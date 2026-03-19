@@ -341,6 +341,12 @@ PRs welcome! If you discover new gRPC endpoints or fix routing issues, please up
 - New pitfalls → `PITFALLS.md`
 - External API changes → `docs/GATEWAY_API.md`
 
+## 🙏 Acknowledgements
+
+This project was inspired by and references early implementations from the following excellent open-source projects:
+- 🛠️ [jlcodes99/cockpit-tools](https://github.com/jlcodes99/cockpit-tools)
+- 📱 [AvenalJ/AntigravityMobile](https://github.com/AvenalJ/AntigravityMobile)
+
 ## Disclaimer
 
 This is an **unofficial, community-driven** open-source tool built for educational and interoperability purposes.
