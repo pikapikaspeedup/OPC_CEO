@@ -66,7 +66,7 @@ export function startTunnel(port: number, timeoutMs = 30000): Promise<{ success:
     if (config.credentialsPath) {
       args.push('--credentials-file', config.credentialsPath.replace(/^~/, homedir()));
     }
-    args.push('tunnel', '--url', `http://localhost:${port}`, 'run', config.tunnelName);
+    args.push('tunnel', 'run', config.tunnelName);
 
     try {
       tunnelProcess = spawn('cloudflared', args, {

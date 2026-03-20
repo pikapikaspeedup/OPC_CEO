@@ -144,9 +144,37 @@ app.prepare().then(() => {
     });
   });
 
-  server.listen(port, hostname, () => {
+  server.listen(port, hostname, async () => {
     console.log(`\n🚀 Antigravity Gateway running on http://${hostname}:${port}`);
     console.log(`   Single-port mode: Next.js + API + WebSocket\n`);
     console.log(`📱 Open on phone: http://<your-ip>:${port}\n`);
+
+    // --- Auto-start Cloudflare Tunnel ---
+    try {
+      const tunnel = await import('./src/lib/bridge/tunnel');
+      const config = tunnel.loadTunnelConfig();
+      if (config?.autoStart && config.tunnelName) {
+        console.log(`🌐 Auto-starting tunnel "${config.tunnelName}"...`);
+        const result = await tunnel.startTunnel(port);
+        if (result.success) {
+          console.log(`🌐 Tunnel active: ${result.url}`);
+        } else {
+          console.log(`🌐 Tunnel failed: ${result.error}`);
+        }
+      }
+    } catch (err: any) {
+      console.log(`🌐 Tunnel auto-start skipped: ${err.message}`);
+    }
   });
+
+  // Clean up tunnel on exit
+  const cleanup = async () => {
+    try {
+      const tunnel = await import('./src/lib/bridge/tunnel');
+      tunnel.stopTunnel();
+    } catch {}
+    process.exit(0);
+  };
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 });

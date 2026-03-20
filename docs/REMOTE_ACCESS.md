@@ -66,6 +66,22 @@ cloudflared tunnel route dns antigravity-gateway ag.yourdomain.com
 
 这会在 Cloudflare DNS 中自动创建一条 CNAME 记录，将 `ag.yourdomain.com` 指向你的隧道。
 
+### 4. 创建隧道配置文件
+
+编辑 `~/.cloudflared/config.yml`（如果不存在则创建）：
+
+```yaml
+tunnel: <你的隧道 ID>
+credentials-file: /Users/<你的用户名>/.cloudflared/<你的隧道 ID>.json
+
+ingress:
+  - hostname: ag.yourdomain.com
+    service: http://localhost:3000
+  - service: http_status:404
+```
+
+> **重要**：`tunnel` 字段填隧道 ID（UUID 格式），可通过 `cloudflared tunnel list` 查看。`ingress` 中的 `hostname` 必须与第 3 步绑定的域名一致。最后一条 `http_status:404` 是兜底规则，不可省略。
+
 ---
 
 ## 三、配置 Gateway
@@ -177,4 +193,6 @@ wscat -c wss://ag.yourdomain.com/ws
 | `tunnel not found` | 确认隧道名称正确：`cloudflared tunnel list` |
 | `unauthorized` / `credential` 错误 | 重新 `cloudflared tunnel login`，检查 credentials JSON |
 | 隧道启动但域名不可达 | 确认 DNS 记录：`cloudflared tunnel route dns <name> <domain>` |
+| Error 1033: Cloudflare Tunnel error | 检查 `~/.cloudflared/config.yml` 是否指向正确的隧道 ID 并包含 ingress 规则 |
+| 隧道进程在跑但 connections 为 0 | `config.yml` 中的 `tunnel` ID 与实际使用的隧道不匹配，更新后重启 |
 | Gateway 重启后隧道没有自动连接 | 配置中设置 `"autoStart": true` |
