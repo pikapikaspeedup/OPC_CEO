@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-antigravity",
+  "name": "Google Antigravity Obsidian",
+  "version": "0.2.0",
+  "minAppVersion": "1.0.0",
+  "description": "Chat with Antigravity AI agents directly in Obsidian. Connects to your local Gateway server.",
+  "author": "Antigravity",
+  "isDesktopOnly": true
+}
