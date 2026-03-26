@@ -1,7 +1,8 @@
 import type {
   Conversation, UserInfo, Server, Skill, Workflow, Rule,
   McpConfig, StepsData, ModelsResponse, WorkspacesResponse, AnalyticsData,
-  KnowledgeItem, KnowledgeDetail,
+  KnowledgeItem, KnowledgeDetail, AgentRun, Project,
+  ResumeProjectOptions, ResumeProjectResponse, TemplateSummaryFE,
 } from './types';
 
 const API = typeof window !== 'undefined' ? window.location.origin : '';
@@ -24,7 +25,7 @@ export const api = {
   rules: () => fetchJson<Rule[]>('/api/rules'),
   mcp: () => fetchJson<McpConfig>('/api/mcp'),
   analytics: () => fetchJson<AnalyticsData>('/api/analytics'),
-  conversationFiles: (id: string, q: string) => fetchJson<{ files: any[] }>(`/api/conversations/${id}/files?q=${encodeURIComponent(q)}`),
+  conversationFiles: (id: string, q: string) => fetchJson<{ files: unknown[] }>(`/api/conversations/${id}/files?q=${encodeURIComponent(q)}`),
 
   createConversation: (workspace: string) =>
     fetchJson<{ cascadeId?: string; error?: string }>('/api/conversations', {
@@ -33,7 +34,7 @@ export const api = {
       body: JSON.stringify({ workspace }),
     }),
 
-  sendMessage: (id: string, text: string, model?: string, agenticMode: boolean = true, attachments?: any) =>
+  sendMessage: (id: string, text: string, model?: string, agenticMode: boolean = true, attachments?: unknown) =>
     fetchJson<{ ok: boolean }>(`/api/conversations/${id}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -59,8 +60,8 @@ export const api = {
       body: JSON.stringify({ stepIndex, model }),
     }),
 
-  getRevertPreview: (id: string, stepIndex: number, model?: string) => 
-    fetchJson<any>(`/api/conversations/${id}/revert-preview?stepIndex=${stepIndex}${model ? `&model=${encodeURIComponent(model)}` : ''}`),
+  getRevertPreview: (id: string, stepIndex: number, model?: string) =>
+    fetchJson<unknown>(`/api/conversations/${id}/revert-preview?stepIndex=${stepIndex}${model ? `&model=${encodeURIComponent(model)}` : ''}`),
 
   launchWorkspace: (workspace: string) =>
     fetchJson<{ ok: boolean; error?: string }>('/api/workspaces/launch', {
@@ -92,6 +93,71 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
+    }),
+
+  // Agent Runs & Projects
+  projects: () => fetchJson<Project[]>('/api/projects'),
+  agentGroups: () => fetchJson<unknown[]>('/api/agent-groups'),
+  agentRuns: (status?: string) => fetchJson<AgentRun[]>(`/api/agent-runs${status ? `?status=${status}` : ''}`),
+  agentRunsByFilter: (filter: { groupId?: string; status?: string; reviewOutcome?: string }) => {
+    const params = new URLSearchParams();
+    if (filter.groupId) params.set('groupId', filter.groupId);
+    if (filter.status) params.set('status', filter.status);
+    if (filter.reviewOutcome) params.set('reviewOutcome', filter.reviewOutcome);
+    return fetchJson<AgentRun[]>(`/api/agent-runs?${params.toString()}`);
+  },
+  agentRun: (id: string) => fetchJson<AgentRun>(`/api/agent-runs/${id}`),
+  dispatchRun: (input: {
+    groupId?: string;
+    templateId?: string;
+    projectId?: string;
+    workspace: string;
+    prompt?: string;
+    model?: string;
+    taskEnvelope?: import('./types').TaskEnvelopeFE;
+    sourceRunIds?: string[];
+  }) =>
+    fetchJson<{ runId: string; status: string }>('/api/agent-runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+  cancelRun: (id: string) =>
+    fetchJson<{ status: string }>(`/api/agent-runs/${id}`, { method: 'DELETE' }),
+  interveneRun: (id: string, data: { action: 'nudge' | 'retry' | 'restart_role' | 'cancel' | 'evaluate', prompt?: string, roleId?: string }) =>
+    fetchJson<{ status: string; action: string; runId: string }>(`/api/agent-runs/${id}/intervene`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  // Pipeline templates
+  pipelines: () => fetchJson<TemplateSummaryFE[]>('/api/pipelines'),
+
+  // Project Management
+  createProject: (data: { name: string; goal: string; templateId?: string; workspace: string }) =>
+    fetchJson<Project>('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  updateProject: (id: string, data: Partial<Project>) =>
+    fetchJson<Project>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  deleteProject: (id: string) =>
+    fetchJson<{ success: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
+
+  // Resume a failed pipeline stage
+  resumeProject: (projectId: string, options: ResumeProjectOptions) =>
+    fetchJson<ResumeProjectResponse>(`/api/projects/${projectId}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
     }),
 };
 

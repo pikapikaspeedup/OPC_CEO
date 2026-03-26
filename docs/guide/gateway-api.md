@@ -373,6 +373,41 @@ done
 
 ---
 
+## V3 Agent 编排接口
+
+这是从 V3 开始引入的顶层多智能体并行自治的编排 API，支持创建项目和解决冲突。详细调用说明请参阅 [cli-api-reference.md](./cli-api-reference.md)。
+
+### `POST /api/projects` — 创建 Project
+
+**功能**: 创建一个自治开发项目的容器，用于将多个相关的 Task 组织在一起。
+
+**Request Body** 示例:
+```json
+{
+  "name": "Tetris Game",
+  "goal": "Build a simple Tetris game in HTML5",
+  "workspace": "file:///path/to/mytools"
+}
+```
+
+### `POST /api/scope-check` — WriteScope 冲突检测
+
+**功能**: 在将多个 Work Package 并行派发给开发节点之前，验证各自写入范围是否有重叠冲突。
+
+**Request Body** 示例:
+```json
+{
+  "packages": [
+    {
+      "taskId": "task-1",
+      "writeScope": [ { "path": "src/auth.ts", "operation": "modify" } ]
+    }
+  ]
+}
+```
+
+---
+
 ## 环境与配置接口
 
 ### `GET /api/servers` — Language Server 实例
@@ -514,8 +549,8 @@ done
 **Response** `200 OK`:
 ```json
 {
-  "name": "Leon Nelson",
-  "email": "leonnelson19898@gmail.com",
+  "name": "Your Name",
+  "email": "user@example.com",
   "hasApiKey": true,
   "credits": { "clientModelConfigs": [ ... ] }
 }
@@ -642,6 +677,8 @@ done
 
 **功能**: 从所有 language_server 聚合 Workflows，去重后返回。
 
+> 这是一个**发现/读取接口**。Gateway 负责枚举可用 workflow；真正执行 workflow 的方式，是在对话中发送对应的 `/workflow-name` 命令。
+
 **Response** `200 OK`:
 ```json
 [
@@ -671,6 +708,8 @@ done
 
 **功能**: 从所有 language_server 聚合用户自定义规则。
 
+> 这也是一个**发现/读取接口**。Gateway 只负责展示和返回规则内容；规则的实际生效由底层 language_server / 客户端规则系统负责。
+
 **Response** `200 OK`:
 ```json
 [
@@ -692,6 +731,7 @@ done
 | `path` | `string` | 规则文件绝对路径 |
 | `content` | `string` | 完整规则内容 |
 | `scope` | `"global" \| "workspace"` | 作用域 |
+| `baseDir` | `string` | 所在根目录 |
 
 ---
 

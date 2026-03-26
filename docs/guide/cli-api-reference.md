@@ -20,7 +20,7 @@ The API runs on port 3000 by default.
   {
     "name": "Tetris Game",
     "goal": "Build a simple Tetris game in HTML5",
-    "workspace": "/Users/darrel/Documents/Games"
+    "workspace": "/path/to/your/workspace"
   }
   ```
 - **Response:** `201 Created`
@@ -51,28 +51,46 @@ The API runs on port 3000 by default.
 
 #### Resume Project Pipeline
 - **URL:** `POST /api/projects/:id/resume`
-- **Description:** Resumes a project from its first failed pipeline stage. The project must have a `pipelineState` (i.e., it was created via template dispatch).
-- **Request Body (JSON, all optional):**
-  - `stageIndex` (number): Target a specific stage. Defaults to the first failed stage.
-  - `action` (string): `"redispatch"` (default), `"retry"`, or `"nudge"`.
-    - `redispatch`: Creates a brand new Run for the failed stage.
-    - `retry`: Retries the failed role within the existing Run (via `interveneRun`).
-    - `nudge`: Sends a follow-up prompt to the failed Run's existing conversation.
-  - `prompt` (string): Custom prompt for retry/nudge.
-- **Response:** `202 Accepted`
+- **Description:** Resumes a project from its first actionable pipeline stage. The project must have a `pipelineState` (i.e., it was created via template dispatch).
+- **Request Body (JSON):**
+  - `stageIndex` (number, optional): Target a specific stage. Defaults to the first actionable stage.
+  - `action` (string, required): `"recover"`, `"nudge"`, `"restart_role"`, or `"cancel"`.
+    - `recover`: Restores the existing Run from artifacts/result envelope.
+    - `nudge`: Sends a follow-up prompt to a stale-active Run's existing conversation.
+    - `restart_role`: Starts a fresh child conversation for the target role within the same Run.
+    - `cancel`: Cancels the canonical Run and marks the stage as `cancelled`.
+  - `prompt` (string, optional): Custom prompt for `nudge` / `restart_role`.
+  - `roleId` (string, optional): Target role for `restart_role`.
+- **Response:** `200 OK` for `recover` and `cancel`, `202 Accepted` for async `nudge` / `restart_role`
   ```json
-  { "status": "resuming", "action": "redispatch", "stageIndex": 0, "groupId": "ux-review", "runId": "..." }
+  {
+    "status": "resuming",
+    "requestedAction": "restart_role",
+    "actualAction": "restart_role",
+    "stageIndex": 1,
+    "groupId": "architecture-advisory",
+    "runId": "..."
+  }
   ```
-- **Conflict Response:** `409 Conflict` when a retry/nudge intervention is already active for the target run.
+- **Conflict Response:** `409 Conflict` when the requested action is not valid for the current canonical run state, or another intervention is already active for the target run.
+- **Action Selection Guide:**
+  - Use `recover` when artifacts already exist and you only need to restore status.
+  - Use `nudge` only when the canonical run is stale-active (`running/starting` with `liveState.staleSince`).
+  - Use `restart_role` when you want a fresh child conversation but must stay inside the same run.
+  - Use `cancel` to stop the canonical run and mark the stage `cancelled`.
+- **Default Stage Selection:** When `stageIndex` is omitted, the server chooses the first actionable stage: `failed`, `blocked`, `cancelled`, or a stale-active canonical run.
+- **Important:** This endpoint never creates a new run. `redispatch` is not part of normal recovery.
 - **Example:**
   ```bash
-  # Resume from first failed stage (default: redispatch)
-  curl -X POST http://localhost:3000/api/projects/<projectId>/resume
-
-  # Retry the critic role in the failed stage
+  # Recover the canonical run from artifacts
   curl -X POST http://localhost:3000/api/projects/<projectId>/resume \
     -H "Content-Type: application/json" \
-    -d '{ "action": "retry" }'
+    -d '{ "action": "recover" }'
+
+  # Restart a role inside the existing run
+  curl -X POST http://localhost:3000/api/projects/<projectId>/resume \
+    -H "Content-Type: application/json" \
+    -d '{ "action": "restart_role", "roleId": "ux-review-critic" }'
   ```
 
 ### 2. Agent Runs
@@ -87,7 +105,7 @@ The API runs on port 3000 by default.
   - `projectId` (String, optional): ID of the project to associate this run with.
   - `sourceRunIds` (Array of Strings, optional): Used to chain dependencies (e.g., provide specs to an architecture run).
   - `templateId` (String, optional): Template ID. If provided without a `groupId`, automatically starts the template pipeline from stage 0. Also supports `pipelineId` as an alias.
-  - `pipelineStageIndex` (Number, optional): Current stage index within the pipeline (0-based). Default is 0 when expanding templates.
+  - `pipelineStageIndex` (Number, optional): Current stage index within the pipeline (0-based). Default is 0 when expanding templates. If omitted while `templateId/pipelineId` and `sourceRunIds` are both present, the API infers the next stage from the first source run.
 - **Example Body:**
   ```json
   {
@@ -121,7 +139,7 @@ The API runs on port 3000 by default.
   {
     "runId": "run-5678",
     "status": "completed",
-    "artifactDir": "data/projects/proj-1234/runs/run-5678/",
+    "artifactDir": "demolong/projects/proj-1234/runs/run-5678/",
     "result": {
       "status": "completed",
       "summary": "...",
@@ -163,19 +181,22 @@ The API runs on port 3000 by default.
 
 ### Run Intervention
 
-#### Intervene on a Failed Run
+#### Intervene on a Run
 - **URL:** `POST /api/agent-runs/:runId/intervene`
 - **Request Body (JSON):**
-  - `action` (String, required): `"nudge"` or `"retry"`.
-    - `nudge`: Sends a follow-up message to the existing child conversation, prompting the AI to correct its output (e.g., output a missing `DECISION:` marker).
-    - `retry`: Creates a fresh child conversation for just the failed role, re-executing it from scratch without re-running upstream roles.
+  - `action` (String, required): `"nudge"`, `"retry"`, `"restart_role"`, or `"cancel"`.
+    - `nudge`: Sends a follow-up message to the existing child conversation for a stale-active run.
+    - `retry`: Compatibility alias for `restart_role`.
+    - `restart_role`: Creates a fresh child conversation for just the target role, re-executing it within the same Run.
+    - `cancel`: Cancels the canonical Run.
   - `prompt` (String, optional): Custom prompt for the intervention. If omitted, a sensible default is generated.
   - `roleId` (String, optional): Target role to intervene on. Defaults to the last role in the run.
-- **Response:** `202 Accepted` — intervention runs asynchronously.
+- **Response:** `202 Accepted` — intervention runs asynchronously. `cancel` also uses the same route and returns `202`.
   ```json
   { "status": "intervening", "action": "nudge", "runId": "..." }
   ```
 - **Conflict Response:** `409 Conflict` when another intervention is already active for the same run.
+- **Important:** `retry` is a compatibility alias. New callers should prefer `restart_role`.
 - **Example:**
   ```bash
   # Nudge a critic that forgot DECISION: marker
@@ -183,10 +204,15 @@ The API runs on port 3000 by default.
     -H "Content-Type: application/json" \
     -d '{ "action": "nudge" }'
 
-  # Retry the critic role with a fresh conversation
+  # Restart the critic role with a fresh conversation
   curl -X POST http://localhost:3000/api/agent-runs/<runId>/intervene \
     -H "Content-Type: application/json" \
-    -d '{ "action": "retry", "roleId": "ux-review-critic" }'
+    -d '{ "action": "restart_role", "roleId": "ux-review-critic" }'
+
+  # Cancel the canonical run
+  curl -X POST http://localhost:3000/api/agent-runs/<runId>/intervene \
+    -H "Content-Type: application/json" \
+    -d '{ "action": "cancel" }'
   ```
 
 ### 4. Utility & Governance

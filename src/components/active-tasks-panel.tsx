@@ -1,8 +1,18 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { useI18n } from '@/components/locale-provider';
 import { cn } from '@/lib/utils';
-import { Activity, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { Activity, X, ChevronUp, ChevronDown, Bot } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+
+export interface SupervisorReview {
+  id: string;
+  round: number;
+  stepCount: number;
+  decision: { status: 'HEALTHY' | 'STUCK' | 'LOOPING' | 'DONE', analysis: string, suggestedAction?: string };
+  timestamp: string;
+}
 
 export interface ActiveTask {
   cascadeId: string;
@@ -18,6 +28,7 @@ export interface ActiveTask {
   };
   isActive: boolean;
   cascadeStatus?: string;
+  supervisorReviews?: SupervisorReview[];
 }
 
 interface ActiveTasksPanelProps {
@@ -51,6 +62,7 @@ function TaskItem({ task, isCurrentConversation, onSelect, onDismiss }: {
   onSelect: () => void;
   onDismiss: () => void;
 }) {
+  const { t } = useI18n();
   const touchRef = useRef({ startX: 0, currentX: 0, swiping: false });
   const itemRef = useRef<HTMLDivElement>(null);
   const [swipeX, setSwipeX] = useState(0);
@@ -92,8 +104,8 @@ function TaskItem({ task, isCurrentConversation, onSelect, onDismiss }: {
     <div
       ref={itemRef}
       className={cn(
-        'px-3 py-2.5 cursor-pointer transition-all border-b border-border/50 last:border-b-0',
-        isCurrentConversation ? 'bg-accent/50' : 'hover:bg-muted/50',
+        'cursor-pointer border-b border-[var(--app-border-soft)] px-3 py-3 transition-all last:border-b-0',
+        isCurrentConversation ? 'bg-[var(--app-accent-soft)]' : 'hover:bg-white/[0.04]',
         dismissed && 'opacity-0 translate-x-full',
       )}
       style={{ transform: `translateX(${swipeX}px)`, opacity: dismissed ? 0 : 1 - Math.abs(swipeX) / 200 }}
@@ -108,8 +120,8 @@ function TaskItem({ task, isCurrentConversation, onSelect, onDismiss }: {
             'w-2 h-2 rounded-full shrink-0',
             task.isActive ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/40'
           )} />
-          <span className="text-xs font-medium truncate">{task.title || task.workspace}</span>
-        </div>
+        <span className="truncate text-xs font-medium text-[var(--app-text)]">{task.title || task.workspace}</span>
+      </div>
         {mode && (
           <span className={cn(
             'text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded text-white shrink-0',
@@ -121,36 +133,68 @@ function TaskItem({ task, isCurrentConversation, onSelect, onDismiss }: {
       </div>
 
       {/* Progress bar */}
-      <div className="h-1.5 bg-muted rounded-full overflow-hidden mb-1">
+      <div className="mb-1 h-1.5 overflow-hidden rounded-full bg-[var(--app-border-soft)]">
         {progressPct !== null ? (
           <div
             className={cn(
               'h-full rounded-full transition-all duration-500',
-              task.isActive ? 'bg-gradient-to-r from-indigo-500 to-purple-500' : 'bg-muted-foreground/40'
+              task.isActive ? 'bg-gradient-to-r from-[var(--app-accent)] to-sky-400' : 'bg-muted-foreground/40'
             )}
             style={{ width: `${progressPct}%` }}
           />
         ) : (
           <div className={cn(
             'h-full rounded-full w-2/3',
-            task.isActive ? 'bg-gradient-to-r from-indigo-500 to-purple-500 animate-pulse-subtle' : 'bg-muted-foreground/30'
+            task.isActive ? 'bg-gradient-to-r from-[var(--app-accent)] to-sky-400 animate-pulse-subtle' : 'bg-muted-foreground/30'
           )} />
         )}
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+      <div className="flex items-center justify-between text-[10px] text-[var(--app-text-muted)]">
         <span className="truncate max-w-[200px]">
-          {task.lastTaskBoundary?.taskStatus || (task.isActive ? 'Working...' : 'Idle')}
+          {task.lastTaskBoundary?.taskStatus || (task.isActive ? t('activeTasks.working') : t('activeTasks.idle'))}
         </span>
         <span className="shrink-0 ml-2 font-mono">
-          {task.stepCount}{task.totalSteps ? `/${task.totalSteps}` : ''} steps
+          {task.stepCount}{task.totalSteps ? `/${task.totalSteps}` : ''} {t('activeTasks.steps', { count: '' }).trim()}
         </span>
       </div>
+
+      {/* V3.5 AI Supervisor Logs */}
+      {task.supervisorReviews && task.supervisorReviews.length > 0 && (
+        <div className="mt-3 border-t border-[var(--app-border-soft)] pt-2 space-y-1.5">
+          <div className="flex items-center text-[10px] font-semibold text-[var(--app-text-muted)] uppercase tracking-wider mb-2">
+            <Bot className="w-3 h-3 mr-1" /> AI Supervisor
+          </div>
+          {task.supervisorReviews.map(rev => {
+            const isWarning = rev.decision.status === 'STUCK' || rev.decision.status === 'LOOPING';
+            const isDone = rev.decision.status === 'DONE';
+            return (
+              <div key={rev.id} className="flex flex-col gap-1 p-1.5 rounded bg-black/10 dark:bg-white/5">
+                <div className="flex items-center gap-1.5">
+                  <Badge variant={isWarning ? 'destructive' : isDone ? 'default' : 'secondary'} className="text-[9px] px-1 py-0 h-4">
+                    {rev.decision.status}
+                  </Badge>
+                  {rev.decision.suggestedAction && rev.decision.suggestedAction !== 'none' && (
+                    <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 text-amber-400 border-amber-400/30">
+                      → {rev.decision.suggestedAction}
+                    </Badge>
+                  )}
+                  <span className="text-[9px] text-[var(--app-text-muted)]">R{rev.round} @ Step {rev.stepCount}</span>
+                </div>
+                <span className="text-[10px] text-[var(--app-text)] leading-tight">
+                  {rev.decision.analysis}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function ActiveTasksPanel({ tasks, onSelect, onDismiss, activeCascadeId }: ActiveTasksPanelProps) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(false);
 
@@ -160,11 +204,11 @@ export default function ActiveTasksPanel({ tasks, onSelect, onDismiss, activeCas
   // Auto show/hide based on active tasks
   useEffect(() => {
     if (taskCount > 0) {
-      setVisible(true);
-    } else {
-      const timer = setTimeout(() => setVisible(false), 3000);
+      const timer = setTimeout(() => setVisible(true), 0);
       return () => clearTimeout(timer);
     }
+    const timer = setTimeout(() => setVisible(false), 3000);
+    return () => clearTimeout(timer);
   }, [taskCount]);
 
   // If nothing to show, render nothing
@@ -175,18 +219,18 @@ export default function ActiveTasksPanel({ tasks, onSelect, onDismiss, activeCas
     return (
       <button
         className={cn(
-          'fixed bottom-24 right-6 z-50 flex items-center gap-2 px-3 py-2 rounded-full shadow-lg border transition-all',
-          'bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80',
+          'fixed bottom-24 right-6 z-50 flex items-center gap-2 rounded-full border px-3 py-2 shadow-lg transition-all',
+          'border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.92)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.84)]',
           'hover:scale-105 active:scale-95',
-          taskCount > 0 ? 'border-indigo-500/30' : 'border-border opacity-60'
+          taskCount > 0 ? 'border-[var(--app-accent)]/30' : 'opacity-60'
         )}
         onClick={() => setExpanded(true)}
       >
-        <Activity className={cn('w-4 h-4', taskCount > 0 ? 'text-indigo-500' : 'text-muted-foreground')} />
-        <span className={cn('text-xs font-semibold', taskCount > 0 ? 'text-indigo-500' : 'text-muted-foreground')}>
+        <Activity className={cn('w-4 h-4', taskCount > 0 ? 'text-[var(--app-accent)]' : 'text-[var(--app-text-muted)]')} />
+        <span className={cn('text-xs font-semibold', taskCount > 0 ? 'text-[var(--app-accent)]' : 'text-[var(--app-text-muted)]')}>
           {taskCount}
         </span>
-        <ChevronUp className="w-3 h-3 text-muted-foreground" />
+        <ChevronUp className="w-3 h-3 text-[var(--app-text-muted)]" />
       </button>
     );
   }
@@ -194,16 +238,15 @@ export default function ActiveTasksPanel({ tasks, onSelect, onDismiss, activeCas
   // Expanded panel
   return (
     <div className={cn(
-      'fixed bottom-24 right-6 z-50 w-80 rounded-xl shadow-2xl border overflow-hidden',
-      'bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80',
+      'fixed bottom-24 right-6 z-50 w-80 overflow-hidden rounded-[20px] border shadow-2xl',
+      'border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.94)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.84)]',
       'animate-in slide-in-from-bottom-4 fade-in duration-200',
     )}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+      <div className="flex items-center justify-between border-b border-[var(--app-border-soft)] bg-white/[0.03] px-3 py-2">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-indigo-500" />
-          <span className="text-xs font-semibold">
-            {taskCount} Active {taskCount === 1 ? 'Task' : 'Tasks'}
+          <Activity className="w-4 h-4 text-[var(--app-accent)]" />
+          <span className="text-xs font-semibold text-[var(--app-text)]">
+            {taskCount} {taskCount === 1 ? t('activeTasks.activeTask') : t('activeTasks.activeTasks')}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -225,8 +268,8 @@ export default function ActiveTasksPanel({ tasks, onSelect, onDismiss, activeCas
       {/* Task list */}
       <div className="max-h-[280px] overflow-y-auto">
         {tasks.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            No active tasks
+          <div className="px-3 py-6 text-center text-xs text-[var(--app-text-muted)]">
+            {t('activeTasks.noActiveTasks')}
           </div>
         ) : (
           tasks.map(task => (

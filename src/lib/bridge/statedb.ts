@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import { homedir } from 'os';
 import path from 'path';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { GATEWAY_HOME, CONVS_FILE } from '../agents/gateway-home';
 
 const STATE_DB_PATH = path.join(
   homedir(),
@@ -9,8 +10,7 @@ const STATE_DB_PATH = path.join(
 );
 
 const BRAIN_DIR = path.join(homedir(), '.gemini/antigravity/brain');
-const LOCAL_CACHE_DIR = path.join(process.cwd(), '..', 'data');
-const LOCAL_CACHE_FILE = path.join(LOCAL_CACHE_DIR, 'local_conversations.json');
+const LOCAL_CACHE_FILE = CONVS_FILE;
 
 export interface ConversationInfo {
   id: string;
@@ -31,7 +31,7 @@ function readLocalCache(): ConversationInfo[] {
 
 function writeLocalCache(convs: ConversationInfo[]) {
   try {
-    mkdirSync(LOCAL_CACHE_DIR, { recursive: true });
+    mkdirSync(GATEWAY_HOME, { recursive: true });
     writeFileSync(LOCAL_CACHE_FILE, JSON.stringify(convs, null, 2));
   } catch {}
 }

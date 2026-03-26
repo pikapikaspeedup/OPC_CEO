@@ -162,18 +162,27 @@ export function buildMetadata(apiKey: string) {
   };
 }
 
-export function buildCascadeConfig(model: string = 'MODEL_PLACEHOLDER_M26', agenticMode: boolean = true) {
+export function buildCascadeConfig(
+  model: string = 'MODEL_PLACEHOLDER_M26',
+  agenticMode: boolean = true,
+  artifactReviewMode: string = 'ARTIFACT_REVIEW_MODE_AUTO',
+) {
   return {
     plannerConfig: {
       conversational: { plannerMode: 'CONVERSATIONAL_PLANNER_MODE_DEFAULT', agenticMode },
       toolConfig: {
         runCommand: { autoCommandConfig: { autoExecutionPolicy: 'CASCADE_COMMANDS_AUTO_EXECUTION_EAGER' } },
-        notifyUser: { artifactReviewMode: 'ARTIFACT_REVIEW_MODE_ALWAYS' },
+        notifyUser: { artifactReviewMode },
+        code: { allowEditGitignore: true },
+        viewFile: { allowViewGitignore: true },
+        grep: { allowAccessGitignore: true },
       },
       requestedModel: { model },
     },
   };
 }
+
+
 
 export async function startCascade(port: number, csrf: string, apiKey: string, workspaceUri: string) {
   return grpcCall({
@@ -208,7 +217,8 @@ export async function sendMessage(
   text: string,
   model?: string,
   agenticMode: boolean = true,
-  attachments?: { items?: import('../types').MessageItem[], media?: import('../types').MessageMedia[] }
+  attachments?: { items?: import('../types').MessageItem[], media?: import('../types').MessageMedia[] },
+  artifactReviewMode?: string,
 ) {
   const items: import('../types').MessageItem[] = attachments?.items ? [...attachments.items] : [];
   if (text) {
@@ -219,7 +229,7 @@ export async function sendMessage(
     cascadeId,
     items,
     metadata: buildMetadata(apiKey),
-    cascadeConfig: buildCascadeConfig(model, agenticMode),
+    cascadeConfig: buildCascadeConfig(model, agenticMode, artifactReviewMode),
   };
 
   if (attachments?.media && attachments.media.length > 0) {

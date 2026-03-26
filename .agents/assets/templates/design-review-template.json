@@ -1,0 +1,26 @@
+{
+  "id": "design-review-template",
+  "kind": "template",
+  "title": "产品体验评审",
+  "description": "UX Review Author 从 5 个维度审计交互设计，Critic 对抗性挑战。3 轮对抗后收敛。",
+
+  "groups": {
+    "ux-review": {
+      "title": "产品体验评审",
+      "description": "UX Review Author audits interaction design, Critic challenges findings. 3-round adversarial review loop.",
+      "executionMode": "review-loop",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true, "advisory": true },
+      "roles": [
+        { "id": "ux-review-author", "workflow": "/ux-review-author", "timeoutMs": 720000, "autoApprove": true },
+        { "id": "ux-review-critic", "workflow": "/ux-review-critic", "timeoutMs": 600000, "autoApprove": true }
+      ],
+      "reviewPolicyId": "default-strict"
+    }
+  },
+
+  "pipeline": [
+    { "groupId": "ux-review", "autoTrigger": false }
+  ],
+
+  "defaultModel": "MODEL_PLACEHOLDER_M26"
+}

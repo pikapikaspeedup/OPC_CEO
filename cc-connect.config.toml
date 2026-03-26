@@ -1,0 +1,42 @@
+# cc-connect × Antigravity 配置模板
+# 复制到 ~/.cc-connect/config.toml
+#
+# 首次设置：
+#   1. 安装 cc-connect:  go install github.com/chenhg5/cc-connect@latest
+#   2. 扫码绑定微信:     cc-connect weixin setup --project antigravity
+#   3. 启动:             cc-connect
+#
+# 命令分工:
+#   cc-connect 内置: /new, /list, /switch, /help, /status, /model, /workspace
+#   ACP adapter 关键词: 模型, model, ws, 工作区, 状态, workflow, skill, 帮助
+#   发 "帮助" 查看完整命令列表
+
+language = "zh"
+
+[log]
+level = "info"
+
+[[projects]]
+name = "antigravity"
+# admin_from = "*"  # 设置为你的微信 user ID 以启用 /dir, /shell 等特权命令
+
+[projects.agent]
+type = "acp"
+
+[projects.agent.options]
+work_dir = "/path/to/your/project"   # ← 修改为你的项目路径
+command = "npx"
+args = ["tsx", "/path/to/Antigravity-Mobility-CLI/scripts/antigravity-acp.ts"]  # ← 修改
+display_name = "Antigravity Agent"
+# env = { AG_BASE_URL = "http://127.0.0.1:3000" }  # 如果 Antigravity 不在默认端口
+
+# 微信平台（ilink）
+[[projects.platforms]]
+type = "weixin"
+
+[projects.platforms.options]
+# token、base_url、account_id 会在 cc-connect weixin setup 后自动填入
+# token = "xxx"
+# base_url = "https://ilinkai.weixin.qq.com"
+# account_id = "xxx"
+allow_from = "*"

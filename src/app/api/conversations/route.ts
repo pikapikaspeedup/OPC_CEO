@@ -10,6 +10,7 @@ import {
   PLAYGROUND_DIR_PATH, grpc,
 } from '@/lib/bridge/gateway';
 import { mkdirSync } from 'fs';
+import { getChildConversationIds } from '@/lib/agents/run-registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +22,11 @@ interface ConvCache { id: string; title: string; workspace: string; mtime: numbe
 let convCache: ConvCache[] = [];
 
 // GET /api/conversations — list conversations
-export async function GET() {
+export async function GET(req: Request) {
+  // Optional workspace filter: ?workspace=file:///path/to/dir
+  const url = new URL(req.url);
+  const filterWorkspace = url.searchParams.get('workspace') || '';
+
   try {
     const files = readdirSync(CONVERSATIONS_DIR)
       .filter(f => f.endsWith('.pb'))
@@ -51,9 +56,15 @@ export async function GET() {
       } catch { }
     }
 
+    // Get hidden child conversation IDs from run registry
+    const hiddenChildIds = getChildConversationIds();
+
     const results: ConvCache[] = [];
 
     for (const file of files) {
+      // Filter out hidden child conversations
+      if (hiddenChildIds.has(file.id)) continue;
+
       let title = '';
       let workspace = '';
       let steps = 0;
@@ -87,7 +98,17 @@ export async function GET() {
     }
 
     convCache = results;
-    return NextResponse.json(results);
+
+    // Apply workspace filter if provided
+    const filtered = filterWorkspace
+      ? results.filter(c => {
+          if (!c.workspace) return false;
+          // Match if either is a prefix of the other (vault may be nested in workspace or vice versa)
+          return c.workspace.startsWith(filterWorkspace) || filterWorkspace.startsWith(c.workspace);
+        })
+      : results;
+
+    return NextResponse.json(filtered);
   } catch (e: any) {
     const conversations = getConversations();
     return NextResponse.json(conversations);

@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import Image from 'next/image';
+import { useI18n } from '@/components/locale-provider';
 import { cn } from '@/lib/utils';
 import { SendHorizontal, Square, ChevronDown, Puzzle, Zap, Rocket, FileText, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -10,10 +12,18 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { ModelConfig, Skill, Workflow } from '@/lib/types';
+import { getModelLabel } from '@/lib/model-labels';
+
+interface ChatAttachments {
+  media?: Array<{
+    mimeType: string;
+    inlineData: string;
+  }>;
+}
 
 interface ChatInputProps {
   activeId?: string;
-  onSend: (text: string, attachments?: any) => void;
+  onSend: (text: string, attachments?: ChatAttachments) => void;
   onCancel?: () => void;
   disabled?: boolean;
   isRunning?: boolean;
@@ -41,6 +51,7 @@ interface PastedImage {
 }
 
 export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunning, connected, models, currentModel, onModelChange, skills, workflows, agenticMode = true, onAgenticModeChange }: ChatInputProps) {
+  const { t } = useI18n();
   const [text, setText] = useState('');
   const [showMenu, setShowMenu] = useState(false);
   const [menuItems, setMenuItems] = useState<AutocompleteItem[]>([]);
@@ -145,10 +156,10 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
           const controller = new AbortController();
           abortControllerRef.current = controller;
           try {
-            const fileRes = await api.conversationFiles(activeId, q);
+            const fileRes = await api.conversationFiles(activeId, q) as { files?: Array<{ name: string; relativePath: string }> };
             if (controller.signal.aborted) return;
             if (fileRes.files && fileRes.files.length > 0) {
-              setFileItems(fileRes.files.map((f: any) => ({
+              setFileItems(fileRes.files.map((f) => ({
                 type: 'file' as const,
                 name: f.name,
                 description: f.relativePath,
@@ -214,7 +225,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
     const trimmed = text.trim();
     if ((!trimmed && pastedImages.length === 0) || disabled) return;
     
-    const attachments: any = {};
+    const attachments: ChatAttachments = {};
     if (pastedImages.length > 0) {
       attachments.media = pastedImages.map(img => ({
         mimeType: img.mimeType,
@@ -258,251 +269,259 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
   };
 
   // Derive display label for the current model
-  const currentLabel = currentModel === 'MODEL_AUTO' 
-    ? '✨ Auto - 智能选型' 
-    : models?.find(m => m.modelOrAlias?.model === currentModel)?.label || currentModel || 'Model';
+  const currentLabel = getModelLabel(currentModel, models || [], { autoLabel: t('composer.autoSelect') });
+  const canSend = text.trim().length > 0 || pastedImages.length > 0;
 
   return (
-    <div className="bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 border-t">
-      <div className="max-w-4xl mx-auto flex flex-col gap-2 relative">
-        {/* Autocomplete Menu */}
-        {showMenu && (navigableItems.length > 0 || isLoadingFiles) && (
-          <div
-            ref={menuRef}
-            className="absolute bottom-full mb-1 left-0 right-0 z-50 bg-popover border rounded-lg shadow-lg overflow-hidden max-h-[300px] overflow-y-auto"
-          >
-            {triggerChar === '@' ? (
-              /* ── Grouped @ Menu: Skills + Files ── */
-              <>
-                {/* Skills Section */}
-                {menuItems.length > 0 && (
-                  <>
-                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/30 border-b">
-                      Skills
-                    </div>
-                    {menuItems.map((item, idx) => (
-                      <button
-                        key={`skill-${item.name}`}
-                        className={cn(
-                          "w-full flex items-start gap-3 px-3 py-2 text-left transition-colors",
-                          idx === selectedIdx ? "bg-accent" : "hover:bg-muted/50"
-                        )}
-                        onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
-                        onMouseEnter={() => setSelectedIdx(idx)}
-                      >
-                        <Puzzle className="w-4 h-4 mt-0.5 text-indigo-500 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium truncate">@{item.name}</div>
-                          {item.description && (
-                            <div className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{item.description}</div>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </>
-                )}
-
-                {/* Files Section */}
-                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/30 border-y">
-                  Files
-                </div>
-                {fileItems.length > 0 ? (
-                  fileItems.map((item, rawIdx) => {
-                    const globalIdx = menuItems.length + rawIdx;
-                    return (
-                      <button
-                        key={`file-${item.description}`}
-                        className={cn(
-                          "w-full flex items-start gap-3 px-3 py-2 text-left transition-colors",
-                          globalIdx === selectedIdx ? "bg-accent" : "hover:bg-muted/50"
-                        )}
-                        onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
-                        onMouseEnter={() => setSelectedIdx(globalIdx)}
-                      >
-                        <FileText className="w-4 h-4 mt-0.5 text-blue-500 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium truncate">{item.name}</div>
-                          <div className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{item.description}</div>
-                        </div>
-                      </button>
-                    );
-                  })
-                ) : isLoadingFiles ? (
-                  <div className="flex items-center gap-2 px-3 py-2.5 text-xs text-muted-foreground">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Searching files...
+    <div className="relative mx-auto w-full max-w-[980px]">
+      {/* Autocomplete Menu */}
+      {showMenu && (navigableItems.length > 0 || isLoadingFiles) && (
+        <div
+          ref={menuRef}
+          className="absolute bottom-[calc(100%+14px)] left-0 right-0 z-50 max-h-[320px] overflow-y-auto rounded-[24px] border border-white/8 bg-[rgba(11,19,31,0.97)] shadow-[0_32px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+        >
+          {triggerChar === '@' ? (
+            <>
+              {menuItems.length > 0 && (
+                <>
+                  <div className="border-b border-white/6 bg-white/[0.03] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--app-text-muted)]">
+                    {t('composer.skills')}
                   </div>
-                ) : (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">
-                    {query ? 'No files match' : 'Type to search files'}
-                  </div>
-                )}
-              </>
-            ) : (
-              /* ── Standard / Menu (Workflows) ── */
-              navigableItems.map((item, idx) => (
-                <button
-                  key={`${item.type}-${item.name}`}
-                  className={cn(
-                    "w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors",
-                    idx === selectedIdx ? "bg-accent" : "hover:bg-muted/50"
-                  )}
-                  onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
-                  onMouseEnter={() => setSelectedIdx(idx)}
-                >
-                  <Zap className="w-4 h-4 mt-0.5 text-amber-500 shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium truncate">/{item.name}</div>
-                    {item.description && (
-                      <div className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{item.description}</div>
-                    )}
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* Pasted Images Preview */}
-        {pastedImages.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-1 mb-2">
-            {pastedImages.map(img => (
-              <div key={img.id} className="relative group rounded-md border bg-muted/50 overflow-hidden w-16 h-16 flex items-center justify-center">
-                <img src={img.dataUrl} alt="Pasted" className="max-w-full max-h-full object-contain" />
-                <button
-                  type="button"
-                  className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[10px] py-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onClick={() => setPastedImages(prev => prev.filter(p => p.id !== img.id))}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="relative flex items-end gap-2 bg-muted/50 rounded-lg border focus-within:ring-1 focus-within:ring-ring p-1 pl-3 transition-shadow">
-          <Textarea
-            ref={ref}
-            value={text}
-            onChange={handleChange}
-            onKeyDown={handleKey}
-            onPaste={handlePaste}
-            onBlur={() => setTimeout(() => setShowMenu(false), 150)}
-            placeholder="Type a message... (/ for workflows, @ for skills & files)"
-            className="min-h-[44px] max-h-[200px] w-full resize-none border-0 shadow-none focus-visible:ring-0 px-0 py-3 bg-transparent"
-            disabled={disabled}
-            rows={1}
-          />
-          <div className="p-1 mb-0.5 sticky bottom-1">
-            {isRunning ? (
-              <Button
-                variant="destructive"
-                size="icon"
-                className="h-9 w-9"
-                onClick={onCancel}
-              >
-                <Square className="h-4 w-4" />
-              </Button>
-            ) : (
-              <Button
-                size="icon"
-                className="h-9 w-9"
-                onClick={send}
-                disabled={disabled || !text.trim()}
-              >
-                <SendHorizontal className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-2 px-1">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wider">
-            <span className={cn(
-              'w-2 h-2 rounded-full',
-              connected ? 'bg-emerald-500' : 'bg-destructive'
-            )} />
-            {connected ? 'Connected' : 'Disconnected'}
-          </div>
-
-          {/* Planning / Fast mode toggle */}
-          {onAgenticModeChange && (
-            <button
-              className={cn(
-                'inline-flex items-center gap-1 h-7 px-2.5 text-xs font-semibold rounded-md transition-all cursor-pointer border',
-                agenticMode
-                  ? 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20 hover:bg-indigo-500/20'
-                  : 'bg-purple-500/10 text-purple-500 border-purple-500/20 hover:bg-purple-500/20'
-              )}
-              onClick={() => onAgenticModeChange(!agenticMode)}
-              title={agenticMode ? 'Planning mode: Agent plans before executing. Click to switch to Fast mode.' : 'Fast mode: Agent executes directly. Click to switch to Planning mode.'}
-            >
-              {agenticMode ? (
-                <><Rocket className="w-3 h-3" /> Planning</>
-              ) : (
-                <><Zap className="w-3 h-3" /> Fast</>
-              )}
-            </button>
-          )}
-
-          {/* Model selector — inline in the input area */}
-          {models && models.length > 0 && onModelChange && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                className="ml-auto inline-flex items-center gap-1 h-7 px-2 text-xs text-muted-foreground hover:text-foreground font-medium rounded-md hover:bg-accent transition-colors cursor-pointer"
-              >
-                <span className="truncate max-w-[160px]">{currentLabel}</span>
-                <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuItem
-                  onClick={() => onModelChange('MODEL_AUTO')}
-                  className={cn('flex justify-between gap-2 text-emerald-600 dark:text-emerald-400 font-semibold', currentModel === 'MODEL_AUTO' && 'bg-accent')}
-                >
-                  <span className="truncate">✨ Auto - 智能选型</span>
-                </DropdownMenuItem>
-                
-                {models.map(m => {
-                  const val = m.modelOrAlias?.model || '';
-                  const pct = m.quotaInfo?.remainingFraction != null
-                    ? `${Math.round(m.quotaInfo.remainingFraction * 100)}%`
-                    : '';
-                  const isSelected = val === currentModel;
-                  return (
-                    <DropdownMenuItem
-                      key={val}
-                      onClick={() => onModelChange(val)}
-                      className={cn('flex justify-between gap-2', isSelected && 'bg-accent')}
-                    >
-                      <span className="truncate">{m.label}</span>
-                      {pct && (
-                        <span className={cn(
-                          'text-[10px] font-mono shrink-0',
-                          parseFloat(pct) > 50 ? 'text-emerald-500' : parseFloat(pct) > 20 ? 'text-amber-500' : 'text-destructive'
-                        )}>
-                          {pct}
-                        </span>
+                  {menuItems.map((item, idx) => (
+                    <button
+                      key={`skill-${item.name}`}
+                      className={cn(
+                        'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
+                        idx === selectedIdx ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
                       )}
-                    </DropdownMenuItem>
+                      onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
+                      onMouseEnter={() => setSelectedIdx(idx)}
+                    >
+                      <Puzzle className="mt-0.5 h-4 w-4 shrink-0 text-indigo-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-[var(--app-text)]">@{item.name}</div>
+                        {item.description && (
+                          <div className="mt-0.5 line-clamp-1 text-xs text-[var(--app-text-muted)]">{item.description}</div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
+
+              <div className="border-y border-white/6 bg-white/[0.03] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--app-text-muted)]">
+                {t('composer.files')}
+              </div>
+              {fileItems.length > 0 ? (
+                fileItems.map((item, rawIdx) => {
+                  const globalIdx = menuItems.length + rawIdx;
+                  return (
+                    <button
+                      key={`file-${item.description}`}
+                      className={cn(
+                        'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
+                        globalIdx === selectedIdx ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
+                      )}
+                      onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
+                      onMouseEnter={() => setSelectedIdx(globalIdx)}
+                    >
+                      <FileText className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-[var(--app-text)]">{item.name}</div>
+                        <div className="mt-0.5 line-clamp-1 text-xs text-[var(--app-text-muted)]">{item.description}</div>
+                      </div>
+                    </button>
                   );
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                })
+              ) : isLoadingFiles ? (
+                <div className="flex items-center gap-2 px-4 py-3 text-xs text-[var(--app-text-muted)]">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {t('composer.searchFiles')}
+                </div>
+              ) : (
+                <div className="px-4 py-3 text-xs text-[var(--app-text-muted)]">
+                  {query ? t('composer.noFiles') : t('composer.typeToSearchFiles')}
+                </div>
+              )}
+            </>
+          ) : (
+            navigableItems.map((item, idx) => (
+              <button
+                key={`${item.type}-${item.name}`}
+                className={cn(
+                  'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
+                  idx === selectedIdx ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
+                )}
+                onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
+                onMouseEnter={() => setSelectedIdx(idx)}
+              >
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-[var(--app-text)]">/{item.name}</div>
+                  {item.description && (
+                    <div className="mt-0.5 line-clamp-1 text-xs text-[var(--app-text-muted)]">{item.description}</div>
+                  )}
+                </div>
+              </button>
+            ))
           )}
-          
-          {isRunning && (
-            <div className={cn(
-              "flex items-center gap-2 text-xs text-amber-500 font-medium bg-amber-500/10 px-2 py-1 rounded-md",
-              models && models.length > 0 ? '' : 'ml-auto'
-            )}>
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-              </span>
-              Running
+        </div>
+      )}
+
+      <div className="chat-composer-frame relative overflow-hidden">
+        {pastedImages.length > 0 && (
+          <div className="border-b border-white/6 px-4 py-4 sm:px-5">
+            <div className="flex flex-wrap gap-3">
+              {pastedImages.map(img => (
+                <div key={img.id} className="group relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[18px] border border-white/8 bg-[var(--app-raised)]">
+                  <Image
+                    src={img.dataUrl}
+                    alt="Pasted"
+                    width={80}
+                    height={80}
+                    unoptimized
+                    className="h-full w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    className="absolute inset-x-1 bottom-1 rounded-full bg-black/70 px-2 py-1 text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
+                    onClick={() => setPastedImages(prev => prev.filter(p => p.id !== img.id))}
+                  >
+                    {t('composer.remove')}
+                  </button>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
+
+        <div className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
+          <div className="rounded-[24px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(19,29,46,0.94)_0%,rgba(13,21,34,0.96)_100%)] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all duration-200 focus-within:border-[var(--app-border-strong)] focus-within:shadow-[0_0_0_1px_rgba(88,243,212,0.16)] sm:px-5 sm:py-4">
+            <Textarea
+              ref={ref}
+              value={text}
+              onChange={handleChange}
+              onKeyDown={handleKey}
+              onPaste={handlePaste}
+              onBlur={() => setTimeout(() => setShowMenu(false), 150)}
+              placeholder={t('composer.placeholder')}
+              className="min-h-[96px] max-h-[240px] w-full resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-7 text-[var(--app-text)] shadow-none placeholder:text-[var(--app-text-muted)] focus-visible:border-transparent focus-visible:ring-0 md:text-[15px]"
+              disabled={disabled}
+              rows={3}
+            />
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3.5 text-[11px] font-medium text-[var(--app-text-soft)]">
+                <span className={cn(
+                  'h-2 w-2 rounded-full',
+                  connected ? 'bg-emerald-400 shadow-[0_0_0_4px_rgba(16,185,129,0.12)]' : 'bg-destructive shadow-[0_0_0_4px_rgba(248,113,113,0.12)]',
+                )} />
+                {connected ? t('composer.connected') : t('composer.disconnected')}
+              </div>
+
+              {onAgenticModeChange && (
+                <button
+                  className={cn(
+                    'inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[11px] font-semibold transition-all',
+                    agenticMode
+                      ? 'border-indigo-400/18 bg-indigo-400/10 text-indigo-100 hover:bg-indigo-400/16'
+                      : 'border-violet-400/18 bg-violet-400/10 text-violet-100 hover:bg-violet-400/16',
+                  )}
+                  onClick={() => onAgenticModeChange(!agenticMode)}
+                  title={agenticMode ? t('composer.planningHint') : t('composer.fastHint')}
+                >
+                  {agenticMode ? (
+                    <><Rocket className="h-3.5 w-3.5" /> {t('composer.planning')}</>
+                  ) : (
+                    <><Zap className="h-3.5 w-3.5" /> {t('composer.fast')}</>
+                  )}
+                </button>
+              )}
+
+              {isRunning && (
+                <div className="inline-flex h-9 items-center gap-2 rounded-full border border-amber-400/18 bg-amber-400/10 px-3.5 text-[11px] font-medium text-amber-100">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-300 opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-400" />
+                  </span>
+                  {t('composer.running')}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+              {models && models.length > 0 && onModelChange && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    className="inline-flex h-11 w-full items-center justify-between gap-3 rounded-[16px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 text-[12px] font-medium text-[var(--app-text-soft)] transition-colors hover:border-[var(--app-border-strong)] hover:text-[var(--app-text)] sm:w-[260px]"
+                    title={t('composer.chooseModel')}
+                  >
+                    <span className="truncate">{currentLabel}</span>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    <DropdownMenuItem
+                      onClick={() => onModelChange('MODEL_AUTO')}
+                      className={cn('flex justify-between gap-2 font-semibold text-emerald-600 dark:text-emerald-400', currentModel === 'MODEL_AUTO' && 'bg-accent')}
+                    >
+                      <span className="truncate">{t('composer.autoSelect')}</span>
+                    </DropdownMenuItem>
+
+                    {models.map(m => {
+                      const val = m.modelOrAlias?.model || '';
+                      const pct = m.quotaInfo?.remainingFraction != null
+                        ? `${Math.round(m.quotaInfo.remainingFraction * 100)}%`
+                        : '';
+                      const isSelected = val === currentModel;
+                      return (
+                        <DropdownMenuItem
+                          key={val}
+                          onClick={() => onModelChange(val)}
+                          className={cn('flex justify-between gap-2', isSelected && 'bg-accent')}
+                        >
+                          <span className="truncate">{m.label}</span>
+                          {pct && (
+                            <span className={cn(
+                              'shrink-0 font-mono text-[10px]',
+                              parseFloat(pct) > 50 ? 'text-emerald-500' : parseFloat(pct) > 20 ? 'text-amber-500' : 'text-destructive',
+                            )}>
+                              {pct}
+                            </span>
+                          )}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+
+              {isRunning ? (
+                <Button
+                  variant="destructive"
+                  className="h-11 min-w-[118px] rounded-[16px] gap-2"
+                  onClick={onCancel}
+                  aria-label={t('composer.stop')}
+                  title={t('composer.stop')}
+                >
+                  <Square className="h-4 w-4" />
+                  {t('composer.stop')}
+                </Button>
+              ) : (
+                <Button
+                  className="h-11 min-w-[118px] rounded-[16px] gap-2"
+                  onClick={send}
+                  disabled={disabled || !canSend}
+                  aria-label={t('composer.send')}
+                  title={t('composer.send')}
+                >
+                  <SendHorizontal className="h-4 w-4" />
+                  {t('composer.send')}
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

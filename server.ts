@@ -13,6 +13,7 @@ import next from 'next';
 import { parse } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createLogger } from './src/lib/logger';
+import { mergeStepsUpdate, extractLastTaskBoundary } from './src/lib/agents/step-merger';
 
 const log = createLogger('Server');
 
@@ -20,7 +21,7 @@ const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000');
 
-const app = next({ dev, hostname, port });
+const app = next({ dev, hostname, port, turbopack: false });
 const handle = app.getRequestHandler();
 
 // Lazy-loaded bridge modules (loaded on first WS connection, not at startup)
@@ -38,6 +39,19 @@ async function ensureBridge() {
 
 app.prepare().then(() => {
   const server = createServer((req, res) => {
+    // CORS for remote clients (Obsidian plugin, etc.)
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    }
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     const parsedUrl = parse(req.url || '', true);
     handle(req, res, parsedUrl);
   });
@@ -75,41 +89,12 @@ app.prepare().then(() => {
           const isActive = status !== 'CASCADE_RUN_STATUS_IDLE';
           const cascadeStatus = status.replace('CASCADE_RUN_STATUS_', '').toLowerCase();
 
-          // Extract latest task boundary for progress panel
-          let lastTaskBoundary: any = null;
-          const allSteps = stepsUpdate?.steps || [];
-          for (let i = allSteps.length - 1; i >= 0; i--) {
-            if (allSteps[i]?.type === 'CORTEX_STEP_TYPE_TASK_BOUNDARY') {
-              lastTaskBoundary = allSteps[i].taskBoundary;
-              break;
-            }
-          }
-
           if (stepsUpdate?.steps?.length) {
-            const indices: number[] = stepsUpdate.indices || [];
-            const newSteps: any[] = stepsUpdate.steps || [];
-            const totalLength: number = stepsUpdate.totalLength || 0;
+            // Use shared merge logic
+            fullSteps = mergeStepsUpdate(fullSteps, stepsUpdate);
 
-            if (indices.length > 0 && indices.length === newSteps.length) {
-              if (totalLength > fullSteps.length) {
-                fullSteps.length = totalLength;
-              }
-              for (let i = 0; i < indices.length; i++) {
-                fullSteps[indices[i]] = newSteps[i];
-              }
-            } else if (newSteps.length > fullSteps.length) {
-              fullSteps = [...newSteps];
-            } else if (newSteps.length === fullSteps.length) {
-              fullSteps = [...newSteps];
-            }
-
-            // Search fullSteps for latest task boundary (more reliable)
-            for (let i = fullSteps.length - 1; i >= 0; i--) {
-              if (fullSteps[i]?.type === 'CORTEX_STEP_TYPE_TASK_BOUNDARY') {
-                lastTaskBoundary = fullSteps[i].taskBoundary;
-                break;
-              }
-            }
+            // Extract task boundary from merged steps (most reliable)
+            const lastTaskBoundary = extractLastTaskBoundary(fullSteps);
 
             const cleanSteps = fullSteps.filter(s => s != null);
             ws.send(JSON.stringify({
@@ -118,6 +103,7 @@ app.prepare().then(() => {
               lastTaskBoundary,
             }));
           } else {
+            const lastTaskBoundary = extractLastTaskBoundary(fullSteps);
             ws.send(JSON.stringify({
               type: 'status', cascadeId, isActive, cascadeStatus,
               stepCount: fullSteps.filter(s => s != null).length,

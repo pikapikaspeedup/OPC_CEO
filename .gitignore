@@ -13,8 +13,8 @@ dist/
 .DS_Store
 
 # runtime data (conversations, workspaces, gRPC intercepts)
-data/
-
+# data/
+/.agents/reference
 # test artifacts
 test.raw
 /test-results/
@@ -22,6 +22,9 @@ test.raw
 
 # env files
 .env*
+
+# local cc-connect config (contains user tokens)
+scripts/cc-connect-config.toml
 
 # typescript
 *.tsbuildinfo
@@ -47,3 +50,9 @@ yarn-error.log*
 
 # Vite build output in public/
 public/assets/
+
+# .agents — only rules.md is tracked
+#.agents/*
+#!.agents/rules.md
+#!.agents/runs/3e2d5054-b66a-48a9-a47c-69593d25f6ba/*
+

@@ -3,20 +3,20 @@ import { createLogger } from '@/lib/logger';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { minimizeAntigravityWindow } from '@/lib/window-control';
+import { GATEWAY_HOME, HIDDEN_WS_FILE } from '@/lib/agents/gateway-home';
 
 export const dynamic = 'force-dynamic';
 
 const log = createLogger('Workspace');
 
-const DATA_DIR = path.join(process.cwd(), '..', 'data');
-const HIDDEN_FILE = path.join(DATA_DIR, 'hidden_workspaces.json');
+const HIDDEN_FILE = HIDDEN_WS_FILE;
 
 function readHidden(): string[] {
   try { return JSON.parse(readFileSync(HIDDEN_FILE, 'utf-8')); } catch { return []; }
 }
 
 function writeHidden(list: string[]) {
-  mkdirSync(DATA_DIR, { recursive: true });
+  mkdirSync(GATEWAY_HOME, { recursive: true });
   writeFileSync(HIDDEN_FILE, JSON.stringify(list, null, 2));
 }
 

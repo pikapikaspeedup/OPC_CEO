@@ -1,0 +1,24 @@
+{
+  "id": "coding-basic-template",
+  "kind": "template",
+  "title": "简单编码",
+  "description": "单个 dev-worker 执行编码任务，无 review loop。",
+
+  "groups": {
+    "coding-basic": {
+      "title": "Coding Worker",
+      "description": "Single dev-worker that executes coding tasks in the workspace.",
+      "executionMode": "legacy-single",
+      "capabilities": { "acceptsEnvelope": false, "emitsManifest": false, "advisory": false },
+      "roles": [
+        { "id": "dev-worker", "workflow": "/dev-worker", "timeoutMs": 1200000, "autoApprove": true }
+      ]
+    }
+  },
+
+  "pipeline": [
+    { "groupId": "coding-basic", "autoTrigger": false }
+  ],
+
+  "defaultModel": "MODEL_PLACEHOLDER_M26"
+}

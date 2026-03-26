@@ -58,7 +58,9 @@ python3 scripts/call_workflow.py   # → creates conversation, runs /ai-topic-di
 | 🌐 **Remote Web UI** | Full chat interface with Markdown rendering, tool cards, model selector, Stop/Revert/Proceed |
 | 🤖 **REST API** | 17 endpoints covering conversations, models, skills, workflows, rules, analytics |
 | ⚡ **Real-time WebSocket** | StreamAgentStateUpdates proxied as JSON — subscribe and get AI responses in real-time |
-| 🔍 **Auto-Discovery** | Zero config. Automatically finds all running language_server instances via `ps`+`lsof` |
+| � **WeChat** | Chat with AI via WeChat using cc-connect + ACP adapter. [Setup guide →](docs/guide/wechat-setup.md) |
+| 📔 **Obsidian Plugin** | AI chat sidebar in Obsidian, directly connected to Gateway. [Setup guide →](docs/guide/obsidian-setup.md) |
+| �🔍 **Auto-Discovery** | Zero config. Automatically finds all running language_server instances via `ps`+`lsof` |
 | 🔀 **Smart Routing** | Routes each conversation to the correct workspace-matching server (not random) |
 | 📱 **Mobile-First** | Built with shadcn/ui + Tailwind CSS 4, responsive from phone to desktop |
 | 🎯 **Skill/Workflow Support** | `@skill-name` and `/workflow-name` autocomplete in the chat input |
@@ -97,6 +99,23 @@ python3 scripts/call_workflow.py   # → creates conversation, runs /ai-topic-di
 │   Shared .pb files, isolated in-memory state      │
 └──────────────────────────────────────────────────┘
 ```
+
+---
+
+## Global Data Directory
+
+On first startup, the Gateway automatically syncs Agent templates, workflows, and other asset files from the repository to the global directory `~/.gemini/antigravity/gateway/`. Runtime registries (projects, runs, conversation mappings) are also persisted here.
+
+> ⚠️ **Do not change this path.** The IDE's built-in Language Server uses the `~/.gemini/` directory. A custom path may prevent the IDE from reading Gateway data, causing conversation and Agent functionality issues.
+
+| Global Path | Contents |
+|-------------|----------|
+| `assets/templates/` | Agent Group template definitions (JSON) |
+| `assets/workflows/` | Role workflow instructions (Markdown) |
+| `assets/standards/` | Design standards documents |
+| `projects.json` | Project registry |
+| `agent_runs.json` | Agent Run state |
+| `local_conversations.json` | Local conversation mappings |
 
 ---
 

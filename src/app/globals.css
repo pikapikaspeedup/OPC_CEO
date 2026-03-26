@@ -7,8 +7,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'Fira Code', 'IBM Plex Mono', monospace;
+  --font-sans: var(--font-manrope), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), 'IBM Plex Mono', monospace;
   
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -67,31 +67,62 @@
 }
 
 .dark {
-  /* Slate/Zinc based premium palette */
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #09090b;
-  --card-foreground: #fafafa;
-  --popover: #09090b;
-  --popover-foreground: #fafafa;
+  --background: #09111b;
+  --foreground: #f4f7fb;
+  --card: #0f1726;
+  --card-foreground: #f4f7fb;
+  --popover: #101a2b;
+  --popover-foreground: #f4f7fb;
   --primary: #fafafa;
   --primary-foreground: #18181b;
-  --secondary: #27272a;
+  --secondary: #172133;
   --secondary-foreground: #fafafa;
-  --muted: #27272a;
-  --muted-foreground: #a1a1aa;
-  --accent: #27272a;
+  --muted: #131d2e;
+  --muted-foreground: #8ea0b8;
+  --accent: #182335;
   --accent-foreground: #fafafa;
-  --destructive: #ef4444;
+  --destructive: #f87171;
   --destructive-foreground: #fafafa;
-  --border: #27272a;
-  --input: #27272a;
-  --ring: #d4d4d8;
-  --chart-1: #2563eb;
+  --border: #213047;
+  --input: #131d2e;
+  --ring: #58f3d4;
+  --chart-1: #58f3d4;
   --chart-2: #22c55e;
-  --chart-3: #ff7010;
-  --chart-4: #8b5cf6;
-  --chart-5: #f43f5e;
+  --chart-3: #f5b74c;
+  --chart-4: #60a5fa;
+  --chart-5: #f87171;
+
+  --app-ink: #09111b;
+  --app-surface: #0f1726;
+  --app-raised: #131d2e;
+  --app-raised-2: #162235;
+  --app-text: #f4f7fb;
+  --app-text-soft: #c0cbda;
+  --app-text-muted: #8ea0b8;
+  --app-border-soft: rgba(142, 160, 184, 0.18);
+  --app-border-strong: rgba(88, 243, 212, 0.22);
+  --app-accent: #58f3d4;
+  --app-accent-soft: rgba(88, 243, 212, 0.14);
+  --app-signal: #f5b74c;
+  --app-signal-soft: rgba(245, 183, 76, 0.14);
+  --app-danger: #f87171;
+  --panel-radius: 24px;
+  --panel-radius-tight: 18px;
+  --panel-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+
+  --agent-shell: var(--app-ink);
+  --agent-shell-2: var(--app-surface);
+  --agent-panel: color-mix(in srgb, var(--app-surface) 92%, transparent);
+  --agent-panel-strong: color-mix(in srgb, var(--app-surface) 96%, transparent);
+  --agent-panel-soft: color-mix(in srgb, var(--app-raised) 82%, transparent);
+  --agent-border-soft: var(--app-border-soft);
+  --agent-border-strong: var(--app-border-strong);
+  --agent-highlight: var(--app-accent);
+  --agent-highlight-soft: var(--app-accent-soft);
+  --agent-signal: var(--app-signal);
+  --agent-signal-soft: var(--app-signal-soft);
+  --agent-text-soft: var(--app-text-soft);
+  --agent-text-muted: var(--app-text-muted);
 }
 
 @layer base {
@@ -102,6 +133,11 @@
     @apply bg-background text-foreground font-sans antialiased;
     overflow: hidden;
     height: 100dvh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-space-grotesk), var(--font-manrope), sans-serif;
+    letter-spacing: -0.03em;
   }
 }
 
@@ -123,6 +159,7 @@
 /* Markdown Polishing */
 .chat-markdown {
   @apply space-y-4;
+  color: var(--app-text-soft);
 }
 .chat-markdown h1, .chat-markdown h2, .chat-markdown h3 {
   @apply font-bold tracking-tight mt-6 mb-2 first:mt-0;
@@ -135,7 +172,10 @@
   @apply px-1.5 py-0.5 rounded bg-muted font-mono text-sm;
 }
 .chat-markdown pre {
-  @apply shadow-sm rounded-lg overflow-hidden border bg-zinc-950/50 my-4;
+  @apply overflow-hidden border my-4;
+  background: rgba(8, 12, 20, 0.88);
+  border-color: var(--app-border-soft);
+  border-radius: 18px;
 }
 .chat-markdown pre code {
   @apply block p-4 bg-transparent text-xs leading-relaxed overflow-x-auto;
@@ -146,10 +186,12 @@
 .chat-markdown ul { @apply list-disc; }
 .chat-markdown ol { @apply list-decimal; }
 .chat-markdown blockquote {
-  @apply border-l-4 border-muted pl-4 italic text-muted-foreground;
+  @apply pl-4 italic text-muted-foreground;
+  border-left: 2px solid rgba(88, 243, 212, 0.32);
 }
 .chat-markdown a {
-  @apply text-primary underline underline-offset-4 font-medium;
+  color: var(--app-accent);
+  @apply underline underline-offset-4 font-medium;
 }
 
 /* Animations */
@@ -160,4 +202,144 @@
 
 .animate-pulse-subtle {
   animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -8px, 0); }
+}
+
+@layer utilities {
+  .agent-stage {
+    background:
+      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 22%),
+      radial-gradient(circle at 76% 8%, rgba(245, 183, 76, 0.08), transparent 18%),
+      linear-gradient(180deg, #09111b 0%, #0b1320 45%, #09111b 100%);
+  }
+
+  .agent-grid {
+    background-image:
+      linear-gradient(rgba(142, 160, 184, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(142, 160, 184, 0.03) 1px, transparent 1px);
+    background-position: center;
+    background-size: 48px 48px;
+    mask-image: radial-gradient(circle at center, black 46%, transparent 100%);
+  }
+
+  .app-shell-stage {
+    background:
+      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 22%),
+      linear-gradient(180deg, #09111b 0%, #0a1421 52%, #09111b 100%);
+  }
+
+  .app-pane {
+    background: linear-gradient(180deg, rgba(15, 23, 38, 0.92) 0%, rgba(12, 19, 31, 0.92) 100%);
+    border: 1px solid var(--app-border-soft);
+  }
+
+  .app-pane-strong {
+    background:
+      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 28%),
+      linear-gradient(180deg, rgba(16, 24, 38, 0.96) 0%, rgba(10, 17, 28, 0.96) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .app-pane-soft {
+    background: linear-gradient(180deg, rgba(18, 28, 43, 0.82) 0%, rgba(13, 21, 34, 0.82) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .chat-stage-panel {
+    background:
+      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 24%),
+      linear-gradient(180deg, rgba(14, 22, 35, 0.94) 0%, rgba(10, 17, 28, 0.98) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 34px 90px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(22px);
+  }
+
+  .chat-stage-content {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.014) 0%, rgba(255, 255, 255, 0) 16%),
+      radial-gradient(circle at top center, rgba(88, 243, 212, 0.04), transparent 38%);
+  }
+
+  .chat-composer-frame {
+    background:
+      radial-gradient(circle at top right, rgba(88, 243, 212, 0.07), transparent 32%),
+      linear-gradient(180deg, rgba(16, 24, 38, 0.97) 0%, rgba(10, 17, 28, 0.99) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 24px 70px rgba(0, 0, 0, 0.36),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    border-radius: 30px;
+    backdrop-filter: blur(24px);
+  }
+
+  .agent-panel {
+    background: linear-gradient(180deg, rgba(15, 23, 38, 0.92) 0%, rgba(12, 19, 31, 0.92) 100%);
+    border: 1px solid var(--agent-border-soft);
+    box-shadow: var(--panel-shadow);
+    backdrop-filter: blur(18px);
+    border-radius: var(--panel-radius);
+  }
+
+  .agent-panel-strong {
+    background:
+      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 30%),
+      linear-gradient(180deg, rgba(16, 24, 38, 0.96) 0%, rgba(10, 17, 28, 0.96) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: var(--panel-shadow);
+    backdrop-filter: blur(22px);
+    border-radius: var(--panel-radius);
+  }
+
+  .agent-panel-soft {
+    background: linear-gradient(180deg, rgba(18, 28, 43, 0.82) 0%, rgba(13, 21, 34, 0.82) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(14px);
+    border-radius: var(--panel-radius-tight);
+  }
+
+  .agent-kicker {
+    color: var(--agent-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+
+  .app-eyebrow {
+    color: var(--app-text-muted);
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+
+  .app-heading {
+    font-family: var(--font-space-grotesk), var(--font-manrope), sans-serif;
+    color: var(--app-text);
+    letter-spacing: -0.04em;
+  }
+
+  .agent-metric {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, rgba(255, 255, 255, 0.012) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    border-radius: var(--panel-radius-tight);
+  }
+
+  .agent-floating {
+    animation: float-slow 9s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-floating {
+    animation: none;
+  }
 }

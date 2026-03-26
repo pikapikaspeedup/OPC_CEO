@@ -20,6 +20,8 @@ function getTargets(filename: string): pino.TransportTargetOptions[] {
         colorize: true,
         translateTime: 'HH:MM:ss',
         ignore: 'pid,hostname',
+        // MCP stdio mode: stdout is reserved for JSON-RPC, redirect logs to stderr
+        ...(process.env.ANTIGRAVITY_MCP ? { destination: 2 } : {}),
       },
       level: process.env.LOG_LEVEL || 'debug',
     },
@@ -37,7 +39,7 @@ const wsLogger = pino({ level: 'debug' }, pino.transport({ targets: getTargets('
 export const createLogger = (module: string) => {
   let parent = sysLogger;
   
-  if (['NewConv', 'SendMsg', 'Proceed', 'Revert', 'Steps'].includes(module)) {
+  if (['NewConv', 'SendMsg', 'Proceed', 'Revert', 'Steps', 'StepsAPI'].includes(module)) {
     parent = convLogger;
   } else if (['Launch', 'Close', 'Kill', 'FileSearch', 'Workspace'].includes(module)) {
     parent = wsLogger;
