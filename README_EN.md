@@ -16,6 +16,9 @@
   <img src="docs/assets/mobile.png" width="25%" alt="Antigravity Gateway Mobile UI" />
 </p>
 
+Thanks **[linuxdo（linux.do）](https://linux.do/)** share, contributor , learn and get together 
+
+
 ## 🆕 What's New in v0.2.0
 
 - 📋 **Knowledge Panel** — Browse, edit, and delete Knowledge Items and their Artifacts
