@@ -420,7 +420,7 @@ export class RelatedNotesView extends ItemView {
     splitBtn.createSpan({ text: 'Split' });
     splitBtn.addEventListener('click', () => {
       if (this.currentPath) {
-        (this.app as any).commands.executeCommandById('antigravity:atom-split');
+        (this.app as any).commands.executeCommandById('obsidian-antigravity:atom-split');
       }
     });
     if (!this.copilotConnected) splitBtn.addClass('ag-rel-quick-btn-disabled');
@@ -432,7 +432,7 @@ export class RelatedNotesView extends ItemView {
     upgradeBtn.createSpan({ text: 'Upgrade' });
     upgradeBtn.addEventListener('click', () => {
       if (this.currentPath) {
-        (this.app as any).commands.executeCommandById('antigravity:atom-upgrade');
+        (this.app as any).commands.executeCommandById('obsidian-antigravity:atom-upgrade');
       }
     });
     if (!this.copilotConnected) upgradeBtn.addClass('ag-rel-quick-btn-disabled');

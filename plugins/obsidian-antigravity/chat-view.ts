@@ -8,7 +8,7 @@
 
 import { ItemView, WorkspaceLeaf, MarkdownRenderer, setIcon, Menu, Notice } from 'obsidian';
 import type AntigravityPlugin from './main';
-import type { Conversation, Step, StepsData, ModelConfig, WsConnectionState, SkillItem, WorkflowItem } from './api-client';
+import type { Conversation, Step, StepsData, ModelConfig, WsConnectionState, SkillItem, WorkflowItem, MessageItem } from './api-client';
 import type { PinItem, PromptTemplate } from './settings';
 import { logger } from './logger';
 
@@ -24,6 +24,13 @@ interface AutocompleteItem {
   description: string;
   prefix: string; // text inserted into input
   icon: string;   // Obsidian icon name
+}
+
+interface ContextPreviewItem {
+  id: string;
+  label: string;
+  path: string;
+  source: 'smart' | 'knowledge';
 }
 
 export class ChatView extends ItemView {
@@ -84,9 +91,12 @@ export class ChatView extends ItemView {
   private streamingPhase: string | null = null;
 
   // Context tags for Smart Context UI
-  private contextTags: string[] = [];
-  private dismissedContextTags = new Set<string>(); // Tags user explicitly removed — prevent re-adding on focus
+  private contextItems: ContextPreviewItem[] = [];
+  private dismissedContextPaths = new Set<string>();
   private contextBarEl: HTMLElement | null = null;
+  private contextPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  private smartContextEnabledForDraft = false;
+  private knowledgeContextEnabledForDraft = false;
   private editorSelection: string = '';
   private selectionBarEl: HTMLElement | null = null;
   private selectionEventRef: any = null;
@@ -124,6 +134,7 @@ export class ChatView extends ItemView {
   async onOpen() {
     logger.info(LOG_SRC, 'Chat view opened');
     this.loadPreferences();
+    this.resetDraftContextState();
     const container = this.contentEl;
     container.empty();
     container.addClass('antigravity-chat-root');
@@ -181,6 +192,10 @@ export class ChatView extends ItemView {
     if (this.fileSearchTimer) {
       clearTimeout(this.fileSearchTimer);
       this.fileSearchTimer = null;
+    }
+    if (this.contextPreviewTimer) {
+      clearTimeout(this.contextPreviewTimer);
+      this.contextPreviewTimer = null;
     }
     // Clean up any model dropdown attached to document.body
     this.cleanupModelDropdown();
@@ -502,6 +517,7 @@ export class ChatView extends ItemView {
     this.currentCascadeId = null;
     this.steps = [];
     this.renderedStepCount = 0;
+    this.resetContextPreview();
     this.showingConversationList = true;
     this.renderHeader();
     this.conversationListEl.show();
@@ -517,9 +533,7 @@ export class ChatView extends ItemView {
     logger.info(LOG_SRC, `Opening conversation ${cascadeId.slice(0, 8)}`);
     this.currentCascadeId = cascadeId;
     this.showingConversationList = false;
-    this.contextTags = [];
-    this.dismissedContextTags.clear();
-    this.renderContextBar();
+    this.resetContextPreview();
     this.renderHeader();
     this.conversationListEl.hide();
     this.messagesEl.show();
@@ -740,7 +754,8 @@ export class ChatView extends ItemView {
   private renderUserMessage(step: Step) {
     const bubble = this.messagesEl.createDiv({ cls: 'ag-msg ag-msg-user' });
     const items = step.userInput?.items || [];
-    const text = items.map(i => i.text || '').filter(Boolean).join('\n');
+    const text = items.map(i => i.text || '').filter(Boolean).join('');
+    const files = this.getUserInputFiles(items);
 
     // Render attached images
     const media = step.userInput?.media || [];
@@ -762,8 +777,23 @@ export class ChatView extends ItemView {
     }
 
     // Display user message with absolute paths shortened to vault-relative
-    const displayText = this.shortenPaths(text || (media.length > 0 ? '' : '(empty)'));
-    bubble.createDiv({ text: displayText, cls: 'ag-msg-text' });
+    const displayText = this.shortenPaths(text.trim());
+    if (displayText) {
+      bubble.createDiv({ text: displayText, cls: 'ag-msg-text' });
+    }
+
+    if (files.length > 0) {
+      const filesEl = bubble.createDiv({ cls: 'ag-msg-files' });
+      for (const file of files) {
+        const chip = filesEl.createSpan({ cls: 'ag-context-tag ag-msg-file-chip' });
+        chip.createSpan({ text: file.label });
+        chip.title = file.path;
+      }
+    }
+
+    if (!displayText && files.length === 0 && media.length === 0) {
+      bubble.createDiv({ text: '(empty)', cls: 'ag-msg-text' });
+    }
   }
 
   /** Replace @[/absolute/vault/path/file.md] with @[file.md] in display text */
@@ -1255,13 +1285,12 @@ export class ChatView extends ItemView {
       this.inputEl.style.height = 'auto';
       this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 150) + 'px';
       this.handleAutocomplete();
+      this.scheduleContextPreview();
     });
 
     // Show Smart Context preview on focus
     this.inputEl.addEventListener('focus', () => {
-      if (!this.inputEl.value.includes('@[')) {
-        this.previewSmartContext();
-      }
+      this.scheduleContextPreview();
     });
 
     // Keyboard navigation for autocomplete + send
@@ -1651,6 +1680,7 @@ export class ChatView extends ItemView {
     // Trigger resize
     this.inputEl.style.height = 'auto';
     this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 150) + 'px';
+    this.scheduleContextPreview();
   }
 
   // ── Code Block Enhancement ──
@@ -1906,6 +1936,27 @@ export class ChatView extends ItemView {
       this.renderToolbar(container);
     });
 
+    const smartBtn = container.createEl('button', {
+      cls: `ag-attach-btn ag-context-toggle-btn ag-smart-context-btn${this.smartContextEnabledForDraft ? ' is-active' : ''}`,
+      attr: {
+        'aria-label': 'Toggle smart context',
+        'aria-pressed': this.smartContextEnabledForDraft ? 'true' : 'false',
+      },
+    });
+    const smartIcon = smartBtn.createSpan({ cls: 'ag-mode-icon' });
+    setIcon(smartIcon, 'files');
+    smartBtn.createSpan({ text: ' Smart' });
+    if (this.getSmartContextMode() === 'auto') {
+      smartBtn.title = this.smartContextEnabledForDraft
+        ? 'Current note context is automatically included for this draft. Click to pause it for this message.'
+        : 'Automatic current note context is paused for this draft. Click to turn it back on.';
+    } else {
+      smartBtn.title = this.smartContextEnabledForDraft
+        ? 'Current note context will be included for this draft. Click to turn it off.'
+        : 'Click to add the current note context for this draft.';
+    }
+    smartBtn.addEventListener('click', () => this.toggleSmartContextForDraft());
+
     // Attach active file button
     const attachBtn = container.createEl('button', { cls: 'ag-attach-btn', attr: { 'aria-label': 'Attach current file' } });
     const attachIcon = attachBtn.createSpan({ cls: 'ag-mode-icon' });
@@ -1919,6 +1970,27 @@ export class ChatView extends ItemView {
     setIcon(promptIcon, 'file-text');
     promptBtn.title = 'Prompt Templates';
     promptBtn.addEventListener('click', () => this.showPromptPicker());
+
+    const relatedBtn = container.createEl('button', {
+      cls: `ag-attach-btn ag-context-toggle-btn ag-related-context-btn${this.knowledgeContextEnabledForDraft ? ' is-active' : ''}`,
+      attr: {
+        'aria-label': 'Toggle related notes context',
+        'aria-pressed': this.knowledgeContextEnabledForDraft ? 'true' : 'false',
+      },
+    });
+    const relatedIcon = relatedBtn.createSpan({ cls: 'ag-mode-icon' });
+    setIcon(relatedIcon, 'brain');
+    relatedBtn.createSpan({ text: ' Related' });
+    if (this.getKnowledgeContextMode() === 'auto') {
+      relatedBtn.title = this.knowledgeContextEnabledForDraft
+        ? 'Related notes are automatically included for this draft. Click to pause them for this message.'
+        : 'Automatic related notes are paused for this draft. Click to turn them back on.';
+    } else {
+      relatedBtn.title = this.knowledgeContextEnabledForDraft
+        ? 'Related notes will be included for this draft. Click to turn them off.'
+        : 'Click to add related notes for this draft.';
+    }
+    relatedBtn.addEventListener('click', () => this.toggleKnowledgeContextForDraft());
 
     // Pin count indicator (if pins exist)
     const pinCount = (this.plugin.settings.pins || []).length;
@@ -2059,6 +2131,8 @@ export class ChatView extends ItemView {
     if (!text) return;
 
     const originalText = text; // preserve for knowledge query
+    this.refreshContextPreview(originalText);
+    const hasFileRefs = /@\[/.test(text);
 
     this.isSending = true;
     this.inputEl.value = '';
@@ -2106,8 +2180,7 @@ export class ChatView extends ItemView {
 
     // ── Smart Context Injection ──
     // Inject context about active note and recent files (unless user already has @[] refs)
-    const hasFileRefs = /@\[/.test(text);
-    if (!hasFileRefs) {
+    if (this.shouldPreviewSmartContext() && !hasFileRefs) {
       const contextPrefix = this.buildSmartContext();
       if (contextPrefix) {
         text = contextPrefix + text;
@@ -2115,32 +2188,15 @@ export class ChatView extends ItemView {
     }
 
     // ── Knowledge Context Injection ──
-    // Query KnowledgeEngine with the user's original message to find related vault notes
-    if (this.plugin.knowledgeEngine) {
-      try {
-        const vaultBase = (this.app.vault.adapter as any).basePath as string;
-        // Collect paths already referenced in text to avoid duplicates
-        const existingRefs = new Set<string>();
-        const refMatches = text.matchAll(/@\[([^\]]+)\]/g);
-        for (const m of refMatches) {
-          const refPath = m[1].replace(vaultBase + '/', '');
-          existingRefs.add(refPath);
-        }
-        // Also exclude the active file
-        const activeFile = this.app.workspace.getActiveFile();
-        if (activeFile) existingRefs.add(activeFile.path);
-
-        const related = this.plugin.knowledgeEngine.queryByText(originalText, 3, existingRefs);
-        if (related.length > 0) {
-          const knowledgeRefs = related
-            .map(r => `@[${vaultBase}/${r.path}]`)
-            .join(' ');
-          text = knowledgeRefs + '\n' + text;
-        }
-      } catch (err: any) {
-        logger.warn(LOG_SRC, 'Knowledge context injection failed', { message: err?.message });
+    if (this.shouldPreviewKnowledgeContext()) {
+      const existingRefs = this.extractReferencedVaultPaths(text);
+      const knowledgePrefix = this.buildContextPrefix('knowledge', existingRefs);
+      if (knowledgePrefix) {
+        text = knowledgePrefix + text;
       }
     }
+
+    this.resetContextPreview();
 
     logger.info(LOG_SRC, 'Sending message', { length: text.length });
 
@@ -2148,7 +2204,7 @@ export class ChatView extends ItemView {
     const userStep: Step = {
       type: 'CORTEX_STEP_TYPE_USER_INPUT',
       userInput: {
-        items: [{ text }],
+        items: this.parseUserInputItems(text),
         media: images.map(img => ({
           mimeType: img.mimeType,
           inlineData: img.dataUrl.split(',')[1],
@@ -2214,50 +2270,232 @@ export class ChatView extends ItemView {
    * Returns empty string if no relevant context.
    */
   private buildSmartContext(): string {
-    const vaultBase = (this.app.vault.adapter as any).basePath as string;
-    const parts: string[] = [];
-    const freshTags: string[] = [];
+    return this.buildContextPrefix('smart');
+  }
 
-    // 1. Active file
-    const activeFile = this.app.workspace.getActiveFile();
-    if (activeFile) {
-      const name = activeFile.name;
-      if (this.contextTags.includes(name)) {
-        parts.push(`@[${vaultBase}/${activeFile.path}]`);
-        freshTags.push(name);
-      }
+  private getSmartContextMode(): 'manual' | 'auto' {
+    return this.plugin.settings.smartContextMode === 'auto' ? 'auto' : 'manual';
+  }
 
-      // 2. Backlinks of active file (via metadataCache)
-      const backlinks = this.getBacklinks(activeFile.path);
-      for (const bl of backlinks.slice(0, 3)) {
-        const blName = bl.split('/').pop() || bl;
-        if (this.contextTags.includes(blName)) {
-          parts.push(`@[${vaultBase}/${bl}]`);
-          freshTags.push(blName);
-        }
-      }
+  private getKnowledgeContextMode(): 'manual' | 'auto' {
+    return this.plugin.settings.knowledgeContextMode === 'auto' ? 'auto' : 'manual';
+  }
+
+  private resetDraftContextState() {
+    this.smartContextEnabledForDraft = this.getSmartContextMode() === 'auto';
+    this.knowledgeContextEnabledForDraft = this.getKnowledgeContextMode() === 'auto';
+    const toolbar = this.inputContainerEl?.querySelector('.ag-toolbar');
+    if (toolbar instanceof HTMLElement) {
+      this.renderToolbar(toolbar);
+    }
+  }
+
+  private toggleSmartContextForDraft() {
+    this.smartContextEnabledForDraft = !this.smartContextEnabledForDraft;
+
+    if (this.smartContextEnabledForDraft) {
+      this.refreshContextPreview();
+    } else {
+      this.contextItems = this.contextItems.filter(item => item.source !== 'smart');
+      this.renderContextBar();
     }
 
-    // 3. Recently edited files (last 3 unique, excluding active)
-    const recentFiles = this.getRecentFiles(activeFile?.path);
-    for (const rf of recentFiles.slice(0, 2)) {
-      const rfName = rf.split('/').pop() || rf;
-      if (this.contextTags.includes(rfName)) {
-        const refPath = `${vaultBase}/${rf}`;
-        if (!parts.includes(`@[${refPath}]`)) {
-          parts.push(`@[${refPath}]`);
-          freshTags.push(rfName);
-        }
-      }
+    const toolbar = this.inputContainerEl?.querySelector('.ag-toolbar');
+    if (toolbar instanceof HTMLElement) {
+      this.renderToolbar(toolbar);
+    }
+  }
+
+  private toggleKnowledgeContextForDraft() {
+    this.knowledgeContextEnabledForDraft = !this.knowledgeContextEnabledForDraft;
+
+    if (this.knowledgeContextEnabledForDraft) {
+      this.refreshContextPreview();
+    } else {
+      this.contextItems = this.contextItems.filter(item => item.source !== 'knowledge');
+      this.renderContextBar();
     }
 
-    // Clear context bar after sending — also reset dismissed set for next message
-    this.contextTags = [];
-    this.dismissedContextTags.clear();
+    const toolbar = this.inputContainerEl?.querySelector('.ag-toolbar');
+    if (toolbar instanceof HTMLElement) {
+      this.renderToolbar(toolbar);
+    }
+  }
+
+  private shouldPreviewSmartContext(): boolean {
+    return this.smartContextEnabledForDraft;
+  }
+
+  private shouldPreviewKnowledgeContext(): boolean {
+    return !!this.plugin.knowledgeEngine && this.knowledgeContextEnabledForDraft;
+  }
+
+  private resetContextPreview() {
+    if (this.contextPreviewTimer) {
+      clearTimeout(this.contextPreviewTimer);
+      this.contextPreviewTimer = null;
+    }
+    this.contextItems = [];
+    this.dismissedContextPaths.clear();
     this.renderContextBar();
+    this.resetDraftContextState();
+  }
 
-    if (parts.length === 0) return '';
-    return parts.join(' ') + '\n\n';
+  private scheduleContextPreview() {
+    if (this.contextPreviewTimer) {
+      clearTimeout(this.contextPreviewTimer);
+    }
+    this.contextPreviewTimer = setTimeout(() => {
+      this.contextPreviewTimer = null;
+      this.refreshContextPreview();
+    }, 80);
+  }
+
+  private refreshContextPreview(queryText = this.inputEl?.value || '') {
+    const nextItems: ContextPreviewItem[] = [];
+    const hasManualFileRefs = /@\[[^\]]+\]/.test(queryText);
+    const pushItem = (path: string, source: ContextPreviewItem['source']) => {
+      if (!path || this.dismissedContextPaths.has(path) || nextItems.some(item => item.path === path)) {
+        return;
+      }
+      nextItems.push({
+        id: `${source}:${path}`,
+        label: path.split('/').pop() || path,
+        path,
+        source,
+      });
+    };
+
+    if (this.shouldPreviewSmartContext() && !hasManualFileRefs) {
+      const activeFile = this.app.workspace.getActiveFile();
+      if (activeFile) {
+        pushItem(activeFile.path, 'smart');
+        for (const backlink of this.getBacklinks(activeFile.path).slice(0, 3)) {
+          pushItem(backlink, 'smart');
+        }
+      }
+
+      for (const recentFile of this.getRecentFiles(activeFile?.path).slice(0, 2)) {
+        pushItem(recentFile, 'smart');
+      }
+    }
+
+    if (this.shouldPreviewKnowledgeContext()) {
+      try {
+        const query = this.stripFileMentions(queryText).trim();
+        if (query) {
+          const excludePaths = this.extractReferencedVaultPaths(queryText);
+          const activeFile = this.app.workspace.getActiveFile();
+          if (activeFile) excludePaths.add(activeFile.path);
+          for (const item of nextItems) excludePaths.add(item.path);
+
+          const related = this.plugin.knowledgeEngine.queryByText(query, 3, excludePaths);
+          for (const result of related) {
+            pushItem(result.path, 'knowledge');
+          }
+        }
+      } catch (err: any) {
+        logger.warn(LOG_SRC, 'Knowledge context preview failed', { message: err?.message });
+      }
+    }
+
+    this.contextItems = nextItems;
+    this.renderContextBar();
+  }
+
+  private buildContextPrefix(source: ContextPreviewItem['source'], excludePaths = new Set<string>()): string {
+    const vaultBase = (this.app.vault.adapter as any).basePath as string;
+    const refs = this.contextItems
+      .filter(item => item.source === source && !excludePaths.has(item.path))
+      .map(item => `@[${vaultBase}/${item.path}]`);
+    if (refs.length === 0) return '';
+    return refs.join(' ') + '\n\n';
+  }
+
+  private stripFileMentions(text: string): string {
+    return text.replace(/@\[[^\]]+\]/g, ' ');
+  }
+
+  private toVaultRelativePath(rawPath: string): string | null {
+    const trimmed = rawPath.trim();
+    if (!trimmed) return null;
+
+    const vaultBase = (this.app.vault.adapter as any).basePath as string;
+    if (vaultBase && trimmed.startsWith(`${vaultBase}/`)) {
+      return trimmed.slice(vaultBase.length + 1);
+    }
+    if (!trimmed.startsWith('/')) {
+      return trimmed.replace(/^\.\//, '');
+    }
+    return null;
+  }
+
+  private extractReferencedVaultPaths(text: string): Set<string> {
+    const refs = new Set<string>();
+    for (const match of text.matchAll(/@\[(.*?)\]/g)) {
+      const relativePath = this.toVaultRelativePath(match[1] || '');
+      if (relativePath) refs.add(relativePath);
+    }
+    return refs;
+  }
+
+  private parseUserInputItems(text: string): MessageItem[] {
+    const items: MessageItem[] = [];
+    const vaultBase = (this.app.vault.adapter as any).basePath as string;
+    const workspaceUri = `file://${vaultBase}`;
+    const fileRegex = /@\[(.*?)\]/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = fileRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        items.push({ text: text.substring(lastIndex, match.index) });
+      }
+
+      const rawPath = (match[1] || '').trim();
+      if (rawPath) {
+        const absolutePath = rawPath.startsWith('/') ? rawPath : `${vaultBase}/${rawPath.replace(/^\.\//, '')}`;
+        const relativePath = this.toVaultRelativePath(rawPath);
+        const fileItem: MessageItem = {
+          item: {
+            file: {
+              absoluteUri: `file://${absolutePath}`,
+            },
+          },
+        };
+        if (relativePath && fileItem.item?.file) {
+          fileItem.item.file.workspaceUrisToRelativePaths = { [workspaceUri]: relativePath };
+        }
+        items.push(fileItem);
+      }
+
+      lastIndex = fileRegex.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+      items.push({ text: text.substring(lastIndex) });
+    }
+
+    return items.length > 0 ? items : [{ text }];
+  }
+
+  private getUserInputFiles(items: MessageItem[]): Array<{ label: string; path: string }> {
+    const files: Array<{ label: string; path: string }> = [];
+
+    for (const item of items) {
+      const file = item.item?.file;
+      if (!file) continue;
+
+      const relativePath = Object.values(file.workspaceUrisToRelativePaths || {})[0]
+        || this.toVaultRelativePath((file.absoluteUri || '').replace(/^file:\/\//, ''));
+      const label = relativePath || file.absoluteUri?.split('/').pop() || 'file';
+      const path = relativePath || (file.absoluteUri || '').replace(/^file:\/\//, '');
+      if (!files.some(existing => existing.path === path)) {
+        files.push({ label, path });
+      }
+    }
+
+    return files;
   }
 
   private updateEditorSelection() {
@@ -2669,7 +2907,7 @@ export class ChatView extends ItemView {
     if (!this.contextBarEl) return;
     this.contextBarEl.empty();
 
-    if (this.contextTags.length === 0) {
+    if (this.contextItems.length === 0) {
       this.contextBarEl.hide();
       return;
     }
@@ -2679,41 +2917,23 @@ export class ChatView extends ItemView {
     setIcon(label, 'paperclip');
     label.appendText(' Context:');
 
-    for (let i = 0; i < this.contextTags.length; i++) {
+    for (const item of this.contextItems) {
       const tag = this.contextBarEl.createSpan({ cls: 'ag-context-tag' });
-      tag.createSpan({ text: this.contextTags[i] });
+      const prefix = item.source === 'knowledge' ? 'Related: ' : 'Smart: ';
+      tag.createSpan({ text: `${prefix}${item.label}` });
+      tag.title = item.path;
       const removeBtn = tag.createSpan({ cls: 'ag-context-remove', text: '×' });
-      const idx = i;
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const removed = this.contextTags.splice(idx, 1)[0];
-        if (removed) this.dismissedContextTags.add(removed);
+        this.contextItems = this.contextItems.filter(existing => existing.id !== item.id);
+        this.dismissedContextPaths.add(item.path);
         this.renderContextBar();
       });
     }
   }
 
   private previewSmartContext() {
-    const vaultBase = (this.app.vault.adapter as any).basePath as string;
-    const tags: string[] = [];
-
-    const activeFile = this.app.workspace.getActiveFile();
-    if (activeFile) {
-      tags.push(activeFile.name);
-      const backlinks = this.getBacklinks(activeFile.path);
-      for (const bl of backlinks.slice(0, 3)) {
-        tags.push(bl.split('/').pop() || bl);
-      }
-    }
-
-    const recentFiles = this.getRecentFiles(activeFile?.path);
-    for (const rf of recentFiles.slice(0, 2)) {
-      tags.push(rf.split('/').pop() || rf);
-    }
-
-    // Filter out tags user explicitly dismissed (don't re-add them on focus)
-    this.contextTags = tags.filter(t => !this.dismissedContextTags.has(t));
-    this.renderContextBar();
+    this.refreshContextPreview();
   }
 
   /**

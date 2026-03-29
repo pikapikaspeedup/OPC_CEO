@@ -22,10 +22,20 @@ export interface Conversation {
   steps: number;
 }
 
+export interface MessageItem {
+  text?: string;
+  item?: {
+    file?: {
+      absoluteUri?: string;
+      workspaceUrisToRelativePaths?: Record<string, string>;
+    };
+  };
+}
+
 export interface Step {
   type: string;
   status?: string;
-  userInput?: { items?: Array<{ text?: string }>; media?: Array<{ mimeType?: string; inlineData?: string; uri?: string }> };
+  userInput?: { items?: MessageItem[]; media?: Array<{ mimeType?: string; inlineData?: string; uri?: string }> };
   plannerResponse?: { response?: string; modifiedResponse?: string };
   codeAction?: { actionSpec?: { createFile?: any; editFile?: any; deleteFile?: any } };
   errorMessage?: { message?: string };

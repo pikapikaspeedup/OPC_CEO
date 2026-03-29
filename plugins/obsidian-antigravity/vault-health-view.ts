@@ -128,7 +128,7 @@ export class VaultHealthView extends ItemView {
     setIcon(enrichIcon, 'sparkles');
     enrichBtn.createSpan({ text: 'AI Enrich Notes' });
     enrichBtn.addEventListener('click', () => {
-      (this.app as any).commands.executeCommandById('antigravity:enrich-notes-ai');
+      (this.app as any).commands.executeCommandById('obsidian-antigravity:enrich-notes-ai');
     });
 
     const rebuildBtn = actionsRow.createEl('button', { cls: 'ag-health-action-btn', text: '' });

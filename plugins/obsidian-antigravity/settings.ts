@@ -54,6 +54,8 @@ export interface PromptTemplate {
 export interface AntigravitySettings {
   gatewayUrl: string;
   workspaceUri: string; // Explicit workspace URI override (empty = auto-detect from vault path)
+  smartContextMode: 'manual' | 'auto';
+  knowledgeContextMode: 'manual' | 'auto';
   logLevel: LogLevel;
   lastModel: string;      // Persisted model selection
   lastAgenticMode: boolean; // Persisted Plan/Fast mode
@@ -78,6 +80,9 @@ export interface AntigravitySettings {
   // Atomization
   atomizationEnabled: boolean;
   atomizationSettleMinutes: number;
+  // Translation
+  translationTargetLang: string;
+  translationAutoOpen: boolean;
   // Onboarding
   onboardingStep: number; // 0=welcome, 1=type intro, 99=done
 }
@@ -85,6 +90,8 @@ export interface AntigravitySettings {
 export const DEFAULT_SETTINGS: AntigravitySettings = {
   gatewayUrl: 'http://localhost:3000',
   workspaceUri: '',
+  smartContextMode: 'manual',
+  knowledgeContextMode: 'manual',
   logLevel: 'INFO',
   lastModel: 'MODEL_AUTO',
   lastAgenticMode: true,
@@ -103,6 +110,8 @@ export const DEFAULT_SETTINGS: AntigravitySettings = {
   quickActionModel: 'gpt-4o',
   atomizationEnabled: true,
   atomizationSettleMinutes: 5,
+  translationTargetLang: 'en',
+  translationAutoOpen: false,
   onboardingStep: 0,
   promptTemplates: [
     // ── Translate (single template with list variable) ──
@@ -232,6 +241,39 @@ export class AntigravitySettingTab extends PluginSettingTab {
       await this.plugin.saveSettings();
       logger.info(LOG_SRC, 'Workspace updated', { workspace: wsDropdown.value || 'auto-detect' });
     });
+
+    // ── Vault-aware Chat ──
+    containerEl.createEl('h3', { text: 'Vault-aware Chat' });
+
+    new Setting(containerEl)
+      .setName('Smart context')
+      .setDesc('Control whether chat automatically adds the current note, backlinks, and recent files. Manual means they are only added after clicking Smart in the chat toolbar.')
+      .addDropdown((dd) =>
+        dd
+          .addOption('manual', 'Manual — only after clicking Smart')
+          .addOption('auto', 'Automatic — include current note context while typing')
+          .setValue(this.plugin.settings.smartContextMode)
+          .onChange(async (value) => {
+            this.plugin.settings.smartContextMode = value as 'manual' | 'auto';
+            await this.plugin.saveSettings();
+            logger.info(LOG_SRC, 'Smart context mode updated', { mode: value });
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Related notes context')
+      .setDesc('Choose how chat adds related notes from your vault. Manual is the default and only adds them after you click Related in the chat toolbar.')
+      .addDropdown((dd) =>
+        dd
+          .addOption('manual', 'Manual — only after clicking Related')
+          .addOption('auto', 'Automatic — include related notes while typing')
+          .setValue(this.plugin.settings.knowledgeContextMode)
+          .onChange(async (value) => {
+            this.plugin.settings.knowledgeContextMode = value as 'manual' | 'auto';
+            await this.plugin.saveSettings();
+            logger.info(LOG_SRC, 'Knowledge context mode updated', { mode: value });
+          }),
+      );
 
     // ── Log Level ──
     new Setting(containerEl)
@@ -385,6 +427,40 @@ export class AntigravitySettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
             }
           }),
+      );
+
+    // ══════════════════════════════════════════════
+    // ── Translation ──
+    // ══════════════════════════════════════════════
+    containerEl.createEl('h3', { text: 'Translation (Multilingual)' });
+
+    new Setting(containerEl)
+      .setName('Default Target Language')
+      .setDesc('The default language for the Translation panel. You can also switch languages inside the panel.')
+      .addDropdown((dd) =>
+        dd
+          .addOption('en', 'English')
+          .addOption('zh', '中文')
+          .addOption('ja', '日本語')
+          .addOption('ko', '한국어')
+          .addOption('es', 'Español')
+          .addOption('fr', 'Français')
+          .addOption('de', 'Deutsch')
+          .setValue(this.plugin.settings.translationTargetLang)
+          .onChange(async (value) => {
+            this.plugin.settings.translationTargetLang = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Auto-open Translation Panel')
+      .setDesc('Automatically open the translation panel when the plugin loads.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.translationAutoOpen).onChange(async (v) => {
+          this.plugin.settings.translationAutoOpen = v;
+          await this.plugin.saveSettings();
+        }),
       );
 
     // ══════════════════════════════════════════════

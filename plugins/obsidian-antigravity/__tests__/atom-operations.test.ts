@@ -42,7 +42,7 @@ function createMockApp(existingFiles: Map<string, string> = new Map()) {
 }
 
 describe('executeSplit', () => {
-  it('creates atom files with frontmatter', async () => {
+  it('creates atom files in a source-named subfolder with frontmatter', async () => {
     const content = 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5';
     const app = createMockApp(new Map([['notes/big-note.md', content]]));
 
@@ -55,8 +55,9 @@ describe('executeSplit', () => {
     };
 
     const created = await executeSplit(app, 'notes/big-note.md', plan);
-    expect(created).toEqual(['notes/Atom One.md', 'notes/Atom Two.md']);
+    expect(created).toEqual(['notes/big-note/Atom One.md', 'notes/big-note/Atom Two.md']);
     expect(app.vault.create).toHaveBeenCalledTimes(2);
+    expect(app.vault.createFolder).toHaveBeenCalledWith('notes/big-note');
 
     // Check atom content has frontmatter
     const firstCall = (app.vault.create as any).mock.calls[0];
@@ -64,10 +65,10 @@ describe('executeSplit', () => {
     expect(firstCall[1]).toContain('tags: [tag1]');
   });
 
-  it('skips existing files without error', async () => {
+  it('skips existing files in the source subfolder without error', async () => {
     const app = createMockApp(new Map([
       ['notes/source.md', 'Content'],
-      ['notes/Existing.md', 'Already here'],
+      ['notes/source/Existing.md', 'Already here'],
     ]));
 
     const plan: SplitPlan = {
