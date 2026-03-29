@@ -6,7 +6,7 @@ import { App, PluginSettingTab, Setting, Notice, Modal } from 'obsidian';
 import type AntigravityPlugin from './main';
 import { logger, type LogLevel } from './logger';
 import { loginWithGitHubCopilot, fetchCopilotUsage, COPILOT_MODELS, fetchCopilotModels, type CopilotCredentials, type CopilotModel } from './copilot-auth';
-import type { CompletionProvider } from './inline-completion';
+import { DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT, type CompletionProvider } from './inline-completion';
 
 const LOG_SRC = 'Settings';
 
@@ -71,8 +71,11 @@ export interface AntigravitySettings {
   inlineCompletionApiBaseUrl: string;
   inlineCompletionModel: string;
   inlineCompletionDelay: number;
+  inlineCompletionMaxPrefixChars: number;
+  inlineCompletionMaxSuffixChars: number;
   inlineCompletionMaxTokens: number;
   inlineCompletionTemperature: number;
+  inlineCompletionSystemPrompt: string;
   copilotCredentials: CopilotCredentials | null;
   // Quick Action provider
   quickActionProvider: 'antigravity' | 'copilot';
@@ -103,8 +106,11 @@ export const DEFAULT_SETTINGS: AntigravitySettings = {
   inlineCompletionApiBaseUrl: '',
   inlineCompletionModel: 'gpt-4o-mini',
   inlineCompletionDelay: 500,
-  inlineCompletionMaxTokens: 128,
+  inlineCompletionMaxPrefixChars: 5000,
+  inlineCompletionMaxSuffixChars: 1500,
+  inlineCompletionMaxTokens: 220,
   inlineCompletionTemperature: 0.1,
+  inlineCompletionSystemPrompt: DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT,
   copilotCredentials: null,
   quickActionProvider: 'copilot',
   quickActionModel: 'gpt-4o',
@@ -739,6 +745,82 @@ export class AntigravitySettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
               this.plugin.updateInlineCompletion();
             }
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Max Tokens')
+      .setDesc('Upper bound for generated completion length (32-512). Increase this if suggestions are too short.')
+      .addText((text) =>
+        text
+          .setPlaceholder('220')
+          .setValue(String(this.plugin.settings.inlineCompletionMaxTokens))
+          .onChange(async (value) => {
+            const num = parseInt(value, 10);
+            if (num >= 32 && num <= 512) {
+              this.plugin.settings.inlineCompletionMaxTokens = num;
+              await this.plugin.saveSettings();
+              this.plugin.updateInlineCompletion();
+            }
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Prefix Context Window')
+      .setDesc('Characters before the cursor to send to the model (500-12000). Larger values improve topic continuity.')
+      .addText((text) =>
+        text
+          .setPlaceholder('5000')
+          .setValue(String(this.plugin.settings.inlineCompletionMaxPrefixChars))
+          .onChange(async (value) => {
+            const num = parseInt(value, 10);
+            if (num >= 500 && num <= 12000) {
+              this.plugin.settings.inlineCompletionMaxPrefixChars = num;
+              await this.plugin.saveSettings();
+              this.plugin.updateInlineCompletion();
+            }
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Suffix Context Window')
+      .setDesc('Characters after the cursor to send as a constraint (0-4000). Larger values help avoid collisions with later text.')
+      .addText((text) =>
+        text
+          .setPlaceholder('1500')
+          .setValue(String(this.plugin.settings.inlineCompletionMaxSuffixChars))
+          .onChange(async (value) => {
+            const num = parseInt(value, 10);
+            if (num >= 0 && num <= 4000) {
+              this.plugin.settings.inlineCompletionMaxSuffixChars = num;
+              await this.plugin.saveSettings();
+              this.plugin.updateInlineCompletion();
+            }
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Inline System Prompt')
+      .setDesc('Advanced: customize how the inline completion model behaves. Use Reset if you want the built-in prompt back.')
+      .addTextArea((text) => {
+        text
+          .setValue(this.plugin.settings.inlineCompletionSystemPrompt)
+          .onChange(async (value) => {
+            this.plugin.settings.inlineCompletionSystemPrompt = value;
+            await this.plugin.saveSettings();
+            this.plugin.updateInlineCompletion();
+          });
+        text.inputEl.rows = 10;
+        text.inputEl.cols = 60;
+      })
+      .addButton((btn) =>
+        btn
+          .setButtonText('Reset')
+          .onClick(async () => {
+            this.plugin.settings.inlineCompletionSystemPrompt = DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT;
+            await this.plugin.saveSettings();
+            this.plugin.updateInlineCompletion();
+            this.display();
           }),
       );
 

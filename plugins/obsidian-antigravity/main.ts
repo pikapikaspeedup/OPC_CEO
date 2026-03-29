@@ -982,10 +982,11 @@ export default class AntigravityPlugin extends Plugin {
       apiBaseUrl: s.inlineCompletionApiBaseUrl || (s.inlineCompletionProvider === 'ollama' ? 'http://localhost:11434/v1' : undefined),
       model: s.inlineCompletionModel || 'gpt-4o-mini',
       triggerDelay: s.inlineCompletionDelay || 500,
-      maxPrefixChars: 3000,
-      maxSuffixChars: 1000,
-      maxTokens: s.inlineCompletionMaxTokens || 128,
+      maxPrefixChars: s.inlineCompletionMaxPrefixChars || 5000,
+      maxSuffixChars: s.inlineCompletionMaxSuffixChars || 1500,
+      maxTokens: s.inlineCompletionMaxTokens || 220,
       temperature: s.inlineCompletionTemperature ?? 0.1,
+      systemPrompt: s.inlineCompletionSystemPrompt,
       onCredentialsRefreshed: async (creds) => {
         this.settings.copilotCredentials = creds;
         await this.saveSettings();

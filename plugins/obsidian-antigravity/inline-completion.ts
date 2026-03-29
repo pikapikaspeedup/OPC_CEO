@@ -43,6 +43,7 @@ export interface InlineCompletionConfig {
   maxSuffixChars: number;   // chars after cursor for context (default 1000)
   maxTokens: number;        // max tokens to generate (default 128)
   temperature: number;      // 0-1 (default 0.1)
+  systemPrompt?: string;
   // Callbacks
   onCredentialsRefreshed?: (creds: CopilotCredentials) => void;
 }
@@ -57,7 +58,7 @@ export type InlineCompletionMode =
   | 'table'
   | 'paragraph';
 
-const INLINE_COMPLETION_SYSTEM_PROMPT = `You are a precise inline completion engine for Obsidian Markdown notes.
+export const DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT = `You are a precise inline completion engine for Obsidian Markdown notes.
 
 Complete only the missing text at the cursor.
 
@@ -67,7 +68,9 @@ Hard requirements:
 - Never repeat text already present before the cursor.
 - Never include text that is already present after the cursor.
 - Preserve the existing language, tone, tense, indentation, markdown syntax, and local writing style.
-- Prefer the smallest useful completion that keeps the user moving.
+- Prefer a genuinely helpful continuation, not the shortest possible one.
+- For normal prose, finish the current thought and continue into the next sentence when the topic is clear.
+- For structured content, match the local unit: one heading fragment, one list item, one task item, one table cell continuation, or one code fragment.
 - If the cursor is inside YAML frontmatter, output only valid YAML.
 - If the cursor is inside a code block, output only code or code comments that match the block.
 - If the cursor is inside a bullet list or task list, continue the current list style instead of switching formats.
@@ -155,34 +158,61 @@ function shortestWindow(text: string, chars: number, fromEnd: boolean): string {
   return fromEnd ? text.slice(-chars) : text.slice(0, chars);
 }
 
-export function buildInlineCompletionPrompt(prefix: string, suffix: string): { system: string; user: string; mode: InlineCompletionMode } {
+function extractRecentHeadings(prefix: string, limit = 3): string[] {
+  return prefix
+    .split('\n')
+    .filter((line) => /^\s{0,3}#{1,6}\s/.test(line))
+    .slice(-limit);
+}
+
+function extractActiveParagraph(prefix: string): string {
+  const lines = prefix.split('\n');
+  const paragraph: string[] = [];
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index];
+    if (!line.trim()) break;
+    paragraph.unshift(line);
+    if (/^\s{0,3}#{1,6}\s/.test(line)) break;
+  }
+  return paragraph.join('\n');
+}
+
+export function buildInlineCompletionPrompt(
+  prefix: string,
+  suffix: string,
+  systemPrompt = DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT,
+): { system: string; user: string; mode: InlineCompletionMode } {
   const mode = detectInlineCompletionMode(prefix, suffix);
   const lineBefore = getCurrentLineBeforeCursor(prefix);
   const lineAfter = getCurrentLineAfterCursor(suffix);
-  const recentPrefix = shortestWindow(prefix, 1600, true);
-  const upcomingSuffix = shortestWindow(suffix, 700, false);
+  const recentHeadings = extractRecentHeadings(prefix);
+  const activeParagraph = extractActiveParagraph(prefix);
   const indent = lineBefore.match(/^\s*/)?.[0].length ?? 0;
 
   const user = [
     `Mode: ${mode}`,
     getModeGuidance(mode),
     `Indentation before cursor: ${indent} spaces`,
+    'Recent headings:',
+    recentHeadings.length > 0 ? recentHeadings.join('\n') : '(none)',
+    'Active paragraph before cursor:',
+    activeParagraph || '(none)',
     'Current line before cursor:',
     lineBefore || '(empty line)',
     'Current line after cursor:',
     lineAfter || '(empty line)',
     'Recent context before cursor:',
     '<<<PREFIX>>>',
-    recentPrefix || '(empty prefix)',
+    prefix || '(empty prefix)',
     '<<<CURSOR>>>',
     'Upcoming context after cursor:',
     '<<<SUFFIX>>>',
-    upcomingSuffix || '(empty suffix)',
+    suffix || '(empty suffix)',
     'Return only the missing text that should be inserted at <<<CURSOR>>>.',
   ].join('\n');
 
   return {
-    system: INLINE_COMPLETION_SYSTEM_PROMPT,
+    system: systemPrompt,
     user,
     mode,
   };
@@ -314,7 +344,7 @@ async function requestCopilotCompletion(
   }
 
   const url = `${creds.apiBaseUrl}/chat/completions`;
-  const prompt = buildInlineCompletionPrompt(prefix, suffix);
+  const prompt = buildInlineCompletionPrompt(prefix, suffix, config.systemPrompt || DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT);
   const body = {
     model: config.model || 'gpt-4o',
     messages: [
@@ -366,7 +396,7 @@ async function requestOpenAICompletion(
   const model = config.model || 'gpt-4o-mini';
   const apiKey = config.apiKey;
   if (!apiKey) return null;
-  const prompt = buildInlineCompletionPrompt(prefix, suffix);
+  const prompt = buildInlineCompletionPrompt(prefix, suffix, config.systemPrompt || DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT);
 
   const res = await requestUrl({
     url: `${baseUrl}/chat/completions`,
