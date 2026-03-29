@@ -47,6 +47,180 @@ export interface InlineCompletionConfig {
   onCredentialsRefreshed?: (creds: CopilotCredentials) => void;
 }
 
+export type InlineCompletionMode =
+  | 'yaml-frontmatter'
+  | 'code-block'
+  | 'task-list'
+  | 'list'
+  | 'heading'
+  | 'blockquote'
+  | 'table'
+  | 'paragraph';
+
+const INLINE_COMPLETION_SYSTEM_PROMPT = `You are a precise inline completion engine for Obsidian Markdown notes.
+
+Complete only the missing text at the cursor.
+
+Hard requirements:
+- Return only the text to insert at the cursor, with no explanation.
+- Continue seamlessly from the prefix and fit naturally into the suffix.
+- Never repeat text already present before the cursor.
+- Never include text that is already present after the cursor.
+- Preserve the existing language, tone, tense, indentation, markdown syntax, and local writing style.
+- Prefer the smallest useful completion that keeps the user moving.
+- If the cursor is inside YAML frontmatter, output only valid YAML.
+- If the cursor is inside a code block, output only code or code comments that match the block.
+- If the cursor is inside a bullet list or task list, continue the current list style instead of switching formats.
+- If the cursor is inside a heading, output only heading text.
+- If the best completion is empty, return an empty string.`;
+
+function isInsideFrontmatter(prefix: string): boolean {
+  const lines = prefix.split('\n');
+  if (lines.length === 0 || lines[0].trim() !== '---') return false;
+  return !lines.slice(1).some((line) => line.trim() === '---');
+}
+
+function countFenceStarts(text: string, fence: '```' | '~~~'): number {
+  const pattern = new RegExp(`(^|\\n)${fence.replace(/[`~]/g, '\\$&')}`, 'g');
+  return [...text.matchAll(pattern)].length;
+}
+
+function isInsideCodeFence(prefix: string): boolean {
+  return countFenceStarts(prefix, '```') % 2 === 1 || countFenceStarts(prefix, '~~~') % 2 === 1;
+}
+
+function getCurrentLineBeforeCursor(prefix: string): string {
+  return prefix.split('\n').at(-1) || '';
+}
+
+function getCurrentLineAfterCursor(suffix: string): string {
+  return suffix.split('\n')[0] || '';
+}
+
+export function detectInlineCompletionMode(prefix: string, suffix: string): InlineCompletionMode {
+  if (isInsideFrontmatter(prefix)) return 'yaml-frontmatter';
+  if (isInsideCodeFence(prefix)) return 'code-block';
+
+  const lineBefore = getCurrentLineBeforeCursor(prefix);
+  const lineAfter = getCurrentLineAfterCursor(suffix);
+  const fullLine = `${lineBefore}${lineAfter}`;
+
+  if (/^\s*[-*+]\s+\[[ xX]\]\s/.test(lineBefore) || /^\s*[-*+]\s+\[[ xX]\]\s/.test(fullLine)) {
+    return 'task-list';
+  }
+  if (
+    /^\s*[-*+]\s+/.test(lineBefore)
+    || /^\s*\d+[.)]\s+/.test(lineBefore)
+    || /^\s*[-*+]\s+/.test(fullLine)
+    || /^\s*\d+[.)]\s+/.test(fullLine)
+  ) {
+    return 'list';
+  }
+  if (/^\s{0,3}#{1,6}\s/.test(lineBefore) || /^\s{0,3}#{1,6}\s/.test(fullLine)) {
+    return 'heading';
+  }
+  if (/^\s*>\s?/.test(lineBefore) || /^\s*>\s?/.test(fullLine)) {
+    return 'blockquote';
+  }
+  if (fullLine.includes('|') && /^\s*\|?[^|]+\|/.test(fullLine)) {
+    return 'table';
+  }
+
+  return 'paragraph';
+}
+
+function getModeGuidance(mode: InlineCompletionMode): string {
+  switch (mode) {
+    case 'yaml-frontmatter':
+      return 'The cursor is inside YAML frontmatter. Continue with valid YAML only.';
+    case 'code-block':
+      return 'The cursor is inside a fenced code block. Continue with code only, not prose.';
+    case 'task-list':
+      return 'The cursor is inside a markdown task list. Preserve the checkbox style and indentation.';
+    case 'list':
+      return 'The cursor is inside a markdown list. Preserve the bullet or numbered list style and indentation.';
+    case 'heading':
+      return 'The cursor is inside a markdown heading. Output only the heading text.';
+    case 'blockquote':
+      return 'The cursor is inside a markdown blockquote. Preserve the quote style.';
+    case 'table':
+      return 'The cursor is inside a markdown table. Preserve the column structure and pipe syntax.';
+    default:
+      return 'The cursor is inside normal note prose. Continue naturally and concisely.';
+  }
+}
+
+function shortestWindow(text: string, chars: number, fromEnd: boolean): string {
+  if (text.length <= chars) return text;
+  return fromEnd ? text.slice(-chars) : text.slice(0, chars);
+}
+
+export function buildInlineCompletionPrompt(prefix: string, suffix: string): { system: string; user: string; mode: InlineCompletionMode } {
+  const mode = detectInlineCompletionMode(prefix, suffix);
+  const lineBefore = getCurrentLineBeforeCursor(prefix);
+  const lineAfter = getCurrentLineAfterCursor(suffix);
+  const recentPrefix = shortestWindow(prefix, 1600, true);
+  const upcomingSuffix = shortestWindow(suffix, 700, false);
+  const indent = lineBefore.match(/^\s*/)?.[0].length ?? 0;
+
+  const user = [
+    `Mode: ${mode}`,
+    getModeGuidance(mode),
+    `Indentation before cursor: ${indent} spaces`,
+    'Current line before cursor:',
+    lineBefore || '(empty line)',
+    'Current line after cursor:',
+    lineAfter || '(empty line)',
+    'Recent context before cursor:',
+    '<<<PREFIX>>>',
+    recentPrefix || '(empty prefix)',
+    '<<<CURSOR>>>',
+    'Upcoming context after cursor:',
+    '<<<SUFFIX>>>',
+    upcomingSuffix || '(empty suffix)',
+    'Return only the missing text that should be inserted at <<<CURSOR>>>.',
+  ].join('\n');
+
+  return {
+    system: INLINE_COMPLETION_SYSTEM_PROMPT,
+    user,
+    mode,
+  };
+}
+
+function overlapLength(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  for (let len = max; len > 0; len--) {
+    if (left.slice(-len) === right.slice(0, len)) {
+      return len;
+    }
+  }
+  return 0;
+}
+
+export function normalizeInlineCompletion(raw: string, prefix: string, suffix: string): string {
+  let text = raw
+    .replace(/^```(?:[\w-]+)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/<CURSOR\s*\/?\s*>/gi, '')
+    .trimEnd();
+
+  const prefixTail = shortestWindow(prefix, 200, true);
+  const prefixEcho = overlapLength(prefixTail, text);
+  if (prefixEcho > 0) {
+    text = text.slice(prefixEcho);
+  }
+
+  const suffixHead = shortestWindow(suffix, 200, false);
+  const suffixEcho = overlapLength(text, suffixHead);
+  if (suffixEcho > 0) {
+    text = text.slice(0, -suffixEcho);
+  }
+
+  return text.trimEnd();
+}
+
 // ── Ghost Text Widget ──
 
 class GhostTextWidget extends WidgetType {
@@ -140,16 +314,17 @@ async function requestCopilotCompletion(
   }
 
   const url = `${creds.apiBaseUrl}/chat/completions`;
+  const prompt = buildInlineCompletionPrompt(prefix, suffix);
   const body = {
     model: config.model || 'gpt-4o',
     messages: [
       {
         role: 'system',
-        content: `You are an intelligent text completion assistant for Obsidian notes. Your job is to predict the most logical text that should be written at the cursor position marked with <CURSOR/>. Your answer must seamlessly continue from the text before the cursor. Only output the completion text, nothing else. Do not repeat the prefix. Do not add explanations. Keep your answer concise (1-3 sentences max). Match the language and style of the surrounding text.`,
+        content: prompt.system,
       },
       {
         role: 'user',
-        content: `${prefix}<CURSOR/>${suffix}`,
+        content: prompt.user,
       },
     ],
     max_tokens: config.maxTokens,
@@ -178,7 +353,8 @@ async function requestCopilotCompletion(
   }
 
   const json = await res.json();
-  return json.choices?.[0]?.message?.content?.trim() || null;
+  const normalized = normalizeInlineCompletion(json.choices?.[0]?.message?.content?.trim() || '', prefix, suffix);
+  return normalized || null;
 }
 
 async function requestOpenAICompletion(
@@ -190,6 +366,7 @@ async function requestOpenAICompletion(
   const model = config.model || 'gpt-4o-mini';
   const apiKey = config.apiKey;
   if (!apiKey) return null;
+  const prompt = buildInlineCompletionPrompt(prefix, suffix);
 
   const res = await requestUrl({
     url: `${baseUrl}/chat/completions`,
@@ -203,11 +380,11 @@ async function requestOpenAICompletion(
       messages: [
         {
           role: 'system',
-          content: `You are an intelligent text completion assistant for Obsidian notes. Your job is to predict the most logical text that should be written at the cursor position marked with <CURSOR/>. Your answer must seamlessly continue from the text before the cursor. Only output the completion text, nothing else. Do not repeat the prefix. Do not add explanations. Keep your answer concise (1-3 sentences max). Match the language and style of the surrounding text.`,
+          content: prompt.system,
         },
         {
           role: 'user',
-          content: `${prefix}<CURSOR/>${suffix}`,
+          content: prompt.user,
         },
       ],
       max_tokens: config.maxTokens,
@@ -217,7 +394,8 @@ async function requestOpenAICompletion(
   });
 
   const json = res.json;
-  return json.choices?.[0]?.message?.content?.trim() || null;
+  const normalized = normalizeInlineCompletion(json.choices?.[0]?.message?.content?.trim() || '', prefix, suffix);
+  return normalized || null;
 }
 
 // ── Keymap: Tab/RightArrow/Escape ──
