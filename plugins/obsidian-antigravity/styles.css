@@ -599,6 +599,21 @@
   background: var(--background-modifier-hover);
 }
 
+/* Artifact summary badge on codeAction steps */
+.ag-step-artifact-summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  padding-left: 22px;
+  line-height: 1.4;
+}
+
+/* Wrapper for inline artifact previews in codeAction steps */
+.ag-code-action-inline-wrap {
+  margin: 4px 0 8px 0;
+  padding-left: 6px;
+}
+
 .ag-step-clickable .ag-step-text {
   text-decoration: underline;
   text-decoration-style: dotted;
@@ -607,6 +622,7 @@
 
 /* Search web step */
 .ag-step-search {
+  position: relative;
   flex-direction: column;
   align-items: flex-start;
   padding: 6px 8px;
@@ -1120,6 +1136,26 @@
   font-size: 11px;
   color: var(--text-faint);
   font-style: italic;
+}
+
+.ag-inline-artifact {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary-alt);
+}
+
+.ag-inline-artifact-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.ag-inline-artifact-header:hover .ag-review-path-name {
+  color: var(--text-accent);
 }
 
 /* ── Code Block Enhancement ── */

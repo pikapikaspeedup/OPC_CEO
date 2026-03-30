@@ -659,7 +659,7 @@ export class FloatingToolbarManager {
             model: settings.quickActionModel || 'gpt-4o',
             messages: [
               { role: 'system', content: 'You are a helpful writing assistant. Respond directly without markdown code fences unless the user asks for code. Be concise.' },
-              { role: 'user', content: prompt + selection },
+              { role: 'user', content: prompt },
             ],
             max_tokens: 1024,
             temperature: 0.3,

@@ -262,6 +262,14 @@ export default class AntigravityPlugin extends Plugin {
       })
     );
 
+    // Hook keyboard events for LinkSuggester (ESC to dismiss, Tab/Enter to insert, arrows to navigate)
+    this.registerDomEvent(document, 'keydown', (e: KeyboardEvent) => {
+      if (this.linkSuggester?.onKeyDown(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    });
+
     // ── Atomization auto-trigger: settle timer on knowledge note edits ──
     this.registerEvent(
       this.app.vault.on('modify', (file) => {

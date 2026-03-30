@@ -111,6 +111,9 @@ export class ChatView extends ItemView {
   // Heartbeat
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Cache external file content for inline previews
+  private inlineArtifactCache = new Map<string, string>();
+
   // WS state listener reference (for cleanup)
   private wsStateListener: ((state: WsConnectionState, detail?: string) => void) | null = null;
 
@@ -819,13 +822,11 @@ export class ChatView extends ItemView {
     const contentEl = bubble.createDiv({ cls: 'ag-msg-text' });
 
     // Render as markdown
-    MarkdownRenderer.render(this.app, text, contentEl, '', this.plugin);
-
-    // Enhance code blocks: add language label + copy button
-    this.enhanceCodeBlocks(contentEl);
-
-    // Auto-link vault note names in AI responses
-    this.autoWikiLink(contentEl);
+    void Promise.resolve(MarkdownRenderer.render(this.app, text, contentEl, '', this.plugin)).then(() => {
+      this.attachAssistantMessageLinkHandlers(contentEl, bubble);
+      this.enhanceCodeBlocks(contentEl);
+      this.autoWikiLink(contentEl);
+    });
 
     // Copy button
     const copyBtn = bubble.createDiv({ cls: 'ag-copy-btn', attr: { 'aria-label': 'Copy' } });
@@ -889,6 +890,180 @@ export class ChatView extends ItemView {
     });
   }
 
+  private attachAssistantMessageLinkHandlers(contentEl: HTMLElement, bubble: HTMLElement) {
+    const links = Array.from(contentEl.querySelectorAll('a'));
+    for (const linkEl of links) {
+      const href = linkEl.getAttribute('href') || '';
+      const filePath = this.decodeFileUriToPath(href);
+      if (!filePath) continue;
+
+      linkEl.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const relativePath = this.getVaultRelativePathFromAbsolute(filePath);
+        if (relativePath) {
+          this.app.workspace.openLinkText(relativePath, '', false);
+          return;
+        }
+
+        const label = (linkEl.textContent || '').trim() || filePath.split('/').pop() || 'file';
+        this.revealInlineArtifact(bubble, label, filePath);
+      });
+    }
+  }
+
+  private decodeFileUriToPath(uri: string): string | null {
+    if (!uri.startsWith('file://')) return null;
+
+    const filePath = uri.replace(/^file:\/\//, '');
+    try {
+      return decodeURIComponent(filePath);
+    } catch {
+      return filePath;
+    }
+  }
+
+  private getVaultRelativePathFromAbsolute(filePath: string): string | null {
+    const vaultBase = (this.app.vault.adapter as any).basePath as string | undefined;
+    if (!vaultBase || !filePath.startsWith(vaultBase)) return null;
+    return filePath.slice(vaultBase.length).replace(/^\//, '');
+  }
+
+  private readExternalFileContent(filePath: string): string | null {
+    const cached = this.inlineArtifactCache.get(filePath);
+    if (cached !== undefined) return cached;
+
+    try {
+      const fs = require('fs');
+      const fileContent = fs.readFileSync(filePath, 'utf-8') as string;
+      this.inlineArtifactCache.set(filePath, fileContent);
+      return fileContent;
+    } catch (err: any) {
+      logger.warn(LOG_SRC, 'Cannot read inline artifact file', { path: filePath, error: err?.message });
+      return null;
+    }
+  }
+
+  private revealInlineArtifact(bubble: HTMLElement, label: string, filePath: string) {
+    const artifactKey = encodeURIComponent(filePath);
+    const existing = bubble.querySelector(`[data-ag-inline-artifact-path="${artifactKey}"]`) as HTMLElement | null;
+    if (existing) {
+      existing.dataset.agCollapsed = 'false';
+      const actionsEl = existing.querySelector('.ag-artifact-actions') as HTMLElement | null;
+      const contentEl = existing.querySelector('.ag-msg-text') as HTMLElement | null;
+      const truncatedEl = existing.querySelector('.ag-review-truncated') as HTMLElement | null;
+      if (actionsEl) actionsEl.style.display = '';
+      if (contentEl) contentEl.style.display = '';
+      if (truncatedEl) truncatedEl.style.display = '';
+      existing.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    const fileContent = this.readExternalFileContent(filePath);
+    if (fileContent == null) {
+      new Notice(`Cannot open: ${label}`);
+      return;
+    }
+
+    const artifactEl = this.renderInlineArtifact(bubble, label, filePath, fileContent);
+    artifactEl.dataset.agInlineArtifactPath = artifactKey;
+    artifactEl.scrollIntoView({ block: 'nearest' });
+  }
+
+  private renderInlineArtifact(hostEl: HTMLElement, label: string, filePath: string, fileContent: string) {
+    const artifactEl = hostEl.createDiv({ cls: 'ag-inline-artifact' });
+    artifactEl.dataset.agCollapsed = 'false';
+
+    const headerEl = artifactEl.createDiv({ cls: 'ag-inline-artifact-header' });
+    headerEl.title = filePath;
+
+    const iconSpan = headerEl.createSpan({ cls: 'ag-review-path-icon' });
+    setIcon(iconSpan, 'file-text');
+    headerEl.createSpan({ text: label || filePath.split('/').pop() || 'file', cls: 'ag-review-path-name' });
+
+    const actionsBar = artifactEl.createDiv({ cls: 'ag-artifact-actions' });
+
+    const copyBtn = actionsBar.createEl('button', { cls: 'ag-artifact-action-btn' });
+    setIcon(copyBtn, 'copy');
+    copyBtn.createSpan({ text: ' Copy' });
+    copyBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await navigator.clipboard.writeText(fileContent);
+      copyBtn.textContent = '✓ Copied';
+      setTimeout(() => {
+        copyBtn.empty();
+        setIcon(copyBtn, 'copy');
+        copyBtn.createSpan({ text: ' Copy' });
+      }, 1500);
+    });
+
+    const appendBtn = actionsBar.createEl('button', { cls: 'ag-artifact-action-btn' });
+    setIcon(appendBtn, 'file-plus');
+    appendBtn.createSpan({ text: ' Append to Note' });
+    appendBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const activeFile = this.app.workspace.getActiveFile();
+      if (!activeFile) {
+        new Notice('No active note open');
+        return;
+      }
+
+      await this.app.vault.append(activeFile, '\n\n' + fileContent);
+      new Notice(`✓ Appended to ${activeFile.name}`);
+      appendBtn.empty();
+      setIcon(appendBtn, 'check');
+      appendBtn.createSpan({ text: ' Appended' });
+      setTimeout(() => {
+        appendBtn.empty();
+        setIcon(appendBtn, 'file-plus');
+        appendBtn.createSpan({ text: ' Append to Note' });
+      }, 2000);
+    });
+
+    const insertBtn = actionsBar.createEl('button', { cls: 'ag-artifact-action-btn' });
+    setIcon(insertBtn, 'pin');
+    insertBtn.createSpan({ text: ' Insert at Cursor' });
+    insertBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const editor = this.app.workspace.activeEditor?.editor;
+      if (!editor) {
+        new Notice('No active editor');
+        return;
+      }
+
+      editor.replaceRange('\n' + fileContent + '\n', editor.getCursor());
+      new Notice('✓ Inserted at cursor');
+      insertBtn.textContent = '✓ Inserted';
+      setTimeout(() => {
+        insertBtn.empty();
+        setIcon(insertBtn, 'pin');
+        insertBtn.createSpan({ text: ' Insert at Cursor' });
+      }, 2000);
+    });
+
+    const previewContent = artifactEl.createDiv({ cls: 'ag-msg-text' });
+    void Promise.resolve(MarkdownRenderer.render(this.app, fileContent.slice(0, 5000), previewContent, '', this.plugin)).then(() => {
+      this.enhanceCodeBlocks(previewContent);
+      this.autoWikiLink(previewContent);
+    });
+
+    const truncatedEl = fileContent.length > 5000
+      ? artifactEl.createDiv({ text: `... (${fileContent.length} chars total)`, cls: 'ag-review-truncated' })
+      : null;
+
+    headerEl.addEventListener('click', () => {
+      const nextCollapsed = artifactEl.dataset.agCollapsed !== 'true';
+      artifactEl.dataset.agCollapsed = nextCollapsed ? 'true' : 'false';
+      const display = nextCollapsed ? 'none' : '';
+      actionsBar.style.display = display;
+      previewContent.style.display = display;
+      if (truncatedEl) truncatedEl.style.display = display;
+    });
+
+    return artifactEl;
+  }
+
   private renderCodeAction(step: Step) {
     const spec = step.codeAction?.actionSpec || {};
     const fileSpec = spec.createFile || spec.editFile || spec.deleteFile;
@@ -902,6 +1077,7 @@ export class ChatView extends ItemView {
     const fileName = decoded.split('/').pop() || (step.codeAction as any)?.description?.slice(0, 40) || '?';
     const icon = spec.createFile ? 'file-plus' : spec.deleteFile ? 'file-minus' : 'file-edit';
     const cls = spec.createFile ? 'ag-step-create' : spec.deleteFile ? 'ag-step-delete' : 'ag-step-edit';
+    const isArtifact = !!(step.codeAction as any)?.isArtifactFile;
 
     const el = this.messagesEl.createDiv({ cls: `ag-step ag-step-clickable ${cls}` });
     this.renderStepStatus(step, el);
@@ -909,16 +1085,48 @@ export class ChatView extends ItemView {
     setIcon(iconSpan, icon);
     el.createSpan({ text: `${action} ${fileName}`, cls: 'ag-step-text' });
 
-    if (uri) {
-      el.addEventListener('click', () => {
-        const filePath = uri.startsWith('file://') ? uri.replace(/^file:\/\//, '') : uri;
-        const vaultPath = (this.app.vault.adapter as any).basePath || '';
-        const relativePath = filePath.startsWith(vaultPath)
-          ? filePath.slice(vaultPath.length).replace(/^\//, '')
-          : filePath.startsWith('/')
-            ? filePath.split('/').pop() || fileName
-            : filePath || fileName;
+    // Artifact summary badge
+    const artifactSummary = (step.codeAction as any)?.artifactMetadata?.summary;
+    if (artifactSummary) {
+      const summaryEl = el.createDiv({ cls: 'ag-step-artifact-summary' });
+      summaryEl.textContent = artifactSummary.slice(0, 120) + (artifactSummary.length > 120 ? '...' : '');
+    }
+
+    if (!uri) return;
+
+    const filePath = uri.startsWith('file://') ? uri.replace(/^file:\/\//, '') : uri;
+    const vaultPath = (this.app.vault.adapter as any).basePath || '';
+    const isInsideVault = filePath.startsWith(vaultPath);
+
+    // Container for inline artifact preview (lives below the step header)
+    let inlineContainer: HTMLElement | null = null;
+
+    el.addEventListener('click', () => {
+      if (isInsideVault) {
+        // File inside vault → open in Obsidian editor
+        const relativePath = filePath.slice(vaultPath.length).replace(/^\//, '');
         this.app.workspace.openLinkText(relativePath, '', false);
+      } else {
+        // File outside vault → toggle inline preview
+        if (inlineContainer) {
+          inlineContainer.remove();
+          inlineContainer = null;
+          return;
+        }
+        inlineContainer = this.messagesEl.createDiv({ cls: 'ag-code-action-inline-wrap' });
+        // Insert right after the step element
+        el.insertAdjacentElement('afterend', inlineContainer);
+        this.revealInlineArtifact(inlineContainer, fileName, filePath);
+      }
+    });
+
+    // Auto-expand artifact files that are outside the vault
+    if (isArtifact && !isInsideVault) {
+      // Defer to next frame so the step element is in the DOM
+      requestAnimationFrame(() => {
+        inlineContainer = this.messagesEl.createDiv({ cls: 'ag-code-action-inline-wrap' });
+        el.insertAdjacentElement('afterend', inlineContainer);
+        this.revealInlineArtifact(inlineContainer, fileName, filePath);
       });
     }
   }
@@ -968,7 +1176,11 @@ export class ChatView extends ItemView {
     // Notification content
     if (content) {
       const contentEl = el.createDiv({ cls: 'ag-msg-text' });
-      MarkdownRenderer.render(this.app, content, contentEl, '', this.plugin);
+      void Promise.resolve(MarkdownRenderer.render(this.app, content, contentEl, '', this.plugin)).then(() => {
+        this.attachAssistantMessageLinkHandlers(contentEl, el);
+        this.enhanceCodeBlocks(contentEl);
+        this.autoWikiLink(contentEl);
+      });
     }
 
     // Review paths (artifact files to review)
@@ -1936,27 +2148,6 @@ export class ChatView extends ItemView {
       this.renderToolbar(container);
     });
 
-    const smartBtn = container.createEl('button', {
-      cls: `ag-attach-btn ag-context-toggle-btn ag-smart-context-btn${this.smartContextEnabledForDraft ? ' is-active' : ''}`,
-      attr: {
-        'aria-label': 'Toggle smart context',
-        'aria-pressed': this.smartContextEnabledForDraft ? 'true' : 'false',
-      },
-    });
-    const smartIcon = smartBtn.createSpan({ cls: 'ag-mode-icon' });
-    setIcon(smartIcon, 'files');
-    smartBtn.createSpan({ text: ' Smart' });
-    if (this.getSmartContextMode() === 'auto') {
-      smartBtn.title = this.smartContextEnabledForDraft
-        ? 'Current note context is automatically included for this draft. Click to pause it for this message.'
-        : 'Automatic current note context is paused for this draft. Click to turn it back on.';
-    } else {
-      smartBtn.title = this.smartContextEnabledForDraft
-        ? 'Current note context will be included for this draft. Click to turn it off.'
-        : 'Click to add the current note context for this draft.';
-    }
-    smartBtn.addEventListener('click', () => this.toggleSmartContextForDraft());
-
     // Attach active file button
     const attachBtn = container.createEl('button', { cls: 'ag-attach-btn', attr: { 'aria-label': 'Attach current file' } });
     const attachIcon = attachBtn.createSpan({ cls: 'ag-mode-icon' });
@@ -1971,26 +2162,6 @@ export class ChatView extends ItemView {
     promptBtn.title = 'Prompt Templates';
     promptBtn.addEventListener('click', () => this.showPromptPicker());
 
-    const relatedBtn = container.createEl('button', {
-      cls: `ag-attach-btn ag-context-toggle-btn ag-related-context-btn${this.knowledgeContextEnabledForDraft ? ' is-active' : ''}`,
-      attr: {
-        'aria-label': 'Toggle related notes context',
-        'aria-pressed': this.knowledgeContextEnabledForDraft ? 'true' : 'false',
-      },
-    });
-    const relatedIcon = relatedBtn.createSpan({ cls: 'ag-mode-icon' });
-    setIcon(relatedIcon, 'brain');
-    relatedBtn.createSpan({ text: ' Related' });
-    if (this.getKnowledgeContextMode() === 'auto') {
-      relatedBtn.title = this.knowledgeContextEnabledForDraft
-        ? 'Related notes are automatically included for this draft. Click to pause them for this message.'
-        : 'Automatic related notes are paused for this draft. Click to turn them back on.';
-    } else {
-      relatedBtn.title = this.knowledgeContextEnabledForDraft
-        ? 'Related notes will be included for this draft. Click to turn them off.'
-        : 'Click to add related notes for this draft.';
-    }
-    relatedBtn.addEventListener('click', () => this.toggleKnowledgeContextForDraft());
 
     // Pin count indicator (if pins exist)
     const pinCount = (this.plugin.settings.pins || []).length;
