@@ -42,3 +42,21 @@
 
 ## Phase 6.1: CEO 决策持久化 + 项目详情展示
 ... (preserved original content)
+
+---
+
+## Phase 6.2: CEO 面板显示逻辑修复与项目详情布局调整
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-06
+
+### 概要
+修复了 CEO 决策信息在项目列表中的显示范围，以及 `ProjectWorkbench` 中 Tabs 的排版布局：
+1. **CEO 面板显示限制**：将 CEO Decision Card 仅显示在项目展开后的详情区域中，列表态不显示。同时修复了无 Pipeline 状态下 CEO 面板数据为空无法读取的 Bug，引入了根据 `viewProject.ceoDecision` 缓存数据的后备展现。
+2. **Tabs 布局修复**：修复了 Base UI 与 Tailwind 冲突导致的横向（并排）挤压问题。将 `data-horizontal` 修改为 `data-[orientation=horizontal]` 使 Tabs 恢复正常的纵向上（Tab Bar）中下（内容）堆叠样式。
+
+### 修改文件
+| 文件 | 变更 |
+|:-----|:-----|
+| `src/components/projects-panel.tsx` | 添加了仅在选中/展开卡片状态下的 CEO Decision Card 构建模块。修复 no-pipeline panel 根据 `ceoDecision` 回调数据显示提案的问题 |
+| `src/components/ui/tabs.tsx` | 重写所有 `data-horizontal` 与 `data-vertical` 的选择器为 `data-[orientation=...]`，修复样式不匹配问题 |

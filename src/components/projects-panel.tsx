@@ -644,6 +644,159 @@ export default function ProjectsPanel({
                 </div>
               )}
 
+              {/* ── CEO Decision Card (Phase 6) ── */}
+              {viewProject.ceoDecision && (
+                <div className={cn(
+                  'rounded-xl border p-4 space-y-3',
+                  viewProject.ceoDecision.resolved
+                    ? 'border-white/8 bg-white/[0.02]'
+                    : 'border-amber-500/20 bg-amber-500/5',
+                )}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">{viewProject.ceoDecision.resolved ? '🤖' : '⚠️'}</span>
+                    <span className="text-sm font-semibold text-white/80">
+                      {viewProject.ceoDecision.resolved ? 'AI 决策记录' : '等待 CEO 审批'}
+                    </span>
+                    <span className="text-[10px] rounded-full bg-white/8 px-2 py-0.5 text-white/40">
+                      {viewProject.ceoDecision.action}
+                    </span>
+                    {viewProject.ceoDecision.resolved && (
+                      <span className="text-[10px] text-emerald-400/60 ml-auto">✓ 已执行</span>
+                    )}
+                    {!viewProject.ceoDecision.resolved && (
+                      <span className="text-[10px] text-amber-400/70 ml-auto animate-pulse">待审批</span>
+                    )}
+                  </div>
+
+                  {/* Original command */}
+                  <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
+                    <div className="text-[10px] text-white/30 mb-1">CEO 指令</div>
+                    <div className="text-sm text-white/70 italic">&ldquo;{viewProject.ceoDecision.command}&rdquo;</div>
+                  </div>
+
+                  {/* AI reasoning */}
+                  <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
+                    <div className="text-[10px] text-white/30 mb-1">🧠 AI 决策依据</div>
+                    <div className="text-[12px] text-white/60 leading-relaxed">{viewProject.ceoDecision.reasoning}</div>
+                  </div>
+
+                  {/* Decision metadata */}
+                  <div className="flex flex-wrap gap-3 text-[11px] text-white/40">
+                    {viewProject.ceoDecision.departmentName && (
+                      <div className="flex items-center gap-1">
+                        <span className="text-white/25">部门:</span>
+                        <span className="text-white/60">{viewProject.ceoDecision.departmentName}</span>
+                      </div>
+                    )}
+                    {viewProject.ceoDecision.templateId && (
+                      <div className="flex items-center gap-1">
+                        <span className="text-white/25">模板:</span>
+                        <span className="text-sky-400/60">{viewProject.ceoDecision.templateId}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1">
+                      <span className="text-white/25">决策时间:</span>
+                      <span className="text-white/50">{new Date(viewProject.ceoDecision.decidedAt).toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {/* Interactive suggestions (unresolved only) */}
+                  {!viewProject.ceoDecision.resolved && viewProject.ceoDecision.suggestions?.length && (
+                    <div className="space-y-2 pt-1">
+                      <div className="text-xs font-medium text-amber-300/80 mb-1">请选择操作：</div>
+                      {viewProject.ceoDecision.suggestions.map((s, i) => (
+                        <button
+                          key={i}
+                          className="flex w-full items-start gap-3 rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 text-left hover:bg-white/[0.06] hover:border-amber-500/30 transition-all group"
+                          onClick={async () => {
+                            if (s.type === 'suggest_add_template' && s.payload?.workspace) {
+                              try {
+                                showFlash('⏳ 正在添加模板并派发...');
+                                const ws = s.payload.workspace;
+                                const deptResp = await api.getDepartment(ws).catch(() => null);
+                                if (deptResp && s.payload.templateId) {
+                                  const existingIds = deptResp.templateIds || [];
+                                  if (!existingIds.includes(s.payload.templateId)) {
+                                    await api.updateDepartment(ws, {
+                                      ...deptResp,
+                                      templateIds: [...existingIds, s.payload.templateId],
+                                    });
+                                  }
+                                }
+                                if (s.payload.projectId && s.payload.goal && s.payload.templateId) {
+                                  await api.dispatchRun({
+                                    workspace: ws,
+                                    templateId: s.payload.templateId,
+                                    projectId: s.payload.projectId,
+                                    prompt: s.payload.goal,
+                                  });
+                                }
+                                await api.updateProject(viewProject.projectId, {
+                                  ceoDecision: { ...viewProject.ceoDecision!, resolved: true },
+                                });
+                                onRefresh?.();
+                                showFlash('✅ 模板已添加，任务已派发');
+                              } catch (e) {
+                                showFlash(e instanceof Error ? e.message : '操作失败');
+                              }
+                            } else if (s.type === 'auto_generate_and_dispatch') {
+                              try {
+                                showFlash('⏳ AI 正在生成模板...');
+                                const genResult = await api.generatePipeline({
+                                  goal: s.payload?.goal || viewProject.goal || viewProject.name,
+                                });
+                                if (!genResult?.draftId) {
+                                  showFlash('模板生成失败，请手动创建');
+                                  return;
+                                }
+                                showFlash('⏳ 正在确认并保存模板...');
+                                const confirmed = await api.confirmDraft(genResult.draftId);
+                                if (!confirmed?.templateId) {
+                                  showFlash('模板保存失败，请手动确认');
+                                  return;
+                                }
+                                const ws = s.payload?.workspace || viewProject.workspace;
+                                if (ws) {
+                                  const deptResp = await api.getDepartment(ws).catch(() => null);
+                                  if (deptResp) {
+                                    await api.updateDepartment(ws, {
+                                      ...deptResp,
+                                      templateIds: [...(deptResp.templateIds || []), confirmed.templateId],
+                                    });
+                                  }
+                                }
+                                showFlash('⏳ 正在派发任务...');
+                                await api.dispatchRun({
+                                  projectId: viewProject.projectId,
+                                  templateId: confirmed.templateId,
+                                  workspace: ws || workspaces[0]?.uri || '',
+                                  prompt: viewProject.goal || '',
+                                });
+                                await api.updateProject(viewProject.projectId, {
+                                  ceoDecision: { ...viewProject.ceoDecision!, resolved: true },
+                                });
+                                onRefresh?.();
+                                showFlash('✅ 模板已生成并开始执行');
+                              } catch (e) {
+                                showFlash(e instanceof Error ? e.message : 'AI 生成失败');
+                              }
+                            } else if (s.type === 'create_template') {
+                              setIsGenerateDialogOpen(true);
+                            }
+                          }}
+                        >
+                          <span className="mt-0.5 text-white/30 group-hover:text-amber-400 transition-colors">→</span>
+                          <div className="flex-1">
+                            <span className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">{s.label}</span>
+                            <p className="text-[11px] text-white/40 mt-0.5">{s.description}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Branch tabs (if has children) */}
               {children.length > 0 && (
                 <div className="flex items-center gap-1.5 flex-wrap pt-1">
@@ -723,7 +876,10 @@ export default function ProjectsPanel({
               ) : (
                 /* ── No pipeline yet: show Decision Panel ── */
                 (() => {
-                  const projectSuggestions = pendingSuggestions[viewProject.projectId];
+                  const projectSuggestions = pendingSuggestions[viewProject.projectId]
+                    || (viewProject.ceoDecision && !viewProject.ceoDecision.resolved
+                      ? viewProject.ceoDecision.suggestions?.map(s => ({ ...s, payload: s.payload || {} }))
+                      : undefined);
                   const hasNeedsDecision = !!projectSuggestions?.length;
 
                   return (
@@ -780,6 +936,12 @@ export default function ProjectsPanel({
                                         delete next[viewProject.projectId];
                                         return next;
                                       });
+                                      // Mark CEO decision resolved
+                                      if (viewProject.ceoDecision) {
+                                        api.updateProject(viewProject.projectId, {
+                                          ceoDecision: { ...viewProject.ceoDecision, resolved: true },
+                                        }).catch(() => {});
+                                      }
                                       onRefresh?.();
                                     } catch (e) {
                                       showFlash(e instanceof Error ? e.message : '转派失败');
@@ -824,6 +986,12 @@ export default function ProjectsPanel({
                                         delete next[viewProject.projectId];
                                         return next;
                                       });
+                                      // Mark CEO decision resolved
+                                      if (viewProject.ceoDecision) {
+                                        await api.updateProject(viewProject.projectId, {
+                                          ceoDecision: { ...viewProject.ceoDecision, resolved: true },
+                                        });
+                                      }
                                       onRefresh?.();
                                       showFlash('✅ 模板已生成并开始执行');
                                     } catch (e) {
