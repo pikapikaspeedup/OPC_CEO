@@ -1,0 +1,24 @@
+{
+  "workPackages": [
+    {
+      "id": "wp-1",
+      "name": "App Skeleton, Create/Read, Empty State & Validation",
+      "goal": "Set up the basic HTML/CSS/JS for the app. Implement the ability to add a new text note via an input field, save it to `localStorage`, and display a list of all saved notes. Include a visible empty state when no notes exist and validation to prevent saving blank/empty notes."
+    },
+    {
+      "id": "wp-2",
+      "name": "Update/Edit Notes Functionality",
+      "goal": "Extend the application to allow users to click an 'Edit' button on an existing note, modify its content within the UI, and save the updated content back to `localStorage`."
+    },
+    {
+      "id": "wp-3",
+      "name": "Delete Notes Functionality",
+      "goal": "Extend the application to allow users to click a 'Delete' button on an existing note, removing it from the UI list and permanently deleting it from `localStorage`. Ensure the empty state UI reappears if the last note is deleted."
+    },
+    {
+      "id": "wp-4",
+      "name": "Automated Smoke Tests",
+      "goal": "Add a simple automated smoke test suite that navigates to the app and verifies the end-to-end flow: creating with validation, reading, updating, deleting notes (and empty states), and asserting data persistence after a page reload."
+    }
+  ]
+}

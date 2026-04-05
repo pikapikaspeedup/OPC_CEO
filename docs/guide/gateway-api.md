@@ -4,7 +4,7 @@
 > **WebSocket**: `ws://localhost:3000/ws`  
 > **认证**: 无需客户端传 API Key（Gateway 内部从 `state.vscdb` 自动获取）  
 > **Content-Type**: 所有 POST 请求均使用 `application/json`  
-> **Last Updated**: 2026-03-18
+> **Last Updated**: 2026-06-22
 
 本文档面向 **Headless CLI** 及所有需要程序化调用 Antigravity 对话能力的场景。
 
@@ -60,6 +60,12 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **功能**: 从 `.pb` 文件扫描 + gRPC 实时查询 + SQLite 兜底，合并返回所有已知对话。
 
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 可选。按 workspace `file://` URI 过滤对话（前缀匹配） |
+
 **Response** `200 OK`:
 ```json
 [
@@ -108,14 +114,27 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 |------|------|------|
 | `cascadeId` | `string` | 新建对话的 UUID，后续所有操作需用此 ID |
 
+**错误响应**:
+
+当指定的 workspace 没有运行中的 language_server 时，返回 `503`：
+```json
+{
+  "error": "workspace_not_running",
+  "message": "Workspace is not running. Please open it in Antigravity first.",
+  "workspace": "file:///path/to/my-project"
+}
+```
+
 **内部执行流程**（客户端无需关心）:
 ```
 1. getLanguageServer(wsUri) → 找专属 server？
    ├─ YES → 直接使用
-   └─ NO  → fallback 到 servers[0] → 先调 AddTrackedWorkspace
-2. grpc.startCascade(port, csrf, apiKey, wsUri)
-3. grpc.updateConversationAnnotations(cascadeId, {lastUserViewTime: now})
-4. addLocalConversation(cascadeId, wsUri, title) → 本地缓存
+   └─ NO  → 返回 503 workspace_not_running
+2. grpc.addTrackedWorkspace(port, csrf, workspacePath)
+3. grpc.startCascade(port, csrf, apiKey, wsUri)
+4. grpc.updateConversationAnnotations(cascadeId, {lastUserViewTime: now, summary: ...})
+5. preRegisterOwner(cascadeId, conn) → ownerMap 预注册
+6. addLocalConversation(cascadeId, wsUri, title) → 本地缓存
 ```
 
 ---
@@ -130,13 +149,22 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `text` | `string` | ✅ | 用户消息文本 |
+| `text` | `string` | ✅ | 用户消息文本。支持 `@[path/to/file]` 语法引用文件（见下方说明） |
 | `model` | `string` | 否 | 模型 ID（见模型速查表）。不传使用默认 |
+| `agenticMode` | `boolean` | 否 | 是否启用 Agentic 模式（默认 `true`）。`false` 时使用 fast 模式 |
+| `attachments` | `object` | 否 | 附件对象，包含 `items` 数组。用于传递文件引用等结构化附件 |
+
+**文件引用语法**：
+
+`text` 中可使用 `@[path/to/file]` 语法引用文件。服务端会自动解析为 `file://` URI 附件：
+- 绝对路径：`@[/Users/you/project/src/app.ts]`
+- 相对路径：`@[src/app.ts]`（相对于对话所属的 workspace 目录）
 
 ```json
 {
-  "text": "帮我重构这个函数",
-  "model": "MODEL_PLACEHOLDER_M26"
+  "text": "帮我重构这个函数 @[src/utils/helpers.ts]",
+  "model": "MODEL_PLACEHOLDER_M26",
+  "agenticMode": true
 }
 ```
 
@@ -152,9 +180,10 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **内部执行流程**:
 ```
-1. refreshOwnerMap() → 确保 ownerMap 新鲜
-2. getOwnerConnection(cascadeId) → 找到此对话所属的 server
-3. grpc.sendMessage(port, csrf, apiKey, cascadeId, text, model)
+1. 解析 @[path] 文件引用 → 转换为 attachments.items
+2. refreshOwnerMap() → 确保 ownerMap 新鲜（30s 缓存）
+3. getOwnerConnection(cascadeId) → 找到此对话所属的 server
+4. grpc.sendMessage(port, csrf, apiKey, cascadeId, text, model, agenticMode, attachments)
 ```
 
 ---
@@ -262,11 +291,11 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `uri` | `string` | ✅ | 审批的文件/资源 URI |
+| `artifactUri` | `string` | ✅ | 审批的文件/资源 URI |
 | `model` | `string` | 否 | 模型 ID |
 
 ```json
-{ "uri": "file:///path/to/reviewed/file.md", "model": "MODEL_PLACEHOLDER_M26" }
+{ "artifactUri": "file:///path/to/reviewed/file.md", "model": "MODEL_PLACEHOLDER_M26" }
 ```
 
 **Response** `200 OK`:
@@ -295,7 +324,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ### `GET /api/conversations/:id/revert-preview` — 回退预览
 
-**功能**: 预览回退效果，不实际执行。
+> ⚠️ **注意**: 此端点目前仅在前端客户端代码中有调用，**后端尚未实现对应的 route handler**。调用会返回 404。
 
 **Query 参数**:
 
@@ -381,6 +410,17 @@ done
 
 **功能**: 创建一个自治开发项目的容器，用于将多个相关的 Task 组织在一起。
 
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | `string` | ✅ | 项目名称 |
+| `goal` | `string` | ✅ | 项目目标描述 |
+| `workspace` | `string` | ✅ | workspace `file://` URI |
+| `templateId` | `string` | 否 | 模板 ID |
+| `projectType` | `string` | 否 | 项目类型 |
+| `skillHint` | `string` | 否 | 技能提示 |
+
 **Request Body** 示例:
 ```json
 {
@@ -388,6 +428,23 @@ done
   "goal": "Build a simple Tetris game in HTML5",
   "workspace": "file:///path/to/mytools"
 }
+```
+
+### `GET /api/projects/:id` — 获取项目详情
+
+**功能**: 返回项目定义，包含 `runs` 数组（完整 `AgentRunState` 对象）。
+
+### `PATCH /api/projects/:id` — 更新项目
+
+**功能**: 部分更新项目属性。
+
+### `DELETE /api/projects/:id` — 删除项目
+
+**功能**: 删除指定项目。
+
+**Response** `200 OK`:
+```json
+{ "success": true }
 ```
 
 ### `POST /api/scope-check` — WriteScope 冲突检测
@@ -405,6 +462,510 @@ done
   ]
 }
 ```
+
+---
+
+## V4.4~V5.4 Pipeline 编排接口
+
+以下是 V4.4 以来新增的 Pipeline 和 Project 管理 API。
+
+### `POST /api/pipelines/lint` — 模板契约校验（V4.4）
+
+**功能**: 校验 template 的 DAG 结构和 typed contracts。
+
+**Request Body**:
+```json
+{ "templateId": "development-template-1" }
+```
+
+**Response** `200 OK`:
+```json
+{
+  "templateId": "development-template-1",
+  "valid": true,
+  "dagErrors": [],
+  "contractErrors": [],
+  "contractWarnings": []
+}
+```
+
+### `POST /api/pipelines/validate` — 通用模板校验（V5.1）
+
+**功能**: 自动检测 `pipeline[]` 或 `graphPipeline` 格式，执行 DAG 结构和契约校验。
+
+**Request Body**:
+```json
+{ "templateId": "my-template" }
+```
+或传入内联模板：
+```json
+{ "template": { "graphPipeline": { "nodes": [], "edges": [] } } }
+```
+
+**Response** `200 OK`:
+```json
+{
+  "format": "graphPipeline",
+  "valid": true,
+  "dagErrors": [],
+  "contractErrors": [],
+  "contractWarnings": []
+}
+```
+
+### `POST /api/pipelines/convert` — 格式互转（V5.1）
+
+**功能**: 在 `pipeline[]` 和 `graphPipeline` 之间互转。
+
+**Request Body**:
+```json
+{
+  "direction": "pipeline-to-graph",
+  "pipeline": [
+    { "groupId": "project-planning", "autoTrigger": true },
+    { "groupId": "development" }
+  ]
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "graphPipeline": {
+    "nodes": [],
+    "edges": []
+  }
+}
+```
+
+### `POST /api/projects/:id/gate/:nodeId/approve` — Gate 审批（V5.2）
+
+**功能**: 审批或拒绝 pipeline 中的 gate 节点。
+
+**Request Body**:
+```json
+{
+  "action": "approve",
+  "reason": "代码审查通过"
+}
+```
+
+**Response** `200 OK`:
+```json
+{ "success": true, "nodeId": "review-gate", "decision": "approved" }
+```
+
+### `GET /api/projects/:id/checkpoints` — 列出 Checkpoint（V5.2）
+
+**功能**: 列出项目的所有 pipeline 状态快照。
+
+**Response** `200 OK`:
+```json
+{
+  "checkpoints": [
+    { "id": "cp-001", "nodeId": "loop-end-1", "createdAt": "2026-06-01T12:00:00Z", "iteration": 2 }
+  ]
+}
+```
+
+### `POST /api/projects/:id/checkpoints/:checkpointId/restore` — 从 Checkpoint 恢复（V5.2）
+
+**功能**: 将 pipeline 状态恢复到指定 checkpoint。
+
+**Response** `200 OK`:
+```json
+{ "restored": true, "checkpointId": "cp-001", "stageCount": 5 }
+```
+
+### `GET /api/projects/:id/journal` — 查询执行日志（V5.2）
+
+**功能**: 返回项目的控制流执行日志。支持查询参数 `nodeId`、`type`、`limit` 过滤。
+
+| 参数 | 类型 | 说明 |
+|:-----|:-----|:-----|
+| `nodeId` | string | 按节点 ID 过滤 |
+| `type` | string | 按事件类型过滤（如 `gate:decided`、`loop:iteration`） |
+| `limit` | number | 最大返回条数（默认 100，上限 1000） |
+
+**Response** `200 OK`:
+```json
+{ "entries": [], "total": 42 }
+```
+
+### `POST /api/projects/:id/resume` — 恢复 Project Pipeline
+
+**功能**: 恢复项目的 Pipeline 执行。支持多种恢复动作：`recover`、`nudge`、`restart_role`、`cancel`、`skip`、`force-complete`。
+
+详细参数说明请参阅 [cli-api-reference.md](./cli-api-reference.md#resume-project-pipeline)。
+
+**Response** `200 OK` / `202 Accepted`:
+```json
+{ "resumed": true, "checkpointId": "cp-003" }
+```
+
+### `POST /api/projects/:id/replay` — 回放到 Checkpoint（V5.2）
+
+**功能**: 回放到指定 checkpoint。
+
+**Request Body**:
+```json
+{ "checkpointId": "cp-001" }
+```
+
+### `POST /api/pipelines/generate` — AI 生成 Pipeline 草案（V5.3）
+
+**功能**: 根据自然语言目标描述生成 graphPipeline 草案。
+
+**Request Body**:
+```json
+{
+  "goal": "构建微服务后端开发流程",
+  "constraints": { "maxStages": 8, "allowFanOut": true }
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "draftId": "draft-xxx",
+  "graphPipeline": { "nodes": [], "edges": [] },
+  "validationResult": { "valid": true },
+  "riskAssessment": { "level": "low", "risks": [] },
+  "templateMeta": { "title": "微服务开发模板" }
+}
+```
+
+### `GET /api/pipelines/generate/:draftId` — 查看草案（V5.3）
+
+**功能**: 查看已生成的 pipeline 草案详情。
+
+### `POST /api/pipelines/generate/:draftId/confirm` — 确认草案（V5.3）
+
+**功能**: 确认并保存 AI 草案为正式模板。**Destructive** — 会写入模板目录。
+
+**Request Body**:
+```json
+{
+  "templateMeta": { "title": "微服务开发模板" }
+}
+```
+
+**Response** `200 OK`:
+```json
+{ "saved": true, "templateId": "generated-xxx" }
+```
+
+### `GET /api/pipelines/subgraphs` — 列出子图（V5.4）
+
+**功能**: 列出所有可用的可复用子图定义。
+
+### `GET /api/pipelines/policies` — 列出资源策略（V5.4）
+
+**功能**: 列出所有资源配额策略。支持查询参数 `scope` 和 `targetId` 过滤。
+
+### `POST /api/pipelines/policies/check` — 检查配额（V5.4）
+
+**功能**: 评估当前 usage 是否违反资源策略。
+
+**Request Body**:
+```json
+{
+  "projectId": "xxx",
+  "usage": { "runs": 15, "branches": 8, "iterations": 3, "stages": 10, "concurrentRuns": 2 }
+}
+```
+
+**Response** `200 OK`:
+```json
+{ "allowed": true, "violations": [], "warnings": [] }
+```
+
+### `GET /api/projects/:id/diagnostics` — 项目健康诊断
+
+**功能**: 返回项目健康摘要、活跃 stage、阻塞原因、分支异常。
+
+### `POST /api/projects/:id/reconcile` — 项目状态修复
+
+**功能**: 对项目执行幂等状态修复。支持 `dryRun` 参数（默认 true）。
+
+### `GET /api/projects/:id/graph` — 获取项目 DAG 图
+
+**功能**: 返回项目当前 pipeline 的 DAG IR 表示。
+
+---
+
+## CEO 命令接口
+
+### `POST /api/ceo/command` — CEO 自然语言命令
+
+**功能**: 接收 CEO 的自然语言命令，自动进行意图识别、部门匹配和任务派发。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `command` | `string` | ✅ | CEO 的自然语言命令 |
+
+```json
+{ "command": "给后端团队安排一个登录模块的开发任务" }
+```
+
+**Response** `200 OK`:
+```json
+{
+  "success": true,
+  "action": "create_project",
+  "message": "已在「后端研发」部门创建项目",
+  "projectId": "abc123"
+}
+```
+
+| Action 值 | 说明 |
+|:----------|:-----|
+| `create_project` | 在最匹配的部门创建了项目 |
+| `multi_create` | 批量创建了多个项目 |
+| `report_to_human` | 生成了各部门状态汇报 |
+| `cancel` / `pause` / `resume` / `retry` / `skip` | 控制了运行中的任务 |
+| `info` | 查询了特定信息 |
+| `needs_decision` | 需要 CEO 在多个方案间选择（返回 `suggestions` 数组） |
+
+---
+
+## 审批接口
+
+### `GET /api/approval` — 审批请求列表
+
+**功能**: 获取所有审批请求。
+
+**Response** `200 OK`: 数组，每项为 `ApprovalRequest` 对象。
+
+### `POST /api/approval` — 提交审批请求
+
+**功能**: 由 Agent 或系统提交新的审批请求。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | `string` | ✅ | `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `other` |
+| `workspace` | `string` | ✅ | 发起部门的 workspace URI |
+| `title` | `string` | ✅ | 审批标题 |
+| `description` | `string` | ✅ | 详细描述 |
+| `urgency` | `string` | 否 | `low` / `normal` / `high` / `critical`（默认 `normal`） |
+| `runId` | `string` | 否 | 关联的 Run ID |
+
+### `GET /api/approval/:id` — 审批详情
+
+**功能**: 获取单个审批请求的详细信息。
+
+### `PATCH /api/approval/:id` — 更新审批状态
+
+**功能**: CEO 批准/拒绝审批请求。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | `string` | ✅ | `approved` / `rejected` / `feedback` |
+| `message` | `string` | 否 | CEO 的回复消息 |
+
+### `POST /api/approval/:id/feedback` — 审批反馈
+
+**功能**: CEO 对审批请求提供反馈（不批准也不拒绝，仅给意见）。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `message` | `string` | ✅ | 反馈内容 |
+
+---
+
+## 部门接口
+
+### `GET /api/departments` — 获取部门配置
+
+**功能**: 获取指定 workspace 的部门配置。如果 `.department/config.json` 不存在，返回默认配置。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace 绝对路径（不含 `file://` 前缀） |
+
+**Response** `200 OK`:
+```json
+{
+  "name": "后端研发",
+  "type": "build",
+  "description": "负责后端 API 和数据库",
+  "skills": [],
+  "okr": null,
+  "provider": "antigravity",
+  "tokenQuota": { "daily": 500000, "monthly": 10000000, "used": { "daily": 12300, "monthly": 456000 }, "canRequestMore": true }
+}
+```
+
+**错误响应**:
+
+| 状态码 | 条件 |
+|--------|------|
+| `400` | 缺少 `workspace` 参数 |
+| `403` | workspace 不在已注册列表中（防路径穿越） |
+| `422` | `.department/config.json` 格式错误 |
+
+### `PUT /api/departments` — 更新部门配置
+
+**功能**: 更新指定 workspace 的部门配置。如果 `.department/` 目录不存在，会自动创建。
+
+**Query 参数**: 同 GET
+
+**Request Body**: 完整的 `DepartmentConfig` JSON 对象。
+
+### `POST /api/departments/sync` — 同步部门状态
+
+**功能**: 触发部门状态同步（配置 → IDE 适配）。
+
+### `GET /api/departments/digest` — 部门摘要
+
+**功能**: 获取部门的日报/周报摘要（已完成任务、进行中任务、阻塞项、Token 用量）。
+
+### `GET /api/departments/quota` — 配额查询
+
+**功能**: 获取部门当前 Token 配额和使用情况。
+
+### `GET /api/departments/memory` — 读取部门记忆
+
+**功能**: 读取 `workspace/.department/memory/` 下的持久记忆内容。
+
+### `POST /api/departments/memory` — 写入部门记忆
+
+**功能**: 追加或更新部门记忆文件。
+
+---
+
+## 定时任务接口
+
+### `GET /api/scheduler/jobs` — 定时任务列表
+
+**功能**: 返回所有已注册的定时任务及其运行状态。
+
+**Response** `200 OK`:
+```json
+[
+  {
+    "jobId": "abc-123",
+    "name": "每日代码审查",
+    "type": "cron",
+    "cronExpression": "0 9 * * 1-5",
+    "action": {
+      "kind": "dispatch-pipeline",
+      "templateId": "coding-basic",
+      "workspace": "/Users/darrel/Projects/backend",
+      "prompt": "审查昨日提交的代码"
+    },
+    "enabled": true,
+    "lastRunAt": "2026-04-04T09:00:00Z",
+    "lastRunResult": "success",
+    "departmentWorkspaceUri": "/Users/darrel/Projects/backend",
+    "createdAt": "2026-04-01T10:00:00Z"
+  }
+]
+```
+
+### `POST /api/scheduler/jobs` — 创建定时任务
+
+**功能**: 注册新的定时任务。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | `string` | ✅ | 任务名称 |
+| `type` | `string` | ✅ | `cron` / `interval` / `once` |
+| `cronExpression` | `string` | 条件 | cron 表达式（type=cron 时必填） |
+| `intervalMs` | `number` | 条件 | 间隔毫秒数（type=interval 时必填） |
+| `scheduledAt` | `string` | 条件 | 执行时间（type=once 时必填，ISO 8601） |
+| `action` | `object` | ✅ | 执行动作，见下方 |
+| `enabled` | `boolean` | 否 | 是否启用（默认 `true`） |
+| `departmentWorkspaceUri` | `string` | 否 | 关联的 OPC 部门 workspace |
+| `opcAction` | `object` | 否 | OPC 专用动作（自动创建项目） |
+
+**Action 类型**:
+
+| kind | 说明 | 必填字段 |
+|------|------|---------|
+| `dispatch-pipeline` | 派发 Pipeline | `templateId`, `workspace`, `prompt` |
+| `dispatch-group` | 派发 Agent Group | `groupId`, `workspace`, `prompt` |
+| `health-check` | 项目健康检查 | `projectId` |
+
+### `GET /api/scheduler/jobs/:id` — 任务详情
+
+**功能**: 获取单个定时任务的详细信息。
+
+### `PATCH /api/scheduler/jobs/:id` — 更新任务
+
+**功能**: 更新定时任务的配置（如启用/禁用、修改 cron 表达式）。
+
+### `DELETE /api/scheduler/jobs/:id` — 删除任务
+
+**功能**: 删除定时任务。
+
+### `POST /api/scheduler/jobs/:id/trigger` — 手动触发任务
+
+**功能**: 立即触发一次定时任务执行（不影响下次 cron 触发时间）。
+
+---
+
+## 交付物接口
+
+### `GET /api/projects/:id/deliverables` — 交付物列表
+
+**功能**: 获取项目的所有交付物。
+
+**Response** `200 OK`:
+```json
+[
+  {
+    "id": "del-001",
+    "projectId": "proj-123",
+    "stageId": "stage-0",
+    "type": "document",
+    "title": "产品需求文档 v1",
+    "artifactPath": "specs/product-spec.md",
+    "createdAt": "2026-04-04T12:00:00Z",
+    "quality": {
+      "reviewDecision": "approved",
+      "reviewedAt": "2026-04-04T13:00:00Z"
+    }
+  }
+]
+```
+
+### `POST /api/projects/:id/deliverables` — 添加交付物
+
+**功能**: 为项目添加一个交付物记录。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `stageId` | `string` | ✅ | 所属 Stage ID |
+| `type` | `string` | ✅ | `document` / `code` / `data` / `review` |
+| `title` | `string` | ✅ | 交付物标题 |
+| `artifactPath` | `string` | 否 | 产物文件路径 |
+
+---
+
+## 运维接口
+
+### `GET /api/operations/audit` — 审计日志
+
+**功能**: 获取系统审计事件日志。
+
+### `GET /api/logs` — 日志查看
+
+**功能**: 获取系统运行日志。
 
 ---
 
@@ -509,8 +1070,43 @@ done
 
 **Response** `200 OK`:
 ```json
-{ "ok": true, "hidden": true }
+{ "ok": true, "hidden": true, "windowMinimized": true }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | `boolean` | 操作是否成功 |
+| `hidden` | `boolean` | workspace 是否已隐藏 |
+| `windowMinimized` | `boolean` | 是否成功最小化了 Antigravity IDE 窗口 |
+
+---
+
+### `POST /api/workspaces/kill` — 停止 Workspace
+
+**功能**: 真正停止指定 workspace 的 `language_server` 进程。
+
+> ⚠️ **危险操作**: 这会杀死 language_server 进程。如果该 workspace 同时在 Antigravity IDE 中打开，IDE 会断开连接并显示错误。仅需从侧边栏隐藏请用 `POST /api/workspaces/close`。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `workspace` | `string` | ✅ | 要停止的 workspace `file://` URI |
+
+```json
+{ "workspace": "file:///path/to/mytools" }
+```
+
+**Response** `200 OK`:
+```json
+{ "ok": true, "killed": { "pid": 54642, "port": 52980, "windowClosed": true } }
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `killed.pid` | `number` | 被终止的进程 ID |
+| `killed.port` | `number` | 被终止的 gRPC 端口 |
+| `killed.windowClosed` | `boolean` | 是否通过 AppleScript 关闭了窗口（false 则回退到 SIGTERM） |
 
 ---
 
@@ -824,7 +1420,7 @@ for i in range(60):
             print("AI is waiting for approval!")
             # 自动 proceed
             requests.post(f"{BASE}/api/conversations/{cid}/proceed",
-                json={"uri": "", "model": "MODEL_PLACEHOLDER_M26"})
+                json={"artifactUri": "", "model": "MODEL_PLACEHOLDER_M26"})
 ```
 
 ### Shell: 一行式快速提问

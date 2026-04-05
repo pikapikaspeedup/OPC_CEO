@@ -1,0 +1,11 @@
+{
+  "projectId": "cec316d4-8636-4290-9cbd-0c0b7cfa7eac",
+  "name": "V4 Dry Run Gemini 3.1 Pro",
+  "goal": "Build a tiny note-taking web app with note CRUD, local persistence, and a simple smoke test. Keep scope intentionally small for this dry-run.",
+  "templateId": "large-project-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI/.tmp/v4-dry-run-20260328",
+  "status": "active",
+  "createdAt": "2026-03-27T23:06:08.333Z",
+  "updatedAt": "2026-03-27T23:06:08.333Z",
+  "runIds": []
+}

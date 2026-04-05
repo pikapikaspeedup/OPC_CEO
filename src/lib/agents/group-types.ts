@@ -20,7 +20,8 @@ export type ReviewOutcome = 'approved' | 'rejected' | 'revise-exhausted';
 export type GroupExecutionMode =
   | 'legacy-single'
   | 'review-loop'
-  | 'delivery-single-pass';
+  | 'delivery-single-pass'
+  | 'orchestration';
 
 export interface GroupSourceContract {
   /** Which upstream group IDs this group accepts as source */
@@ -254,6 +255,7 @@ export interface AgentRunState {
   supervisorConversationId?: string;
   // V3.5: Pipeline tracking
   pipelineId?: string;
+  pipelineStageId?: string;
   pipelineStageIndex?: number;
 }
 
@@ -285,6 +287,17 @@ export interface SupervisorSummary {
   suggestedActions: string[];
   startedAt: string;
   finishedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// V5.5: Shared Conversation Mode — reuse cascadeId across roles/rounds
+// ---------------------------------------------------------------------------
+
+export interface SharedConversationState {
+  /** CascadeId being reused for the author role across rounds */
+  authorCascadeId?: string;
+  /** Cumulative estimated token count for safety-valve reset */
+  estimatedTokens: number;
 }
 
 // ---------------------------------------------------------------------------

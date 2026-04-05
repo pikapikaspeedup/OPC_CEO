@@ -1,0 +1,74 @@
+{
+  "id": "v4-smoke-template",
+  "kind": "template",
+  "title": "V4 Fan-Out Smoke",
+  "description": "A minimal orchestration smoke test for planning, fan-out, join, and integration.",
+  "groups": {
+    "smoke-planning": {
+      "title": "Smoke Planning",
+      "description": "Seeds a deterministic work package file.",
+      "executionMode": "legacy-single",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true },
+      "roles": [
+        { "id": "smoke-work-package-seeder", "workflow": "/smoke-work-package-seeder", "timeoutMs": 300000, "autoApprove": true }
+      ]
+    },
+    "smoke-fan-out": {
+      "title": "Smoke Fan-Out",
+      "description": "Orchestration node that creates child projects from the seeded work packages.",
+      "executionMode": "orchestration",
+      "roles": []
+    },
+    "smoke-join": {
+      "title": "Smoke Join",
+      "description": "Orchestration node that waits for all branches to complete.",
+      "executionMode": "orchestration",
+      "roles": []
+    },
+    "smoke-integration": {
+      "title": "Smoke Integration",
+      "description": "Final smoke report after join completes.",
+      "executionMode": "legacy-single",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true },
+      "roles": [
+        { "id": "smoke-integration-check", "workflow": "/smoke-integration-check", "timeoutMs": 300000, "autoApprove": true }
+      ]
+    }
+  },
+  "pipeline": [
+    {
+      "stageId": "planning",
+      "groupId": "smoke-planning",
+      "autoTrigger": false
+    },
+    {
+      "stageId": "fanout",
+      "groupId": "smoke-fan-out",
+      "autoTrigger": true,
+      "triggerOn": "completed",
+      "stageType": "fan-out",
+      "upstreamStageIds": ["planning"],
+      "fanOutSource": {
+        "workPackagesPath": "delivery/work-packages.json",
+        "perBranchTemplateId": "v4-smoke-branch-template"
+      }
+    },
+    {
+      "stageId": "join",
+      "groupId": "smoke-join",
+      "autoTrigger": true,
+      "stageType": "join",
+      "joinFrom": "fanout",
+      "joinPolicy": "all",
+      "upstreamStageIds": ["fanout"]
+    },
+    {
+      "stageId": "integration",
+      "groupId": "smoke-integration",
+      "autoTrigger": true,
+      "triggerOn": "completed",
+      "upstreamStageIds": ["join"]
+    }
+  ],
+  "defaultModel": "MODEL_PLACEHOLDER_M26"
+}

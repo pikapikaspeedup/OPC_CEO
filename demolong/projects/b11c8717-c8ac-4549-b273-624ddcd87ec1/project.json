@@ -1,0 +1,79 @@
+{
+  "projectId": "b11c8717-c8ac-4549-b273-624ddcd87ec1",
+  "name": "TradingAgents 量化选股深度研究",
+  "goal": "深度研究 TradingAgents 系列 3 个 GitHub 仓库，分析核心亮点、量化因子、因子进化逻辑、条件猎手机制和选股逻辑",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-03-29T10:01:43.026Z",
+  "updatedAt": "2026-04-05T20:37:51.948Z",
+  "runIds": [
+    "1ef949de-b200-4d86-b9d0-a83d4401578e"
+  ],
+  "pipelineState": {
+    "templateId": "universal-batch-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "batch-planning",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "1ef949de-b200-4d86-b9d0-a83d4401578e",
+        "startedAt": "2026-03-29T10:03:24.063Z",
+        "completedAt": "2026-03-29T10:04:25.425Z"
+      },
+      {
+        "stageId": "fanout",
+        "groupId": "research-fan-out",
+        "stageIndex": 1,
+        "status": "completed",
+        "attempts": 0,
+        "startedAt": "2026-03-29T10:04:25.430Z",
+        "branches": [
+          {
+            "branchIndex": 0,
+            "workPackageId": "wp-tradingagents-ashare",
+            "workPackageName": "TradingAgents-AShare",
+            "subProjectId": "592592d0-a050-4b37-abb1-a4f1b40af1b7",
+            "runId": "2843c3d1-65b2-4151-98aa-04346f882d4a",
+            "status": "completed",
+            "startedAt": "2026-03-29T10:04:25.433Z",
+            "completedAt": "2026-03-29T10:07:44.373Z"
+          },
+          {
+            "branchIndex": 1,
+            "workPackageId": "wp-tradingagents-cn",
+            "workPackageName": "TradingAgents-CN",
+            "subProjectId": "a7542187-b2f8-4720-86d2-f67e3c8dfef5",
+            "runId": "86625d3b-149c-4c8e-a09f-7dcd2bb8ce08",
+            "status": "completed",
+            "startedAt": "2026-03-29T10:04:25.624Z",
+            "completedAt": "2026-03-29T10:07:12.402Z"
+          },
+          {
+            "branchIndex": 2,
+            "workPackageId": "wp-tradingagents-mcpmode",
+            "workPackageName": "TradingAgents-MCPmode",
+            "subProjectId": "0445deed-07bf-4023-8a12-d1db4668337c",
+            "runId": "f7b98f9e-ac7f-422c-8dc0-98d37c66e9f2",
+            "status": "completed",
+            "startedAt": "2026-03-29T10:04:25.697Z",
+            "completedAt": "2026-03-29T10:06:55.576Z"
+          }
+        ],
+        "completedAt": "2026-03-29T10:07:44.377Z"
+      },
+      {
+        "stageId": "join",
+        "groupId": "research-join",
+        "stageIndex": 2,
+        "status": "completed",
+        "attempts": 0,
+        "startedAt": "2026-03-29T10:07:44.380Z",
+        "completedAt": "2026-03-29T10:07:44.382Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

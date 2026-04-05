@@ -1,0 +1,42 @@
+{
+  "projectId": "0b4b1569-68dc-4307-b06b-3d15be50e6d7",
+  "name": "Python 计算脚本",
+  "goal": "编写一个 Python 脚本来计算 1+10 的结果并将结果打印到控制台。",
+  "templateId": "",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-04-05T22:12:24.108Z",
+  "updatedAt": "2026-04-05T22:12:56.416Z",
+  "runIds": [
+    "e89e286a-55ab-4eb7-bbac-abbd5827eebd"
+  ],
+  "projectType": "adhoc",
+  "priority": "normal",
+  "pipelineState": {
+    "templateId": "coding-basic-template",
+    "stages": [
+      {
+        "stageId": "coding-basic",
+        "groupId": "coding-basic",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "e89e286a-55ab-4eb7-bbac-abbd5827eebd",
+        "startedAt": "2026-04-05T22:12:25.519Z",
+        "completedAt": "2026-04-05T22:12:56.384Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  },
+  "ceoDecision": {
+    "command": "编写一个 Python 脚本来计算 1+10 的结果并将结果打印到控制台。",
+    "action": "dispatch",
+    "reasoning": "该需求属于简单的 Python 脚本开发，匹配“超级 IT 研发部”的产品研发职能。由于任务无需复杂的评审流程，选择该部门已关联的“coding-basic-template”模板是最优解。",
+    "departmentName": "超级 IT 研发部",
+    "templateId": "coding-basic-template",
+    "message": "已将任务「Python 计算脚本」派发给 超级 IT 研发部（coding-basic-template），执行已启动",
+    "resolved": true,
+    "decidedAt": "2026-04-05T22:12:25.549Z"
+  }
+}

@@ -192,6 +192,27 @@ app.prepare().then(() => {
     log.info({ hostname, port }, '🚀 Antigravity Gateway running');
     log.info('Single-port mode: Next.js + API + WebSocket');
 
+    try {
+      const { initializeScheduler } = await import('./src/lib/agents/scheduler');
+      initializeScheduler();
+    } catch (err: any) {
+      log.warn({ err: err.message }, 'Scheduler initialization failed');
+    }
+
+    try {
+      const { initializeFanOutController } = await import('./src/lib/agents/fan-out-controller');
+      initializeFanOutController();
+    } catch {
+      // Fan-out controller is optional during early startup or before V4.1 files exist.
+    }
+
+    try {
+      const { initApprovalTriggers } = await import('./src/lib/agents/approval-triggers');
+      initApprovalTriggers();
+    } catch {
+      // Approval triggers are optional.
+    }
+
     // --- Auto-start Cloudflare Tunnel ---
     try {
       const tunnel = await import('./src/lib/bridge/tunnel');

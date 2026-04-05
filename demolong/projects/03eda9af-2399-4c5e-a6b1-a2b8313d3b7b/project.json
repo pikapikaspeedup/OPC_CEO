@@ -1,0 +1,44 @@
+{
+  "projectId": "03eda9af-2399-4c5e-a6b1-a2b8313d3b7b",
+  "name": "Gemini Plugins Investigation",
+  "goal": "调查下 Gemini 的插件",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "active",
+  "createdAt": "2026-04-05T20:30:29.094Z",
+  "updatedAt": "2026-04-05T20:31:01.289Z",
+  "runIds": [
+    "9748a901-34c4-40af-a3d9-32bd4b03a28f"
+  ],
+  "pipelineState": {
+    "templateId": "universal-batch-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "batch-planning",
+        "stageIndex": 0,
+        "status": "running",
+        "attempts": 1,
+        "runId": "9748a901-34c4-40af-a3d9-32bd4b03a28f",
+        "startedAt": "2026-04-05T20:31:01.288Z"
+      },
+      {
+        "stageId": "fanout",
+        "groupId": "research-fan-out",
+        "stageIndex": 1,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "join",
+        "groupId": "research-join",
+        "stageIndex": 2,
+        "status": "pending",
+        "attempts": 0
+      }
+    ],
+    "activeStageIds": [
+      "planning"
+    ],
+    "status": "running"
+  }
+}

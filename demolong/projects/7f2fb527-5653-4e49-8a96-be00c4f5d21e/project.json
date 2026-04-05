@@ -1,0 +1,51 @@
+{
+  "projectId": "7f2fb527-5653-4e49-8a96-be00c4f5d21e",
+  "name": "Graph Pipeline E2E Token Test",
+  "goal": "Run graph pipeline smoke test.",
+  "templateId": "graph-smoke-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "active",
+  "createdAt": "2026-03-28T11:23:00.429Z",
+  "updatedAt": "2026-03-28T11:23:46.835Z",
+  "runIds": [
+    "6cfc09f5-c8d3-4059-a985-5363ee9e0966"
+  ],
+  "pipelineState": {
+    "templateId": "graph-smoke-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "smoke-planning",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "6cfc09f5-c8d3-4059-a985-5363ee9e0966",
+        "startedAt": "2026-03-28T11:23:11.147Z",
+        "completedAt": "2026-03-28T11:23:46.824Z"
+      },
+      {
+        "stageId": "fanout",
+        "groupId": "smoke-fan-out",
+        "stageIndex": 1,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "join",
+        "groupId": "smoke-join",
+        "stageIndex": 2,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "integration",
+        "groupId": "smoke-integration",
+        "stageIndex": 3,
+        "status": "pending",
+        "attempts": 0
+      }
+    ],
+    "activeStageIds": [],
+    "status": "running"
+  }
+}

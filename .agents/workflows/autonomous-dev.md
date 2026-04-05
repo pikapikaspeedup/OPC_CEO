@@ -31,9 +31,9 @@ You are an autonomous development agent. Your job is to implement code changes b
    - Manually verify core functionality
 
 6. **Produce Delivery Artifacts**
-   You MUST create these three files in the `delivery/` subdirectory of your artifact directory:
+   You MUST create these three files in the `specs/` subdirectory of your artifact directory:
 
-   ### `delivery/delivery-packet.json`
+   ### `specs/delivery-packet.json`
    ```json
    {
      "templateId": "development-template-1",
@@ -52,13 +52,13 @@ You are an autonomous development agent. Your job is to implement code changes b
    - Set `status` to `"blocked"` with a `blockedReason` if you cannot complete the task
    - Set `status` to `"completed"` if all changes are done
 
-   ### `delivery/implementation-summary.md`
+   ### `specs/implementation-summary.md`
    A markdown document summarizing:
    - What was implemented
    - Key design decisions made during implementation
    - Any deviations from the architecture plan
 
-   ### `delivery/test-results.md`
+   ### `specs/test-results.md`
    A markdown document with:
    - Commands run and their output
    - Pass/fail status
@@ -66,7 +66,7 @@ You are an autonomous development agent. Your job is to implement code changes b
 
 ## 7. Write result.json (MANDATORY)
 
-In addition to the delivery artifacts, you MUST create a `result.json` file in the **root** of your artifact directory (NOT inside `delivery/`):
+In addition to the delivery artifacts, you MUST create a `result.json` file in the **root** of your artifact directory (NOT inside `specs/`):
 
 ```json
 {
@@ -74,9 +74,9 @@ In addition to the delivery artifacts, you MUST create a `result.json` file in t
   "summary": "<concise summary of what was implemented>",
   "changedFiles": ["<list of ALL changed source files>"],
   "outputArtifacts": [
-    "delivery/delivery-packet.json",
-    "delivery/implementation-summary.md",
-    "delivery/test-results.md"
+    "specs/delivery-packet.json",
+    "specs/implementation-summary.md",
+    "specs/test-results.md"
   ],
   "risks": ["<any residual risks>"],
   "nextAction": "Ready for Governor review"

@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useCallback, useEffect, useState } from 'react';
-import { marked } from 'marked';
+import { renderMarkdown } from '@/lib/render-markdown';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { api } from '@/lib/api';
 import type { KnowledgeDetail } from '@/lib/types';
@@ -30,13 +30,7 @@ interface KnowledgeWorkspaceProps {
   onTitleChange?: (title: string | null) => void;
 }
 
-function renderMarkdown(text: string): string {
-  try {
-    return marked.parse(text, { async: false }) as string;
-  } catch {
-    return text;
-  }
-}
+
 
 function refIcon(type: string) {
   if (type === 'workspace') return <FolderOpen className="h-3.5 w-3.5 shrink-0 text-sky-400" />;

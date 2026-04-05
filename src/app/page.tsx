@@ -1,19 +1,27 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Sidebar from '@/components/sidebar';
 import Chat from '@/components/chat';
 import ChatInput from '@/components/chat-input';
 import KnowledgeWorkspace from '@/components/knowledge-panel';
+import DepartmentMemoryPanel from '@/components/department-memory-panel';
 import LogViewerPanel from '@/components/log-viewer-panel';
-import AgentRunsPanel from '@/components/agent-runs-panel';
-import AgentRunDetail from '@/components/agent-run-detail';
 import ProjectsPanel from '@/components/projects-panel';
+import AnalyticsDashboard from '@/components/analytics-dashboard';
+import TokenQuotaWidget from '@/components/token-quota-widget';
+import McpStatusWidget from '@/components/mcp-status-widget';
+import CodexWidget from '@/components/codex-widget';
+import TunnelStatusWidget from '@/components/tunnel-status-widget';
+import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
+import GlobalCommandBar from '@/components/global-command-bar';
+import NotificationIndicators from '@/components/notification-indicators';
 import { useI18n } from '@/components/locale-provider';
 import { api, connectWs } from '@/lib/api';
-import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Workspace, TemplateSummaryFE, ResumeAction } from '@/lib/types';
+import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
+import { generateCEOEvents } from '@/lib/ceo-events';
 import { Download, Menu, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -22,12 +30,12 @@ import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
 import { getModelLabel } from '@/lib/model-labels';
 import { AppShell, StatusChip, WorkspaceHeader } from '@/components/ui/app-shell';
 
-type SidebarSection = 'conversations' | 'projects' | 'agents' | 'knowledge';
+type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations';
 
 export default function Home() {
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarSection, setSidebarSection] = useState<SidebarSection>('conversations');
+  const [sidebarSection, setSidebarSection] = useState<SidebarSection>('projects');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState('Antigravity');
   const [steps, setSteps] = useState<StepsData | null>(null);
@@ -56,6 +64,7 @@ export default function Home() {
   const [selectedKnowledgeId, setSelectedKnowledgeId] = useState<string | null>(null);
   const [selectedKnowledgeTitle, setSelectedKnowledgeTitle] = useState('');
   const [knowledgeRefreshSignal, setKnowledgeRefreshSignal] = useState(0);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const lastStepCountRef = useRef(0);
   const apiLoadedRef = useRef(false);
@@ -79,7 +88,7 @@ export default function Home() {
     }).catch(() => { });
 
     // Load pipeline templates once on mount
-    api.pipelines().then(setTemplates).catch(() => {});
+    api.pipelines().then(setTemplates).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -318,10 +327,11 @@ export default function Home() {
 
   const handleResumeProject = useCallback(async (
     projectId: string,
-    stageIndex: number,
+    stageId: string,
     action: ResumeAction,
+    branchIndex?: number,
   ) => {
-    await api.resumeProject(projectId, { stageIndex, action });
+    await api.resumeProject(projectId, { stageId, branchIndex, action });
     await loadAgentState();
   }, [loadAgentState]);
 
@@ -411,12 +421,146 @@ export default function Home() {
   const agentWorkspaces = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces)
     .filter(workspace => workspace.running && !workspace.hidden)
     .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
+
+  // OPC Phase 3: load department configs for all workspaces
+  const [departmentsMap, setDepartmentsMap] = useState<Map<string, DepartmentConfig>>(new Map());
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const wsKey = useMemo(() => agentWorkspaces.map(w => w.uri).join(','), [agentWorkspaces]);
+  useEffect(() => {
+    if (!agentWorkspaces.length) return;
+    Promise.all(
+      agentWorkspaces.map(ws =>
+        api.getDepartment(ws.uri)
+          .then(config => [ws.uri, config] as const)
+          .catch(() => [ws.uri, null] as const),
+      ),
+    ).then(results => {
+      const map = new Map<string, DepartmentConfig>();
+      for (const [uri, config] of results) {
+        if (config) map.set(uri, config);
+      }
+      setDepartmentsMap(map);
+    });
+  }, [wsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isOpcUnconfigured = useMemo(() => {
+    if (!departmentsMap.size) return false;
+    return [...departmentsMap.values()].every(d => d.type === 'build' && !d.okr);
+  }, [departmentsMap]);
+
+  // Poll pending approval count for header badge
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      api.listApprovals({ status: 'pending' })
+        .then(res => { if (!cancelled) setPendingApprovals(res.summary?.pending ?? 0); })
+        .catch(() => { });
+    };
+    poll();
+    const interval = setInterval(poll, 8000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // CEO events derived from projects
+  const ceoEvents = useMemo(() => {
+    try { return generateCEOEvents(projects, []); }
+    catch { return [] as CEOEvent[]; }
+  }, [projects]);
+
+  // Active runs for header ▶ indicator
+  const headerActiveRuns = useMemo(
+    () => agentRuns.filter(r => isAgentRunActive(r.status)),
+    [agentRuns],
+  );
+
+  // CEO command handler for GlobalCommandBar
+  const handleCEOCommand = useCallback(async (text: string) => {
+    try {
+      const result = await api.ceoCommand(text);
+      if (result.projectId || result.action === 'create_project' || result.action === 'multi_create') {
+        loadAgentState();
+      }
+      return {
+        success: result.success,
+        message: result.message,
+        suggestions: result.suggestions,
+      };
+    } catch {
+      return { success: false, message: '命令执行失败' };
+    }
+  }, [loadAgentState]);
+
+  const handleSuggestionAction = useCallback(async (suggestion: import('@/lib/api').CEOSuggestion) => {
+    if (suggestion.type === 'suggest_add_template' && suggestion.payload) {
+      // Add template to department, then dispatch
+      const { workspace, templateId, projectId, goal } = suggestion.payload;
+      if (workspace && templateId) {
+        try {
+          // 1. Add template to department config
+          const deptConfig = await api.getDepartment(workspace);
+          const existingIds = deptConfig.templateIds || [];
+          if (!existingIds.includes(templateId)) {
+            await api.updateDepartment(workspace, {
+              ...deptConfig,
+              templateIds: [...existingIds, templateId],
+            });
+          }
+          // 2. If project exists, dispatch it
+          if (projectId && goal) {
+            await api.dispatchRun({ workspace, templateId, projectId, prompt: goal });
+          }
+          loadAgentState();
+        } catch {
+          // best effort
+        }
+      }
+    } else if (suggestion.type === 'auto_generate_and_dispatch' && suggestion.payload) {
+      // AI generate template, then dispatch
+      const { workspace, goal, projectId, departmentName } = suggestion.payload;
+      if (workspace && goal) {
+        try {
+          const genResult = await api.generatePipeline({ goal: `为部门 ${departmentName || '未知'} 设计工作模板：${goal}` });
+          if (genResult.draftId) {
+            // Auto-confirm the draft
+            const confirmed = await api.confirmDraft(genResult.draftId);
+            if (confirmed.templateId) {
+              // Add to department
+              const deptConfig = await api.getDepartment(workspace);
+              await api.updateDepartment(workspace, {
+                ...deptConfig,
+                templateIds: [...(deptConfig.templateIds || []), confirmed.templateId],
+              });
+              // Dispatch if project exists
+              if (projectId) {
+                await api.dispatchRun({ workspace, templateId: confirmed.templateId, projectId, prompt: goal });
+              }
+            }
+          }
+          loadAgentState();
+        } catch {
+          // best effort
+        }
+      }
+    } else if (suggestion.type === 'use_template' && suggestion.payload?.workspace) {
+      // Open department settings
+      setSidebarSection('projects');
+    } else if (suggestion.type === 'create_template') {
+      // Navigate to template browser
+      setSidebarSection('projects');
+    } else if (suggestion.type === 'reassign_department' && suggestion.payload) {
+      // Re-dispatch to the suggested department
+      const { workspace, templateId, groupId } = suggestion.payload;
+      if (workspace && (templateId || groupId)) {
+        api.dispatchRun({ workspace, ...(templateId ? { templateId } : { groupId }), prompt: '' }).then(() => loadAgentState()).catch(() => { });
+      }
+    }
+  }, [loadAgentState]);
+
   const selectedAgentRun = agentRuns.find(run => run.runId === selectedAgentRunId) || null;
-  const displayTitle = sidebarSection === 'agents'
-    ? t('shell.agents')
-    : sidebarSection === 'knowledge'
-      ? t('shell.knowledge')
-      : activeTitle;
+  const displayTitle = sidebarSection === 'knowledge'
+    ? t('shell.knowledge')
+    : activeTitle;
 
   return (
     <>
@@ -434,7 +578,7 @@ export default function Home() {
             agentRuns={agentRuns}
             selectedAgentRunId={selectedAgentRunId}
             onSelectAgentRun={(runId) => {
-              setSidebarSection('agents');
+              setSidebarSection('projects');
               setSelectedAgentRunId(runId);
             }}
             selectedKnowledgeId={selectedKnowledgeId}
@@ -450,45 +594,75 @@ export default function Home() {
           />
         )}
         header={(
-          <header className="relative z-10 flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.86)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.78)] md:px-5">
+          <header className="relative z-10 flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.90)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.82)] md:px-5">
             <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setSidebarOpen(true)}>
               <Menu className="h-4 w-4" />
             </Button>
 
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-sm font-semibold text-[var(--app-text)] shadow-[0_12px_30px_rgba(0,0,0,0.2)]">
+            {/* Logo */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-sm font-bold text-[var(--app-text)] shadow-[0_8px_20px_rgba(0,0,0,0.15)]">
                 A
               </div>
-              <div className="min-w-0">
-                <div className="app-eyebrow">{t('common.appName')}</div>
-                <div className="truncate text-sm font-semibold text-[var(--app-text)]">{displayTitle}</div>
-              </div>
+              <span className="hidden md:block text-xs font-semibold text-white/60">{displayTitle || t('common.appName')}</span>
             </div>
 
-            <div className="ml-auto flex items-center gap-2">
+            {/* Global Command Bar — center */}
+            <GlobalCommandBar
+              workspaces={agentWorkspaces}
+              departments={departmentsMap}
+              onSubmitCommand={handleCEOCommand}
+              onSuggestionAction={handleSuggestionAction}
+            />
+
+            {/* Right: Notifications + Utils */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <NotificationIndicators
+                events={ceoEvents}
+                activeRuns={headerActiveRuns}
+                projects={projects}
+                pendingApprovals={pendingApprovals}
+                onEventAction={(event, action) => {
+                  const payload = action.payload || {};
+                  const projectId = typeof payload.projectId === 'string' ? payload.projectId : event.projectId;
+                  if (projectId) {
+                    setSidebarSection('projects');
+                    setSelectedProjectId(projectId);
+                  }
+                }}
+                onIntervene={async (runId, action) => {
+                  await api.interveneRun(runId, { action });
+                  loadAgentState();
+                }}
+                onNavigateToProject={(id) => {
+                  setSidebarSection('projects');
+                  setSelectedProjectId(id);
+                }}
+              />
+
+              <div className="w-px h-5 bg-white/8 mx-0.5" />
+
               <LocaleToggle className="hidden md:inline-flex" />
               <Button
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="icon"
                 onClick={() => setLogViewerOpen(true)}
-                className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+                className="text-white/40 hover:text-white hover:bg-white/10"
                 aria-label={t('shell.logs')}
                 title={t('shell.logs')}
               >
                 <Terminal className="h-4 w-4" />
-                <span className="hidden md:inline">{t('shell.logs')}</span>
               </Button>
               {sidebarSection === 'conversations' && steps?.steps?.length ? (
                 <Button
-                  variant="outline"
-                  size="sm"
+                  variant="ghost"
+                  size="icon"
                   onClick={handleExportMarkdown}
-                  className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+                  className="text-white/40 hover:text-white hover:bg-white/10"
                   aria-label={t('shell.export')}
                   title={t('shell.export')}
                 >
                   <Download className="h-4 w-4" />
-                  <span className="hidden md:inline">{t('shell.export')}</span>
                 </Button>
               ) : null}
             </div>
@@ -500,12 +674,50 @@ export default function Home() {
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-30" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1580px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                {isOpcUnconfigured && !onboardingDismissed && (
+                  <div className="rounded-xl border border-indigo-500/20 bg-gradient-to-r from-indigo-500/5 to-purple-500/5 px-6 py-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base">✨</span>
+                          <span className="text-sm font-semibold text-white">欢迎使用 AI 公司管理系统</span>
+                        </div>
+                        <p className="text-xs text-white/50">
+                          检测到 {departmentsMap.size} 个工作区尚未配置部门信息。配置后 CEO Agent 可以智能派发任务。
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button size="sm" onClick={() => setOnboardingOpen(true)}>
+                          🚀 开始配置
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setOnboardingDismissed(true)}>
+                          稍后
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <OnboardingWizard
+                  workspaces={agentWorkspaces}
+                  departments={departmentsMap}
+                  open={onboardingOpen}
+                  onOpenChange={setOnboardingOpen}
+                  onComplete={(newMap) => {
+                    setDepartmentsMap(newMap);
+                    setOnboardingDismissed(true);
+                  }}
+                />
                 <ProjectsPanel
                   projects={projects}
                   agentRuns={agentRuns}
                   workspaces={agentWorkspaces}
                   selectedProjectId={selectedProjectId}
+                  departments={departmentsMap}
                   onSelectProject={setSelectedProjectId}
+                  onOpenOperations={() => {
+                    setSidebarSection('operations');
+                    setSidebarOpen(true);
+                  }}
                   onSelectRun={(runId) => {
                     setSelectedAgentRunId(runId);
                     // Note: NOT switching to agents section — this is only for legacy projects
@@ -517,80 +729,11 @@ export default function Home() {
                   onCancelRun={handleCancelAgentRun}
                   onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
                   onRefresh={() => loadAgentState(selectedAgentRunId)}
+                  onDepartmentSaved={(uri, config) => {
+                    setDepartmentsMap(prev => new Map(prev).set(uri, config));
+                    api.updateDepartment(uri, config).catch(() => { });
+                  }}
                 />
-              </div>
-            </ScrollArea>
-          </div>
-        ) : sidebarSection === 'agents' ? (
-          <div className="agent-stage relative flex-1 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 agent-grid opacity-30" />
-            <ScrollArea className="h-full">
-              <div className="relative mx-auto flex w-full max-w-[1580px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-
-                <div className="grid gap-5 xl:grid-cols-[500px_minmax(0,1fr)] 2xl:grid-cols-[540px_minmax(0,1fr)]">
-                  <div className="space-y-5">
-                    <AgentRunsPanel
-                      workspaces={agentWorkspaces}
-                      currentModel={currentModel}
-                      currentModelLabel={currentModelLabel}
-                      models={models}
-                      layout="full"
-                      showRunsList={false}
-                      onDispatched={async (runId) => {
-                        setSelectedAgentRunId(runId);
-                        await loadAgentState(runId);
-                      }}
-                    />
-                  </div>
-
-                  <AgentRunDetail
-                    loading={agentRunsLoading}
-                    run={selectedAgentRun}
-                    models={models}
-                    onCancel={handleCancelAgentRun}
-                    onIntervene={handleInterveneAgentRun}
-                    onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
-                    onOpenChatTab={(id, title) => handleLoadAgentConversation(id, title || t('shell.agents'))}
-                    renderChat={activeId ? () => (
-                      <div className="flex flex-col h-full bg-transparent">
-                        <div className="flex-1 overflow-hidden relative">
-                          <Chat
-                            steps={steps}
-                            loading={loading}
-                            currentModel={currentModel}
-                            onProceed={handleProceed}
-                            onRevert={handleRevert}
-                            isActive={isActive}
-                          />
-                        </div>
-                        <div className="shrink-0 border-t border-white/6 px-4 pb-4 pt-3">
-                          {sendError ? (
-                            <div className="mb-3 flex justify-center">
-                              <div className="rounded-full border border-red-400/18 bg-red-400/10 px-4 py-2 text-sm font-medium text-red-100">
-                                {sendError}
-                              </div>
-                            </div>
-                          ) : null}
-                          <ChatInput
-                            activeId={activeId}
-                            onSend={handleSend}
-                            onCancel={handleCancel}
-                            disabled={loading}
-                            isRunning={isRunning}
-                            connected={connected}
-                            models={models}
-                            currentModel={currentModel}
-                            onModelChange={setCurrentModel}
-                            skills={skills}
-                            workflows={workflows}
-                            agenticMode={agenticMode}
-                            onAgenticModeChange={setAgenticMode}
-                          />
-                        </div>
-                      </div>
-                    ) : undefined}
-                  />
-                </div>
               </div>
             </ScrollArea>
           </div>
@@ -605,6 +748,24 @@ export default function Home() {
                   onTitleChange={handleKnowledgeTitleChange}
                   onDeleted={handleKnowledgeDeleted}
                 />
+
+                {/* Department Memory — knowledge deposited by agent runs */}
+                <DepartmentMemoryPanel workspaces={agentWorkspaces} />
+              </div>
+            </ScrollArea>
+          </div>
+        ) : sidebarSection === 'operations' ? (
+          <div className="app-shell-stage relative flex-1 overflow-hidden">
+            <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
+            <ScrollArea className="h-full">
+              <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                <AnalyticsDashboard />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <TokenQuotaWidget workspaces={agentWorkspaces} />
+                  <McpStatusWidget />
+                </div>
+                <TunnelStatusWidget />
+                <CodexWidget />
               </div>
             </ScrollArea>
           </div>

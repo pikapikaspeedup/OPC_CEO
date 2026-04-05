@@ -1,0 +1,32 @@
+{
+  "projectId": "a81e4c1c-cc66-433c-bbe5-e81f07142cdd",
+  "name": "Python基础运算脚本",
+  "goal": "写一个 Python 脚本计算 1+10 的结果并打印输出。",
+  "templateId": "",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-04-05T21:45:03.858Z",
+  "updatedAt": "2026-04-05T21:45:30.353Z",
+  "runIds": [
+    "bc3c6e1b-dec8-45b5-bb04-310c1700418c"
+  ],
+  "projectType": "adhoc",
+  "priority": "normal",
+  "pipelineState": {
+    "templateId": "coding-basic-template",
+    "stages": [
+      {
+        "stageId": "coding-basic",
+        "groupId": "coding-basic",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "bc3c6e1b-dec8-45b5-bb04-310c1700418c",
+        "startedAt": "2026-04-05T21:45:04.199Z",
+        "completedAt": "2026-04-05T21:45:30.316Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

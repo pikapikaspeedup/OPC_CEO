@@ -18,6 +18,8 @@ const log = createLogger('Gateway');
 export { discoverLanguageServers, getLanguageServer } from './discovery';
 export { getApiKey, getUserInfo, getWorkspaces, getPlaygrounds, getConversations, addLocalConversation } from './statedb';
 export * as grpc from './grpc';
+export { CodexMCPClient, codexExec, isCodexAvailable } from './codex-adapter';
+export type { CodexExecOptions, CodexMCPSessionOptions, CodexMCPResult, CodexSandbox, CodexApprovalPolicy } from './codex-adapter';
 
 // --- Helper: get all server connections ---
 export function getAllConnections() {

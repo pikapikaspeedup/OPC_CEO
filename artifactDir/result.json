@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "summary": "Completed research on TradingAgents-CN. Final report written to research/tradingagents-cn.md.",
+  "changedFiles": ["research/tradingagents-cn.md"],
+  "outputArtifacts": ["research/tradingagents-cn.md"],
+  "risks": [],
+  "blockers": [],
+  "nextAction": "None"
+}

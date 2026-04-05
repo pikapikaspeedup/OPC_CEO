@@ -1,0 +1,54 @@
+{
+  "id": "graph-smoke-template",
+  "kind": "template",
+  "title": "V5 Graph Pipeline Smoke",
+  "description": "Minimal E2E test for graphPipeline: planning → fan-out → join → integration.",
+  "groups": {
+    "smoke-planning": {
+      "title": "Smoke Planning",
+      "description": "Seeds a deterministic work package file.",
+      "executionMode": "legacy-single",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true },
+      "roles": [
+        { "id": "smoke-work-package-seeder", "workflow": "/smoke-work-package-seeder", "timeoutMs": 300000, "autoApprove": true }
+      ]
+    },
+    "smoke-fan-out": {
+      "title": "Smoke Fan-Out",
+      "description": "Orchestration node that creates child projects from the seeded work packages.",
+      "executionMode": "orchestration",
+      "roles": []
+    },
+    "smoke-join": {
+      "title": "Smoke Join",
+      "description": "Orchestration node that waits for all branches to complete.",
+      "executionMode": "orchestration",
+      "roles": []
+    },
+    "smoke-integration": {
+      "title": "Smoke Integration",
+      "description": "Final smoke report after join completes.",
+      "executionMode": "legacy-single",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true },
+      "roles": [
+        { "id": "smoke-integration-check", "workflow": "/smoke-integration-check", "timeoutMs": 300000, "autoApprove": true }
+      ]
+    }
+  },
+  "graphPipeline": {
+    "nodes": [
+      { "id": "planning", "kind": "stage", "groupId": "smoke-planning", "autoTrigger": true },
+      { "id": "fanout", "kind": "fan-out", "groupId": "smoke-fan-out", "triggerOn": "completed",
+        "fanOut": { "workPackagesPath": "delivery/work-packages.json", "perBranchTemplateId": "v4-smoke-branch-template" } },
+      { "id": "join", "kind": "join", "groupId": "smoke-join",
+        "join": { "sourceNodeId": "fanout", "policy": "all" } },
+      { "id": "integration", "kind": "stage", "groupId": "smoke-integration", "triggerOn": "completed" }
+    ],
+    "edges": [
+      { "from": "planning", "to": "fanout" },
+      { "from": "fanout", "to": "join" },
+      { "from": "join", "to": "integration" }
+    ]
+  },
+  "defaultModel": "MODEL_PLACEHOLDER_M37"
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { marked } from 'marked';
+import { renderMarkdown } from '@/lib/render-markdown';
 import {
   Loader2,
   MessageSquare,
@@ -71,10 +71,7 @@ function formatDuration(startedAt?: string, finishedAt?: string): string | null 
   return `${hours}h ${minutes % 60}m`;
 }
 
-function renderMarkdown(text: string): string {
-  try { return marked.parse(text, { async: false }) as string; }
-  catch { return text; }
-}
+
 
 const inputAuditConfig: Record<string, { label: string; tone: string; border: string }> = {
   verified: {

@@ -1,0 +1,382 @@
+# 盘前报告（Morning Brief）完整机制解读
+
+## 一、整体架构
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        触发层                                        │
+│  Cron (0 8 * * 1-5)  ──或──  用户手动请求"生成盘前简报"              │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                      OpenClaw Gateway (port 18789)                  │
+│  ① 接收 Cron/用户消息                                               │
+│  ② 识别 "review-report" skill                                       │
+│  ③ 加载 skills/review-report/SKILL.md                               │
+│  ④ AI 按 SKILL 步骤自主执行                                         │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                      MCP Server (port 8001)                         │
+│  AI 分 3 轮并行调用 30+ 金融数据工具                                  │
+│  数据源：AkShare / Tushare / aitrend.us / Tavily / Serper / 本地DB  │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                      持久化 + 展示                                    │
+│  save_brief("morning_brief") → SaaS PostgreSQL → 前端 BriefView     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 二、触发方式
+
+### 2.1 Cron 定时触发（主要方式）
+
+**配置文件**：`openclaw_config/cron/jobs.json`
+
+```json
+{
+  "id": "550e8f21-a1b3-4c5d-9e2f-7a8c9b1d3e4a",
+  "name": "morning-brief",
+  "enabled": true,
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 8 * * 1-5"
+  },
+  "sessionTarget": "isolated",
+  "wakeMode": "now",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "请执行 review-report skill 的 generate-morning-brief 动作，生成盘前简报"
+  }
+}
+```
+
+- **触发时间**：周一至周五 08:00
+- **会话模式**：`isolated`（独立会话，不影响用户正在进行的对话）
+- **节假日**：通过 `is_trading_day()` 自动判断，非交易日跳过
+
+### 2.2 用户手动触发
+
+用户在聊天框说"帮我生成盘前简报"，OpenClaw 自动识别 `review-report` skill 并执行。
+
+---
+
+## 三、Skill 执行逻辑
+
+**Skill 文件位置**：`openclaw/docker/.openclaw/skills/review-report/SKILL.md`
+
+### 3.1 前置检查
+
+```
+① is_trading_day() → 非交易日立即停止
+② get_user_config() → 获取用户画像（watchlist / focus_sectors / strategy）
+③ 读取 STRATEGY.md → 获取交易纪律
+```
+
+### 3.2 第一轮：并行 30+ 工具（全局数据采集）
+
+所有工具**同时发出**，不等待。分为 6 个数据组：
+
+#### 组 1：全球宏观行情（结构化数据）
+
+| MCP 工具 | 数据源 | 获取内容 |
+|----------|--------|---------|
+| `financial-data.get_global_indices` | AkShare/Tushare | 美股三大指数、欧洲指数、亚太指数 |
+| `financial-data.get_gold_silver_spot` | AkShare | 黄金、白银现货价格 |
+| `financial-data.get_oil_price` | AkShare | 布伦特/WTI 原油价格 |
+| `financial-data.get_forex_rates` | AkShare | 美元指数、人民币汇率 |
+| `financial-data.get_global_futures` | AkShare | 全球期货行情 |
+
+#### 组 2：宏观新闻（AI 语义搜索 + 实时网搜）
+
+| MCP 工具 | 参数 | 用途 |
+|----------|------|------|
+| `financial-data.search_news` | `query="美股 纳斯达克 标普500 道琼斯 收盘", limit=5` | 美股动态 |
+| `financial-data.search_news` | `query="美债 收益率 国债 利率 美联储", limit=5` | 利率环境 |
+| `financial-data.search_news` | `query="原油 黄金 铜价 大宗商品", limit=5` | 大宗商品 |
+| `financial-data.search_news` | `query="人民币 汇率 美元指数", limit=5` | 汇率动态 |
+| `financial-data.search_memory` | `query="美股 全球市场 宏观", search_type="keyword"` | 本地知识库-宏观 |
+| `tavily.tavily_search` | `query="global market overnight US stocks", max_results=5` | AI 实时网搜-美股 |
+| `serper.google_search` | `q="地缘政治 最新消息 今日"` | Google 搜索-地缘 |
+
+#### 组 3：地缘政治（多源交叉）
+
+| MCP 工具 | 参数 | 用途 |
+|----------|------|------|
+| `financial-data.search_news` | `query="地缘政治 冲突 制裁 关税 贸易战", limit=10` | aitrend 语义搜索 |
+| `financial-data.search_memory` | `query="地缘政治 冲突 制裁", search_type="keyword"` | 本地知识库 |
+| `tavily.tavily_search` | `query="geopolitics latest news today sanctions trade war", max_results=5` | 英文实时网搜 |
+| `financial-data.get_events` | `limit=10` | 事件日历 |
+
+#### 组 4：A 股市场数据（结构化数据）
+
+| MCP 工具 | 参数 | 获取内容 |
+|----------|------|---------|
+| `financial-data.get_market_overview` | 无 | 指数涨跌、成交额、涨跌家数 |
+| `financial-data.get_sector_performance` | `top_n=10` | 板块涨跌排行 |
+| `financial-data.get_concept_fund_flow` | `top_n=15` | 概念板块资金流向 |
+| `financial-data.get_industry_fund_flow` | `top_n=10` | 行业板块资金流向 |
+| `financial-data.get_northbound_flow` | 无 | 北向资金（沪股通/深股通） |
+| `financial-data.get_main_capital_flow` | `top_n=20` | 全市场主力资金排行 |
+| `financial-data.get_market_fund_flow_summary` | 无 | 资金总览（主力 vs 散户） |
+| `financial-data.get_limit_up_stocks` | `date="yesterday"` | 昨日涨停列表（情绪温度） |
+
+#### 组 5：资讯新闻
+
+| MCP 工具 | 参数 | 获取内容 |
+|----------|------|---------|
+| `financial-data.get_headlines` | `limit=10` | aitrend 头条新闻 |
+| `financial-data.get_digest` | 无 | aitrend 日报摘要 |
+| `financial-data.get_events` | `limit=10` | 事件日历 |
+| `financial-data.get_cx_news_headlines` | 无 | 财新要闻 |
+| `financial-data.search_news` | `query="科技突破 AI 芯片 量子 新能源 算力", limit=10` | 科技突破 |
+
+#### 组 6：历史情报参考
+
+| MCP 工具 | 参数 | 用途 |
+|----------|------|------|
+| `financial-data.get_latest_brief` | `brief_type="intel_digest"` | 最近的情报追踪 AI 摘要 |
+| `financial-data.get_latest_brief` | `brief_type="closing_review"` | 昨日盘后复盘 |
+
+---
+
+### 3.3 第二轮：用户赛道定向搜索 + 自选股深度
+
+根据用户 `get_user_config()` 返回的 `focus_sectors`（如 AI/算力、新能源、半导体）和 `watchlist` 动态生成：
+
+#### 赛道搜索（每个赛道）
+
+| MCP 工具 | 参数 | 用途 |
+|----------|------|------|
+| `financial-data.search_news` | `query="[赛道关键词] 最新进展 政策 订单", limit=8` | 赛道新闻 |
+| 从第一轮 `get_concept_fund_flow` 结果中筛选 | - | 赛道资金流数据 |
+
+#### 自选股深度（每只股票，全部并行）
+
+| MCP 工具 | 参数 | 获取内容 |
+|----------|------|---------|
+| `financial-data.get_market_quote` | `code=股票代码` | 最新行情（价格、涨跌、成交） |
+| `financial-data.get_technical_indicators` | `code=股票代码` | MACD/RSI/布林带/均线全集 |
+| `financial-data.get_stock_fund_flow` | `code=股票代码` | 个股主力资金流向（近 3 日） |
+| `financial-data.get_stock_news` | `code=股票代码` | 个股专属新闻 |
+
+#### 信号评分（批量）
+
+| MCP 工具 | 参数 | 获取内容 |
+|----------|------|---------|
+| `financial-data.get_watchlist_signals` | `tickers=[全部自选股代码], days=5, min_score=0` | AlphaSignal 量化信号评分 |
+
+---
+
+### 3.4 第三轮：高分股公告深挖
+
+**条件**：仅对信号评分 ≥ 6 的股票执行，最多 3 只
+
+| MCP 工具 | 参数 | 用途 |
+|----------|------|------|
+| `financial-data.get_stock_announcements` | `symbol=代码, page_size=5` | 近期重要公告 |
+
+若没有评分 ≥ 6 的股票，跳过此轮。
+
+---
+
+## 四、报告输出结构（8 大模块）
+
+AI 整合 3 轮工具返回的数据，按以下 8 个模块生成深度 Markdown 报告。
+**核心原则：不是数据罗列，而是"数据 → 推理 → 结论"的三段式深度分析。**
+
+### 模块一：宏观环境与外部市场
+
+```markdown
+### 一、宏观环境与外部市场
+
+**海外股市**
+- 纳指收涨 1.2% 至 18,500 点，标普微涨 0.3%
+
+**利率环境**
+- 美债 10Y 收益率：4.25% | 2Y-10Y 利差：-15bp
+- → 推理：利差倒挂加深，衰退预期升温
+
+**大宗商品**
+- 黄金 1880 美元/盎司横盘；原油 75 美元/桶小幅回落
+- → 推理：金价横盘说明避险情绪稳定；油价回落利好航空等消费降本板块
+
+**汇率**
+- 美元指数：104.2 | 离岸人民币：7.25
+- → 推理：美元走强环境下北向资金流入动力可能减弱
+
+> **综合判断**：外部环境偏暖，利好 A 股科技成长方向
+```
+
+**数据来源**：`get_global_indices` + `get_gold_silver_spot` + `get_oil_price` + `get_forex_rates` + `search_news("美股...")` + `tavily_search("global market")` + `get_latest_brief("intel_digest")`
+
+### 模块二：地缘政治与重大事件
+
+- 筛选 24h 内最重要的 3-5 条地缘事件
+- 每条事件→影响哪些 A 股板块→利好/利空→影响程度
+- 区分「已定价事件」和「未定价风险」
+
+**数据来源**：`search_news("地缘政治...")` + `search_memory("地缘政治")` + `tavily_search("geopolitics")` + `serper.google_search`
+
+### 模块三：科技突破与产业趋势
+
+- AI/半导体/新能源/量子等领域的重大突破
+- 每条突破→映射 A 股产业链（上游/中游/下游）
+- 判断「短期催化」vs「长期趋势」
+
+**数据来源**：`search_news("科技突破 AI 芯片...")` + `search_memory("AI 芯片")` + `tavily_search("AI technology breakthrough")` + `get_headlines`
+
+### 模块四：A 股市场概况与情绪
+
+- 昨日涨跌家数比→市场广度
+- 涨停数量+首板/连板分布→情绪温度计
+- 成交额变化→量能判断
+- **输出开盘预判**
+
+**数据来源**：`get_market_overview` + `get_limit_up_stocks` + `get_market_fund_flow_summary`
+
+### 模块五：资金面深度分析
+
+- 北向资金方向+规模→外资态度
+- 主力资金净流入前 5→板块共振信号
+- 概念/行业资金流→资金共识方向
+- 全市场主力 vs 散户→是否存在分歧
+
+**数据来源**：`get_northbound_flow` + `get_main_capital_flow` + `get_market_fund_flow_summary` + `get_concept_fund_flow` + `get_industry_fund_flow`
+
+### 模块六：关注赛道深度分析
+
+对用户每个关注赛道：
+- 最新动态（2-3 条重要新闻）
+- 资金态度（概念板块资金流向）
+- 板块表现（昨日涨跌+全市场排名）
+- 催化剂判断
+- 与全局环境交叉分析
+
+**数据来源**：`search_news("[赛道关键词]")` + 筛选 `get_concept_fund_flow` + `get_sector_performance`
+
+### 模块七：自选股深度晨检
+
+对每只自选股：
+- 技术面综合：MACD + RSI + 布林带 + 均线→趋势判断
+- 资金面：主力近 3 日资金流→吸筹/出货/观望
+- 消息面：个股新闻 + 公告→催化/风险
+- 信号评分：AlphaSignal 量化分数
+- 赛道联动：所属赛道整体表现
+- 策略匹配：是否符合用户 STRATEGY.md 的操作条件
+
+**数据来源**：`get_market_quote` + `get_technical_indicators` + `get_stock_fund_flow` + `get_stock_news` + `get_watchlist_signals` + `get_stock_announcements`
+
+### 模块八：今日操作策略
+
+综合前 7 个模块的所有推理结论：
+- 市场环境定性（偏强/震荡/偏弱）
+- 重点关注方向（2-3 个）
+- 自选股操作建议（具体方向+理由）
+- 风险提示
+- 仓位建议（基于 STRATEGY.md）
+
+---
+
+## 五、持久化与展示
+
+### 5.1 保存到数据库
+
+AI 生成完报告后，自动调用：
+
+```
+financial-data.save_brief(
+    brief_type = "morning_brief",
+    content = "<完整 Markdown 报告>",
+    user_id = <从会话提取>
+)
+```
+
+**实现位置**：`mcp_server/src/tools/saas_user_config.py` → `save_brief()` 函数
+
+**去重机制**：同日同用户同类型（`morning_brief`）自动 UPDATE，避免重复记录。
+
+**保存前校验**：
+- 内容必须是"盘前策略简报"语义
+- 禁止以"情报追踪摘要"结构保存（防止任务跑偏）
+
+### 5.2 前端展示
+
+**文件**：`newweb/src/views/BriefView.tsx`
+
+**展示逻辑**：
+- 盘前场景（pre-market/auction）自动从 API 拉取最新 `morning_brief`
+- API 调用：`api.latestBrief('morning_brief')`
+- **轮询**：每 60 秒自动拉取一次，确保 Cron 生成完后能及时展示
+- 渲染为 Markdown 格式的卡片
+
+### 5.3 端到端链路
+
+```
+Cron 08:00 触发
+  → OpenClaw Gateway 接收消息
+  → 识别 review-report skill
+  → AI 按 SKILL.md 分 3 轮调用 30+ MCP 工具
+  → AI 整合数据，生成 8 模块 Markdown 报告
+  → 调用 save_brief("morning_brief", content) → 写入 SaaS PostgreSQL
+  → 前端 BriefView 每 60s 轮询 → 拉到新报告 → 渲染展示
+```
+
+---
+
+## 六、降级策略（4 条独立信息通道）
+
+SKILL 强制要求每个数据模块都有多条独立数据源，**禁止写"数据暂缺"**：
+
+| 通道 | 说明 | 覆盖范围 |
+|------|------|---------|
+| ① `financial-data.*` | AkShare + Tushare 结构化行情 + aitrend 语义资讯 + 本地 DB | 行情、资金、板块、新闻 |
+| ② `financial-data.search_memory` | 本地知识库 / 历史日志 | 历史分析、记忆 |
+| ③ `tavily.tavily_search` | AI 优化实时网搜 | 全球实时新闻 |
+| ④ `serper.google_search` | Google SERP 搜索 | 中文实时信息 |
+
+**降级链执行逻辑**：
+1. 首选工具失败 → 立刻并行调用二选
+2. 二选也失败 → 调用三选兜底
+3. 三选仍无 → 从 `get_latest_brief("intel_digest")` 和 `get_latest_brief("closing_review")` 中提取历史信息
+
+**具体降级示例**：
+
+| 需要的信息 | 首选 | 二选 | 三选（兜底） |
+|-----------|------|------|------------|
+| 美股收盘 | `get_global_indices` | `search_news("美股")` + `tavily_search("US stocks")` | `serper.google_search("美股昨日收盘")` |
+| 美债/利率 | `search_news("美债 利率")` | `tavily_search("US treasury yield")` | `get_cx_news_headlines` + `get_digest` |
+| 油价/金价 | `get_oil_price` + `get_gold_silver_spot` | `get_global_futures` + `search_news("原油 黄金")` | `tavily_search("oil gold price")` |
+| 地缘政治 | `search_news("地缘政治")` + `search_memory` | `tavily_search("geopolitics")` + `serper.google_search` | `get_cx_news_headlines` + `get_latest_brief("intel_digest")` |
+
+---
+
+## 七、关键文件索引
+
+| 文件 | 说明 |
+|------|------|
+| `openclaw_config/cron/jobs.json` | Cron 定时任务配置 |
+| `openclaw/docker/.openclaw/skills/review-report/SKILL.md` | 完整 Skill 指令（AI 执行蓝图） |
+| `mcp_server/src/main.py` | MCP 工具注册入口 |
+| `mcp_server/src/tools/saas_user_config.py` | `save_brief` / `get_latest_brief` / `get_user_config` 实现 |
+| `mcp_server/src/tools/market_data.py` | 行情/资金/板块/涨停等工具实现 |
+| `mcp_server/src/tools/aitrend_us.py` | aitrend.us 资讯工具实现 |
+| `mcp_server/src/tools/technical_indicators.py` | 技术指标计算工具实现 |
+| `newweb/src/views/BriefView.tsx` | 前端盘前简报展示组件 |
+| `newweb/src/lib/api.ts` | 前端 API 调用层（`latestBrief`） |
+| `openclaw_config/workspace/STRATEGY.md` | 用户交易纪律（报告引用） |
+
+---
+
+## 八、盘后复盘（简述）
+
+与盘前报告同属 `review-report` skill，Cron 在 **15:15** 触发。
+
+**主要区别**：
+- 数据源优先级：**Tushare（首选）→ AkShare → search_news/tavily（兜底）**
+- 新增 Tushare 工具：`ts_get_limit_list` / `ts_get_ths_limit_list` / `ts_get_limit_step` / `ts_get_kpl_list` / `ts_get_northbound` / `ts_get_dc_daily` / `ts_get_ths_daily` / `ts_get_hm_detail` / `ts_get_ths_hot` / `ts_get_dc_hot`
+- 报告结构 4 模块：市场回顾 → 主线题材与资金 → 自选股表现 → 明日展望
+- 保存：`save_brief(brief_type="closing_review")`

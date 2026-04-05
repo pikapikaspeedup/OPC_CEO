@@ -1,0 +1,33 @@
+{
+  "projectId": "f5eb31c6-bba7-432b-a3b2-80810dcca040",
+  "name": "Graph Pipeline Verification Run - Smoke Branch 1",
+  "goal": "Create a minimal branch result for smoke branch 1.",
+  "templateId": "v4-smoke-branch-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-03-28T12:02:07.142Z",
+  "updatedAt": "2026-03-28T12:02:31.475Z",
+  "runIds": [
+    "b237df72-c9b7-4c12-a914-49c2b66caa4f"
+  ],
+  "parentProjectId": "79b9c0bc-3a24-4e38-9a86-55245a91098a",
+  "parentStageId": "fanout",
+  "branchIndex": 0,
+  "pipelineState": {
+    "templateId": "v4-smoke-branch-template",
+    "stages": [
+      {
+        "stageId": "branch-task",
+        "groupId": "smoke-branch-task",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "b237df72-c9b7-4c12-a914-49c2b66caa4f",
+        "startedAt": "2026-03-28T12:02:07.527Z",
+        "completedAt": "2026-03-28T12:02:31.458Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

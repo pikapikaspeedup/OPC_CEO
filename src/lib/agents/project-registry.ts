@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import path from 'path';
-import type { ProjectDefinition, ProjectPipelineState, PipelineStageProgress } from './project-types';
+import type { BranchProgress, ProjectDefinition, ProjectPipelineState, PipelineStageProgress } from './project-types';
 import { AssetLoader } from './asset-loader';
 import { createLogger } from '../logger';
 import { GATEWAY_HOME, PROJECTS_FILE, ARTIFACT_ROOT_DIR } from './gateway-home';
+import { resolveStageId } from './pipeline-graph';
 
 const log = createLogger('ProjectRegistry');
 
@@ -30,7 +31,7 @@ function saveToDisk(): void {
     }
     const entries = Array.from(projects.values());
     writeFileSync(PERSIST_FILE, JSON.stringify(entries, null, 2), 'utf-8');
-    
+
     // V3.6 Fix (E4): Synchronize per-project `project.json`
     for (const project of entries) {
       if (project.workspace) {
@@ -40,7 +41,7 @@ function saveToDisk(): void {
         }
       }
     }
-    
+
     log.debug({ count: entries.length }, 'Projects persisted');
   } catch (err: any) {
     log.error({ err: err.message }, 'Failed to persist projects');
@@ -55,7 +56,7 @@ function loadFromDisk(): void {
       log.debug('Projects map already populated in Memory (HMR skipped disk load)');
       return;
     }
-    
+
     if (!existsSync(PERSIST_FILE)) {
       // Fallback: try legacy path for backward compatibility
       const legacyFile = path.join(process.cwd(), 'data', 'projects.json');
@@ -72,6 +73,19 @@ function loadFromDisk(): void {
     const raw = readFileSync(PERSIST_FILE, 'utf-8');
     const entries: ProjectDefinition[] = JSON.parse(raw);
     for (const entry of entries) {
+      if (entry.pipelineState) {
+        const template = entry.pipelineState.templateId ? AssetLoader.getTemplate(entry.pipelineState.templateId) : null;
+        entry.pipelineState.stages = entry.pipelineState.stages.map((stage, idx) => {
+          const templateStage = template?.pipeline[idx];
+          return {
+            ...stage,
+            stageId: stage.stageId || (templateStage ? resolveStageId(templateStage) : stage.groupId),
+            stageIndex: stage.stageIndex ?? idx,
+          };
+        });
+        entry.pipelineState.activeStageIds = entry.pipelineState.activeStageIds
+          || entry.pipelineState.stages.filter(stage => stage.status === 'running').map(stage => stage.stageId);
+      }
       projects.set(entry.projectId, entry);
     }
     log.info({ total: entries.length }, 'Projects loaded from disk');
@@ -82,7 +96,18 @@ function loadFromDisk(): void {
 
 loadFromDisk();
 
-export function createProject(input: { name: string; goal: string; templateId?: string; workspace: string }): ProjectDefinition {
+export function createProject(input: {
+  name: string;
+  goal: string;
+  templateId?: string;
+  workspace: string;
+  parentProjectId?: string;
+  parentStageId?: string;
+  branchIndex?: number;
+  projectType?: 'coordinated' | 'adhoc' | 'strategic';
+  skillHint?: string;
+  priority?: 'urgent' | 'high' | 'normal' | 'low';
+}): ProjectDefinition {
   const projectId = randomUUID();
   const project: ProjectDefinition = {
     projectId,
@@ -94,6 +119,12 @@ export function createProject(input: { name: string; goal: string; templateId?: 
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     runIds: [],
+    parentProjectId: input.parentProjectId,
+    parentStageId: input.parentStageId,
+    branchIndex: input.branchIndex,
+    projectType: input.projectType,
+    skillHint: input.skillHint,
+    priority: input.priority,
   };
 
   const projectDir = path.join(input.workspace.replace(/^file:\/\//, ''), ARTIFACT_ROOT_DIR, 'projects', projectId);
@@ -177,8 +208,13 @@ export function addRunToProject(projectId: string, runId: string): void {
 /**
  * Initialize pipeline state on a project from its template.
  * Called when the first run for a template is dispatched.
+ * V5.3: accepts optional templateOverrides to deep-merge onto the template before compiling.
  */
-export function initializePipelineState(projectId: string, templateId: string): ProjectPipelineState | null {
+export function initializePipelineState(
+  projectId: string,
+  templateId: string,
+  templateOverrides?: Record<string, unknown>,
+): ProjectPipelineState | null {
   const project = projects.get(projectId);
   if (!project) return null;
 
@@ -187,56 +223,80 @@ export function initializePipelineState(projectId: string, templateId: string): 
     return project.pipelineState;
   }
 
-  const template = AssetLoader.getTemplate(templateId);
-  if (!template) {
+  const baseTemplate = AssetLoader.getTemplate(templateId);
+  if (!baseTemplate) {
     log.warn({ projectId, templateId }, 'Cannot initialize pipeline state: template not found');
     return null;
   }
 
-  const stages: PipelineStageProgress[] = template.pipeline.map((stage, idx) => ({
-    groupId: stage.groupId,
-    stageIndex: idx,
-    status: 'pending',
-    attempts: 0,
-  }));
+  // V5.3: Deep-merge runtime overrides onto a clone so the original asset stays untouched
+  const template = templateOverrides
+    ? deepMerge(structuredClone(baseTemplate), templateOverrides)
+    : baseTemplate;
+
+  let stages: PipelineStageProgress[] = [];
+  if (template.pipeline) {
+    stages = template.pipeline.map((stage: any, idx: number) => ({
+      stageId: resolveStageId(stage),
+      groupId: stage.groupId,
+      stageIndex: idx,
+      status: 'pending',
+      attempts: 0,
+    }));
+  } else if (template.graphPipeline) {
+    stages = template.graphPipeline.nodes.map((node: any, idx: number) => ({
+      stageId: node.id,
+      groupId: node.groupId || node.id,
+      stageIndex: idx,
+      status: 'pending',
+      attempts: 0,
+    }));
+  }
 
   const pipelineState: ProjectPipelineState = {
     templateId,
     stages,
-    currentStageIndex: 0,
+    activeStageIds: [],
     status: 'running',
+    ...(templateOverrides ? { templateOverrides } : {}),
   };
 
   project.pipelineState = pipelineState;
   project.status = 'active';
   project.updatedAt = new Date().toISOString();
   saveToDisk();
-  log.info({ projectId, templateId, stageCount: stages.length }, 'Pipeline state initialized');
+  log.info({ projectId, templateId, stageCount: stages.length, hasOverrides: !!templateOverrides }, 'Pipeline state initialized');
   return pipelineState;
+}
+
+/** Deep-merge source into target (mutates target). Arrays are replaced, not concatenated. */
+function deepMerge(target: any, source: any): any {
+  for (const key of Object.keys(source)) {
+    if (
+      source[key] !== null &&
+      typeof source[key] === 'object' &&
+      !Array.isArray(source[key]) &&
+      typeof target[key] === 'object' &&
+      !Array.isArray(target[key])
+    ) {
+      deepMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
 }
 
 /**
  * Update a specific pipeline stage's status.
  * Called when a run starts, completes, or fails.
  */
-export function updatePipelineStage(
-  projectId: string,
-  stageIndex: number,
-  updates: Partial<PipelineStageProgress>,
-): void {
-  const project = projects.get(projectId);
-  if (!project?.pipelineState) return;
-
-  const stage = project.pipelineState.stages[stageIndex];
-  if (!stage) return;
-
-  Object.assign(stage, updates);
-
-  // Sync project-level pipeline status
+function recomputePipelineState(project: ProjectDefinition): void {
+  if (!project.pipelineState) return;
   const stages = project.pipelineState.stages;
-  const hasFailedStage = stages.some(s => s.status === 'failed');
-  const hasCancelledStage = stages.some(s => s.status === 'cancelled');
-  const allComplete = stages.every(s => s.status === 'completed' || s.status === 'skipped');
+  const hasFailedStage = stages.some(stage => stage.status === 'failed');
+  const hasCancelledStage = stages.some(stage => stage.status === 'cancelled');
+  const allComplete = stages.every(stage => stage.status === 'completed' || stage.status === 'skipped');
 
   if (allComplete) {
     project.pipelineState.status = 'completed';
@@ -252,22 +312,85 @@ export function updatePipelineStage(
     project.status = 'active';
   }
 
-  // Advance currentStageIndex to the latest meaningful stage.
-  const latestRunning = stages.findIndex(s => s.status === 'running');
-  if (latestRunning >= 0) {
-    project.pipelineState.currentStageIndex = latestRunning;
-  } else {
-    const latestTouched = [...stages]
-      .reverse()
-      .find(s => s.status !== 'pending');
-    if (latestTouched) {
-      project.pipelineState.currentStageIndex = latestTouched.stageIndex;
-    }
-  }
+  project.pipelineState.activeStageIds = stages
+    .filter(stage => stage.status === 'running')
+    .map(stage => stage.stageId);
+}
 
+function getStageByIdentifier(project: ProjectDefinition, stageIdentifier: string | number): PipelineStageProgress | null {
+  if (!project.pipelineState) return null;
+  if (typeof stageIdentifier === 'number') {
+    return project.pipelineState.stages[stageIdentifier] ?? null;
+  }
+  return project.pipelineState.stages.find(stage => stage.stageId === stageIdentifier) ?? null;
+}
+
+export function updatePipelineStageByStageId(
+  projectId: string,
+  stageId: string,
+  updates: Partial<PipelineStageProgress>,
+): void {
+  const project = projects.get(projectId);
+  if (!project?.pipelineState) return;
+
+  const stage = project.pipelineState.stages.find(item => item.stageId === stageId);
+  if (!stage) return;
+
+  Object.assign(stage, updates);
+  recomputePipelineState(project);
   project.updatedAt = new Date().toISOString();
   saveToDisk();
-  log.debug({ projectId, stageIndex, stageStatus: stage.status }, 'Pipeline stage updated');
+  log.debug({ projectId, stageId, stageStatus: stage.status }, 'Pipeline stage updated');
+}
+
+export function updatePipelineStage(
+  projectId: string,
+  stageIndex: number,
+  updates: Partial<PipelineStageProgress>,
+): void {
+  const project = projects.get(projectId);
+  if (!project?.pipelineState) return;
+  const stage = project.pipelineState.stages[stageIndex];
+  if (!stage) return;
+  updatePipelineStageByStageId(projectId, stage.stageId, updates);
+}
+
+export function updateBranchProgress(
+  projectId: string,
+  stageId: string,
+  branchIndex: number,
+  updates: Partial<BranchProgress>,
+): void {
+  const project = projects.get(projectId);
+  if (!project?.pipelineState) return;
+  const stage = project.pipelineState.stages.find(item => item.stageId === stageId);
+  if (!stage) return;
+
+  if (!stage.branches) {
+    stage.branches = [];
+  }
+
+  const existing = stage.branches.find(branch => branch.branchIndex === branchIndex);
+  if (existing) {
+    Object.assign(existing, updates);
+  } else {
+    stage.branches.push({
+      branchIndex,
+      workPackageId: updates.workPackageId || `branch-${branchIndex}`,
+      workPackageName: updates.workPackageName || `Branch ${branchIndex}`,
+      subProjectId: updates.subProjectId || '',
+      runId: updates.runId,
+      status: updates.status || 'pending',
+      lastError: updates.lastError,
+      startedAt: updates.startedAt,
+      completedAt: updates.completedAt,
+    });
+  }
+
+  recomputePipelineState(project);
+  project.updatedAt = new Date().toISOString();
+  saveToDisk();
+  log.debug({ projectId, stageId, branchIndex }, 'Branch progress updated');
 }
 
 /**
@@ -284,6 +407,9 @@ export function getFirstActionableStage(projectId: string): PipelineStageProgres
     if (stage.status === 'failed' || stage.status === 'blocked' || stage.status === 'cancelled') {
       return true;
     }
+    if (stage.branches?.some(branch => branch.status === 'failed' || branch.status === 'blocked' || branch.status === 'cancelled')) {
+      return true;
+    }
     if (stage.status !== 'running' || !stage.runId) {
       return false;
     }
@@ -297,10 +423,10 @@ export function getFirstActionableStage(projectId: string): PipelineStageProgres
  * Single source of truth for attempts, runId, status, and startedAt.
  * Called by: API dispatch and runtime auto-trigger.
  */
-export function trackStageDispatch(projectId: string, stageIndex: number, runId: string): void {
+export function trackStageDispatch(projectId: string, stageIdentifier: string | number, runId: string): void {
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
-  const stage = project.pipelineState.stages[stageIndex];
+  const stage = getStageByIdentifier(project, stageIdentifier);
   if (!stage) return;
 
   stage.attempts = (stage.attempts || 0) + 1;
@@ -309,12 +435,10 @@ export function trackStageDispatch(projectId: string, stageIndex: number, runId:
   stage.startedAt = new Date().toISOString();
   stage.lastError = undefined;
 
-  project.pipelineState.status = 'running';
-  project.pipelineState.currentStageIndex = stageIndex;
-  project.status = 'active';
+  recomputePipelineState(project);
   project.updatedAt = new Date().toISOString();
   saveToDisk();
-  log.info({ projectId, stageIndex, runId: runId.slice(0, 8), attempts: stage.attempts }, 'Pipeline stage dispatch tracked');
+  log.info({ projectId, stageId: stage.stageId, runId: runId.slice(0, 8), attempts: stage.attempts }, 'Pipeline stage dispatch tracked');
 }
 
 /**
@@ -322,14 +446,14 @@ export function trackStageDispatch(projectId: string, stageIndex: number, runId:
  * Does NOT touch status, startedAt, or lastError (those are managed by the runtime).
  * Use this for nudge/retry where the stage status is already being managed asynchronously.
  */
-export function incrementStageAttempts(projectId: string, stageIndex: number): void {
+export function incrementStageAttempts(projectId: string, stageIdentifier: string | number): void {
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
-  const stage = project.pipelineState.stages[stageIndex];
+  const stage = getStageByIdentifier(project, stageIdentifier);
   if (!stage) return;
 
   stage.attempts = (stage.attempts || 0) + 1;
   project.updatedAt = new Date().toISOString();
   saveToDisk();
-  log.debug({ projectId, stageIndex, attempts: stage.attempts }, 'Stage attempts incremented');
+  log.debug({ projectId, stageId: stage.stageId, attempts: stage.attempts }, 'Stage attempts incremented');
 }

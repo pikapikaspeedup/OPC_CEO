@@ -2,13 +2,18 @@
   "workPackages": [
     {
       "id": "wp-1",
-      "name": "Smoke Branch 1",
-      "goal": "Create a minimal branch result for smoke branch 1."
+      "name": "Gemini Extensions Research",
+      "goal": "Target: Gemini Extensions (Official extensions, uses, mechanism).\n\nOriginal instructions: 帮我调查下 Gemini 的插件体系（Extensions和Tools），梳理当前有哪些官方插件、用途、工作机制，以及如何通过 API 调用（以 Python 或 Node.js 为例）。请整理一份详细的分析报告。使用 3.1 pro 模型。\n\nPlease research the current official Gemini Extensions, what they are used for, and how they fundamentally work."
     },
     {
       "id": "wp-2",
-      "name": "Smoke Branch 2",
-      "goal": "Create a minimal branch result for smoke branch 2."
+      "name": "Gemini Tools Research",
+      "goal": "Target: Gemini Built-in Tools (Function Calling, Code Execution, etc.).\n\nOriginal instructions: 帮我调查下 Gemini 的插件体系（Extensions和Tools），梳理当前有哪些官方插件、用途、工作机制，以及如何通过 API 调用（以 Python 或 Node.js 为例）。请整理一份详细的分析报告。使用 3.1 pro 模型。\n\nPlease research the current official Gemini Tools, their specific use cases, and their working mechanisms."
+    },
+    {
+       "id": "wp-3",
+       "name": "Gemini API Integration for Extensions & Tools",
+       "goal": "Target: Gemini API Integration (Python or Node.js).\n\nOriginal instructions: 帮我调查下 Gemini 的插件体系（Extensions和Tools），梳理当前有哪些官方插件、用途、工作机制，以及如何通过 API 调用（以 Python 或 Node.js 为例）。请整理一份详细的分析报告。使用 3.1 pro 模型。\n\nPlease research how to integrate and call Gemini Extensions and Tools using the official Gemini API, providing specific examples in Python or Node.js."
     }
   ]
 }

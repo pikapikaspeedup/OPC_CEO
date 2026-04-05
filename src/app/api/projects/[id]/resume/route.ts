@@ -1,22 +1,25 @@
 import { NextResponse } from 'next/server';
-import { getProject, getFirstActionableStage, incrementStageAttempts, updatePipelineStage } from '@/lib/agents/project-registry';
+import { getProject, getFirstActionableStage, incrementStageAttempts, updatePipelineStage, updatePipelineStageByStageId } from '@/lib/agents/project-registry';
 import { getRun, recoverInterruptedRun, updateRun } from '@/lib/agents/run-registry';
 import { cancelRun, interveneRun, InterventionConflictError } from '@/lib/agents/group-runtime';
+import { emitProjectEvent } from '@/lib/agents/project-events';
 import { createLogger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
 const log = createLogger('ProjectResume');
 
-type ResumeAction = 'recover' | 'nudge' | 'restart_role' | 'cancel' | 'skip';
+type ResumeAction = 'recover' | 'nudge' | 'restart_role' | 'cancel' | 'skip' | 'force-complete';
 
 function responseForAction(input: {
   status: string;
   requestedAction: ResumeAction;
   actualAction: ResumeAction;
+  stageId: string;
   stageIndex: number;
   groupId: string;
   runId: string;
+  branchIndex?: number;
   activeConversationId?: string;
   message?: string;
 }) {
@@ -43,35 +46,127 @@ export async function POST(
 
     const body = await req.json().catch(() => ({}));
     const {
+      stageId: requestedStageId,
       stageIndex: requestedStageIndex,
+      branchIndex: requestedBranchIndex,
       action,
       prompt,
       roleId,
     } = body as {
+      stageId?: string;
       stageIndex?: number;
+      branchIndex?: number;
       action?: ResumeAction;
       prompt?: string;
       roleId?: string;
     };
 
-    if (!action || !['recover', 'nudge', 'restart_role', 'cancel', 'skip'].includes(action)) {
+    if (!action || !['recover', 'nudge', 'restart_role', 'cancel', 'skip', 'force-complete'].includes(action)) {
       return NextResponse.json(
-        { error: 'Missing or invalid action. Must be "recover", "nudge", "restart_role", "cancel", or "skip".' },
+        { error: 'Missing or invalid action. Must be "recover", "nudge", "restart_role", "cancel", "skip", or "force-complete".' },
         { status: 400 },
       );
     }
 
-    const targetStage = requestedStageIndex !== undefined
-      ? project.pipelineState.stages[requestedStageIndex]
-      : getFirstActionableStage(projectId);
+    const targetStage = requestedStageId
+      ? project.pipelineState.stages.find(stage => stage.stageId === requestedStageId)
+      : requestedStageIndex !== undefined
+        ? project.pipelineState.stages[requestedStageIndex]
+        : getFirstActionableStage(projectId);
     if (!targetStage) {
-      const error = requestedStageIndex !== undefined
-        ? `Stage ${requestedStageIndex} not found`
-        : 'No actionable stages found in pipeline';
+      const error = requestedStageId
+        ? `Stage ${requestedStageId} not found`
+        : requestedStageIndex !== undefined
+          ? `Stage ${requestedStageIndex} not found`
+          : 'No actionable stages found in pipeline';
       return NextResponse.json({ error }, { status: 400 });
     }
 
+    let effectiveProjectId = projectId;
+    let effectiveStage = targetStage;
+    let effectiveBranchIndex = requestedBranchIndex;
+    if (requestedBranchIndex !== undefined) {
+      const branch = targetStage.branches?.find(item => item.branchIndex === requestedBranchIndex);
+      if (!branch?.subProjectId) {
+        return NextResponse.json({ error: `Branch ${requestedBranchIndex} not found on stage ${targetStage.stageId}` }, { status: 404 });
+      }
+      const subProject = getProject(branch.subProjectId);
+      if (!subProject?.pipelineState) {
+        return NextResponse.json({ error: `Sub-project ${branch.subProjectId} has no pipeline state` }, { status: 409 });
+      }
+      const subStage = getFirstActionableStage(branch.subProjectId);
+      if (!subStage) {
+        return NextResponse.json({ error: `No actionable stages found in sub-project ${branch.subProjectId}` }, { status: 409 });
+      }
+      effectiveProjectId = branch.subProjectId;
+      effectiveStage = subStage;
+    }
+
     const shortProjectId = projectId.slice(0, 8);
+
+    // Force-complete: mark stage as completed and emit event to trigger downstream dispatch
+    if (action === 'force-complete') {
+      const allowedStatuses = ['running', 'failed', 'blocked', 'cancelled', 'pending'];
+      if (!allowedStatuses.includes(targetStage.status)) {
+        return NextResponse.json(
+          {
+            error: `Cannot force-complete stage in status '${targetStage.status}': allowed statuses are ${allowedStatuses.join(', ')}`,
+            requestedAction: action,
+          },
+          { status: 409 },
+        );
+      }
+
+      log.info({
+        projectId: shortProjectId,
+        stageId: effectiveStage.stageId,
+        stageIndex: effectiveStage.stageIndex,
+        previousStatus: targetStage.status,
+        runId: targetStage.runId?.slice(0, 8),
+      }, 'Force-completing pipeline stage');
+
+      if (effectiveStage.stageId) {
+        updatePipelineStageByStageId(effectiveProjectId, effectiveStage.stageId, {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+        });
+      } else {
+        updatePipelineStage(effectiveProjectId, effectiveStage.stageIndex, {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+        });
+      }
+
+      // Emit stage:completed event — this is the KEY trigger for downstream dispatch
+      // fan-out-controller.handleProjectEvent() will call tryFanOut() + dispatchDownstreamStages()
+      emitProjectEvent({
+        type: 'stage:completed',
+        projectId: effectiveProjectId,
+        stageId: effectiveStage.stageId || `stage-${effectiveStage.stageIndex}`,
+        runId: targetStage.runId || '',
+        nodeKind: 'stage',
+      });
+
+      // V5.3 Fix: If this was a sub-project (like a fan-out branch) and this stage completion 
+      // caused the entire project to complete, we must explicitly emit project:completed.
+      // Otherwise fan-out-controller won't bubble up the branch completion to the parent.
+      const updatedProject = getProject(effectiveProjectId);
+      if (updatedProject?.pipelineState?.status === 'completed') {
+        emitProjectEvent({ type: 'project:completed', projectId: effectiveProjectId });
+      }
+
+      return responseForAction({
+        status: 'force-completed',
+        requestedAction: action,
+        actualAction: action,
+        stageId: effectiveStage.stageId,
+        stageIndex: effectiveStage.stageIndex,
+        groupId: effectiveStage.groupId,
+        runId: effectiveStage.runId || '',
+        branchIndex: effectiveBranchIndex,
+        message: 'Stage force-completed. Downstream stages will be dispatched automatically.',
+      });
+    }
 
     // Skip action can be performed without a runId (e.g. for pending stages)
     if (action === 'skip') {
@@ -86,24 +181,39 @@ export async function POST(
         );
       }
 
-      updatePipelineStage(projectId, targetStage.stageIndex, { status: 'skipped', completedAt: new Date().toISOString() });
-      
+      if (effectiveStage.stageId) {
+        updatePipelineStageByStageId(effectiveProjectId, effectiveStage.stageId, {
+          status: 'skipped',
+          completedAt: new Date().toISOString(),
+        });
+      } else {
+        updatePipelineStage(effectiveProjectId, effectiveStage.stageIndex, { status: 'skipped', completedAt: new Date().toISOString() });
+      }
+
+      // V5.3 Fix: Ensure project completion is bubbled up if this skip completes a branch
+      const updatedProject = getProject(effectiveProjectId);
+      if (updatedProject?.pipelineState?.status === 'completed') {
+        emitProjectEvent({ type: 'project:completed', projectId: effectiveProjectId });
+      }
+
       return responseForAction({
         status: 'skipped',
         requestedAction: action,
         actualAction: action,
-        stageIndex: targetStage.stageIndex,
-        groupId: targetStage.groupId,
-        runId: targetStage.runId || '',
+        stageId: effectiveStage.stageId,
+        stageIndex: effectiveStage.stageIndex,
+        groupId: effectiveStage.groupId,
+        runId: effectiveStage.runId || '',
+        branchIndex: effectiveBranchIndex,
         message: 'Stage skipped successfully',
       });
     }
 
-    if (!targetStage.runId) {
+    if (!effectiveStage.runId) {
       return NextResponse.json({ error: 'Selected stage has no canonical run to resume' }, { status: 409 });
     }
 
-    const existingRun = getRun(targetStage.runId);
+    const existingRun = getRun(effectiveStage.runId);
     if (!existingRun) {
       return NextResponse.json({ error: 'Canonical run not found for selected stage' }, { status: 404 });
     }
@@ -118,10 +228,11 @@ export async function POST(
 
     log.info({
       projectId: shortProjectId,
-      stageIndex: targetStage.stageIndex,
+      stageId: effectiveStage.stageId,
+      stageIndex: effectiveStage.stageIndex,
       action,
-      groupId: targetStage.groupId,
-      runId: targetStage.runId.slice(0, 8),
+      groupId: effectiveStage.groupId,
+      runId: effectiveStage.runId.slice(0, 8),
     }, 'Resuming project pipeline');
 
     if (action === 'recover') {
@@ -146,9 +257,11 @@ export async function POST(
           status: 'recovered',
           requestedAction: action,
           actualAction: action,
-          stageIndex: targetStage.stageIndex,
-          groupId: targetStage.groupId,
+          stageId: effectiveStage.stageId,
+          stageIndex: effectiveStage.stageIndex,
+          groupId: effectiveStage.groupId,
           runId: existingRun.runId,
+          branchIndex: effectiveBranchIndex,
           activeConversationId: existingRun.activeConversationId,
           message: 'Recovered from existing artifacts',
         });
@@ -172,7 +285,7 @@ export async function POST(
         );
       }
 
-      incrementStageAttempts(projectId, targetStage.stageIndex);
+      incrementStageAttempts(effectiveProjectId, effectiveStage.stageId || effectiveStage.stageIndex);
       try {
         interveneRun(existingRun.runId, 'nudge', prompt, roleId).catch((err: any) => {
           log.error({ projectId: shortProjectId, err: err.message }, 'Resume nudge failed');
@@ -188,9 +301,11 @@ export async function POST(
         status: 'resuming',
         requestedAction: action,
         actualAction: action,
-        stageIndex: targetStage.stageIndex,
-        groupId: targetStage.groupId,
+        stageId: effectiveStage.stageId,
+        stageIndex: effectiveStage.stageIndex,
+        groupId: effectiveStage.groupId,
         runId: existingRun.runId,
+        branchIndex: effectiveBranchIndex,
         activeConversationId: existingRun.activeConversationId,
       });
     }
@@ -207,7 +322,7 @@ export async function POST(
         );
       }
 
-      incrementStageAttempts(projectId, targetStage.stageIndex);
+      incrementStageAttempts(effectiveProjectId, effectiveStage.stageId || effectiveStage.stageIndex);
       try {
         interveneRun(existingRun.runId, 'restart_role', prompt, roleId).catch((err: any) => {
           log.error({ projectId: shortProjectId, err: err.message }, 'Resume restart_role failed');
@@ -223,9 +338,11 @@ export async function POST(
         status: 'resuming',
         requestedAction: action,
         actualAction: action,
-        stageIndex: targetStage.stageIndex,
-        groupId: targetStage.groupId,
+        stageId: effectiveStage.stageId,
+        stageIndex: effectiveStage.stageIndex,
+        groupId: effectiveStage.groupId,
         runId: existingRun.runId,
+        branchIndex: effectiveBranchIndex,
         activeConversationId: existingRun.activeConversationId,
       });
     }
@@ -246,9 +363,11 @@ export async function POST(
       status: 'cancelled',
       requestedAction: action,
       actualAction: action,
-      stageIndex: targetStage.stageIndex,
-      groupId: targetStage.groupId,
+      stageId: effectiveStage.stageId,
+      stageIndex: effectiveStage.stageIndex,
+      groupId: effectiveStage.groupId,
       runId: existingRun.runId,
+      branchIndex: effectiveBranchIndex,
       activeConversationId: existingRun.activeConversationId,
     });
   } catch (err: any) {

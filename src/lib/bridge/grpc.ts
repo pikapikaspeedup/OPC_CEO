@@ -66,6 +66,8 @@ export function streamAgentState(
     },
   }, (res: IncomingMessage) => {
     let buffer = Buffer.alloc(0);
+    let receivedAnyData = false;
+    const httpStatus = res.statusCode;
 
     res.on('data', (chunk: Buffer) => {
       if (aborted) return;
@@ -75,6 +77,7 @@ export function streamAgentState(
       for (const msg of messages) {
         const update = msg?.update;
         if (update) {
+          receivedAnyData = true;
           onUpdate(update);
         } else if (msg?.error) {
           onError?.(new Error(msg.error.message || 'stream error'));
@@ -84,7 +87,12 @@ export function streamAgentState(
 
     res.on('end', () => {
       if (!aborted) {
-        onError?.(new Error('stream ended'));
+        // Diagnostic: distinguish between "conversation completed normally",
+        // "conversation not owned by this server", and other stream drops
+        const detail = receivedAnyData
+          ? 'stream ended after receiving data (conversation likely completed)'
+          : `stream ended immediately with no data (HTTP ${httpStatus}) — conversation may not exist on this server`;
+        onError?.(new Error(detail));
       }
     });
 

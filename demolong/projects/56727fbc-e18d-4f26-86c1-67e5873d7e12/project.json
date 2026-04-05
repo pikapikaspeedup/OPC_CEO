@@ -1,0 +1,29 @@
+{
+  "projectId": "56727fbc-e18d-4f26-86c1-67e5873d7e12",
+  "name": "Python 1+10 计算脚本",
+  "goal": "写一个 Python 脚本计算 1+10 的结果",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-04-05T21:26:02.750Z",
+  "updatedAt": "2026-04-05T21:26:55.464Z",
+  "runIds": [
+    "6487656a-1f70-4f56-9c84-55599b3c9de0"
+  ],
+  "pipelineState": {
+    "templateId": "coding-basic-template",
+    "stages": [
+      {
+        "stageId": "coding-basic",
+        "groupId": "coding-basic",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "6487656a-1f70-4f56-9c84-55599b3c9de0",
+        "startedAt": "2026-04-05T21:26:17.743Z",
+        "completedAt": "2026-04-05T21:26:55.447Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

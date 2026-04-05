@@ -1,0 +1,116 @@
+/**
+ * Notification Dispatcher
+ *
+ * Sends approval notifications through all enabled channels.
+ * Tracks delivery status on the request.
+ *
+ * Input:  ApprovalRequest
+ * Output: Updated request with notification delivery results
+ */
+
+import { createLogger } from '../logger';
+import type { ApprovalRequest, NotificationDelivery } from './types';
+import { getEnabledChannels } from './channels';
+
+const log = createLogger('Dispatcher');
+
+/**
+ * Dispatch notifications for a new or updated approval request.
+ *
+ * Sends to all enabled channels in parallel.
+ * Updates the request's `notifications` array with delivery results.
+ *
+ * @param request — The approval request to notify about.
+ * @returns Array of delivery results.
+ */
+export async function dispatchNotifications(request: ApprovalRequest): Promise<NotificationDelivery[]> {
+  const channels = getEnabledChannels();
+  if (channels.length === 0) {
+    log.warn({ requestId: request.id }, 'No enabled notification channels');
+    return [];
+  }
+
+  const deliveries: NotificationDelivery[] = [];
+
+  // Send to all channels in parallel
+  const results = await Promise.allSettled(
+    channels.map(async (channel) => {
+      const result = await channel.send(request);
+      const delivery: NotificationDelivery = {
+        channel: channel.id,
+        success: result.success,
+        messageId: result.messageId,
+        sentAt: new Date().toISOString(),
+        error: result.error,
+      };
+      return delivery;
+    }),
+  );
+
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      deliveries.push(result.value);
+    } else {
+      deliveries.push({
+        channel: 'unknown',
+        success: false,
+        sentAt: new Date().toISOString(),
+        error: result.reason?.message || 'Unknown error',
+      });
+    }
+  }
+
+  log.info({
+    requestId: request.id,
+    total: channels.length,
+    success: deliveries.filter(d => d.success).length,
+    failed: deliveries.filter(d => !d.success).length,
+  }, 'Notifications dispatched');
+
+  return deliveries;
+}
+
+/**
+ * Dispatch a follow-up notification (e.g. CEO's feedback → agent).
+ *
+ * TODO: Implement agent notification after CEO responds.
+ * This would send a message back to the requesting department/agent.
+ *
+ * @param request — The updated request with CEO's response.
+ */
+export async function dispatchFeedbackNotification(request: ApprovalRequest): Promise<void> {
+  if (!request.response) return;
+
+  log.info({
+    requestId: request.id,
+    action: request.response.action,
+    workspace: request.workspace,
+  }, 'Feedback notification dispatched (placeholder)');
+
+  // TODO: Implement based on callback type
+  // - 'update_quota': update DepartmentConfig.tokenQuota
+  // - 'resume_run': resume a paused run
+  // - 'notify_agent': send message to agent
+  // - 'custom': execute custom callback payload
+
+  const callback = request.response.action === 'approved'
+    ? request.onApproved
+    : request.response.action === 'rejected'
+      ? request.onRejected
+      : request.onFeedback;
+
+  if (callback) {
+    log.info({
+      requestId: request.id,
+      callbackType: callback.type,
+    }, 'Executing approval callback (placeholder)');
+
+    // TODO: Implement callback execution
+    // switch (callback.type) {
+    //   case 'update_quota': await updateTokenQuota(callback.payload); break;
+    //   case 'resume_run':   await resumeRun(callback.payload); break;
+    //   case 'notify_agent': await notifyAgent(callback.payload); break;
+    //   case 'custom':       await executeCustomCallback(callback.payload); break;
+    // }
+  }
+}

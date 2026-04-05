@@ -39,7 +39,12 @@ import {
   Sparkles,
   FolderKanban,
   Zap,
+  Settings,
+  GitBranch,
 } from 'lucide-react';
+import SchedulerPanel from '@/components/scheduler-panel';
+import SubgraphPanel from '@/components/subgraph-panel';
+import PolicyPanel from '@/components/policy-panel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -51,7 +56,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ModeTabs } from '@/components/ui/app-shell';
 
-type SidebarSection = 'conversations' | 'projects' | 'agents' | 'knowledge';
+type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations';
 
 interface SidebarProps {
   activeId: string | null;
@@ -353,19 +358,21 @@ export default function Sidebar({
   });
 
   const sectionTitle =
-    section === 'agents'
-      ? t('shell.agents')
-      : section === 'knowledge'
-        ? t('shell.knowledge')
-        : t('shell.chats');
+    section === 'knowledge'
+      ? t('shell.knowledge')
+      : section === 'operations'
+        ? 'Operations'
+        : section === 'projects'
+          ? 'OPC'
+          : t('shell.chats');
   const sectionCount =
     section === 'projects'
       ? projects.length
-      : section === 'agents'
-      ? agentRuns.length
       : section === 'knowledge'
         ? knowledgeItems.length
-        : visibleConversations.length;
+        : section === 'operations'
+          ? null
+          : visibleConversations.length;
 
   return (
     <>
@@ -408,10 +415,10 @@ export default function Sidebar({
             fill
             className="w-full"
             tabs={[
+              { value: 'projects', label: 'OPC', icon: <FolderKanban className="h-4 w-4" /> },
               { value: 'conversations', label: t('shell.chats'), icon: <MessageSquare className="h-4 w-4" /> },
-              { value: 'projects', label: 'Projects', icon: <FolderKanban className="h-4 w-4" /> },
-              { value: 'agents', label: t('shell.agents'), icon: <Bot className="h-4 w-4" /> },
               { value: 'knowledge', label: t('shell.knowledge'), icon: <BookOpen className="h-4 w-4" /> },
+              { value: 'operations', label: 'Ops', icon: <Settings className="h-4 w-4" /> },
             ]}
           />
 
@@ -513,92 +520,64 @@ export default function Sidebar({
               {section === 'projects' ? (
                 projects.length > 0 ? (
                   <div className="space-y-2">
-                    {projects.map(project => (
-                      <RailItem
-                        key={project.projectId}
-                        icon={<FolderKanban className="h-4 w-4" />}
-                        title={project.name}
-                        meta={(
-                          <>
-                            <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
-                              {project.status}
-                            </Badge>
-                            <span>{formatRelativeTime(project.createdAt, locale)}</span>
-                          </>
-                        )}
-                        active={selectedProjectId === project.projectId}
-                        onClick={() => {
-                          onSelectProject?.(project.projectId);
-                          onClose();
-                        }}
-                      />
-                    ))}
+                    {projects
+                      .filter(p => !p.parentProjectId) // Top-level only
+                      .map(project => {
+                        const children = projects.filter(c => c.parentProjectId === project.projectId);
+                        const hasChildren = children.length > 0;
+                        const isParentOrChildSelected = selectedProjectId === project.projectId ||
+                          children.some(c => c.projectId === selectedProjectId);
+
+                        return (
+                          <div key={project.projectId}>
+                            <RailItem
+                              icon={<FolderKanban className="h-4 w-4" />}
+                              title={project.name}
+                              meta={(
+                                <>
+                                  <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                                    {project.status}
+                                  </Badge>
+                                  {hasChildren && (
+                                    <span className="text-violet-400/70">{children.length} branches</span>
+                                  )}
+                                </>
+                              )}
+                              active={selectedProjectId === project.projectId}
+                              onClick={() => {
+                                onSelectProject?.(project.projectId);
+                                onClose();
+                              }}
+                            />
+                            {/* Nested child projects — auto-expand when parent or child is selected */}
+                            {hasChildren && isParentOrChildSelected && (
+                              <div className="ml-6 mt-1 space-y-0.5 border-l border-violet-500/20 pl-3">
+                                {children.map(child => (
+                                  <RailItem
+                                    key={child.projectId}
+                                    icon={<GitBranch className="h-3.5 w-3.5 text-violet-400/60" />}
+                                    title={<span className="text-[13px]">{child.name}</span>}
+                                    meta={(
+                                      <Badge variant="outline" className="h-4 rounded-full border-white/8 bg-white/[0.03] px-1.5 text-[9px]">
+                                        {child.status}
+                                      </Badge>
+                                    )}
+                                    active={selectedProjectId === child.projectId}
+                                    onClick={() => {
+                                      onSelectProject?.(child.projectId);
+                                      onClose();
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 ) : (
                   <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
                     No projects found
-                  </div>
-                )
-              ) : null}
-
-              {section === 'agents' ? (
-                agentRuns.length > 0 ? (
-                  <div className="space-y-5">
-                    {activeAgentRuns.length > 0 ? (
-                      <div className="space-y-2">
-                        <SectionLabel>{t('sidebar.active')}</SectionLabel>
-                        {activeAgentRuns.map(run => (
-                          <RailItem
-                            key={run.runId}
-                            icon={<Bot className="h-4 w-4" />}
-                            title={run.prompt}
-                            meta={(
-                              <>
-                                <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
-                                  {getAgentRunWorkspaceName(run.workspace)}
-                                </Badge>
-                                <span>{getAgentRunTimeAgo(run.createdAt, locale)}</span>
-                              </>
-                            )}
-                            active={selectedAgentRunId === run.runId}
-                            onClick={() => {
-                              onSelectAgentRun?.(run.runId);
-                              onClose();
-                            }}
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {recentAgentRuns.length > 0 ? (
-                      <div className="space-y-2">
-                        <SectionLabel>{t('sidebar.recent')}</SectionLabel>
-                        {recentAgentRuns.map(run => (
-                          <RailItem
-                            key={run.runId}
-                            icon={<Sparkles className="h-4 w-4" />}
-                            title={run.prompt}
-                            meta={(
-                              <>
-                                <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
-                                  {getAgentRunWorkspaceName(run.workspace)}
-                                </Badge>
-                                <span>{getAgentRunTimeAgo(run.createdAt, locale)}</span>
-                              </>
-                            )}
-                            active={selectedAgentRunId === run.runId}
-                            onClick={() => {
-                              onSelectAgentRun?.(run.runId);
-                              onClose();
-                            }}
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
-                    {t('sidebar.noRunsYet')}
                   </div>
                 )
               ) : null}
@@ -632,6 +611,19 @@ export default function Sidebar({
                     {t('knowledge.noItems')}
                   </div>
                 )
+              ) : null}
+
+              {section === 'operations' ? (
+                <div className="space-y-6">
+                  <SchedulerPanel />
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3 px-1">Subgraphs</div>
+                    <SubgraphPanel />
+                  </div>
+                  <div>
+                    <PolicyPanel />
+                  </div>
+                </div>
               ) : null}
             </div>
           </ScrollArea>

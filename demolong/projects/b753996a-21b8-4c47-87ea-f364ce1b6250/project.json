@@ -1,0 +1,52 @@
+{
+  "projectId": "b753996a-21b8-4c47-87ea-f364ce1b6250",
+  "name": "Graph Pipeline Test",
+  "goal": "Run graph pipeline smoke test",
+  "templateId": "graph-smoke-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "active",
+  "createdAt": "2026-03-28T11:19:34.814Z",
+  "updatedAt": "2026-03-28T11:21:09.924Z",
+  "runIds": [
+    "9cf7742a-0e65-4a12-bda5-9675781df54d",
+    "40f635e6-65db-48c9-814a-66fb2e9c56cd"
+  ],
+  "pipelineState": {
+    "templateId": "graph-smoke-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "smoke-planning",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "40f635e6-65db-48c9-814a-66fb2e9c56cd",
+        "startedAt": "2026-03-28T11:20:26.113Z",
+        "completedAt": "2026-03-28T11:21:09.914Z"
+      },
+      {
+        "stageId": "fanout",
+        "groupId": "smoke-fan-out",
+        "stageIndex": 1,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "join",
+        "groupId": "smoke-join",
+        "stageIndex": 2,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "integration",
+        "groupId": "smoke-integration",
+        "stageIndex": 3,
+        "status": "pending",
+        "attempts": 0
+      }
+    ],
+    "activeStageIds": [],
+    "status": "running"
+  }
+}

@@ -139,12 +139,14 @@ npm run ag -- intervene 90b9e6b9-... nudge \
 | `restart_role` | 在同一 Run 内新建 Conversation 接管指定角色 |
 | `nudge` | 给 stale-active 的 Agent 发送提示 |
 | `cancel` | 取消运行 |
+| `evaluate` | 触发对当前 Run 状态的评估（适用于需要重新检测完成状态的场景） |
 
 选择建议：
 
 - Run 还在 `running/starting`，并且已经出现 `liveState.staleSince`：用 `nudge`
 - 当前 Conversation 明显坏掉了，但想保留同一个 Run：用 `restart_role`
 - 需要立刻终止当前执行：用 `cancel`
+- 需要重新评估 Run 的产物和状态：用 `evaluate`
 - `retry` 只是兼容别名；新用法优先写 `restart_role`
 
 ---
@@ -163,6 +165,12 @@ npm run ag -- resume 01748476-... --action restart_role --role product-lead-revi
 
 # 取消当前 stage 的 canonical run
 npm run ag -- resume 01748476-... --action cancel
+
+# 跳过当前 stage（不触发下游）
+npm run ag -- resume 01748476-... --action skip
+
+# 强制完成卡住的 stage（触发下游 dispatch）
+npm run ag -- resume 01748476-... --action force-complete
 ```
 
 `resume` 现在必须显式传 `--action`。选择逻辑如下：
@@ -171,6 +179,8 @@ npm run ag -- resume 01748476-... --action cancel
 - `nudge`：run 仍在 `starting/running`，且 `liveState.staleSince` 已出现
 - `restart_role`：需要在同一个 run 内换一个新 Conversation 接管
 - `cancel`：要终止当前 canonical run，并把 stage 标记为 `cancelled`
+- `skip`：跳过 stage，不执行也不触发下游（适用于 `pending`/`failed`/`blocked`/`cancelled` 状态）
+- `force-complete`：标记 stage 完成并触发下游（适用于 Watcher 断连等卡死场景）
 
 如果不传 `--stageIndex`，服务端会自动选择第一个 actionable stage：
 

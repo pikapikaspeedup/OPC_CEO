@@ -1077,7 +1077,6 @@ export class ChatView extends ItemView {
     const fileName = decoded.split('/').pop() || (step.codeAction as any)?.description?.slice(0, 40) || '?';
     const icon = spec.createFile ? 'file-plus' : spec.deleteFile ? 'file-minus' : 'file-edit';
     const cls = spec.createFile ? 'ag-step-create' : spec.deleteFile ? 'ag-step-delete' : 'ag-step-edit';
-    const isArtifact = !!(step.codeAction as any)?.isArtifactFile;
 
     const el = this.messagesEl.createDiv({ cls: `ag-step ag-step-clickable ${cls}` });
     this.renderStepStatus(step, el);
@@ -1085,48 +1084,16 @@ export class ChatView extends ItemView {
     setIcon(iconSpan, icon);
     el.createSpan({ text: `${action} ${fileName}`, cls: 'ag-step-text' });
 
-    // Artifact summary badge
-    const artifactSummary = (step.codeAction as any)?.artifactMetadata?.summary;
-    if (artifactSummary) {
-      const summaryEl = el.createDiv({ cls: 'ag-step-artifact-summary' });
-      summaryEl.textContent = artifactSummary.slice(0, 120) + (artifactSummary.length > 120 ? '...' : '');
-    }
-
-    if (!uri) return;
-
-    const filePath = uri.startsWith('file://') ? uri.replace(/^file:\/\//, '') : uri;
-    const vaultPath = (this.app.vault.adapter as any).basePath || '';
-    const isInsideVault = filePath.startsWith(vaultPath);
-
-    // Container for inline artifact preview (lives below the step header)
-    let inlineContainer: HTMLElement | null = null;
-
-    el.addEventListener('click', () => {
-      if (isInsideVault) {
-        // File inside vault → open in Obsidian editor
-        const relativePath = filePath.slice(vaultPath.length).replace(/^\//, '');
+    if (uri) {
+      el.addEventListener('click', () => {
+        const filePath = uri.startsWith('file://') ? uri.replace(/^file:\/\//, '') : uri;
+        const vaultPath = (this.app.vault.adapter as any).basePath || '';
+        const relativePath = filePath.startsWith(vaultPath)
+          ? filePath.slice(vaultPath.length).replace(/^\//, '')
+          : filePath.startsWith('/')
+            ? filePath.split('/').pop() || fileName
+            : filePath || fileName;
         this.app.workspace.openLinkText(relativePath, '', false);
-      } else {
-        // File outside vault → toggle inline preview
-        if (inlineContainer) {
-          inlineContainer.remove();
-          inlineContainer = null;
-          return;
-        }
-        inlineContainer = this.messagesEl.createDiv({ cls: 'ag-code-action-inline-wrap' });
-        // Insert right after the step element
-        el.insertAdjacentElement('afterend', inlineContainer);
-        this.revealInlineArtifact(inlineContainer, fileName, filePath);
-      }
-    });
-
-    // Auto-expand artifact files that are outside the vault
-    if (isArtifact && !isInsideVault) {
-      // Defer to next frame so the step element is in the DOM
-      requestAnimationFrame(() => {
-        inlineContainer = this.messagesEl.createDiv({ cls: 'ag-code-action-inline-wrap' });
-        el.insertAdjacentElement('afterend', inlineContainer);
-        this.revealInlineArtifact(inlineContainer, fileName, filePath);
       });
     }
   }
@@ -2148,6 +2115,27 @@ export class ChatView extends ItemView {
       this.renderToolbar(container);
     });
 
+    const smartBtn = container.createEl('button', {
+      cls: `ag-attach-btn ag-context-toggle-btn ag-smart-context-btn${this.smartContextEnabledForDraft ? ' is-active' : ''}`,
+      attr: {
+        'aria-label': 'Toggle smart context',
+        'aria-pressed': this.smartContextEnabledForDraft ? 'true' : 'false',
+      },
+    });
+    const smartIcon = smartBtn.createSpan({ cls: 'ag-mode-icon' });
+    setIcon(smartIcon, 'files');
+    smartBtn.createSpan({ text: ' Smart' });
+    if (this.getSmartContextMode() === 'auto') {
+      smartBtn.title = this.smartContextEnabledForDraft
+        ? 'Current note context is automatically included for this draft. Click to pause it for this message.'
+        : 'Automatic current note context is paused for this draft. Click to turn it back on.';
+    } else {
+      smartBtn.title = this.smartContextEnabledForDraft
+        ? 'Current note context will be included for this draft. Click to turn it off.'
+        : 'Click to add the current note context for this draft.';
+    }
+    smartBtn.addEventListener('click', () => this.toggleSmartContextForDraft());
+
     // Attach active file button
     const attachBtn = container.createEl('button', { cls: 'ag-attach-btn', attr: { 'aria-label': 'Attach current file' } });
     const attachIcon = attachBtn.createSpan({ cls: 'ag-mode-icon' });
@@ -2162,6 +2150,26 @@ export class ChatView extends ItemView {
     promptBtn.title = 'Prompt Templates';
     promptBtn.addEventListener('click', () => this.showPromptPicker());
 
+    const relatedBtn = container.createEl('button', {
+      cls: `ag-attach-btn ag-context-toggle-btn ag-related-context-btn${this.knowledgeContextEnabledForDraft ? ' is-active' : ''}`,
+      attr: {
+        'aria-label': 'Toggle related notes context',
+        'aria-pressed': this.knowledgeContextEnabledForDraft ? 'true' : 'false',
+      },
+    });
+    const relatedIcon = relatedBtn.createSpan({ cls: 'ag-mode-icon' });
+    setIcon(relatedIcon, 'brain');
+    relatedBtn.createSpan({ text: ' Related' });
+    if (this.getKnowledgeContextMode() === 'auto') {
+      relatedBtn.title = this.knowledgeContextEnabledForDraft
+        ? 'Related notes are automatically included for this draft. Click to pause them for this message.'
+        : 'Automatic related notes are paused for this draft. Click to turn them back on.';
+    } else {
+      relatedBtn.title = this.knowledgeContextEnabledForDraft
+        ? 'Related notes will be included for this draft. Click to turn them off.'
+        : 'Click to add related notes for this draft.';
+    }
+    relatedBtn.addEventListener('click', () => this.toggleKnowledgeContextForDraft());
 
     // Pin count indicator (if pins exist)
     const pinCount = (this.plugin.settings.pins || []).length;

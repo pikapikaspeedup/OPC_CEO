@@ -1,0 +1,29 @@
+{
+  "completedAt": "2026-03-29T10:07:44.379Z",
+  "totalBranches": 3,
+  "succeeded": 3,
+  "failed": 0,
+  "branches": [
+    {
+      "index": 0,
+      "name": "TradingAgents-AShare",
+      "status": "completed",
+      "subProjectId": "592592d0-a050-4b37-abb1-a4f1b40af1b7",
+      "duration": "199s"
+    },
+    {
+      "index": 1,
+      "name": "TradingAgents-CN",
+      "status": "completed",
+      "subProjectId": "a7542187-b2f8-4720-86d2-f67e3c8dfef5",
+      "duration": "167s"
+    },
+    {
+      "index": 2,
+      "name": "TradingAgents-MCPmode",
+      "status": "completed",
+      "subProjectId": "0445deed-07bf-4023-8a12-d1db4668337c",
+      "duration": "150s"
+    }
+  ]
+}

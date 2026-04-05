@@ -1,0 +1,9 @@
+{
+  "decision": "revise",
+  "summary": "The required file product-spec.md is missing. The previous draft was written to project-plan.md. Please write the specification to the correct file path. Additionally, provide edge cases for empty states and blank notes.",
+  "issueCount": 2,
+  "revisionRequests": [
+    "Write the specification to specs/product-spec.md instead of specs/project-plan.md",
+    "Add details for empty state UI and empty input validation"
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "projectId": "79b9c0bc-3a24-4e38-9a86-55245a91098a",
+  "name": "Graph Pipeline Verification Run",
+  "goal": "Verify graph pipeline execution end-to-end.",
+  "templateId": "graph-smoke-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-03-28T12:01:23.364Z",
+  "updatedAt": "2026-03-28T12:03:26.867Z",
+  "runIds": [
+    "b3cfa632-764d-45a7-b775-f229d293c4cc",
+    "bf2d723b-435c-4d0f-8eed-5740a1c8f3d6",
+    "d446e5aa-1455-43f7-8816-679d9825474c"
+  ],
+  "pipelineState": {
+    "templateId": "graph-smoke-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "smoke-planning",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "b3cfa632-764d-45a7-b775-f229d293c4cc",
+        "startedAt": "2026-03-28T12:01:33.447Z",
+        "completedAt": "2026-03-28T12:02:07.110Z"
+      },
+      {
+        "stageId": "fanout",
+        "groupId": "smoke-fan-out",
+        "stageIndex": 1,
+        "status": "completed",
+        "attempts": 0,
+        "startedAt": "2026-03-28T12:02:07.134Z",
+        "branches": [
+          {
+            "branchIndex": 0,
+            "workPackageId": "wp-1",
+            "workPackageName": "Smoke Branch 1",
+            "subProjectId": "f5eb31c6-bba7-432b-a3b2-80810dcca040",
+            "runId": "b237df72-c9b7-4c12-a914-49c2b66caa4f",
+            "status": "completed",
+            "startedAt": "2026-03-28T12:02:07.145Z",
+            "completedAt": "2026-03-28T12:02:31.470Z"
+          },
+          {
+            "branchIndex": 1,
+            "workPackageId": "wp-2",
+            "workPackageName": "Smoke Branch 2",
+            "subProjectId": "c38866ff-d13d-4c6b-86d2-f8f2362ad779",
+            "runId": "d8cadc8f-f442-436b-8c20-18c5e3e05a6a",
+            "status": "completed",
+            "startedAt": "2026-03-28T12:02:07.538Z",
+            "completedAt": "2026-03-28T12:02:43.051Z"
+          }
+        ],
+        "completedAt": "2026-03-28T12:02:43.054Z"
+      },
+      {
+        "stageId": "join",
+        "groupId": "smoke-join",
+        "stageIndex": 2,
+        "status": "completed",
+        "attempts": 0,
+        "startedAt": "2026-03-28T12:02:43.057Z",
+        "completedAt": "2026-03-28T12:02:43.062Z"
+      },
+      {
+        "stageId": "integration",
+        "groupId": "smoke-integration",
+        "stageIndex": 3,
+        "status": "completed",
+        "attempts": 2,
+        "runId": "bf2d723b-435c-4d0f-8eed-5740a1c8f3d6",
+        "startedAt": "2026-03-28T12:02:43.584Z",
+        "completedAt": "2026-03-28T12:03:26.850Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

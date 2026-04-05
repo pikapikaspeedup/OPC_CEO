@@ -1,0 +1,53 @@
+{
+  "projectId": "8669f7c5-be3d-4b64-95e0-2a2bd7944a1b",
+  "name": "V4 Fan-Out Smoke Test",
+  "goal": "V4 Fan-Out Smoke Test — produce 2 work packages, each branch writes a minimal report, then converge.",
+  "templateId": "v4-smoke-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "failed",
+  "createdAt": "2026-03-27T23:54:24.002Z",
+  "updatedAt": "2026-04-05T20:37:51.890Z",
+  "runIds": [
+    "7478240a-04e8-400d-9b8d-a10b9e41cc54"
+  ],
+  "pipelineState": {
+    "templateId": "v4-smoke-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "smoke-planning",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "7478240a-04e8-400d-9b8d-a10b9e41cc54",
+        "startedAt": "2026-03-27T23:54:33.524Z",
+        "completedAt": "2026-03-27T23:55:03.860Z",
+        "contractViolations": []
+      },
+      {
+        "stageId": "fanout",
+        "groupId": "smoke-fan-out",
+        "stageIndex": 1,
+        "status": "failed",
+        "attempts": 0,
+        "lastError": "Work packages file not found: /Users/darrel/Documents/Antigravity-Mobility-CLI/demolong/projects/8669f7c5-be3d-4b64-95e0-2a2bd7944a1b/runs/7478240a-04e8-400d-9b8d-a10b9e41cc54/delivery/work-packages.json"
+      },
+      {
+        "stageId": "join",
+        "groupId": "smoke-join",
+        "stageIndex": 2,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "integration",
+        "groupId": "smoke-integration",
+        "stageIndex": 3,
+        "status": "pending",
+        "attempts": 0
+      }
+    ],
+    "activeStageIds": [],
+    "status": "failed"
+  }
+}

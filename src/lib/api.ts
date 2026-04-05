@@ -3,7 +3,174 @@ import type {
   McpConfig, StepsData, ModelsResponse, WorkspacesResponse, AnalyticsData,
   KnowledgeItem, KnowledgeDetail, AgentRun, Project,
   ResumeProjectOptions, ResumeProjectResponse, TemplateSummaryFE,
+  GenerationResultFE, ConfirmResultFE,
+  SubgraphSummaryFE, ResourcePolicyFE, PolicyEvalResultFE,
+  JournalEntryFE, CheckpointFE,
+  DepartmentConfig,
+  DailyDigestFE,
+  Deliverable,
+  TemplateDetailFE,
+  ApprovalRequestFE,
+  ApprovalSummaryFE,
 } from './types';
+
+// V4.3 Operations & Observability types
+export type HealthStatus = 'running' | 'waiting' | 'blocked' | 'stale' | 'failed' | 'completed';
+export type OrchestrationState = 'na' | 'waiting' | 'eligible' | 'completed';
+
+export interface StageDiagnosticsFE {
+  stageId: string;
+  groupId: string;
+  stageType: 'normal' | 'fan-out' | 'join';
+  status: string;
+  pendingReason?: string;
+  waitingOnStageIds?: string[];
+  staleSince?: string;
+  orchestrationState?: OrchestrationState;
+  recommendedActions: string[];
+  contractIssues?: string[];
+}
+
+export interface BranchDiagnosticsFE {
+  parentStageId: string;
+  branchIndex: number;
+  subProjectId?: string;
+  runId?: string;
+  status: string;
+  health: HealthStatus;
+  staleSince?: string;
+  failureReason?: string;
+  recommendedActions: string[];
+}
+
+export interface ProjectDiagnosticsResponse {
+  projectId: string;
+  projectStatus: string;
+  health: HealthStatus;
+  activeStageIds: string[];
+  canReconcile: boolean;
+  summary: string;
+  recommendedActions: string[];
+  stages: StageDiagnosticsFE[];
+  branches: BranchDiagnosticsFE[];
+}
+
+export interface GraphNode {
+  stageId: string;
+  groupId: string;
+  stageType: string;
+  status: string;
+  active: boolean;
+  branchCompleted?: number;
+  branchTotal?: number;
+  /** V5.2: control-flow node kind */
+  nodeKind?: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end' | 'subgraph-ref';
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  /** V5.2: edge label for switch branches or gate outcomes */
+  label?: string;
+}
+
+export interface ProjectGraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface ReconcileAction {
+  kind: 'dispatch-stage' | 'fan-out' | 'complete-join' | 'sync-status' | 'noop';
+  stageId?: string;
+  branchIndex?: number;
+  detail: string;
+}
+
+export interface ReconcileResponse {
+  projectId: string;
+  dryRun: boolean;
+  actions: ReconcileAction[];
+}
+
+export interface AuditEvent {
+  timestamp: string;
+  kind: string;
+  projectId?: string;
+  stageId?: string;
+  branchIndex?: number;
+  jobId?: string;
+  message: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface SchedulerJobResponse {
+  jobId: string;
+  name?: string;
+  type?: string;
+  action?: { kind: string; [key: string]: unknown };
+  enabled?: boolean;
+  nextRunAt?: string | null;
+  lastRunAt?: string;
+  lastRunResult?: string;
+  lastRunError?: string;
+  /** OPC: associated department workspace URI */
+  departmentWorkspaceUri?: string;
+  /** OPC: action to create Ad-hoc project */
+  opcAction?: {
+    type: 'create_project';
+    projectType: 'adhoc';
+    goal: string;
+    skillHint?: string;
+  };
+}
+
+export interface ContractLintError {
+  severity: 'error';
+  stageId: string;
+  field: string;
+  message: string;
+  relatedStageId?: string;
+}
+
+export interface ContractLintWarning {
+  severity: 'warning';
+  stageId: string;
+  message: string;
+}
+
+export interface LintResponse {
+  valid: boolean;
+  dagErrors: string[];
+  contractErrors: ContractLintError[];
+  contractWarnings: ContractLintWarning[];
+}
+
+export interface ValidateResponse extends LintResponse {
+  format: 'pipeline' | 'graphPipeline';
+}
+
+export interface ConvertResponse {
+  pipeline?: any[];
+  graphPipeline?: any;
+}
+
+export interface CEOSuggestion {
+  type: 'use_template' | 'create_template' | 'reassign_department' | 'auto_generate_and_dispatch' | 'suggest_add_template';
+  label: string;
+  description: string;
+  payload?: Record<string, string>;
+}
+
+export interface CEOCommandResult {
+  success: boolean;
+  action: 'create_project' | 'report_to_human' | 'info' | 'cancel' | 'pause' | 'resume' | 'retry' | 'skip' | 'multi_create' | 'needs_decision';
+  message: string;
+  projectId?: string;
+  projectIds?: string[];
+  runId?: string;
+  runIds?: string[];
+  suggestions?: CEOSuggestion[];
+}
 
 const API = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -77,6 +244,96 @@ export const api = {
       body: JSON.stringify({ workspace }),
     }),
 
+  killWorkspace: (workspace: string) =>
+    fetchJson<{ ok: boolean; error?: string }>('/api/workspaces/kill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace }),
+    }),
+
+  // OPC: Department config
+  getDepartment: (workspaceUri: string) =>
+    fetchJson<DepartmentConfig>(`/api/departments?workspace=${encodeURIComponent(workspaceUri)}`),
+  updateDepartment: (workspaceUri: string, config: DepartmentConfig) =>
+    fetchJson<{ ok: boolean }>(`/api/departments?workspace=${encodeURIComponent(workspaceUri)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }),
+  syncDepartment: (workspaceUri: string, target: string = 'all') =>
+    fetchJson<{ ok: boolean }>(`/api/departments/sync?workspace=${encodeURIComponent(workspaceUri)}&target=${encodeURIComponent(target)}`, {
+      method: 'POST',
+    }),
+  getDepartmentMemory: (workspaceUri: string, scope: 'department' | 'organization' = 'department') =>
+    fetchJson<{ scope: string; workspace?: string; memory?: Record<string, string>; content?: string }>(
+      `/api/departments/memory?workspace=${encodeURIComponent(workspaceUri)}&scope=${scope}`,
+    ),
+  addDepartmentMemory: (workspaceUri: string, category: string, content: string, source?: string) =>
+    fetchJson<{ ok: boolean }>(`/api/departments/memory?workspace=${encodeURIComponent(workspaceUri)}&category=${category}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, source: source || 'manual' }),
+    }),
+  getDepartmentQuota: (workspaceUri: string) =>
+    fetchJson<{ workspace: string; quota: { daily: number; monthly: number; used: { daily: number; monthly: number }; canRequestMore: boolean } }>(
+      `/api/departments/quota?workspace=${encodeURIComponent(workspaceUri)}`,
+    ),
+  tunnelStatus: () =>
+    fetchJson<{ running: boolean; starting: boolean; url: string | null; error: string | null; configured: boolean; config: any }>(
+      '/api/tunnel',
+    ),
+  tunnelStart: () =>
+    fetchJson<{ success: boolean; url?: string; error?: string }>(
+      '/api/tunnel/start',
+      { method: 'POST' },
+    ),
+  tunnelStop: () =>
+    fetchJson<{ success: boolean }>(
+      '/api/tunnel/stop',
+      { method: 'POST' },
+    ),
+
+  tunnelSaveConfig: (config: { tunnelName: string; url: string; credentialsPath?: string; autoStart?: boolean }) =>
+    fetchJson<{ success: boolean; config: typeof config }>(
+      '/api/tunnel/config',
+      { method: 'POST', body: JSON.stringify(config) },
+    ),
+
+  // OPC: Codex integration
+  codexExec: (params: { prompt: string; cwd?: string; model?: string; sandbox?: string; timeoutMs?: number }) =>
+    fetchJson<{ output: string }>(
+      '/api/codex',
+      { method: 'POST', body: JSON.stringify(params) },
+    ),
+  codexCreateSession: (params: { prompt: string; cwd?: string; model?: string; sandbox?: string; approvalPolicy?: string }) =>
+    fetchJson<{ threadId: string; content: string }>(
+      '/api/codex/sessions',
+      { method: 'POST', body: JSON.stringify(params) },
+    ),
+  codexReply: (threadId: string, prompt: string) =>
+    fetchJson<{ threadId: string; content: string }>(
+      `/api/codex/sessions/${encodeURIComponent(threadId)}`,
+      { method: 'POST', body: JSON.stringify({ prompt }) },
+    ),
+
+  // OPC: Daily digest
+  getDailyDigest: (workspaceUri: string, date?: string, period?: 'day' | 'week' | 'month') => {
+    const params = new URLSearchParams({ workspace: workspaceUri });
+    if (date) params.set('date', date);
+    if (period) params.set('period', period);
+    return fetchJson<DailyDigestFE>(`/api/departments/digest?${params}`);
+  },
+
+  // OPC: Deliverables
+  getDeliverables: (projectId: string) =>
+    fetchJson<Deliverable[]>(`/api/projects/${encodeURIComponent(projectId)}/deliverables`),
+  createDeliverable: (projectId: string, data: { stageId: string; type: string; title: string; artifactPath?: string }) =>
+    fetchJson<Deliverable>(`/api/projects/${encodeURIComponent(projectId)}/deliverables`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
   // Knowledge Items
   knowledge: () => fetchJson<KnowledgeItem[]>('/api/knowledge'),
   knowledgeDetail: (id: string) => fetchJson<KnowledgeDetail>(`/api/knowledge/${encodeURIComponent(id)}`),
@@ -114,8 +371,10 @@ export const api = {
     workspace: string;
     prompt?: string;
     model?: string;
+    pipelineStageId?: string;
     taskEnvelope?: import('./types').TaskEnvelopeFE;
     sourceRunIds?: string[];
+    conversationMode?: 'shared' | 'isolated';
   }) =>
     fetchJson<{ runId: string; status: string }>('/api/agent-runs', {
       method: 'POST',
@@ -134,8 +393,58 @@ export const api = {
   // Pipeline templates
   pipelines: () => fetchJson<TemplateSummaryFE[]>('/api/pipelines'),
 
+  pipelineDetail: (id: string) =>
+    fetchJson<TemplateDetailFE>(`/api/pipelines/${encodeURIComponent(id)}`),
+
+  updatePipeline: (id: string, data: Record<string, unknown>) =>
+    fetchJson<{ success: boolean; templateId: string }>(`/api/pipelines/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  deletePipeline: (id: string) =>
+    fetchJson<{ success: boolean; templateId: string }>(`/api/pipelines/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  clonePipeline: (id: string, newId: string, newTitle?: string) =>
+    fetchJson<{ success: boolean; templateId: string }>(`/api/pipelines/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newId, newTitle }),
+    }),
+
+  updateWorkflow: (name: string, content: string) =>
+    fetchJson<{ success: boolean; name: string }>(`/api/workflows/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }),
+
+  lintTemplate: (templateId: string) =>
+    fetchJson<LintResponse>('/api/pipelines/lint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templateId }),
+    }),
+
+  validateTemplate: (input: { templateId?: string; template?: any }) =>
+    fetchJson<ValidateResponse>('/api/pipelines/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+
+  convertTemplate: (input: { direction: 'pipeline-to-graph' | 'graph-to-pipeline'; pipeline?: any[]; graphPipeline?: any }) =>
+    fetchJson<ConvertResponse>('/api/pipelines/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+
   // Project Management
-  createProject: (data: { name: string; goal: string; templateId?: string; workspace: string }) =>
+  createProject: (data: { name: string; goal: string; templateId?: string; workspace: string; projectType?: 'coordinated' | 'adhoc' | 'strategic'; skillHint?: string }) =>
     fetchJson<Project>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -158,6 +467,191 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),
+    }),
+
+  // Operations & Observability (V4.3)
+  projectDiagnostics: (projectId: string) =>
+    fetchJson<ProjectDiagnosticsResponse>(`/api/projects/${projectId}/diagnostics`),
+
+  projectGraph: (projectId: string) =>
+    fetchJson<ProjectGraphResponse>(`/api/projects/${projectId}/graph`),
+
+  // V5.2: Gate approval
+  gateApprove: (projectId: string, nodeId: string, input: { action: 'approve' | 'reject'; reason?: string; approvedBy?: string }) =>
+    fetchJson<{ nodeId: string; action: string; timestamp: string }>(`/api/projects/${encodeURIComponent(projectId)}/gate/${encodeURIComponent(nodeId)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+
+  reconcileProject: (projectId: string, dryRun: boolean = true) =>
+    fetchJson<ReconcileResponse>(`/api/projects/${projectId}/reconcile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun }),
+    }),
+
+  auditEvents: async (params?: { kind?: string; projectId?: string; since?: string; until?: string; limit?: number }) => {
+    const searchParams = new URLSearchParams();
+    if (params?.kind) searchParams.set('kind', params.kind);
+    if (params?.projectId) searchParams.set('projectId', params.projectId);
+    if (params?.since) searchParams.set('since', params.since);
+    if (params?.until) searchParams.set('until', params.until);
+    if (params?.limit) searchParams.set('limit', String(params.limit));
+    const result = await fetchJson<{ events: AuditEvent[]; total: number }>(`/api/operations/audit?${searchParams.toString()}`);
+    return result.events ?? [];
+  },
+
+  schedulerJobs: () => fetchJson<SchedulerJobResponse[]>('/api/scheduler/jobs'),
+
+  createSchedulerJob: (data: {
+    name: string;
+    type: 'cron' | 'interval' | 'once';
+    cronExpression?: string;
+    intervalMs?: number;
+    scheduledAt?: string;
+    action: { kind: string; [key: string]: unknown };
+    enabled?: boolean;
+    departmentWorkspaceUri?: string;
+    opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string };
+  }) =>
+    fetchJson<SchedulerJobResponse>('/api/scheduler/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  updateSchedulerJob: (id: string, data: Partial<{
+    name: string;
+    type: 'cron' | 'interval' | 'once';
+    cronExpression?: string;
+    intervalMs?: number;
+    scheduledAt?: string;
+    action: { kind: string; [key: string]: unknown };
+    enabled: boolean;
+    departmentWorkspaceUri?: string;
+    opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string };
+  }>) =>
+    fetchJson<SchedulerJobResponse>(`/api/scheduler/jobs/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  deleteSchedulerJob: (id: string) =>
+    fetchJson<{ success: boolean }>(`/api/scheduler/jobs/${id}`, { method: 'DELETE' }),
+
+  triggerSchedulerJob: (id: string) =>
+    fetchJson<{ jobId: string; status: string; triggeredAt: string; message?: string }>(`/api/scheduler/jobs/${id}/trigger`, { method: 'POST' }),
+
+  // AI Pipeline Generation (V5.3)
+  generatePipeline: (input: { goal: string; constraints?: string; referenceTemplateId?: string; model?: string }) =>
+    fetchJson<GenerationResultFE>('/api/pipelines/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+
+  getDraft: (draftId: string) =>
+    fetchJson<GenerationResultFE>(`/api/pipelines/generate/${encodeURIComponent(draftId)}`),
+
+  confirmDraft: (draftId: string, modifications?: Record<string, unknown>) =>
+    fetchJson<ConfirmResultFE>(`/api/pipelines/generate/${encodeURIComponent(draftId)}/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modifications }),
+    }),
+
+  // Subgraphs & Resource Policies (V5.4)
+  listSubgraphs: () =>
+    fetchJson<SubgraphSummaryFE[]>('/api/pipelines/subgraphs'),
+
+  listPolicies: (scope?: string, targetId?: string) => {
+    const params = new URLSearchParams();
+    if (scope) params.set('scope', scope);
+    if (targetId) params.set('targetId', targetId);
+    const qs = params.toString();
+    return fetchJson<ResourcePolicyFE[]>(`/api/pipelines/policies${qs ? `?${qs}` : ''}`);
+  },
+
+  createPolicy: (policy: Omit<ResourcePolicyFE, 'id'> & { id?: string }) =>
+    fetchJson<ResourcePolicyFE>('/api/pipelines/policies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy),
+    }),
+
+  checkPolicy: (context: { workspaceUri?: string; templateId?: string; projectId?: string }, usage: Record<string, number>) =>
+    fetchJson<PolicyEvalResultFE>('/api/pipelines/policies/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context, usage }),
+    }),
+
+  // V5.2: Execution Journal
+  queryJournal: (projectId: string, params?: { nodeId?: string; type?: string; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.nodeId) sp.set('nodeId', params.nodeId);
+    if (params?.type) sp.set('type', params.type);
+    if (params?.limit) sp.set('limit', String(params.limit));
+    const qs = sp.toString();
+    return fetchJson<{ entries: JournalEntryFE[]; total: number }>(
+      `/api/projects/${encodeURIComponent(projectId)}/journal${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  // V5.2: Checkpoint management
+  listCheckpoints: (projectId: string) =>
+    fetchJson<{ checkpoints: CheckpointFE[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/checkpoints`,
+    ),
+
+  createCheckpoint: (projectId: string, nodeId?: string) =>
+    fetchJson<CheckpointFE>(`/api/projects/${encodeURIComponent(projectId)}/checkpoints`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId }),
+    }),
+
+  restoreCheckpoint: (projectId: string, checkpointId: string) =>
+    fetchJson<{ restored: boolean; checkpointId: string; activeStageIds: string[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/checkpoints/${encodeURIComponent(checkpointId)}/restore`,
+      { method: 'POST' },
+    ),
+
+  replayProject: (projectId: string, checkpointId?: string) =>
+    fetchJson<{ replayed: boolean; checkpointId: string; restoredStageCount: number; activeStageIds: string[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/replay`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkpointId }),
+      },
+    ),
+
+  ceoCommand: (command: string, options?: { model?: string }) =>
+    fetchJson<CEOCommandResult>('/api/ceo/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command, ...(options?.model ? { model: options.model } : {}) }),
+    }),
+
+  // CEO Approval Framework
+  listApprovals: (params?: { status?: string; workspace?: string; type?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set('status', params.status);
+    if (params?.workspace) sp.set('workspace', params.workspace);
+    if (params?.type) sp.set('type', params.type);
+    sp.set('summary', 'true');
+    const qs = sp.toString();
+    return fetchJson<{ requests: ApprovalRequestFE[]; summary: ApprovalSummaryFE }>(`/api/approval?${qs}`);
+  },
+
+  respondApproval: (id: string, action: 'approved' | 'rejected' | 'feedback', message?: string) =>
+    fetchJson<ApprovalRequestFE>(`/api/approval/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, message: message || '', channel: 'web' }),
     }),
 };
 

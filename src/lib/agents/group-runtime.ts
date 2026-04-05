@@ -5,6 +5,7 @@
  * V1.5: multi-role serial execution with review loop.
  * V2: envelope protocol, artifact manifest, advisory handoff.
  * V2.5: execution mode routing, source contract, work package, delivery finalization, scope audit.
+ * V6: Multi-provider support (Antigravity gRPC + Codex MCP).
  * Directly calls bridge/gRPC layer (no HTTP roundtrip, no adapter abstraction).
  */
 
@@ -16,6 +17,7 @@ import {
   getOwnerConnection,
   grpc,
 } from '../bridge/gateway';
+import { extractAndPersistMemory } from './department-memory';
 import { getGroup } from './group-registry';
 import { createRun, updateRun, getRun } from './run-registry';
 import { watchConversation, type ConversationWatchState } from './watch-conversation';
@@ -25,9 +27,11 @@ import type {
   TaskEnvelope, ResultEnvelope, ArtifactManifest, ArtifactRef,
   GroupSourceContract, RunLiveState, SupervisorReview, SupervisorDecision, SupervisorSummary,
   RoleInputReadAudit, RoleReadEvidence, InputArtifactReadAuditEntry,
+  SharedConversationState,
 } from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
 import type { DevelopmentWorkPackage, DevelopmentDeliveryPacket, WriteScopeAudit } from './development-template-types';
+import type { DepartmentConfig } from '../types';
 import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { createLogger } from '../logger';
 import * as fs from 'fs';
@@ -35,10 +39,54 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ReviewEngine } from './review-engine';
 import { AssetLoader } from './asset-loader';
+import {
+  buildRolePrompt,
+  buildRoleSwitchPrompt,
+  buildDeliveryPrompt,
+  formatPromptArtifactLines,
+  extractReviewDecision,
+  parseDecisionMarker,
+  getCopiedArtifactPath,
+} from './prompt-builder';
+import { startSupervisorLoop, summarizeStepForSupervisor, SUPERVISOR_MODEL } from './supervisor';
+import {
+  readDeliveryPacket,
+  buildWriteScopeAudit,
+  scanArtifactManifest,
+  copyUpstreamArtifacts,
+  buildResultEnvelope,
+  writeEnvelopeFile,
+} from './run-artifacts';
+import {
+  isAuthoritativeConversation,
+  cancelCascadeBestEffort,
+  propagateTermination,
+  getFailureReason,
+  summarizeFailureText,
+  getCanonicalTaskEnvelope,
+  normalizeComparablePath,
+  includesPathCandidate,
+  extractStepReadEvidence,
+  filterEvidenceByCandidates,
+  dedupeStringList,
+  buildRoleInputReadAudit,
+  enforceCanonicalInputReadProtocol,
+} from './runtime-helpers';
+import { compactCodingResult } from './result-parser';
+import { finalizeAdvisoryRun, finalizeDeliveryRun } from './finalization';
 import { checkWriteScopeConflicts } from "./scope-governor";
-import { getNextStage } from './pipeline-registry';
+import { getExecutor, resolveProvider } from '../providers';
+import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline-registry';
 
 const log = createLogger('Runtime');
+
+// ---------------------------------------------------------------------------
+// V5.5: Shared Conversation Mode — feature flag
+// ---------------------------------------------------------------------------
+
+const SHARED_CONVERSATION_ENABLED = process.env.AG_SHARED_CONVERSATION === 'true';
+/** When total estimated tokens in a shared conversation exceed this, fall back to isolated */
+const SHARED_CONVERSATION_TOKEN_RESET = Number(process.env.AG_SHARED_CONVERSATION_TOKEN_RESET) || 100_000;
 
 // ---------------------------------------------------------------------------
 // Active run tracking (watchers + timers for cleanup on cancel/timeout)
@@ -51,23 +99,7 @@ interface ActiveRun {
 
 const activeRuns = new Map<string, ActiveRun>();
 
-function isAuthoritativeConversation(run: AgentRunState | null, conversationId: string): run is AgentRunState {
-  return !!run && (!run.activeConversationId || run.activeConversationId === conversationId);
-}
-
-async function cancelCascadeBestEffort(
-  cascadeId: string | undefined,
-  conn: { port: number; csrf: string },
-  apiKey: string,
-  shortRunId: string,
-): Promise<void> {
-  if (!cascadeId) return;
-  try {
-    await grpc.cancelCascade(conn.port, conn.csrf, apiKey, cascadeId);
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), err: err.message }, 'Best-effort cancel for superseded cascade failed');
-  }
-}
+// isAuthoritativeConversation, cancelCascadeBestEffort — moved to runtime-helpers.ts
 
 // ---------------------------------------------------------------------------
 // DispatchRunInput — V2 unified input type
@@ -83,7 +115,10 @@ export interface DispatchRunInput {
   sourceRunIds?: string[];
   projectId?: string;
   pipelineId?: string;
+  pipelineStageId?: string;
   pipelineStageIndex?: number;
+  /** V5.5: Override conversation mode for this run. 'shared' = reuse cascade, 'isolated' = default */
+  conversationMode?: 'shared' | 'isolated';
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +298,11 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
   if (!group) {
     throw new Error(`Unknown group: ${input.groupId}`);
   }
+  if (group.executionMode === 'orchestration') {
+    const err: any = new Error(`Group '${input.groupId}' is an orchestration node and cannot be dispatched directly`);
+    err.statusCode = 400;
+    throw err;
+  }
 
   // 2. Validate input: must have either prompt or taskEnvelope
   const goal = input.taskEnvelope?.goal || input.prompt;
@@ -288,18 +328,60 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     resolvedSource = { sourceRuns: [], inputArtifacts };
   }
 
-  // 4. Find the server for this workspace
-  const servers = discoverLanguageServers();
-  const server = servers.find(
-    (s) => s.workspace && (s.workspace.includes(workspacePath) || workspacePath.includes(s.workspace)),
-  );
-  if (!server) {
-    throw new Error(`No language_server found for workspace: ${input.workspace}`);
+  // 4. Check token quota before dispatching
+  const { checkTokenQuota, shouldAutoRequestQuota } = require('../approval/token-quota');
+  const quotaCheck = checkTokenQuota(workspacePath);
+  if (!quotaCheck.allowed) {
+    // Auto-generate approval request for quota increase
+    try {
+      const { submitApprovalRequest } = require('../approval/handler');
+      await submitApprovalRequest({
+        type: 'token_increase' as const,
+        workspace: workspacePath,
+        title: `Token 配额超限: ${input.groupId}`,
+        description: `部门 ${workspacePath} 的 Token 配额已用尽，无法执行新任务。`,
+        urgency: 'high' as const,
+      });
+    } catch { /* non-fatal */ }
+    throw new Error(`Token quota exceeded for workspace ${workspacePath}. An approval request has been submitted.`);
+  }
+  if (shouldAutoRequestQuota(workspacePath)) {
+    try {
+      const { submitApprovalRequest } = require('../approval/handler');
+      await submitApprovalRequest({
+        type: 'token_increase' as const,
+        workspace: workspacePath,
+        title: `Token 配额预警: ${input.groupId}`,
+        description: `部门 ${workspacePath} 的 Token 使用量即将达到上限（剩余 ${quotaCheck.remaining}），建议增加配额。`,
+        urgency: 'normal' as const,
+      });
+    } catch { /* non-fatal */ }
   }
 
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error('No API key available');
+  // 5. Resolve provider and find server
+  const provider = resolveProvider('execution', workspacePath).provider;
+  let server: { port: number; csrf: string; workspace?: string } | undefined;
+  let apiKey: string | undefined;
+
+  if (provider === 'antigravity') {
+    // Antigravity requires a running language server
+    const servers = discoverLanguageServers();
+    server = servers.find(
+      (s) => s.workspace && (s.workspace.includes(workspacePath) || workspacePath.includes(s.workspace)),
+    );
+    if (!server) {
+      throw new Error(`No language_server found for workspace: ${input.workspace}`);
+    }
+    apiKey = getApiKey();
+    if (!apiKey) {
+      throw new Error('No API key available');
+    }
+  } else {
+    // Codex CLI doesn't need a language server — uses MCP subprocess
+    log.info({ workspace: workspacePath, provider }, 'Using Codex CLI provider (no language server needed)');
+    // Create a placeholder server object for APIs that still require it
+    server = { port: 0, csrf: '' };
+    apiKey = '';
   }
 
   // 5. Build or synthesize TaskEnvelope
@@ -338,6 +420,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     sourceRunIds: allSourceRunIds.length > 0 ? allSourceRunIds : input.sourceRunIds,
     projectId: input.projectId,
     pipelineId: input.pipelineId,
+    pipelineStageId: input.pipelineStageId,
     pipelineStageIndex: input.pipelineStageIndex,
   });
 
@@ -456,6 +539,11 @@ async function createAndDispatchChild(
 }
 
 // ---------------------------------------------------------------------------
+// V6: Department Provider Resolution
+// ---------------------------------------------------------------------------
+
+
+// ---------------------------------------------------------------------------
 // startWatching — fire-and-forget watcher for single-role runs
 // ---------------------------------------------------------------------------
 
@@ -469,11 +557,38 @@ function startWatching(
   const shortRunId = runId.slice(0, 8);
   let lastWasActive = true;
   let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let filePollTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+    const currentRun = getRun(runId);
+    if (!currentRun || currentRun.status === 'cancelled' || currentRun.status === 'failed') return;
+    const absDir = currentRun.artifactDir ? path.join((currentRun.workspace || '').replace(/^file:\/\//, ''), currentRun.artifactDir) : undefined;
+    if (!absDir) return;
+    try {
+      let isDone = false;
+      try {
+        const dp = JSON.parse(fs.readFileSync(path.join(absDir, 'delivery', 'delivery-packet.json'), 'utf-8'));
+        if (dp?.status === 'completed') isDone = true;
+      } catch { }
+      if (!isDone) {
+        try {
+          const rj = JSON.parse(fs.readFileSync(path.join(absDir, 'result.json'), 'utf-8'));
+          if (rj?.status === 'completed') isDone = true;
+        } catch { }
+      }
+      if (isDone) {
+        log.info({ runId: shortRunId }, 'File-based watcher detected completion via artifact JSON');
+        handleCompletion(runId, []);
+        stopLocalWatch();
+      }
+    } catch { }
+  }, 3000);
   let stopped = false;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_ATTEMPTS = 30; // ~90 seconds of retries
 
   const stopLocalWatch = () => {
     if (stopped) return;
     stopped = true;
+    if (filePollTimer) { clearInterval(filePollTimer); filePollTimer = null; }
     if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
     abortWatch();
     const active = activeRuns.get(runId);
@@ -487,6 +602,8 @@ function startWatching(
     conn,
     cascadeId,
     async (state: ConversationWatchState) => {
+      // Reset reconnect counter on successful data
+      reconnectAttempts = 0;
       const currentRun = getRun(runId);
       if (!isAuthoritativeConversation(currentRun, cascadeId)) {
         log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Ignoring stale watcher for superseded branch');
@@ -550,7 +667,17 @@ function startWatching(
       lastWasActive = state.isActive;
     },
     (err: Error) => {
-      log.warn({ runId: shortRunId, err: err.message }, 'Watch stream disconnected');
+      reconnectAttempts++;
+      log.warn({ runId: shortRunId, err: err.message, attempt: reconnectAttempts, maxAttempts: MAX_RECONNECT_ATTEMPTS }, 'Watch stream disconnected');
+
+      // Safety: stop infinite reconnect loop
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        log.error({ runId: shortRunId, attempts: reconnectAttempts }, 'Watch max reconnect attempts reached — marking run as failed. Use force-complete to manually advance pipeline.');
+        updateRun(runId, { status: 'failed', lastError: `Watch stream lost after ${reconnectAttempts} reconnect attempts` });
+        stopLocalWatch();
+        return;
+      }
+
       setTimeout(async () => {
         const currentRun = getRun(runId);
         if (!isAuthoritativeConversation(currentRun, cascadeId) || currentRun.status !== 'running') return;
@@ -559,7 +686,7 @@ function startWatching(
           await refreshOwnerMap();
           const newConn = getOwnerConnection(cascadeId);
           if (newConn) {
-            log.info({ runId: shortRunId }, 'Watch reconnecting');
+            log.info({ runId: shortRunId, port: newConn.port, attempt: reconnectAttempts }, 'Watch reconnecting');
             stopLocalWatch();
             startWatching(runId, cascadeId, newConn, apiKey, roleConfig);
           } else {
@@ -985,9 +1112,10 @@ export async function processInterventionResult(
         workspace: originalRun.workspace,
         projectId: originalRun.projectId,
         pipelineId: originalRun.pipelineId,
+        pipelineStageId: originalRun.pipelineStageId,
         pipelineStageIndex: originalRun.pipelineStageIndex,
       };
-      void tryAutoTriggerNextStage(runId, group.id, input);
+      void tryAutoTriggerNextStage(runId, originalRun.pipelineStageId || group.id, input);
     } else if (decision === 'rejected') {
       updateRun(runId, { status: 'blocked', result, reviewOutcome: 'rejected', lastError: 'Reviewer rejected the spec' });
       finalizeAdvisoryRun(runId, group, artifactAbsDir, 'rejected', result);
@@ -1025,6 +1153,7 @@ export async function processInterventionResult(
         prompt: originalRun.prompt,
         projectId: originalRun.projectId,
         pipelineId: originalRun.pipelineId,
+        pipelineStageId: originalRun.pipelineStageId,
         pipelineStageIndex: originalRun.pipelineStageIndex,
         taskEnvelope: originalRun.taskEnvelope,
       };
@@ -1072,6 +1201,7 @@ export async function processInterventionResult(
       prompt: originalRun.prompt,
       projectId: originalRun.projectId,
       pipelineId: originalRun.pipelineId,
+      pipelineStageId: originalRun.pipelineStageId,
       pipelineStageIndex: originalRun.pipelineStageIndex,
       taskEnvelope: originalRun.taskEnvelope,
     };
@@ -1083,8 +1213,8 @@ export async function processInterventionResult(
       originalRun.taskEnvelope?.goal || originalRun.prompt,
       originalRun.model || 'MODEL_PLACEHOLDER_M26',
       input, artifactDirRel, artifactAbsDir, currentRound, nextRoleIndex,
-    ).then(async (decision) => {
-      if (decision === 'revise') {
+    ).then(async (roundResult) => {
+      if (roundResult.decision === 'revise') {
         const nextRound = currentRound + 1;
         updateRun(runId, { currentRound: nextRound });
         await executeReviewLoop(
@@ -1106,9 +1236,10 @@ export async function processInterventionResult(
       workspace: originalRun.workspace,
       projectId: originalRun.projectId,
       pipelineId: originalRun.pipelineId,
+      pipelineStageId: originalRun.pipelineStageId,
       pipelineStageIndex: originalRun.pipelineStageIndex,
     };
-    void tryAutoTriggerNextStage(runId, group.id, input);
+    void tryAutoTriggerNextStage(runId, originalRun.pipelineStageId || group.id, input);
   } else {
     // Non-review-loop, non-delivery author completed — mark success
     updateRun(runId, { status: 'completed', result });
@@ -1186,11 +1317,36 @@ function watchUntilComplete(
     const shortRunId = runId.slice(0, 8);
     let lastWasActive = true;
     let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let filePollTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      const currentRun = getRun(runId);
+      if (!currentRun || currentRun.status === 'cancelled' || currentRun.status === 'failed') return;
+      const absDir = currentRun.artifactDir ? path.join((currentRun.workspace || '').replace(/^file:\/\//, ''), currentRun.artifactDir) : undefined;
+      if (!absDir) return;
+      try {
+        let isDone = false;
+        try {
+          const dp = JSON.parse(fs.readFileSync(path.join(absDir, 'delivery', 'delivery-packet.json'), 'utf-8'));
+          if (dp?.status === 'completed') isDone = true;
+        } catch { }
+        if (!isDone) {
+          try {
+            const rj = JSON.parse(fs.readFileSync(path.join(absDir, 'result.json'), 'utf-8'));
+            if (rj?.status === 'completed') isDone = true;
+          } catch { }
+        }
+        if (isDone) {
+          log.info({ runId: shortRunId }, 'File-based watcher detected completion via artifact JSON');
+          const result = compactCodingResult([], absDir, roleConfig);
+          settle(() => resolve({ steps: [], result }));
+        }
+      } catch { }
+    }, 3000);
     let isSettled = false;
 
     const settle = (fn: () => void) => {
       if (isSettled) return;
       isSettled = true;
+      if (filePollTimer) { clearInterval(filePollTimer); filePollTimer = null; }
       if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
       clearTimeout(timeoutTimer);
       abortWatch();
@@ -1320,290 +1476,7 @@ function watchUntilComplete(
   });
 }
 
-// ---------------------------------------------------------------------------
-// V3.5: AI Supervisor Loop — uses internal task dispatch (not external API)
-// Reuses a single supervisor conversation across all review rounds for context
-// continuity. Each review prompt includes historical comparison data so the
-// model can detect changes between rounds (progress vs stuck).
-// ---------------------------------------------------------------------------
-
-const SUPERVISOR_MODEL = 'MODEL_PLACEHOLDER_M47'; // Gemini 3 Flash
-
-/**
- * Summarize a single step into a human-readable one-liner for the supervisor prompt.
- */
-function summarizeStepForSupervisor(step: any): string {
-  const type = (step.type || '').replace('CORTEX_STEP_TYPE_', '');
-  switch (type) {
-    case 'CODE_ACTION': {
-      const spec = step.codeAction?.actionSpec || {};
-      const file = (spec.createFile?.absoluteUri || spec.editFile?.absoluteUri || spec.deleteFile?.absoluteUri || '').split('/').pop() || '?';
-      const action = spec.createFile ? 'create' : spec.deleteFile ? 'delete' : 'edit';
-      return `[CODE_ACTION] ${action} ${file}`;
-    }
-    case 'VIEW_FILE':
-      return `[VIEW_FILE] ${(step.viewFile?.absoluteUri || '').split('/').pop() || '?'}`;
-    case 'GREP_SEARCH':
-      return `[GREP_SEARCH] "${step.grepSearch?.query || step.grepSearch?.searchPattern || '?'}"`;
-    case 'RUN_COMMAND':
-      return `[RUN_COMMAND] ${(step.runCommand?.command || step.runCommand?.commandLine || '?').slice(0, 80)}`;
-    case 'SEARCH_WEB':
-      return `[SEARCH_WEB] "${step.searchWeb?.query || '?'}"`;
-    case 'FIND':
-      return `[FIND] pattern="${step.find?.pattern || '?'}" in ${(step.find?.searchDirectory || '').split('/').pop() || '/'}`;
-    case 'LIST_DIRECTORY':
-      return `[LIST_DIR] ${(step.listDirectory?.path || '').split('/').pop() || '/'}`;
-    case 'PLANNER_RESPONSE': {
-      const pr = step.plannerResponse || {};
-      const text = pr.modifiedResponse || pr.response || '';
-      return `[PLANNER_RESPONSE] ${text.slice(0, 120)}${text.length > 120 ? '...' : ''}`;
-    }
-    case 'USER_INPUT':
-      return `[USER_INPUT]`;
-    case 'ERROR_MESSAGE':
-      return `[ERROR] ${(step.errorMessage?.message || '').slice(0, 80)}`;
-    default:
-      return `[${type}]`;
-  }
-}
-
-async function startSupervisorLoop(
-  runId: string,
-  cascadeId: string,
-  goal: string,
-  apiKey: string,
-  server: { port: number; csrf: string },
-  wsUri: string,
-) {
-  const MAX_REVIEWS = 10;
-  const REVIEW_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
-  const POLL_INTERVAL_MS = 5_000;
-  const POLL_TIMEOUT_MS = 90_000; // max wait per review round
-  const STUCK_CANCEL_THRESHOLD = 3; // consecutive STUCK rounds before suggesting cancel
-
-  // Create a single supervisor conversation for all review rounds
-  let supervisorCascadeId: string | undefined;
-
-  // Track previous review state for comparison
-  let prevStepCount = 0;
-  let prevLastStepType = '';
-  let prevDecision: string | undefined;
-
-  // Track consecutive stuck/looping for escalation
-  let consecutiveStuck = 0;
-  let consecutiveStuckPeak = 0;
-  let healthyCount = 0;
-  let stuckCount = 0;
-  let loopingCount = 0;
-  let doneCount = 0;
-  const suggestedActions: string[] = [];
-  const loopStartedAt = new Date().toISOString();
-
-  // Wait one interval before first review
-  await new Promise(r => setTimeout(r, REVIEW_INTERVAL_MS));
-
-  for (let i = 1; i <= MAX_REVIEWS; i++) {
-    const run = getRun(runId);
-    // V3.5 Fix: Only exit on terminal status, NOT on activeConversationId change.
-    // The supervisor should survive role switches and keep monitoring the run.
-    if (!run || TERMINAL_STATUSES.has(run.status)) {
-      break;
-    }
-    if (!run.liveState) continue;
-
-    // Dynamically track the current active conversation (changes on role switch)
-    const currentCascadeId = run.activeConversationId || cascadeId;
-
-    try {
-      // 1. Collect context: fetch recent steps of the currently active agent
-      const resp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, currentCascadeId);
-      const allSteps = (resp?.steps || []).filter((s: any) => s != null);
-
-      // Summarize last 8 steps with meaningful content
-      const recentSteps = allSteps.slice(-8).map(summarizeStepForSupervisor);
-      const recentStepsText = recentSteps.join('\n') || 'No recent actions.';
-
-      const currentStepCount = allSteps.length;
-      const currentLastStepType = run.liveState.lastStepType || 'None';
-      const staleTimeMs = run.liveState.staleSince
-        ? Date.now() - new Date(run.liveState.staleSince).getTime()
-        : 0;
-
-      // Build comparison context from previous review
-      const deltaSteps = currentStepCount - prevStepCount;
-      const comparisonText = i === 1
-        ? '(First review — no prior data to compare)'
-        : `Previous review (#${i - 1}):
-- Previous step count: ${prevStepCount} → Current: ${currentStepCount} (delta: ${deltaSteps > 0 ? '+' : ''}${deltaSteps})
-- Previous last activity: ${prevLastStepType}
-- Previous assessment: ${prevDecision || 'N/A'}
-${deltaSteps === 0 ? '⚠️ NO NEW STEPS since last review — agent may be stuck!' : ''}`;
-
-      // 2. Build review prompt (include active role for context)
-      const activeRoleId = run.activeRoleId || 'unknown';
-      const reviewPrompt = `[Review Round #${i}]
-Task Goal: ${goal}
-
-Current State: 
-- Active Role: ${activeRoleId}
-- Cascade Status: ${run.liveState.cascadeStatus}
-- Total steps executed: ${currentStepCount}
-- Last activity type: ${currentLastStepType}
-- Time since last step: ${Math.round(staleTimeMs / 1000)}s
-
-Comparison with previous review:
-${comparisonText}
-
-Recent Actions (last 8 steps):
-${recentStepsText}
-
-Is the agent making meaningful progress toward the goal, stuck, looping, or done?
-Reply with ONLY a JSON object: {"status": "HEALTHY|STUCK|LOOPING|DONE", "analysis": "brief reason"}`;
-
-      // 3. Create or reuse the supervisor conversation
-      if (!supervisorCascadeId) {
-        const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, wsUri);
-        supervisorCascadeId = startResult?.cascadeId;
-        if (!supervisorCascadeId) {
-          log.warn({ runId: runId.slice(0, 8), round: i }, 'Supervisor review: startCascade returned no cascadeId');
-          continue;
-        }
-        // Mark as hidden supervisor task
-        await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, supervisorCascadeId, {
-          'antigravity.task.hidden': 'true',
-          'antigravity.task.type': 'supervisor-review',
-          'antigravity.task.runId': runId,
-        });
-      }
-
-      // Send review prompt to the SAME conversation (accumulates context)
-      await grpc.sendMessage(
-        server.port, server.csrf, apiKey, supervisorCascadeId,
-        reviewPrompt, SUPERVISOR_MODEL,
-        false, // agenticMode = false — just answer, no tools
-        undefined,
-        'ARTIFACT_REVIEW_MODE_TURBO',
-      );
-
-      // 4. Poll for the model's response
-      const pollStart = Date.now();
-      let responseText = '';
-      // Track the step count before this send, so we only look at new planner responses
-      const preStepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, supervisorCascadeId);
-      const preStepCount = (preStepsResp?.steps || []).filter((s: any) => s != null).length;
-
-      while (Date.now() - pollStart < POLL_TIMEOUT_MS) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-
-        const stepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, supervisorCascadeId);
-        const steps = (stepsResp?.steps || []).filter((s: any) => s != null);
-
-        // Only look at steps after our send
-        for (let j = steps.length - 1; j >= preStepCount; j--) {
-          const step = steps[j];
-          if (step?.type === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
-            const planner = step.plannerResponse || step.response || {};
-            const text = planner.modifiedResponse || planner.response || '';
-            if (text) {
-              responseText = text;
-              break;
-            }
-          }
-        }
-        if (responseText) break;
-      }
-
-      if (!responseText) {
-        log.warn({ runId: runId.slice(0, 8), round: i }, 'Supervisor review: no response within timeout');
-        continue;
-      }
-
-      // 5. Parse JSON from the model response
-      let decision: SupervisorDecision;
-      try {
-        const jsonMatch = responseText.match(/\{[\s\S]*?\}/);
-        decision = jsonMatch ? JSON.parse(jsonMatch[0]) : { status: 'HEALTHY', analysis: responseText.slice(0, 200) };
-        if (!['HEALTHY', 'STUCK', 'LOOPING', 'DONE'].includes(decision.status)) {
-          decision.status = 'HEALTHY';
-        }
-      } catch {
-        decision = { status: 'HEALTHY', analysis: `(Parse failed) ${responseText.slice(0, 200)}` };
-      }
-
-      // Update comparison state for next round
-      prevStepCount = currentStepCount;
-      prevLastStepType = currentLastStepType;
-      prevDecision = decision.status;
-
-      // Track consecutive stuck and compute suggested action (simulate, don't execute)
-      let suggestedAction: 'none' | 'nudge' | 'cancel' = 'none';
-      if (decision.status === 'STUCK' || decision.status === 'LOOPING') {
-        consecutiveStuck++;
-        if (consecutiveStuck > consecutiveStuckPeak) consecutiveStuckPeak = consecutiveStuck;
-        if (consecutiveStuck >= STUCK_CANCEL_THRESHOLD) {
-          suggestedAction = 'cancel';
-          suggestedActions.push(`Round ${i}: suggest cancel (${consecutiveStuck} consecutive ${decision.status})`);
-        } else {
-          suggestedAction = 'nudge';
-          suggestedActions.push(`Round ${i}: suggest nudge (${decision.status})`);
-        }
-      } else {
-        consecutiveStuck = 0;
-      }
-
-      // Count by status
-      switch (decision.status) {
-        case 'HEALTHY': healthyCount++; break;
-        case 'STUCK': stuckCount++; break;
-        case 'LOOPING': loopingCount++; break;
-        case 'DONE': doneCount++; break;
-      }
-
-      decision.suggestedAction = suggestedAction;
-
-      // 6. Write review result
-      const review: SupervisorReview = {
-        id: `rev-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        round: i,
-        stepCount: currentStepCount,
-        decision,
-      };
-
-      const currentRun = getRun(runId);
-      if (currentRun) {
-        const reviews = [...(currentRun.supervisorReviews || []), review];
-        updateRun(runId, { supervisorReviews: reviews });
-        log.info({ runId: runId.slice(0, 8), reviewRound: i, decision: decision.status, steps: currentStepCount, delta: deltaSteps }, 'Supervisor review completed');
-      }
-    } catch (err: any) {
-      log.warn({ runId: runId.slice(0, 8), round: i, err: err.message }, 'Supervisor loop iteration failed');
-    }
-
-    if (i < MAX_REVIEWS) {
-      await new Promise(r => setTimeout(r, REVIEW_INTERVAL_MS));
-    }
-  }
-
-  // Write supervisor summary when loop exits
-  const finalRun = getRun(runId);
-  if (finalRun) {
-    const totalRounds = (finalRun.supervisorReviews || []).length;
-    const summary: SupervisorSummary = {
-      totalRounds,
-      healthyCount,
-      stuckCount,
-      loopingCount,
-      doneCount,
-      consecutiveStuckPeak,
-      suggestedActions,
-      startedAt: loopStartedAt,
-      finishedAt: new Date().toISOString(),
-    };
-    updateRun(runId, { supervisorSummary: summary });
-    log.info({ runId: runId.slice(0, 8), totalRounds, healthyCount, stuckCount, loopingCount, doneCount, consecutiveStuckPeak }, 'Supervisor loop finished');
-  }
-}
+// startSupervisorLoop, summarizeStepForSupervisor — moved to supervisor.ts
 
 // ---------------------------------------------------------------------------
 // executeSerialEnvelopeRun — unified envelope run for review-loop & delivery-single-pass
@@ -1792,7 +1665,7 @@ async function executeDeliverySinglePass(
   // Pipeline auto-trigger: dispatch next stage if this run belongs to a pipeline
   const runAfterFinalize = getRun(runId);
   if (runAfterFinalize?.status === 'completed' && runAfterFinalize.pipelineId) {
-    void tryAutoTriggerNextStage(runId, group.id, input);
+    void tryAutoTriggerNextStage(runId, input.pipelineStageId || group.id, input);
   }
 }
 
@@ -1816,14 +1689,21 @@ async function executeReviewLoop(
   const initialRunState = getRun(runId);
   let round = initialRunState?.currentRound || 1;
 
+  // V5.5: Carry shared conversation state across rounds when feature flag or per-run override enabled
+  const useSharedConversation = input.conversationMode === 'shared' || (input.conversationMode !== 'isolated' && SHARED_CONVERSATION_ENABLED);
+  let sharedState: SharedConversationState | undefined = useSharedConversation
+    ? { estimatedTokens: 0 }
+    : undefined;
+
   while (true) {
     updateRun(runId, { currentRound: round });
-    const decision = await executeReviewRound(
+    const roundResult = await executeReviewRound(
       runId, group, server, apiKey, wsUri, goal, finalModel,
-      input, artifactDir, artifactAbsDir, round, 0,
+      input, artifactDir, artifactAbsDir, round, 0, sharedState,
     );
 
-    if (decision !== 'revise') return; // approved, rejected, revise-exhausted, or failed — loop ends
+    if (roundResult.decision !== 'revise') return; // approved, rejected, revise-exhausted, or failed — loop ends
+    sharedState = roundResult.sharedState;
     round++;
   }
 }
@@ -1833,7 +1713,10 @@ async function executeReviewLoop(
 // Returns the review decision or 'failed' if the round couldn't complete.
 // ---------------------------------------------------------------------------
 
-type ReviewRoundResult = 'approved' | 'rejected' | 'revise' | 'revise-exhausted' | 'failed';
+interface ReviewRoundOutput {
+  decision: 'approved' | 'rejected' | 'revise' | 'revise-exhausted' | 'failed';
+  sharedState?: SharedConversationState;
+}
 
 async function executeReviewRound(
   runId: string,
@@ -1848,12 +1731,19 @@ async function executeReviewRound(
   artifactAbsDir: string,
   round: number,
   startRoleIndex: number,
-): Promise<ReviewRoundResult> {
+  sharedState?: SharedConversationState,
+): Promise<ReviewRoundOutput> {
   const shortRunId = runId.slice(0, 8);
   const policy = group.reviewPolicyId ? AssetLoader.getReviewPolicy(group.reviewPolicyId) : null;
   const taskEnvelope = getCanonicalTaskEnvelope(runId, input.taskEnvelope);
 
-  log.info({ runId: shortRunId, round, roleCount: group.roles.length, startRoleIndex }, 'Starting review round');
+  // V5.5: Token safety-valve — if shared conversation exceeds threshold, drop back to isolated
+  if (sharedState && sharedState.estimatedTokens > SHARED_CONVERSATION_TOKEN_RESET) {
+    log.info({ runId: shortRunId, tokens: sharedState.estimatedTokens, threshold: SHARED_CONVERSATION_TOKEN_RESET }, 'Shared conversation token threshold exceeded, falling back to isolated mode');
+    sharedState = undefined;
+  }
+
+  log.info({ runId: shortRunId, round, roleCount: group.roles.length, startRoleIndex, sharedConversation: !!sharedState }, 'Starting review round');
 
   for (let i = startRoleIndex; i < group.roles.length; i++) {
     const role = group.roles[i];
@@ -1862,17 +1752,70 @@ async function executeReviewRound(
     const currentRun = getRun(runId);
     if (!currentRun || currentRun.status === 'cancelled') {
       log.info({ runId: shortRunId }, 'Run cancelled externally, stopping');
-      return 'failed';
+      return { decision: 'failed', sharedState };
     }
 
     log.info({ runId: shortRunId, roleId: role.id, round, isReviewer }, 'Dispatching role');
 
-    const rolePrompt = buildRolePrompt(role, goal, artifactDir, round, isReviewer, taskEnvelope?.inputArtifacts || []);
+    const rolePrompt = buildRolePrompt(role, goal, artifactDir, artifactAbsDir, round, isReviewer, taskEnvelope?.inputArtifacts || []);
 
-    const cascadeId = await createAndDispatchChild(
-      server, apiKey, wsUri, runId, input.groupId, role.id,
-      rolePrompt, finalModel, input.parentConversationId,
-    );
+    // V6: Resolve provider for this workspace
+    const workspacePath = wsUri.replace(/^file:\/\//, '');
+    const provider = resolveProvider('execution', workspacePath).provider;
+
+    // V5.5: Decide whether to reuse an existing cascade or create a new one
+    const canReuse = sharedState?.authorCascadeId && !isReviewer && round > 1 && provider === 'antigravity';
+    let cascadeId: string;
+    let codexResult: { codexThreadId: string; content: string; changedFiles?: string[] } | undefined;
+
+    if (provider === 'codex') {
+      // ── Codex MCP mode: synchronous execution via CodexExecutor ──
+      const codexExecutor = getExecutor('codex');
+      const execResult = await codexExecutor.executeTask({
+        workspace: workspacePath,
+        prompt: rolePrompt,
+        model: finalModel,
+        artifactDir,
+        runId,
+        groupId: input.groupId,
+        roleId: role.id,
+      });
+      cascadeId = execResult.handle || `codex-${randomUUID()}`;
+      updateRun(runId, {
+        status: 'running',
+        childConversationId: cascadeId,
+        activeConversationId: cascadeId,
+        activeRoleId: role.id,
+      });
+      codexResult = { codexThreadId: cascadeId, content: execResult.content, changedFiles: execResult.changedFiles };
+    } else if (canReuse) {
+      // ── Shared mode: send role-switch prompt to existing cascade ──
+      cascadeId = sharedState!.authorCascadeId!;
+      const switchPrompt = buildRoleSwitchPrompt(role, round, artifactDir, artifactAbsDir, goal, taskEnvelope?.inputArtifacts || []);
+
+      log.info({ runId: shortRunId, roleId: role.id, round, cascadeId: cascadeId.slice(0, 8), mode: 'shared' }, 'Reusing existing cascade for role');
+
+      updateRun(runId, {
+        activeConversationId: cascadeId,
+        activeRoleId: role.id,
+      });
+
+      await grpc.sendMessage(server.port, server.csrf, apiKey, cascadeId, switchPrompt, finalModel, false, undefined, 'ARTIFACT_REVIEW_MODE_TURBO');
+
+      // Estimate tokens: switch prompt + overhead for model response
+      sharedState = { ...sharedState!, estimatedTokens: sharedState!.estimatedTokens + switchPrompt.length / 4 + 2000 };
+    } else {
+      // ── Isolated mode: create new child conversation (existing behavior) ──
+      cascadeId = await createAndDispatchChild(
+        server, apiKey, wsUri, runId, input.groupId, role.id,
+        rolePrompt, finalModel, input.parentConversationId,
+      );
+
+      // V5.5: Track the author's cascade for potential reuse in subsequent rounds
+      if (sharedState && !isReviewer) {
+        sharedState = { ...sharedState, authorCascadeId: cascadeId, estimatedTokens: rolePrompt.length / 4 + 5000 };
+      }
+    }
 
     const run = getRun(runId);
     const roles = [...(run?.roles || [])];
@@ -1883,7 +1826,7 @@ async function executeReviewRound(
       childConversationId: cascadeId,
       status: 'running',
       startedAt,
-      promptSnapshot: rolePrompt,
+      promptSnapshot: canReuse ? `[shared-conversation] ${rolePrompt.slice(0, 200)}...` : rolePrompt,
       promptRecordedAt: startedAt,
     };
     roles.push(roleProgress);
@@ -1891,17 +1834,37 @@ async function executeReviewRound(
 
     // V3.5 Fix: Only start supervisor on the very first role of the first round.
     // The supervisor dynamically tracks activeConversationId across role switches.
-    if (round === 1 && i === 0) {
+    if (round === 1 && i === 0 && provider === 'antigravity') {
       void startSupervisorLoop(runId, cascadeId, goal, apiKey, server, wsUri);
     }
 
-    log.info({ runId: shortRunId, roleId: role.id, round, cascadeId: cascadeId.slice(0, 8), promptLength: rolePrompt.length }, 'Watching role execution');
-    const { steps, result } = await watchUntilComplete(
-      runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, role, cascadeId,
-    );
+    let steps: any[] = [];
+    let result: TaskResult;
+
+    if (provider === 'codex' && codexResult) {
+      // ── Codex: result already available from CodexExecutor ──
+      log.info({ runId: shortRunId, roleId: role.id, round, provider: 'codex' }, 'Codex role completed (synchronous)');
+      const changedFiles = codexResult.changedFiles || [];
+      result = {
+        status: 'completed',
+        summary: codexResult.content,
+        changedFiles,
+        blockers: [],
+        needsReview: changedFiles.length > 0 ? ['code-review'] : [],
+      };
+    } else {
+      // ── Antigravity: watch gRPC stream until complete ──
+      log.info({ runId: shortRunId, roleId: role.id, round, cascadeId: cascadeId.slice(0, 8), promptLength: rolePrompt.length }, 'Watching role execution');
+      const watchResult = await watchUntilComplete(
+        runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, role, cascadeId,
+      );
+      steps = watchResult.steps;
+      result = watchResult.result;
+    }
+
     if (!isAuthoritativeConversation(getRun(runId), cascadeId)) {
       log.info({ runId: shortRunId, roleId: role.id, cascadeId: cascadeId.slice(0, 8) }, 'Skipping review-loop writeback for superseded branch');
-      return 'failed';
+      return { decision: 'failed', sharedState };
     }
     log.info({ runId: shortRunId, roleId: role.id, round, resultStatus: result.status, summaryLength: result.summary.length, changedFiles: result.changedFiles.length }, 'Role execution completed');
 
@@ -1923,7 +1886,7 @@ async function executeReviewRound(
     if (finalizedResult.status !== 'completed') {
       log.warn({ runId: shortRunId, roleId: role.id, status: finalizedResult.status }, 'Role did not complete, stopping chain');
       propagateTermination(runId, finalizedResult.status, getFailureReason(finalizedResult));
-      return 'failed';
+      return { decision: 'failed', sharedState };
     }
 
     // V2.5.1: After author role completes, validate that output files were actually created
@@ -1931,13 +1894,26 @@ async function executeReviewRound(
       const outputDir = role.id.includes('architect') ? 'architecture' : 'specs';
       const outputAbsPath = path.join(artifactAbsDir, outputDir);
       const hasOutput = fs.existsSync(outputAbsPath) && fs.readdirSync(outputAbsPath).length > 0;
-      if (!hasOutput) {
+      // Fallback: delivery roles may also write to delivery/ instead of specs/
+      const deliveryFallback = !hasOutput && outputDir === 'specs'
+        ? (fs.existsSync(path.join(artifactAbsDir, 'delivery')) && fs.readdirSync(path.join(artifactAbsDir, 'delivery')).length > 0)
+        : false;
+      if (deliveryFallback) {
+        // Move delivery/ contents to specs/ so the reviewer can find them
+        const deliveryPath = path.join(artifactAbsDir, 'delivery');
+        const specsPath = path.join(artifactAbsDir, 'specs');
+        if (!fs.existsSync(specsPath)) fs.mkdirSync(specsPath, { recursive: true });
+        for (const file of fs.readdirSync(deliveryPath)) {
+          fs.renameSync(path.join(deliveryPath, file), path.join(specsPath, file));
+        }
+        log.info({ runId: shortRunId, roleId: role.id }, 'Moved delivery/ contents to specs/ for reviewer compatibility');
+      } else if (!hasOutput) {
         log.error({ runId: shortRunId, roleId: role.id, round, expectedOutput: outputAbsPath }, 'Author role completed but produced no output files — reviewer cannot proceed');
         updateRun(runId, {
           status: 'failed',
           lastError: `Author role ${role.id} completed without producing output files in ${outputDir}/. The child conversation may have errored during file creation.`,
         });
-        return 'failed';
+        return { decision: 'failed', sharedState };
       }
       log.info({ runId: shortRunId, roleId: role.id, round, outputDir }, 'Author output directory validated');
     }
@@ -1967,979 +1943,128 @@ async function executeReviewRound(
         updateRun(runId, { status: 'completed', result: finalizedResult, reviewOutcome: 'approved' });
         finalizeAdvisoryRun(runId, group, artifactAbsDir, 'approved', finalizedResult);
         // Pipeline auto-trigger: dispatch next stage if this run belongs to a pipeline
-        void tryAutoTriggerNextStage(runId, group.id, input);
-        return 'approved';
+        void tryAutoTriggerNextStage(runId, input.pipelineStageId || group.id, input);
+        return { decision: 'approved', sharedState };
       }
       if (decision === 'rejected') {
         updateRun(runId, { status: 'blocked', result: finalizedResult, reviewOutcome: 'rejected', lastError: 'Reviewer rejected the spec' });
         finalizeAdvisoryRun(runId, group, artifactAbsDir, 'rejected', finalizedResult);
-        return 'rejected';
+        return { decision: 'rejected', sharedState };
       }
       if (decision === 'revise-exhausted') {
         log.warn({ runId: shortRunId }, 'Review policy exhausted or forced termination');
         updateRun(runId, { status: 'blocked', reviewOutcome: 'revise-exhausted', lastError: 'Exceeded max review rounds per policy' });
         finalizeAdvisoryRun(runId, group, artifactAbsDir, 'revise-exhausted', undefined);
-        return 'revise-exhausted';
+        return { decision: 'revise-exhausted', sharedState };
       }
-      return 'revise';
+      return { decision: 'revise', sharedState };
     }
   }
 
   // Should not reach here in normal flow, but handle gracefully
-  return 'failed';
+  return { decision: 'failed', sharedState };
 }
-
-// ---------------------------------------------------------------------------
-// V2: Advisory run finalization — manifest scan + result envelope
-// ---------------------------------------------------------------------------
-
-function finalizeAdvisoryRun(
-  runId: string,
-  group: GroupDefinition,
-  artifactAbsDir: string,
-  decision: string,
-  result?: TaskResult,
-): void {
-  if (!group.capabilities?.emitsManifest) return;
-
-  const shortRunId = runId.slice(0, 8);
-
-  try {
-    // 1. Scan artifact directory and build manifest
-    const manifest = scanArtifactManifest(runId, group.templateId, artifactAbsDir);
-    const manifestPath = path.join(artifactAbsDir, 'artifacts.manifest.json');
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-    log.info({ runId: shortRunId, items: manifest.items.length }, 'Artifact manifest written');
-
-    // 2. Build and write result envelope
-    const run = getRun(runId);
-    const resultEnvelope = buildResultEnvelope(run!, manifest, decision, result);
-    writeEnvelopeFile(artifactAbsDir, 'result-envelope.json', resultEnvelope);
-
-    // 3. Update run state with manifest path and result envelope
-    // V3.5 Fix: Use run's artifactDir (now per-run isolated) for manifest path
-    const relManifestPath = run?.artifactDir
-      ? `${run.artifactDir}artifacts.manifest.json`
-      : `${ARTIFACT_ROOT_DIR}/runs/${runId}/artifacts.manifest.json`;
-    updateRun(runId, {
-      artifactManifestPath: relManifestPath,
-      resultEnvelope,
-    });
-
-    log.info({ runId: shortRunId, decision }, 'Advisory run finalized');
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Failed to finalize advisory run (non-fatal)');
-  }
-}
-
-// ---------------------------------------------------------------------------
-// V2.5: Delivery run finalization — delivery packet + scope audit + manifest
-// ---------------------------------------------------------------------------
-
-function finalizeDeliveryRun(
-  runId: string,
-  group: GroupDefinition,
-  artifactAbsDir: string,
-  result: TaskResult,
-  workPackage?: DevelopmentWorkPackage,
-): void {
-  const shortRunId = runId.slice(0, 8);
-
-  try {
-    // 1. Read delivery packet (HARD CONSTRAINT: missing packet = protocol violation)
-    const expectedTaskId = workPackage?.taskId || getRun(runId)?.taskEnvelope?.taskId;
-    const deliveryPacket = readDeliveryPacket(artifactAbsDir, shortRunId, expectedTaskId);
-    if (!deliveryPacket) {
-      log.error({ runId: shortRunId }, 'delivery-packet.json missing or invalid — delivery contract violated');
-      updateRun(runId, {
-        status: 'blocked',
-        result: { ...result, status: 'blocked' },
-        lastError: 'Delivery contract violated: delivery-packet.json is missing or invalid',
-      });
-      return;
-    }
-
-    // 2. Build scope audit
-    const scopeAudit = buildWriteScopeAudit(artifactAbsDir, workPackage, result, deliveryPacket, shortRunId);
-
-    // 3. Determine decision
-    let decision: string;
-    if (deliveryPacket.status === 'blocked') {
-      decision = 'blocked-by-team';
-    } else if (scopeAudit && !scopeAudit.withinScope && scopeAudit.outOfScopeFiles.length > 0) {
-      decision = 'delivered-with-scope-warnings';
-    } else {
-      decision = 'delivered';
-    }
-
-    // 4. Scan manifest
-    const manifest = scanArtifactManifest(runId, group.templateId, artifactAbsDir);
-    const manifestPath = path.join(artifactAbsDir, 'artifacts.manifest.json');
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-
-    // 5. Build result envelope with delivery-specific fields
-    const run = getRun(runId);
-    const resultEnvelope: ResultEnvelope = {
-      templateId: group.templateId,
-      runId,
-      taskId: workPackage?.taskId || run?.taskEnvelope?.taskId,
-      status: decision === 'blocked-by-team' ? 'blocked' : 'completed',
-      decision,
-      summary: deliveryPacket?.summary || result.summary,
-      outputArtifacts: manifest.items,
-      risks: deliveryPacket?.residualRisks || [],
-      openQuestions: deliveryPacket?.openQuestions || [],
-      nextAction: deliveryPacket?.status === 'blocked'
-        ? `Blocked: ${deliveryPacket.blockedReason || 'unknown reason'}`
-        : deliveryPacket?.followUps?.join('; '),
-    };
-    writeEnvelopeFile(artifactAbsDir, 'result-envelope.json', resultEnvelope);
-
-    // 6. Update run state
-    // V3.5 Fix: Use run's artifactDir (now per-run isolated) for manifest path
-    const relManifestPath = run?.artifactDir
-      ? `${run.artifactDir}artifacts.manifest.json`
-      : `${ARTIFACT_ROOT_DIR}/runs/${runId}/artifacts.manifest.json`;
-    const finalStatus = decision === 'blocked-by-team' ? 'blocked' as const : 'completed' as const;
-    updateRun(runId, {
-      status: finalStatus,
-      result: {
-        ...result,
-        status: finalStatus,
-        summary: deliveryPacket?.summary || result.summary,
-      },
-      artifactManifestPath: relManifestPath,
-      resultEnvelope,
-      lastError: decision === 'blocked-by-team' ? deliveryPacket?.blockedReason : undefined,
-    });
-
-    log.info({ runId: shortRunId, decision, scopeOk: scopeAudit?.withinScope }, 'Delivery run finalized');
-  } catch (err: any) {
-    log.error({ runId: shortRunId, err: err.message }, 'Delivery finalization failed');
-    updateRun(runId, {
-      status: 'blocked',
-      result: { ...result, status: 'blocked' },
-      lastError: `Delivery finalization error: ${err.message}`,
-    });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // V3.5: Pipeline auto-trigger — dispatch next stage when current stage completes
 // ---------------------------------------------------------------------------
 
 async function tryAutoTriggerNextStage(
   runId: string,
-  currentGroupId: string,
+  currentStageId: string,
   input: DispatchRunInput,
 ): Promise<void> {
   const run = getRun(runId);
-  // Use templateId to look up the pipeline (template = pipeline now)
   const templateId = run?.templateId || run?.pipelineId;
-  if (!templateId) return;
+  if (!templateId || !run?.projectId) return;
 
   const shortRunId = runId.slice(0, 8);
-  const next = getNextStage(templateId, currentGroupId);
-  if (!next) {
+  const downstreams = getDownstreamStages(templateId, currentStageId);
+  if (downstreams.length === 0) {
     log.info({ runId: shortRunId, templateId }, 'Pipeline completed — no next stage');
     return;
   }
 
-  const { stage, stageIndex } = next;
+  const { getProject, addRunToProject, trackStageDispatch } = require('./project-registry');
+  const project = getProject(run.projectId);
+  const template = AssetLoader.getTemplate(templateId);
+  if (!project?.pipelineState || !template) return;
 
-  if (run?.projectId) {
-    const { getProject } = require('./project-registry');
-    const project = getProject(run.projectId);
-    const nextStage = project?.pipelineState?.stages[stageIndex];
+  for (const stage of downstreams) {
+    const stageId = stage.stageId || stage.groupId;
+    const nextStage = project.pipelineState.stages.find((item: any) => item.stageId === stageId);
     if (nextStage?.runId && nextStage.status !== 'pending') {
       log.info({
         runId: shortRunId,
-        stageIndex,
+        stageId,
         nextGroupId: stage.groupId,
         existingStatus: nextStage.status,
       }, 'Downstream stage already has a canonical run, skipping auto-trigger');
-      return;
-    }
-  }
-
-  // Check auto-trigger flag
-  if (!stage.autoTrigger) {
-    log.info({ runId: shortRunId, nextGroupId: stage.groupId }, 'Next pipeline stage exists but autoTrigger is false');
-    return;
-  }
-
-  // Check trigger condition
-  const triggerOn = stage.triggerOn || 'approved';
-  if (triggerOn === 'approved' && run!.reviewOutcome !== 'approved' && run!.status !== 'completed') {
-    log.info({ runId: shortRunId, triggerOn, reviewOutcome: run!.reviewOutcome }, 'Trigger condition not met');
-    return;
-  }
-
-  log.info({
-    runId: shortRunId,
-    templateId,
-    nextGroupId: stage.groupId,
-    stageIndex,
-  }, 'Auto-triggering next pipeline stage');
-
-  try {
-    const nextInput: DispatchRunInput = {
-      groupId: stage.groupId,
-      workspace: input.workspace,
-      prompt: stage.promptTemplate || run!.prompt,
-      model: input.model || run!.model,
-      projectId: run!.projectId,
-      sourceRunIds: [runId],
-      pipelineId: templateId,
-      pipelineStageIndex: stageIndex,
-      taskEnvelope: run!.taskEnvelope ? {
-        ...run!.taskEnvelope,
-        goal: stage.promptTemplate || run!.taskEnvelope.goal,
-      } : undefined,
-    };
-    const result = await dispatchRun(nextInput);
-
-    // V3.5 Fix 8: Track dispatch via unified helper
-    if (run!.projectId && result?.runId) {
-      const { addRunToProject, trackStageDispatch } = require('./project-registry');
-      addRunToProject(run!.projectId, result.runId);
-      trackStageDispatch(run!.projectId, stageIndex, result.runId);
-    }
-  } catch (err: any) {
-    log.error({ runId: shortRunId, nextGroupId: stage.groupId, err: err.message }, 'Failed to auto-trigger next pipeline stage');
-  }
-}
-
-// ---------------------------------------------------------------------------
-// V2.5: Read & validate delivery-packet.json
-// ---------------------------------------------------------------------------
-
-function readDeliveryPacket(
-  artifactAbsDir: string,
-  shortRunId: string,
-  expectedTaskId?: string,
-): DevelopmentDeliveryPacket | undefined {
-  const packetPath = path.join(artifactAbsDir, 'delivery', 'delivery-packet.json');
-  try {
-    if (!fs.existsSync(packetPath)) {
-      log.error({ runId: shortRunId }, 'delivery-packet.json not found');
-      return undefined;
-    }
-    const raw = JSON.parse(fs.readFileSync(packetPath, 'utf-8'));
-
-    // Required fields (must match DevelopmentDeliveryPacket type)
-    if (!raw.status || !raw.summary || !raw.taskId || !raw.changedFiles) {
-      log.error({ runId: shortRunId }, 'delivery-packet.json missing required fields (status, summary, taskId, changedFiles)');
-      return undefined;
+      continue;
     }
 
-    // Validate status enum
-    if (raw.status !== 'completed' && raw.status !== 'blocked') {
-      log.error({ runId: shortRunId, status: raw.status }, 'delivery-packet.json has invalid status (must be completed|blocked)');
-      return undefined;
+    if (!stage.autoTrigger) {
+      log.info({ runId: shortRunId, stageId, nextGroupId: stage.groupId }, 'Downstream stage exists but autoTrigger is false');
+      continue;
     }
 
-    // blocked MUST have blockedReason
-    if (raw.status === 'blocked' && !raw.blockedReason) {
-      log.error({ runId: shortRunId }, 'delivery-packet.json has blocked status but no blockedReason — protocol violation');
-      return undefined;
+    if (stage.stageType === 'fan-out' || stage.stageType === 'join') {
+      continue;
     }
 
-    // taskId cross-check
-    if (expectedTaskId && raw.taskId !== expectedTaskId) {
-      log.error({ runId: shortRunId, expected: expectedTaskId, got: raw.taskId }, 'delivery-packet.json taskId mismatch — possible cross-contamination');
-      return undefined;
+    const { ready, missingUpstreams } = canActivateStage(template, stage, project.pipelineState);
+    if (!ready) {
+      log.info({ runId: shortRunId, stageId, missingUpstreams }, 'Downstream stage not ready');
+      continue;
     }
 
-    // changedFiles must be array
-    if (!Array.isArray(raw.changedFiles)) {
-      log.error({ runId: shortRunId }, 'delivery-packet.json changedFiles is not an array');
-      return undefined;
-    }
+    const upstreamStageIds = stage.upstreamStageIds?.length ? stage.upstreamStageIds : [currentStageId];
+    const allSourceRunIds = upstreamStageIds
+      .map(upstreamStageId => project.pipelineState.stages.find((item: any) => item.stageId === upstreamStageId)?.runId)
+      .filter(Boolean) as string[];
+    const filteredSourceRunIds = filterSourcesByContract(stage.groupId, allSourceRunIds);
 
-    return raw as DevelopmentDeliveryPacket;
-  } catch (err: any) {
-    log.error({ runId: shortRunId, err: err.message }, 'Failed to parse delivery-packet.json');
-    return undefined;
-  }
-}
+    log.info({
+      runId: shortRunId,
+      templateId,
+      nextGroupId: stage.groupId,
+      stageId,
+      sourceRunCount: filteredSourceRunIds.length,
+    }, 'Auto-triggering downstream pipeline stage');
 
-// ---------------------------------------------------------------------------
-// V2.5: Build scope audit (soft check, does not block)
-// ---------------------------------------------------------------------------
-
-function buildWriteScopeAudit(
-  artifactAbsDir: string,
-  workPackage: DevelopmentWorkPackage | undefined,
-  result: TaskResult,
-  deliveryPacket: DevelopmentDeliveryPacket | undefined,
-  shortRunId: string,
-): WriteScopeAudit | undefined {
-  if (!workPackage || workPackage.allowedWriteScope.length === 0) {
-    return undefined;
-  }
-
-  try {
-    const declaredPaths = workPackage.allowedWriteScope.map(s => s.path);
-    const observedChangedFiles = result.changedFiles || [];
-    const reportedChangedFiles = deliveryPacket?.changedFiles || [];
-    const effectiveChangedFiles = [...new Set([...observedChangedFiles, ...reportedChangedFiles])];
-
-    const outOfScopeFiles = effectiveChangedFiles.filter(f => {
-      return !declaredPaths.some(dp => f.includes(dp) || dp.includes(f));
-    });
-
-    const audit: WriteScopeAudit = {
-      taskId: workPackage.taskId,
-      withinScope: outOfScopeFiles.length === 0,
-      declaredScopeCount: declaredPaths.length,
-      observedChangedFiles,
-      reportedChangedFiles,
-      effectiveChangedFiles,
-      outOfScopeFiles,
-    };
-
-    // Write scope audit
-    const deliveryDir = path.join(artifactAbsDir, 'delivery');
-    if (!fs.existsSync(deliveryDir)) fs.mkdirSync(deliveryDir, { recursive: true });
-    fs.writeFileSync(path.join(deliveryDir, 'scope-audit.json'), JSON.stringify(audit, null, 2), 'utf-8');
-    log.info({ runId: shortRunId, withinScope: audit.withinScope, outOfScope: outOfScopeFiles.length }, 'Scope audit written');
-
-    return audit;
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Failed to build scope audit');
-    return undefined;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// V2: Scan artifact directory to build manifest (recursive)
-// ---------------------------------------------------------------------------
-
-function scanArtifactManifest(
-  runId: string,
-  templateId: string,
-  artifactAbsDir: string,
-): ArtifactManifest {
-  const items: ArtifactRef[] = [];
-  const allowedExtensions = new Set(['.md', '.json', '.txt']);
-
-  // M3: Scan whitelist directories recursively
-  const scanDirs = [
-    { dir: 'specs', kindPrefix: 'product' },
-    { dir: 'architecture', kindPrefix: 'architecture' },
-    { dir: 'review', kindPrefix: 'review' },
-    { dir: 'delivery', kindPrefix: 'delivery' },
-    // work-package is runtime-generated input, NOT delivery output — excluded from manifest
-  ];
-
-  function scanRecursive(baseDirPath: string, kindPrefix: string): void {
-    if (!fs.existsSync(baseDirPath)) return;
     try {
-      const entries = fs.readdirSync(baseDirPath, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(baseDirPath, entry.name);
-        if (entry.isDirectory()) {
-          scanRecursive(fullPath, kindPrefix);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if (!allowedExtensions.has(ext)) continue;
-
-          const baseName = path.basename(entry.name, ext);
-          const relPath = path.relative(artifactAbsDir, fullPath);
-          const kind = `${kindPrefix}.${baseName}`;
-
-          items.push({
-            id: randomUUID(),
-            kind,
-            title: baseName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-            path: relPath,
-            format: ext.slice(1) as 'md' | 'json' | 'txt',
-            sourceRunId: runId,
-          });
-        }
+      const nextInput: DispatchRunInput = {
+        groupId: stage.groupId,
+        workspace: input.workspace,
+        prompt: stage.promptTemplate || run.prompt,
+        model: input.model || run.model,
+        projectId: run.projectId,
+        sourceRunIds: filteredSourceRunIds,
+        pipelineId: templateId,
+        pipelineStageId: stageId,
+        taskEnvelope: run.taskEnvelope ? {
+          ...run.taskEnvelope,
+          goal: stage.promptTemplate || run.taskEnvelope.goal,
+        } : undefined,
+      };
+      const result = await dispatchRun(nextInput);
+      if (result?.runId) {
+        addRunToProject(run.projectId, result.runId);
+        trackStageDispatch(run.projectId, stageId, result.runId);
       }
-    } catch {
-      // Directory read failed, skip
+    } catch (err: any) {
+      log.error({ runId: shortRunId, stageId, nextGroupId: stage.groupId, err: err.message }, 'Failed to auto-trigger downstream pipeline stage');
     }
   }
-
-  for (const { dir, kindPrefix } of scanDirs) {
-    scanRecursive(path.join(artifactAbsDir, dir), kindPrefix);
-  }
-
-  return { runId, templateId, items };
 }
 
-// ---------------------------------------------------------------------------
-// V2/H1: Copy upstream artifacts into current run's input/ directory
-// ---------------------------------------------------------------------------
-
-function copyUpstreamArtifacts(
-  workspacePath: string,
-  artifactAbsDir: string,
-  inputArtifacts: ArtifactRef[],
-  runId: string,
-): void {
-  const shortRunId = runId.slice(0, 8);
-  const inputDir = path.join(artifactAbsDir, 'input');
-
-  try {
-    if (!fs.existsSync(inputDir)) {
-      fs.mkdirSync(inputDir, { recursive: true });
-    }
-
-    for (const art of inputArtifacts) {
-      if (!art.sourceRunId) continue;
-      const srcRun = getRun(art.sourceRunId);
-      if (!srcRun?.artifactDir) continue;
-
-      const srcPath = path.join(workspacePath, srcRun.artifactDir, art.path);
-      if (!fs.existsSync(srcPath)) {
-        log.warn({ runId: shortRunId, srcPath: art.path }, 'Source artifact not found, skipping copy');
-        continue;
-      }
-
-      // Copy to input/<sourceRunId-short>/<original-path>
-      const destDir = path.join(inputDir, art.sourceRunId.slice(0, 8));
-      const destPath = path.join(destDir, art.path);
-      const destParent = path.dirname(destPath);
-      if (!fs.existsSync(destParent)) {
-        fs.mkdirSync(destParent, { recursive: true });
-      }
-      fs.copyFileSync(srcPath, destPath);
-      log.debug({ runId: shortRunId, src: art.path }, 'Upstream artifact copied');
-    }
-
-    log.info({ runId: shortRunId, count: inputArtifacts.length }, 'Upstream artifacts copied to input/');
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Failed to copy upstream artifacts (non-fatal)');
-  }
-}
-
-// ---------------------------------------------------------------------------
-// V2: Build ResultEnvelope from run state + manifest
-// ---------------------------------------------------------------------------
-
-function buildResultEnvelope(
-  run: AgentRunState,
-  manifest: ArtifactManifest,
-  decision: string,
-  result?: TaskResult,
-): ResultEnvelope {
-  return {
-    templateId: run.templateId || manifest.templateId,
-    runId: run.runId,
-    status: run.status,
-    decision,
-    summary: result?.summary || run.result?.summary || 'Advisory run completed',
-    outputArtifacts: manifest.items,
-    risks: [],
-    nextAction: decision === 'approved'
-      ? 'Ready for next phase'
-      : decision === 'rejected'
-        ? 'Requires re-evaluation'
-        : undefined,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// V2: Helper to write envelope JSON files
-// ---------------------------------------------------------------------------
-
-function writeEnvelopeFile(artifactAbsDir: string, filename: string, data: unknown): void {
-  try {
-    if (!fs.existsSync(artifactAbsDir)) {
-      fs.mkdirSync(artifactAbsDir, { recursive: true });
-    }
-    fs.writeFileSync(path.join(artifactAbsDir, filename), JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err: any) {
-    log.warn({ filename, err: err.message }, 'Failed to write envelope file');
-  }
-}
-
-function getCanonicalTaskEnvelope(runId: string, fallback?: TaskEnvelope): TaskEnvelope | undefined {
-  return getRun(runId)?.taskEnvelope || fallback;
-}
-
-function getCopiedArtifactPath(artifact: ArtifactRef): string {
-  const shortSrcId = artifact.sourceRunId?.slice(0, 8) || 'unknown';
-  return `input/${shortSrcId}/${artifact.path}`;
-}
-
-function normalizeComparablePath(value: string | undefined): string {
-  if (!value) return '';
-  let normalized = value.trim();
-  if (normalized.startsWith('file://')) {
-    normalized = normalized.replace(/^file:\/\//, '');
-  }
-  try {
-    normalized = decodeURIComponent(normalized);
-  } catch {
-    // Keep original if URI decoding fails
-  }
-  return path.normalize(normalized).replace(/\\/g, '/');
-}
-
-function includesPathCandidate(haystack: string, candidate: string): boolean {
-  if (!haystack || !candidate) return false;
-  return haystack.replace(/\\/g, '/').includes(candidate.replace(/\\/g, '/'));
-}
-
-function extractStepReadEvidence(steps: any[]): RoleReadEvidence[] {
-  const evidence: RoleReadEvidence[] = [];
-
-  steps.forEach((step, stepIndex) => {
-    const stepType = typeof step?.type === 'string' ? step.type : 'unknown';
-    const viewTarget = step?.viewFile?.absoluteUri || step?.viewFile?.absolutePathUri || step?.viewFile?.absolutePath;
-    if (typeof viewTarget === 'string' && viewTarget.trim()) {
-      evidence.push({ stepIndex, stepType, target: viewTarget });
-    }
-
-    const commandTarget = step?.runCommand?.commandLine || step?.runCommand?.command;
-    if (typeof commandTarget === 'string' && commandTarget.trim()) {
-      evidence.push({ stepIndex, stepType, target: commandTarget });
-    }
-  });
-
-  return evidence;
-}
-
-function filterEvidenceByCandidates(evidence: RoleReadEvidence[], candidates: string[]): RoleReadEvidence[] {
-  const normalizedCandidates = candidates
-    .map(candidate => normalizeComparablePath(candidate))
-    .filter(Boolean);
-
-  return evidence.filter((item) => {
-    const normalizedTarget = normalizeComparablePath(item.target);
-    return normalizedCandidates.some((candidate) =>
-      normalizedTarget === candidate
-      || includesPathCandidate(item.target, candidate)
-      || includesPathCandidate(normalizedTarget, candidate));
-  });
-}
-
-function dedupeStringList(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
-function buildRoleInputReadAudit(
-  runId: string,
-  artifactDir: string,
-  taskEnvelope: TaskEnvelope | undefined,
-  steps: any[],
-): RoleInputReadAudit | undefined {
-  const run = getRun(runId);
-  if (!run) return undefined;
-
-  const workspacePath = run.workspace.replace(/^file:\/\//, '');
-  const taskEnvelopeRelPath = `${artifactDir}task-envelope.json`;
-  const taskEnvelopeAbsPath = path.join(workspacePath, taskEnvelopeRelPath);
-  const evidence = extractStepReadEvidence(steps);
-  const taskEnvelopeEvidence = filterEvidenceByCandidates(evidence, [taskEnvelopeAbsPath, taskEnvelopeRelPath]);
-  const inputArtifacts = taskEnvelope?.inputArtifacts || [];
-
-  if (inputArtifacts.length === 0) {
-    return {
-      status: 'not_applicable',
-      auditedAt: new Date().toISOString(),
-      taskEnvelopePath: taskEnvelopeRelPath,
-      taskEnvelopeRead: taskEnvelopeEvidence.length > 0,
-      taskEnvelopeEvidence,
-      requiredArtifactCount: 0,
-      canonicalReadCount: 0,
-      alternateReadCount: 0,
-      missingCanonicalPaths: [],
-      summary: 'No canonical input artifacts were required for this role.',
-      entries: [],
-    };
-  }
-
-  const entries: InputArtifactReadAuditEntry[] = inputArtifacts.map((artifact) => {
-    const canonicalRelPath = `${artifactDir}${getCopiedArtifactPath(artifact)}`;
-    const canonicalAbsPath = path.join(workspacePath, canonicalRelPath);
-    const canonicalEvidence = filterEvidenceByCandidates(evidence, [canonicalAbsPath, canonicalRelPath]);
-
-    const alternateCandidates: string[] = [];
-    if (artifact.sourceRunId) {
-      const sourceRun = getRun(artifact.sourceRunId);
-      if (sourceRun?.artifactDir) {
-        const sourceRelPath = `${sourceRun.artifactDir}${artifact.path}`;
-        const sourceAbsPath = path.join(workspacePath, sourceRelPath);
-        alternateCandidates.push(sourceAbsPath, sourceRelPath);
-      }
-    }
-
-    const alternateEvidence = filterEvidenceByCandidates(evidence, alternateCandidates).filter((item) =>
-      !canonicalEvidence.some((match) =>
-        match.stepIndex === item.stepIndex
-        && match.stepType === item.stepType
-        && match.target === item.target));
-
-    return {
-      artifactId: artifact.id,
-      title: artifact.title,
-      kind: artifact.kind,
-      sourceRunId: artifact.sourceRunId,
-      originalPath: artifact.path,
-      canonicalPath: canonicalRelPath,
-      canonicalRead: canonicalEvidence.length > 0,
-      evidence: canonicalEvidence,
-      alternateReadPaths: dedupeStringList(alternateEvidence.map(item => item.target)),
-    };
-  });
-
-  const canonicalReadCount = entries.filter(entry => entry.canonicalRead).length;
-  const alternateReadCount = entries.filter(entry => (entry.alternateReadPaths || []).length > 0).length;
-  const missingCanonicalPaths = entries
-    .filter(entry => !entry.canonicalRead)
-    .map(entry => entry.canonicalPath);
-
-  const status = canonicalReadCount === inputArtifacts.length
-    ? 'verified'
-    : canonicalReadCount > 0
-      ? 'partial'
-      : 'missing';
-
-  const summaryParts = [
-    `Canonical inputs read: ${canonicalReadCount}/${inputArtifacts.length}.`,
-    taskEnvelopeEvidence.length > 0 ? 'Task envelope read: yes.' : 'Task envelope read: no.',
-  ];
-  if (alternateReadCount > 0) {
-    summaryParts.push(`Alternate/source-path reads observed for ${alternateReadCount} artifact(s).`);
-  }
-  if (missingCanonicalPaths.length > 0) {
-    summaryParts.push(`Missing canonical reads: ${missingCanonicalPaths.join(', ')}.`);
-  }
-
-  return {
-    status,
-    auditedAt: new Date().toISOString(),
-    taskEnvelopePath: taskEnvelopeRelPath,
-    taskEnvelopeRead: taskEnvelopeEvidence.length > 0,
-    taskEnvelopeEvidence,
-    requiredArtifactCount: inputArtifacts.length,
-    canonicalReadCount,
-    alternateReadCount,
-    missingCanonicalPaths,
-    summary: summaryParts.join(' '),
-    entries,
-  };
-}
-
-function enforceCanonicalInputReadProtocol(
-  roleId: string,
-  result: TaskResult,
-  audit: RoleInputReadAudit | undefined,
-): TaskResult {
-  if (!audit || result.status !== 'completed' || audit.status === 'not_applicable' || audit.status === 'verified') {
-    return result;
-  }
-
-  const violation = audit.missingCanonicalPaths.length > 0
-    ? `Protocol violation: role ${roleId} did not read required canonical input artifacts from this run: ${audit.missingCanonicalPaths.join(', ')}`
-    : `Protocol violation: role ${roleId} did not verify required canonical input artifact reads.`;
-
-  const blockers = dedupeStringList([...(result.blockers || []), violation, audit.summary]);
-  const summary = result.summary ? `${result.summary}\n\n${violation}` : violation;
-
-  return {
-    ...result,
-    status: 'blocked',
-    summary,
-    blockers,
-  };
-}
-
-function formatPromptArtifactLines(artifactDir: string, inputArtifacts: ArtifactRef[]): string[] {
-  if (inputArtifacts.length === 0) {
-    return ['- None were provided. If you need upstream inputs and cannot find them, stop and report blocked.'];
-  }
-
-  return inputArtifacts.map((artifact, index) => {
-    const label = artifact.title || artifact.kind || artifact.path;
-    const copiedPath = `${artifactDir}${getCopiedArtifactPath(artifact)}`;
-    const sourceSuffix = artifact.sourceRunId ? `; sourceRunId=${artifact.sourceRunId}` : '';
-    return `- [${index + 1}] ${label} (${artifact.kind}) -> ${copiedPath}${sourceSuffix}`;
-  });
-}
-
-// ---------------------------------------------------------------------------
-// buildRolePrompt — construct the workflow prompt for each role
-// ---------------------------------------------------------------------------
-
-function buildRolePrompt(
-  role: GroupRoleDefinition,
-  originalPrompt: string,
-  artifactDir: string,
-  round: number,
-  isReviewer: boolean,
-  inputArtifacts: ArtifactRef[] = [],
-): string {
-  const taskEnvelopePath = `${artifactDir}task-envelope.json`;
-  const outputDir = role.id.includes('architect') ? 'architecture' : 'specs';
-  const reviewPrefix = role.id.includes('architecture') ? 'architecture-' : '';
-  const inputArtifactLines = formatPromptArtifactLines(artifactDir, inputArtifacts);
-
-  const workflowContent = AssetLoader.resolveWorkflowContent(role.workflow);
-  const sharedIntro = [
-    workflowContent,
-    '',
-    'Stage context',
-    `- Task envelope: ${taskEnvelopePath}`,
-    '- Workspace root: use the current workspace root as cwd.',
-    '',
-    'Canonical upstream inputs',
-    ...inputArtifactLines,
-    '',
-    'Execution rules',
-    '- Read the task envelope first, then every canonical upstream input listed above before planning.',
-    '- Treat the copied input artifacts above as the authoritative upstream deliverables for this stage.',
-    '- Prefer the copied files under this run over searching for alternate copies elsewhere in the workspace.',
-    '- If any required input file is missing or inconsistent, stop and report blocked instead of guessing.',
-    '- Preserve explicit tradeoffs and constraints from the upstream spec in your output.',
-  ];
-
-  if (isReviewer) {
-    return [
-      ...sharedIntro,
-      '',
-      'Review assignment',
-      `- Review target directory: ${artifactDir}${reviewPrefix ? 'architecture' : 'specs'}/`,
-      `- Review round: ${round}`,
-      `- Write review markdown to: ${artifactDir}review/${reviewPrefix}review-round-${round}.md`,
-      `- Write decision JSON to: ${artifactDir}review/result-round-${round}.json`,
-      '- The decision JSON must include a "decision" field with exactly one of: "approved", "revise", "rejected".',
-      '- Review both the generated specs and the canonical upstream inputs before deciding.',
-      '',
-      'Original goal',
-      originalPrompt,
-    ].join('\n');
-  }
-
-  if (round === 1) {
-    return [
-      ...sharedIntro,
-      '',
-      'Author assignment',
-      `- Write specs to: ${artifactDir}${outputDir}/`,
-      '- Produce concrete, implementation-driving decisions. Avoid vague recommendations.',
-      '- Use the canonical upstream inputs above as the source of truth for this stage.',
-      '',
-      'Original goal',
-      originalPrompt,
-    ].join('\n');
-  }
-
-  return [
-    ...sharedIntro,
-    '',
-    'Revision assignment',
-    `- Revision round: ${round}`,
-    `- Read reviewer feedback from: ${artifactDir}review/${reviewPrefix}review-round-${round - 1}.md`,
-    `- Update specs in: ${artifactDir}${outputDir}/`,
-    '- Address every reviewer concern explicitly and keep the upstream constraints intact.',
-    '',
-    'Original goal',
-    originalPrompt,
-  ].join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// V2.5: buildDeliveryPrompt — construct the workflow prompt for delivery runs
-// ---------------------------------------------------------------------------
-
-function buildDeliveryPrompt(
-  role: GroupRoleDefinition,
-  originalPrompt: string,
-  artifactDir: string,
-  artifactAbsDir: string,
-  taskEnvelope?: TaskEnvelope,
-): string {
-  const wpPath = `${artifactDir}work-package/work-package.json`;
-  const inputDir = `${artifactDir}input/`;
-  const taskEnvelopePath = `${artifactDir}task-envelope.json`;
-  const inputArtifactLines = formatPromptArtifactLines(artifactDir, taskEnvelope?.inputArtifacts || []);
-
-  // Check if work package exists for more specific instructions
-  const wpAbsPath = path.join(artifactAbsDir, 'work-package', 'work-package.json');
-  const hasWorkPackage = fs.existsSync(wpAbsPath);
-
-  if (hasWorkPackage) {
-    return [
-      AssetLoader.resolveWorkflowContent(role.workflow),
-      '',
-      'Stage context',
-      `- Task envelope: ${taskEnvelopePath}`,
-      `- Work package: ${wpPath}`,
-      `- Input directory root: ${inputDir}`,
-      '',
-      'Canonical upstream inputs',
-      ...inputArtifactLines,
-      '',
-      'Delivery assignment',
-      '- Read the work package first, then the task envelope, then every canonical upstream input listed above.',
-      '- Implement all requested changes in the workspace codebase.',
-      `- Write delivery artifacts to: ${artifactDir}delivery/`,
-      '- You MUST create: delivery/delivery-packet.json, delivery/implementation-summary.md, and delivery/test-results.md.',
-      '- If a required upstream artifact is missing, report blocked instead of inferring requirements from memory.',
-      '',
-      'Original goal',
-      originalPrompt,
-    ].join('\n');
-  }
-
-  return [
-    AssetLoader.resolveWorkflowContent(role.workflow),
-    '',
-    'Stage context',
-    `- Task envelope: ${taskEnvelopePath}`,
-    `- Input directory root: ${inputDir}`,
-    '',
-    'Canonical upstream inputs',
-    ...inputArtifactLines,
-    '',
-    'Delivery assignment',
-    `- Write your delivery artifacts to: ${artifactDir}delivery/`,
-    '- You MUST create: delivery/delivery-packet.json (with status, summary, changedFiles, tests fields), delivery/implementation-summary.md, and delivery/test-results.md.',
-    '- Read the task envelope and canonical upstream inputs before implementation.',
-    '',
-    'Original goal',
-    originalPrompt,
-  ].join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// extractReviewDecision — parse DECISION marker from review file then steps
-// ---------------------------------------------------------------------------
-
-function extractReviewDecision(
-  artifactAbsDir: string,
-  round: number,
-  steps: any[],
-  result: TaskResult,
-): ReviewDecision {
-  // 1. Primary: Try reading round-scoped result-round-N.json
-  const roundResultPath = path.join(artifactAbsDir, 'review', `result-round-${round}.json`);
-  const legacyResultPath = path.join(artifactAbsDir, 'review', 'result.json');
-
-  // Try round-scoped first, then legacy only for round 1 (backward compat)
-  const pathsToTry = [roundResultPath];
-  if (round === 1) pathsToTry.push(legacyResultPath);
-
-  for (const resultJsonPath of pathsToTry) {
-    try {
-      if (fs.existsSync(resultJsonPath)) {
-        const data = JSON.parse(fs.readFileSync(resultJsonPath, 'utf-8'));
-        if (data.decision && typeof data.decision === 'string') {
-          const decisionLower = data.decision.toLowerCase();
-          if (['approved', 'revise', 'rejected'].includes(decisionLower)) {
-            return decisionLower as ReviewDecision;
-          }
-        }
-      }
-    } catch {
-      // Silent fail, fallback to other methods
-    }
-  }
-
-  // 2. Secondary: If result object has decision directly
-  if (result?.decision && typeof result.decision === 'string') {
-    const decisionLower = result.decision.toLowerCase();
-    if (['approved', 'revise', 'rejected'].includes(decisionLower)) {
-      return decisionLower as ReviewDecision;
-    }
-  }
-
-  // 3. Fallback: Parse Markdown markers for legacy runs
-  const reviewPatterns = [
-    path.join(artifactAbsDir, 'review', `review-round-${round}.md`),
-    path.join(artifactAbsDir, 'review', `architecture-review-round-${round}.md`),
-  ];
-
-  for (const reviewPath of reviewPatterns) {
-    try {
-      if (fs.existsSync(reviewPath)) {
-        const content = fs.readFileSync(reviewPath, 'utf-8');
-        const decision = parseDecisionMarker(content);
-        if (decision) return decision;
-      }
-    } catch {
-      // File read failed, try next
-    }
-  }
-
-  // Fallback: scan raw steps for DECISION marker
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const step = steps[i];
-    if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') continue;
-    const planner = step.plannerResponse || step.response || {};
-    const text = planner.modifiedResponse || planner.response || '';
-    const decision = parseDecisionMarker(text);
-    if (decision) return decision;
-  }
-
-  // M1: No summary fallback — summary is not an authoritative decision carrier.
-  // If no decision found in review file or steps, it's a protocol violation.
-  throw new Error('Missing explicit review decision (no DECISION: marker found in review file or conversation steps)');
-}
-
-function parseDecisionMarker(text: string): ReviewDecision | null {
-  // Matches "DECISION:" optionally wrapped in bold/newlines, followed by APPROVED/REVISE/REJECTED
-  // This handles "**DECISION:** APPROVED", "DECISION:  REVISE.", etc.
-  const match = text.match(/DECISION:\s*\**\s*(APPROVED|REVISE|REJECTED)/i);
-
-  if (!match) return null;
-
-  const decision = match[1].toUpperCase();
-  if (decision === 'APPROVED') return 'approved';
-  if (decision === 'REVISE') return 'revise';
-  if (decision === 'REJECTED') return 'rejected';
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// propagateTermination — mark run and pending roles on failure
-// ---------------------------------------------------------------------------
-
-function summarizeFailureText(text?: string): string | undefined {
-  if (!text) return undefined;
-  const firstMeaningfulLine = text
-    .split('\n')
-    .map(line => line.trim().replace(/^#+\s*/, ''))
-    .find(line => line.length > 0);
-
-  if (!firstMeaningfulLine) return undefined;
-  return firstMeaningfulLine.length > 240
-    ? `${firstMeaningfulLine.slice(0, 237)}...`
-    : firstMeaningfulLine;
-}
-
-function getFailureReason(result: TaskResult): string | undefined {
-  return result.blockers[0] || summarizeFailureText(result.summary);
-}
-
-function propagateTermination(
-  runId: string,
-  failStatus: 'failed' | 'blocked' | 'cancelled' | 'timeout',
-  lastError?: string,
-): void {
-  const run = getRun(runId);
-  if (run?.roles) {
-    for (const role of run.roles) {
-      if (role.status === 'queued' || role.status === 'starting') {
-        role.status = 'cancelled';
-      }
-    }
-    updateRun(runId, { roles: run.roles });
-  }
-  updateRun(runId, {
-    status: failStatus,
-    lastError: lastError ?? run?.lastError ?? (failStatus === 'timeout' ? 'Role exceeded timeout limit' : undefined),
-  });
-}
-
+// readDeliveryPacket, buildWriteScopeAudit, scanArtifactManifest,
+// copyUpstreamArtifacts, buildResultEnvelope, writeEnvelopeFile — moved to run-artifacts.ts
+
+// getCanonicalTaskEnvelope, normalizeComparablePath, includesPathCandidate,
+// extractStepReadEvidence, filterEvidenceByCandidates, dedupeStringList,
+// buildRoleInputReadAudit, enforceCanonicalInputReadProtocol,
+// summarizeFailureText, getFailureReason, propagateTermination
+// — moved to runtime-helpers.ts
 // ---------------------------------------------------------------------------
 // handleAutoApprove — approve blocking artifacts automatically
 // ---------------------------------------------------------------------------
@@ -3011,201 +2136,20 @@ function handleCompletion(runId: string, steps: any[]): void {
   updateRun(runId, { status: result.status, result });
 
   // Sync pipeline state for legacy-single runs (same as envelope path)
-  if (run?.projectId && run.pipelineStageIndex !== undefined) {
-    const { updatePipelineStage } = require('./project-registry');
+  if (run?.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
+    const { updatePipelineStage, updatePipelineStageByStageId } = require('./project-registry');
     const stageStatus = result.status === 'completed' ? 'completed'
       : result.status === 'blocked' ? 'blocked' : 'failed';
-    updatePipelineStage(run.projectId, run.pipelineStageIndex, {
-      status: stageStatus,
-      runId,
-    });
+    if (run.pipelineStageId) {
+      updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: stageStatus, runId });
+    } else {
+      updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: stageStatus, runId });
+    }
   }
 
   cleanup(runId);
 }
 
-// ---------------------------------------------------------------------------
-// compactCodingResult
-// ---------------------------------------------------------------------------
-
-/**
- * V3: Try to read a structured result.json from the artifact directory.
- * Returns a TaskResult if found and valid, or null if not found or malformed.
- */
-function getResultJsonCandidates(
-  artifactAbsDir: string,
-  roleConfig?: GroupRoleDefinition,
-): string[] {
-  const candidates: string[] = [];
-
-  if (roleConfig?.id.includes('author')) {
-    const outputDir = roleConfig.id.includes('architect') ? 'architecture' : 'specs';
-    candidates.push(path.join(artifactAbsDir, outputDir, 'result.json'));
-  }
-
-  candidates.push(path.join(artifactAbsDir, 'result.json'));
-
-  return [...new Set(candidates)];
-}
-
-function tryReadResultJson(
-  artifactAbsDir: string,
-  roleConfig?: GroupRoleDefinition,
-): TaskResult | null {
-  try {
-    for (const resultPath of getResultJsonCandidates(artifactAbsDir, roleConfig)) {
-      if (!fs.existsSync(resultPath)) continue;
-
-      const raw = fs.readFileSync(resultPath, 'utf-8');
-      const data = JSON.parse(raw);
-
-      // Validate required fields
-      if (!data.status || !data.summary) {
-        log.warn({ resultPath, keys: Object.keys(data) }, 'result.json exists but missing required fields (status/summary)');
-        continue;
-      }
-
-      const validStatuses = ['completed', 'blocked', 'failed'];
-      const status = validStatuses.includes(data.status) ? data.status : 'completed';
-
-      log.info({
-        resultPath: path.relative(artifactAbsDir, resultPath) || 'result.json',
-        artifactAbsDir: artifactAbsDir.split('/').slice(-3).join('/'),
-        status,
-        changedFiles: (data.changedFiles || []).length,
-        summaryLength: data.summary.length,
-      }, 'result.json found — using structured result');
-
-      return {
-        status,
-        summary: data.summary,
-        changedFiles: data.changedFiles || [],
-        blockers: data.blockedReason ? [data.blockedReason] : [],
-        needsReview: data.outputArtifacts || [],
-      };
-    }
-
-    return null;
-  } catch (err: any) {
-    log.warn({ artifactAbsDir, err: err.message }, 'result.json exists but failed to parse');
-    return null;
-  }
-}
-
-export function compactCodingResult(
-  steps: any[],
-  artifactAbsDir?: string,
-  roleConfig?: GroupRoleDefinition,
-): TaskResult {
-  // V3: Try structured result.json first
-  if (artifactAbsDir) {
-    const jsonResult = tryReadResultJson(artifactAbsDir, roleConfig);
-    if (jsonResult) return jsonResult;
-    log.debug({ artifactAbsDir: artifactAbsDir.split('/').slice(-3).join('/') }, 'No result.json found — falling back to step parsing');
-  }
-
-  let summary = '';
-  const changedFiles = new Set<string>();
-  const blockers: string[] = [];
-  const needsReview: string[] = [];
-  let hasErrorMessage = false;
-
-  // V2.5.1: Check for ERROR_MESSAGE steps — only mark failed if the agent
-  // did NOT recover (i.e. no successful PLANNER_RESPONSE or CODE_ACTION after the last error)
-  let lastErrorIndex = -1;
-  for (let i = 0; i < steps.length; i++) {
-    if (steps[i]?.type === 'CORTEX_STEP_TYPE_ERROR_MESSAGE') {
-      lastErrorIndex = i;
-    }
-  }
-  if (lastErrorIndex >= 0) {
-    // Check if agent recovered after the last error
-    let recovered = false;
-    for (let i = lastErrorIndex + 1; i < steps.length; i++) {
-      const t = steps[i]?.type;
-      if (t === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' || t === 'CORTEX_STEP_TYPE_CODE_ACTION') {
-        recovered = true;
-        break;
-      }
-    }
-    hasErrorMessage = !recovered;
-  }
-
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const step = steps[i];
-    if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') continue;
-
-    const planner = step.plannerResponse || step.response || {};
-    const plannerStatus = planner.status || step.status || '';
-
-    if (plannerStatus === 'DONE' || plannerStatus === 'STATUS_DONE') {
-      const text = planner.modifiedResponse || planner.response || '';
-      if (text.trim()) {
-        summary = text.trim();
-        break;
-      }
-    }
-  }
-
-  if (!summary) {
-    for (let i = steps.length - 1; i >= 0; i--) {
-      const step = steps[i];
-      if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') continue;
-      const planner = step.plannerResponse || step.response || {};
-      const text = planner.modifiedResponse || planner.response || '';
-      if (text.trim()) {
-        summary = text.trim();
-        break;
-      }
-    }
-  }
-
-  for (const step of steps) {
-    if (step?.type === 'CORTEX_STEP_TYPE_CODE_ACTION') {
-      const action = step.codeAction || step.actionSpec || {};
-      const spec = action.actionSpec || action;
-
-      for (const key of Object.keys(spec)) {
-        const sub = spec[key];
-        if (sub?.absoluteUri) {
-          changedFiles.add(sub.absoluteUri.replace(/^file:\/\//, ''));
-        }
-        if (sub?.uri) {
-          changedFiles.add(sub.uri.replace(/^file:\/\//, ''));
-        }
-      }
-
-      if (action.absoluteUri) {
-        changedFiles.add(action.absoluteUri.replace(/^file:\/\//, ''));
-      }
-    }
-  }
-
-  for (const step of steps) {
-    if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') continue;
-
-    const planner = step.plannerResponse || step.response || {};
-    if (planner.isBlocking && !step._autoApproved) {
-      const blockerText = planner.modifiedResponse || planner.response || 'Blocking notification';
-      blockers.push(blockerText.slice(0, 200));
-    }
-
-    if (planner.reviewAbsoluteUris?.length) {
-      needsReview.push(...planner.reviewAbsoluteUris);
-    }
-    if (planner.pathsToReview?.length) {
-      needsReview.push(...planner.pathsToReview);
-    }
-  }
-
-  return {
-    status: hasErrorMessage ? 'failed' : (blockers.length > 0 ? 'blocked' : 'completed'),
-    summary: summary || (hasErrorMessage ? 'Task failed due to an error in the child conversation' : 'Task completed (no summary extracted)'),
-    changedFiles: [...changedFiles],
-    blockers,
-    needsReview: [...new Set(needsReview)],
-  };
-}
 
 // ---------------------------------------------------------------------------
 // cancelRun
@@ -3228,9 +2172,13 @@ export async function cancelRun(runId: string): Promise<void> {
     }
   }
 
-  if (run.projectId && run.pipelineStageIndex !== undefined) {
-    const { updatePipelineStage } = require('./project-registry');
-    updatePipelineStage(run.projectId, run.pipelineStageIndex, { status: 'cancelled', runId });
+  if (run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
+    const { updatePipelineStage, updatePipelineStageByStageId } = require('./project-registry');
+    if (run.pipelineStageId) {
+      updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
+    } else {
+      updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: 'cancelled', runId });
+    }
   }
   updateRun(runId, { status: 'cancelled' });
   cleanup(runId);
@@ -3256,9 +2204,13 @@ async function cancelRunInternal(
   }
 
   const run = getRun(runId);
-  if (status === 'cancelled' && run?.projectId && run.pipelineStageIndex !== undefined) {
-    const { updatePipelineStage } = require('./project-registry');
-    updatePipelineStage(run.projectId, run.pipelineStageIndex, { status: 'cancelled', runId });
+  if (status === 'cancelled' && run?.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
+    const { updatePipelineStage, updatePipelineStageByStageId } = require('./project-registry');
+    if (run.pipelineStageId) {
+      updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
+    } else {
+      updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: 'cancelled', runId });
+    }
   }
   updateRun(runId, {
     status,

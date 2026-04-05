@@ -6,9 +6,16 @@ import {
   Loader2,
   AlertTriangle,
   SkipForward,
+  GitBranch,
+  ExternalLink,
+  ShieldCheck,
+  RotateCw,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { PipelineStageProgressFE, RoleProgressFE } from '@/lib/types';
+import { resolveRoleAvatar, resolveRoleDisplayName, resolveRoleStatusText } from '@/lib/role-utils';
+import { useI18n } from '@/components/locale-provider';
+import type { PipelineStageProgressFE, BranchProgressFE, RoleProgressFE } from '@/lib/types';
 
 interface PipelineStageCardProps {
   stage: PipelineStageProgressFE;
@@ -19,6 +26,7 @@ interface PipelineStageCardProps {
   selectedRoleKey?: string | null;
   onClick: () => void;
   onSelectRole?: (roleKey: string) => void;
+  onNavigateToProject?: (projectId: string) => void;
 }
 
 const stageStatusConfig: Record<string, {
@@ -123,7 +131,9 @@ export default function PipelineStageCard({
   selectedRoleKey,
   onClick,
   onSelectRole,
+  onNavigateToProject,
 }: PipelineStageCardProps) {
+  const { locale } = useI18n();
   const config = stageStatusConfig[stage.status] || stageStatusConfig.pending;
   const displayTitle = stageTitle || stage.groupId;
   const isPending = stage.status === 'pending';
@@ -190,73 +200,143 @@ export default function PipelineStageCard({
                 <span className="text-[11px] text-white/30 font-mono">{elapsed}</span>
               )}
             </div>
+            {/* V5.2: Control-flow node badges */}
+            {stage.nodeKind === 'gate' && (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <ShieldCheck className="h-3 w-3 text-amber-400/70" />
+                <span className={cn(
+                  'text-[10px] font-medium',
+                  stage.gateApproval?.status === 'approved' ? 'text-emerald-400/70' :
+                  stage.gateApproval?.status === 'rejected' ? 'text-red-400/70' :
+                  'text-amber-400/70'
+                )}>
+                  {stage.gateApproval?.status === 'approved' ? 'Approved' :
+                   stage.gateApproval?.status === 'rejected' ? 'Rejected' :
+                   'Awaiting approval'}
+                </span>
+              </div>
+            )}
+            {(stage.nodeKind === 'loop-start' || stage.nodeKind === 'loop-end') && stage.loopIteration != null && (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <RotateCw className="h-3 w-3 text-violet-400/70" />
+                <span className="text-[10px] font-medium text-violet-400/70">
+                  Iteration {stage.loopIteration}
+                </span>
+              </div>
+            )}
+            {stage.nodeKind === 'switch' && stage.switchSelectedBranch && (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <ArrowRightLeft className="h-3 w-3 text-sky-400/70" />
+                <span className="text-[10px] font-medium text-sky-400/70">
+                  → {stage.switchSelectedBranch}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Inline Role Progress sub-nodes */}
       {roles && roles.length > 0 && !isPending && (
-        <div className="relative ml-[18px] border-l border-white/8 pl-5 pt-1 pb-1">
-          {roles.map((role, index) => {
-            const roleKey = makeRoleKey(role, index);
-            const rs = roleStatusIcons[role.status] || roleStatusIcons.pending;
-            const duration = formatElapsedTime(role.startedAt, role.finishedAt);
-            const isRoleSelected = selectedRoleKey === roleKey;
+        <div className="relative ml-[18px] pl-3 pt-2 pb-1">
+          <div className="flex flex-wrap gap-2">
+            {roles.map((role, index) => {
+              const roleKey = makeRoleKey(role, index);
+              const rs = roleStatusIcons[role.status] || roleStatusIcons.pending;
+              const isRoleSelected = selectedRoleKey === roleKey;
+
+              return (
+                <div
+                  key={roleKey}
+                  role="button"
+                  tabIndex={0}
+                  className={cn(
+                    'group/role flex flex-col gap-0.5 rounded-xl px-3 py-2 cursor-pointer transition-colors min-w-[140px] max-w-[200px]',
+                    isRoleSelected
+                      ? 'bg-sky-400/[0.08] border border-sky-400/20'
+                      : 'hover:bg-white/[0.04] border border-white/8',
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectRole?.(roleKey);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onSelectRole?.(roleKey);
+                    }
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base shrink-0" title={role.roleId}>
+                      {resolveRoleAvatar(role.roleId)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-medium text-white/70 truncate">
+                        {resolveRoleDisplayName(role.roleId)}
+                      </div>
+                      <div className={cn('text-[10px]', rs.color)}>
+                        {resolveRoleStatusText(role.status, locale, stageTitle)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {/* Fan-out Branch sub-nodes */}
+      {stage.branches && stage.branches.length > 0 && (
+        <div className="relative ml-[18px] border-l border-violet-400/15 pl-5 pt-1 pb-1">
+          <div className="flex items-center gap-1.5 px-3 pb-1">
+            <GitBranch className="h-3 w-3 text-violet-400/50" />
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-400/50">
+              Branches ({stage.branches.filter(b => b.status === 'completed').length}/{stage.branches.length})
+            </span>
+          </div>
+          {stage.branches.map((branch) => {
+            const bs = stageStatusConfig[branch.status] || stageStatusConfig.pending;
+            const branchDuration = formatElapsedTime(branch.startedAt, branch.completedAt);
 
             return (
               <div
-                key={roleKey}
-                role="button"
-                tabIndex={0}
-                className={cn(
-                  'group/role relative flex flex-col gap-1 rounded-xl px-3 py-2 -ml-1 cursor-pointer transition-colors',
-                  isRoleSelected
-                    ? 'bg-sky-400/[0.08] border border-sky-400/20'
-                    : 'hover:bg-white/[0.04] border border-transparent',
-                )}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectRole?.(roleKey);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onSelectRole?.(roleKey);
-                  }
-                }}
+                key={`branch-${branch.branchIndex}`}
+                className="group/branch flex flex-col gap-0.5 rounded-xl px-3 py-2 -ml-1 transition-colors hover:bg-white/[0.04] border border-transparent"
               >
                 <div className="flex items-center gap-2.5">
-                  {/* Role status icon */}
-                  <div className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/[0.03]', rs.color)}>
-                    {rs.icon}
+                  <div className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/[0.03]', bs.color)}>
+                    {bs.icon}
                   </div>
-
-                  {/* Role info */}
                   <span className="text-[12px] font-medium text-white/70 truncate">
-                    {role.roleId}
+                    {branch.workPackageName}
                   </span>
-                  <span className="shrink-0 text-[10px] font-mono text-white/30">
-                    R{role.round}
+                  <span className={cn('shrink-0 text-[10px] font-medium uppercase', bs.color)}>
+                    {bs.label}
                   </span>
-                  {role.reviewDecision && (
-                    <span className={cn(
-                      'shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase',
-                      reviewDecisionColors[role.reviewDecision] || 'bg-white/5 text-white/40',
-                    )}>
-                      {role.reviewDecision}
+                  {branchDuration && (
+                    <span className="shrink-0 text-[10px] text-white/25 font-mono">
+                      {branchDuration}
                     </span>
                   )}
-                  {duration && (
-                    <span className="shrink-0 text-[10px] text-white/25 font-mono ml-auto">
-                      {duration}
-                    </span>
+                  {branch.subProjectId && onNavigateToProject && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onNavigateToProject(branch.subProjectId);
+                      }}
+                      className="ml-auto flex items-center gap-1 rounded-full bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-[10px] font-medium text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/15 transition-colors"
+                      title="Open sub-project"
+                    >
+                      <ExternalLink className="h-2.5 w-2.5" />
+                      Open
+                    </button>
                   )}
                 </div>
-                {/* Role summary preview */}
-                {role.result?.summary && (
-                  <div className="ml-[34px] text-[11px] leading-4 text-white/35 line-clamp-1">
-                    {role.result.summary.split('\n')[0].slice(0, 120)}
+                {branch.lastError && (
+                  <div className="ml-[34px] text-[11px] leading-4 text-red-400/60 line-clamp-1">
+                    {branch.lastError}
                   </div>
                 )}
               </div>

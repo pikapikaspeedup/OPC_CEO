@@ -43,6 +43,80 @@ export interface WorkspacesResponse {
   playgrounds: string[];
 }
 
+// ---------------------------------------------------------------------------
+// OPC: Department (Workspace 增强)
+// ---------------------------------------------------------------------------
+
+export interface DepartmentSkill {
+  skillId: string;
+  name: string;
+  category: string;
+  workflowRef: string;
+  difficulty?: 'junior' | 'mid' | 'senior';
+  deliverableSpec?: {
+    format: string;
+    qualityCriteria?: string[];
+  };
+}
+
+export interface DepartmentOKR {
+  period: string;
+  objectives: Array<{
+    title: string;
+    keyResults: Array<{
+      description: string;
+      target: number;
+      current: number;
+    }>;
+  }>;
+}
+
+/** Maps a roleId pattern to a display name for pixel office personification. */
+export interface DepartmentRoster {
+  rolePattern: string;   // regex pattern matched against roleId, e.g. "pm|product"
+  displayName: string;   // human name to display, e.g. "张三"
+  title?: string;        // optional job title, e.g. "产品经理"
+  spriteType?: string;   // character sprite override, e.g. 'cc_nova', 'rpg_dev', 'guest_3', 'rpg_char_2'
+  x?: number;            // custom canvas x position (0–1280), overrides auto-placement
+  y?: number;            // custom canvas y position (0–720), overrides auto-placement
+  visible?: boolean;     // whether to show in the office room (default true)
+}
+
+export interface RoomLayoutItem {
+  assetKey: string;           // texture key, e.g. 'rpg_cabinet', 'lpc_tv', 'cc_coding_desk'
+  x: number;                  // canvas x (0–1280)
+  y: number;                  // canvas y (0–720)
+  scale?: number;             // display scale (default 1)
+  depth?: number;             // z-order
+  frame?: number;             // spritesheet frame index
+  rotation?: number;          // rotation in degrees (default 0)
+}
+
+export interface DepartmentConfig {
+  name: string;
+  type: string;                   // e.g. 'build', 'research', 'operations', 'ceo', or user-defined
+  typeIcon?: string;              // emoji icon for the department type, e.g. '🔧'
+  description?: string;           // department positioning / intro, used by CEO for task routing
+  templateIds?: string[];         // selected pipeline template IDs
+  skills: DepartmentSkill[];
+  okr?: DepartmentOKR | null;
+  roster?: DepartmentRoster[];  // optional role name overrides
+  roomLayout?: RoomLayoutItem[];  // preserved for backward compat
+  roomBg?: string;                // preserved for backward compat
+  /** V6: Default provider for this department's agent tasks */
+  provider?: 'antigravity' | 'codex';
+  /** V6: Token quota for this department */
+  tokenQuota?: TokenQuota | null;
+}
+
+/** V6: Token quota for a department */
+export interface TokenQuota {
+  daily: number;
+  monthly: number;
+  used: { daily: number; monthly: number };
+  canRequestMore: boolean;
+}
+
 export type AgentRunStatus =
   | 'queued'
   | 'starting'
@@ -80,11 +154,33 @@ export type PipelineStageStatusFE =
   | 'skipped';
 
 export interface PipelineStageProgressFE {
+  stageId: string;
   groupId: string;
   stageIndex: number;
   runId?: string;
   status: PipelineStageStatusFE;
   attempts: number;
+  branches?: BranchProgressFE[];
+  lastError?: string;
+  startedAt?: string;
+  completedAt?: string;
+  /** V5.2: node kind for control-flow rendering */
+  nodeKind?: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end';
+  /** V5.2: gate approval state */
+  gateApproval?: { status: 'pending' | 'approved' | 'rejected'; approvedBy?: string; reason?: string; decidedAt?: string };
+  /** V5.2: loop iteration count (for loop-start / loop-end) */
+  loopIteration?: number;
+  /** V5.2: switch selected branch label */
+  switchSelectedBranch?: string;
+}
+
+export interface BranchProgressFE {
+  branchIndex: number;
+  workPackageId: string;
+  workPackageName: string;
+  subProjectId: string;
+  runId?: string;
+  status: PipelineStageStatusFE;
   lastError?: string;
   startedAt?: string;
   completedAt?: string;
@@ -93,8 +189,12 @@ export interface PipelineStageProgressFE {
 export interface ProjectPipelineStateFE {
   templateId: string;
   stages: PipelineStageProgressFE[];
-  currentStageIndex: number;
+  activeStageIds: string[];
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+  /** V5.2: loop iteration counters per loop-start nodeId */
+  loopCounters?: Record<string, number>;
+  /** V5.2: last checkpoint ID for replay/resume */
+  lastCheckpointId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,23 +204,97 @@ export interface ProjectPipelineStateFE {
 export interface TemplateGroupSummary {
   title: string;
   description?: string;
+  roleIds?: string[];
 }
 
 export interface TemplateSummaryFE {
   id: string;
   title: string;
   groups: Record<string, TemplateGroupSummary>;
-  pipeline: Array<{ groupId: string }>;
+  pipeline: Array<{ stageId?: string; groupId: string; stageType?: string }>;
+  /** V5.1: template format — graphPipeline templates always have a DAG */
+  format?: 'pipeline' | 'graphPipeline';
+}
+
+// ---------------------------------------------------------------------------
+// Template Detail (full template definition for template browser)
+// ---------------------------------------------------------------------------
+
+export interface TemplateRoleDetailFE {
+  id: string;
+  workflow: string;
+  timeoutMs: number;
+  autoApprove: boolean;
+  workflowContent?: string;
+}
+
+export interface TemplateGroupDetailFE {
+  title: string;
+  description: string;
+  executionMode?: string;
+  roles: TemplateRoleDetailFE[];
+  reviewPolicyId?: string;
+  capabilities?: Record<string, boolean>;
+  sourceContract?: {
+    acceptedSourceGroupIds?: string[];
+    requireReviewOutcome?: string[];
+    autoBuildInputArtifactsFromSources?: boolean;
+    autoIncludeUpstreamSourceRuns?: boolean;
+  };
+}
+
+export interface TemplateNodeFE {
+  id: string;
+  kind: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end' | 'subgraph-ref';
+  groupId: string;
+  label?: string;
+  autoTrigger?: boolean;
+  triggerOn?: 'approved' | 'completed' | 'any';
+  gate?: { autoApprove?: boolean; approvalTimeout?: number; approvalPrompt?: string };
+  fanOut?: { workPackagesPath: string; perBranchTemplateId: string; maxConcurrency?: number };
+  join?: { sourceNodeId: string; policy?: 'all' };
+  loop?: { maxIterations: number; pairedNodeId: string };
+}
+
+export interface TemplateEdgeFE {
+  from: string;
+  to: string;
+  condition?: string;
+}
+
+export interface TemplatePipelineStageFE {
+  stageId?: string;
+  groupId: string;
+  autoTrigger: boolean;
+  triggerOn?: string;
+  stageType?: string;
+  upstreamStageIds?: string[];
+  fanOutSource?: { workPackagesPath: string; perBranchTemplateId: string; maxConcurrency?: number };
+  joinFrom?: string;
+  joinPolicy?: string;
+}
+
+export interface TemplateDetailFE {
+  id: string;
+  kind: 'template';
+  title: string;
+  description: string;
+  groups: Record<string, TemplateGroupDetailFE>;
+  pipeline?: TemplatePipelineStageFE[];
+  graphPipeline?: { nodes: TemplateNodeFE[]; edges: TemplateEdgeFE[] };
+  defaultModel?: string;
 }
 
 // ---------------------------------------------------------------------------
 // Resume API Types
 // ---------------------------------------------------------------------------
 
-export type ResumeAction = 'recover' | 'nudge' | 'restart_role' | 'cancel' | 'skip';
+export type ResumeAction = 'recover' | 'nudge' | 'restart_role' | 'cancel' | 'skip' | 'force-complete';
 
 export interface ResumeProjectOptions {
+  stageId?: string;
   stageIndex?: number;
+  branchIndex?: number;
   action: ResumeAction;
   prompt?: string;
   roleId?: string;
@@ -130,11 +304,31 @@ export interface ResumeProjectResponse {
   status: string;
   requestedAction: ResumeAction;
   actualAction: ResumeAction;
+  stageId: string;
   stageIndex: number;
   groupId: string;
   runId: string;
+  branchIndex?: number;
   activeConversationId?: string;
   message?: string;
+}
+
+/** Phase 6: CEO AI decision record (frontend representation) */
+export interface CEODecisionRecordFE {
+  command: string;
+  action: string;
+  reasoning: string;
+  departmentName?: string;
+  templateId?: string;
+  message: string;
+  suggestions?: Array<{
+    type: string;
+    label: string;
+    description: string;
+    payload?: Record<string, string>;
+  }>;
+  resolved: boolean;
+  decidedAt: string;
 }
 
 export interface Project {
@@ -147,7 +341,73 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   runIds: string[];
+  childProjectIds?: string[];
+  parentProjectId?: string;
   pipelineState?: ProjectPipelineStateFE;
+  /** OPC: project execution type */
+  projectType?: 'coordinated' | 'adhoc' | 'strategic';
+  /** OPC: skill hint for ad-hoc tasks */
+  skillHint?: string;
+  /** Phase 6: CEO AI decision record */
+  ceoDecision?: CEODecisionRecordFE;
+}
+
+// ---------------------------------------------------------------------------
+// OPC: DailyDigest (Phase 3)
+// ---------------------------------------------------------------------------
+
+export interface DailyDigestFE {
+  workspaceUri: string;
+  departmentName: string;
+  date: string;
+  period?: 'day' | 'week' | 'month';
+  summary: string;
+  tasksCompleted: Array<{ projectId: string; projectName: string; description: string }>;
+  tasksInProgress: Array<{ projectId: string; projectName: string; description: string; progress?: string }>;
+  blockers: Array<{ projectId: string; description: string; since: string }>;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OPC: CEO Events (Phase 3)
+// ---------------------------------------------------------------------------
+
+export interface CEOEvent {
+  id: string;
+  type: 'critical' | 'warning' | 'info' | 'done';
+  title: string;
+  description?: string;
+  projectId?: string;
+  workspaceUri?: string;
+  timestamp: string;
+  actions?: Array<{
+    label: string;
+    action: 'view' | 'approve' | 'dismiss' | 'navigate';
+    payload?: Record<string, unknown>;
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// OPC: Deliverable (Phase 3)
+// ---------------------------------------------------------------------------
+
+export interface Deliverable {
+  id: string;
+  projectId: string;
+  stageId: string;
+  type: 'document' | 'code' | 'data' | 'review';
+  title: string;
+  artifactPath?: string;
+  createdAt: string;
+  quality: {
+    reviewDecision?: 'approved' | 'revise' | 'rejected';
+    reviewedAt?: string;
+  };
 }
 
 
@@ -219,6 +479,7 @@ export interface AgentRun {
   supervisorConversationId?: string;
   // V3.5: Pipeline tracking
   pipelineId?: string;
+  pipelineStageId?: string;
   pipelineStageIndex?: number;
 }
 
@@ -493,4 +754,139 @@ export interface Step {
 export interface StepsData {
   steps: Step[];
   cascadeStatus?: string; // 'running' | 'idle' — from WS
+}
+
+// --- V5.3 AI-Assisted Pipeline Generation (FE types) ---
+
+export interface RiskAssessmentFE {
+  severity: 'critical' | 'warning' | 'info';
+  category: string;
+  message: string;
+  suggestion?: string;
+}
+
+export interface GenerationResultFE {
+  draftId: string;
+  status: 'draft' | 'confirmed';
+  graphPipeline: Record<string, unknown>;
+  templateMeta: { name: string; description?: string };
+  explanation: string;
+  validation: { valid: boolean; dagErrors: string[] };
+  risks: RiskAssessmentFE[];
+}
+
+export interface ConfirmResultFE {
+  templateId: string;
+  saved: boolean;
+  validationErrors?: string[];
+}
+
+// --- V5.4 Platformization (FE types) ---
+
+export interface SubgraphSummaryFE {
+  id: string;
+  title: string;
+  description?: string;
+  nodeCount: number;
+  inputs: { id: string; nodeId: string }[];
+  outputs: { id: string; nodeId: string }[];
+}
+
+export interface PolicyRuleFE {
+  resource: 'runs' | 'branches' | 'iterations' | 'stages' | 'concurrent-runs';
+  limit: number;
+  action: 'warn' | 'block' | 'pause';
+  description?: string;
+}
+
+export interface ResourcePolicyFE {
+  id: string;
+  name: string;
+  scope: 'workspace' | 'template' | 'project';
+  targetId: string;
+  rules: PolicyRuleFE[];
+  enabled?: boolean;
+}
+
+export interface PolicyViolationFE {
+  policyId: string;
+  rule: PolicyRuleFE;
+  currentValue: number;
+  action: 'warn' | 'block' | 'pause';
+  message: string;
+}
+
+export interface PolicyEvalResultFE {
+  allowed: boolean;
+  violations: PolicyViolationFE[];
+}
+
+// ---------------------------------------------------------------------------
+// V5.2: Execution Journal
+// ---------------------------------------------------------------------------
+
+export interface JournalEntryFE {
+  timestamp: string;
+  projectId: string;
+  nodeId: string;
+  eventType: string;
+  data: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// V5.2: Checkpoint
+// ---------------------------------------------------------------------------
+
+export interface CheckpointFE {
+  id: string;
+  projectId: string;
+  nodeId: string;
+  createdAt: string;
+  state: {
+    stages: PipelineStageProgressFE[];
+    activeStageIds: string[];
+  };
+  loopCounters: Record<string, number>;
+}
+
+// ---------------------------------------------------------------------------
+// OPC: CEO Approval Framework
+// ---------------------------------------------------------------------------
+
+export type ApprovalRequestTypeFE =
+  | 'token_increase'
+  | 'tool_access'
+  | 'provider_change'
+  | 'scope_extension'
+  | 'pipeline_approval'
+  | 'other';
+
+export type ApprovalUrgencyFE = 'low' | 'normal' | 'high' | 'critical';
+export type ApprovalStatusFE = 'pending' | 'approved' | 'rejected' | 'feedback';
+
+export interface ApprovalRequestFE {
+  id: string;
+  type: ApprovalRequestTypeFE;
+  workspace: string;
+  runId?: string;
+  title: string;
+  description: string;
+  urgency: ApprovalUrgencyFE;
+  status: ApprovalStatusFE;
+  createdAt: string;
+  updatedAt: string;
+  response?: {
+    action: 'approved' | 'rejected' | 'feedback';
+    message: string;
+    respondedAt: string;
+    channel: string;
+  };
+}
+
+export interface ApprovalSummaryFE {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  feedback: number;
 }

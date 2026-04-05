@@ -1,0 +1,18 @@
+src/app/api/pipelines/[id]/route.test.ts(59,16): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; }' but required in type 'PipelineStage'.
+src/app/page.tsx(728,19): error TS2322: Type '(projectId: string, stageId: string, action: ResumeAction, branchIndex?: number) => Promise<void>' is not assignable to type '(projectId: string, stageIndex: number, action: ResumeAction) => Promise<void>'.
+  Types of parameters 'stageId' and 'stageIndex' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+src/app/page.tsx(732,39): error TS7006: Parameter 'uri' implicitly has an 'any' type.
+src/app/page.tsx(732,44): error TS7006: Parameter 'config' implicitly has an 'any' type.
+src/components/projects-panel.tsx(370,29): error TS2322: Type '(projectId: string, stageIndex: number, action: ResumeAction) => Promise<void>' is not assignable to type '(projectId: string, stageId: string, action: ResumeAction, branchIndex?: number | undefined) => Promise<void>'.
+  Types of parameters 'stageIndex' and 'stageId' are incompatible.
+    Type 'string' is not assignable to type 'number'.
+src/lib/agents/dispatch-service.ts(197,5): error TS2322: Type '{ [key: string]: unknown; goal?: string | undefined; inputArtifacts?: { path: string; label?: string | undefined; }[] | undefined; } | undefined' is not assignable to type 'TaskEnvelope | undefined'.
+  Property 'templateId' is missing in type '{ [key: string]: unknown; goal?: string | undefined; inputArtifacts?: { path: string; label?: string | undefined; }[] | undefined; }' but required in type 'TaskEnvelope'.
+src/lib/agents/generation-context.test.ts(15,7): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; }' but required in type 'PipelineStage'.
+src/lib/agents/generation-context.test.ts(16,7): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; }' but required in type 'PipelineStage'.
+src/lib/agents/generation-context.test.ts(50,9): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; }' but required in type 'PipelineStage'.
+src/lib/agents/generation-context.test.ts(51,9): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; stageType: "fan-out"; }' but required in type 'PipelineStage'.
+src/lib/agents/pipeline-generator.test.ts(23,16): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; }' but required in type 'PipelineStage'.
+src/lib/agents/pipeline-generator.test.ts(23,36): error TS2741: Property 'autoTrigger' is missing in type '{ groupId: string; }' but required in type 'PipelineStage'.
+src/lib/project-utils.test.ts(157,44): error TS2339: Property 'lastError' does not exist on type '{ runId: string; status: string; branches: never[]; }'.

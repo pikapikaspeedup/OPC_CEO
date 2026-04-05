@@ -1,6 +1,10 @@
 import type { GroupDefinition } from './group-types';
+import type { StageContract, FanOutContract, JoinMergeContract } from './contract-types';
+import type { GraphPipeline } from './graph-pipeline-types';
 
 export interface PipelineStage {
+  /** Stable stage identifier, unique within the template */
+  stageId?: string;
   /** Which agent group to run at this stage */
   groupId: string;
   /** Automatically dispatch this stage when the previous stage completes? */
@@ -9,6 +13,26 @@ export interface PipelineStage {
   triggerOn?: 'approved' | 'completed' | 'any';
   /** Optional prompt template override for this stage */
   promptTemplate?: string;
+  /** Explicit upstream dependency list. Falls back to linear previous stage when omitted. */
+  upstreamStageIds?: string[];
+  /** Orchestration stage type */
+  stageType?: 'normal' | 'fan-out' | 'join';
+  /** Fan-out configuration */
+  fanOutSource?: {
+    workPackagesPath: string;
+    perBranchTemplateId: string;
+    /** Maximum number of branches to run concurrently. Omit or 0 = unlimited. */
+    maxConcurrency?: number;
+  };
+  /** Join configuration */
+  joinFrom?: string;
+  joinPolicy?: 'all';
+  /** Stage data contract (V4.4) */
+  contract?: StageContract;
+  /** Fan-out data contract — only meaningful when stageType === 'fan-out' (V4.4) */
+  fanOutContract?: FanOutContract;
+  /** Join merge contract — only meaningful when stageType === 'join' (V4.4) */
+  joinMergeContract?: JoinMergeContract;
 }
 
 /**
@@ -30,6 +54,8 @@ export interface TemplateDefinition {
   groups: Record<string, Omit<GroupDefinition, 'id' | 'templateId' | 'defaultModel'>>;
   /** Ordered pipeline stages — defines execution order */
   pipeline: PipelineStage[];
+  /** Explicit graph definition (alternative to pipeline[], mutually exclusive; takes priority) */
+  graphPipeline?: GraphPipeline;
   /** Default model for all groups in this template */
   defaultModel?: string;
 }

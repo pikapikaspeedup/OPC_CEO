@@ -25,6 +25,7 @@ export const PROJECTS_FILE = path.join(GATEWAY_HOME, 'projects.json');
 export const RUNS_FILE = path.join(GATEWAY_HOME, 'agent_runs.json');
 export const CONVS_FILE = path.join(GATEWAY_HOME, 'local_conversations.json');
 export const HIDDEN_WS_FILE = path.join(GATEWAY_HOME, 'hidden_workspaces.json');
+export const SCHEDULED_JOBS_FILE = path.join(GATEWAY_HOME, 'scheduled_jobs.json');
 
 // Global assets directory
 export const GLOBAL_ASSETS_DIR = path.join(GATEWAY_HOME, 'assets');

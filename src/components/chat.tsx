@@ -2,7 +2,7 @@ import { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { useI18n } from '@/components/locale-provider';
 import type { Step, StepsData } from '@/lib/types';
-import { marked } from 'marked';
+import { renderMarkdown } from '@/lib/render-markdown';
 import { cn } from '@/lib/utils';
 import {
   Eye, Search, Terminal, Globe, FolderOpen, AlertTriangle,
@@ -62,10 +62,7 @@ const modeStyles: Record<string, { label: string; bg: string; border: string; ic
 
 const TIMELINE_OFFSET = 'ml-11';
 
-function renderMarkdown(text: string): string {
-  try { return marked.parse(text, { async: false }) as string; }
-  catch { return text; }
-}
+
 
 function getToolLabel(step: Step, t: (key: string, values?: Record<string, string | number>) => string): { icon: React.ReactNode; text: string; statusIcon?: React.ReactNode } {
   const type = step.type || '';

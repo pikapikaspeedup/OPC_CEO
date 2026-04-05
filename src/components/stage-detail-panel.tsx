@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { marked } from 'marked';
+import { renderMarkdown } from '@/lib/render-markdown';
 import {
   CheckCircle2,
   Clock,
@@ -15,6 +15,7 @@ import {
   XCircle,
   MessageSquare,
   ShieldCheck,
+  FastForward,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -27,21 +28,22 @@ interface StageDetailPanelProps {
   stageTitle: string;
   /** The AgentRun associated with this stage — carries result, envelopes, etc. */
   run?: AgentRun | null;
-  onResume: (stageIndex: number, action: ResumeAction) => Promise<void>;
+  onResume: (stageId: string, action: ResumeAction, branchIndex?: number) => Promise<void>;
   resumeLoading: boolean;
   resumeError?: string | null;
   onOpenConversation?: (id: string, title: string) => void;
   onEvaluateRun?: (runId: string) => Promise<void>;
+  onGateApprove?: (nodeId: string, input: { action: 'approve' | 'reject'; reason?: string }) => Promise<void>;
 }
 
 const stageStatusConfig: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' | 'info' }> = {
-  pending:   { label: 'Pending',   tone: 'neutral' },
-  running:   { label: 'Running',   tone: 'info' },
+  pending: { label: 'Pending', tone: 'neutral' },
+  running: { label: 'Running', tone: 'info' },
   completed: { label: 'Completed', tone: 'success' },
-  failed:    { label: 'Failed',    tone: 'danger' },
-  blocked:   { label: 'Blocked',   tone: 'warning' },
+  failed: { label: 'Failed', tone: 'danger' },
+  blocked: { label: 'Blocked', tone: 'warning' },
   cancelled: { label: 'Cancelled', tone: 'neutral' },
-  skipped:   { label: 'Skipped',   tone: 'neutral' },
+  skipped: { label: 'Skipped', tone: 'neutral' },
 };
 
 function formatElapsedTime(startedAt?: string, completedAt?: string): string | null {
@@ -57,10 +59,7 @@ function formatElapsedTime(startedAt?: string, completedAt?: string): string | n
   return `${hours}h ${minutes % 60}m`;
 }
 
-function renderMarkdown(text: string): string {
-  try { return marked.parse(text, { async: false }) as string; }
-  catch { return text; }
-}
+
 
 function MetaCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -80,6 +79,7 @@ export default function StageDetailPanel({
   resumeError,
   onOpenConversation,
   onEvaluateRun,
+  onGateApprove,
 }: StageDetailPanelProps) {
   const config = stageStatusConfig[stage.status] || stageStatusConfig.pending;
   const elapsed = formatElapsedTime(stage.startedAt, stage.completedAt);
@@ -87,6 +87,7 @@ export default function StageDetailPanel({
   const canRestartRole = isStaleActive || stage.status === 'failed' || stage.status === 'blocked' || stage.status === 'cancelled';
   const canCancel = run?.status === 'starting' || run?.status === 'running' || stage.status === 'blocked';
   const canSkip = ['pending', 'failed', 'blocked', 'cancelled'].includes(stage.status);
+  const canForceComplete = ['running', 'failed', 'blocked', 'cancelled', 'pending'].includes(stage.status);
 
   // Run-level data
   const summary = run?.result?.summary?.trim() || '';
@@ -101,6 +102,11 @@ export default function StageDetailPanel({
   const [evalStatus, setEvalStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [evalError, setEvalError] = useState<string | null>(null);
   const [evalStartReviewCount, setEvalStartReviewCount] = useState<number | null>(null);
+
+  // Gate approve/reject state
+  const [gateLoading, setGateLoading] = useState(false);
+  const [gateError, setGateError] = useState<string | null>(null);
+  const isGatePending = stage.nodeKind === 'gate' && stage.gateApproval?.status === 'pending';
 
   // Detect when evaluation completes — supervisorReviews count increases
   const currentReviewCount = run?.supervisorReviews?.length || 0;
@@ -132,9 +138,25 @@ export default function StageDetailPanel({
     }
   };
 
+  const handleGateAction = async (gateAction: 'approve' | 'reject', e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onGateApprove) return;
+    setGateLoading(true);
+    setGateError(null);
+    try {
+      await onGateApprove(stage.stageId, { action: gateAction });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Gate action failed';
+      setGateError(msg);
+      setTimeout(() => setGateError(null), 5000);
+    } finally {
+      setGateLoading(false);
+    }
+  };
+
   const handleResume = async (action: ResumeAction, e: React.MouseEvent) => {
     e.stopPropagation();
-    await onResume(stage.stageIndex, action);
+    await onResume(stage.stageId, action);
   };
 
   return (
@@ -156,22 +178,80 @@ export default function StageDetailPanel({
           <div className={cn(
             'flex h-10 w-10 items-center justify-center rounded-[16px] border',
             stage.status === 'completed' ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-400' :
-            stage.status === 'running' ? 'border-sky-400/20 bg-sky-400/10 text-sky-400' :
-            stage.status === 'blocked' ? 'border-amber-400/20 bg-amber-400/10 text-amber-400' :
-            stage.status === 'failed' ? 'border-red-400/20 bg-red-400/10 text-red-400' :
-            stage.status === 'cancelled' ? 'border-slate-300/20 bg-slate-300/10 text-slate-300' :
-            'border-white/10 bg-white/5 text-white/40',
+              stage.status === 'running' ? 'border-sky-400/20 bg-sky-400/10 text-sky-400' :
+                stage.status === 'blocked' ? 'border-amber-400/20 bg-amber-400/10 text-amber-400' :
+                  stage.status === 'failed' ? 'border-red-400/20 bg-red-400/10 text-red-400' :
+                    stage.status === 'cancelled' ? 'border-slate-300/20 bg-slate-300/10 text-slate-300' :
+                      'border-white/10 bg-white/5 text-white/40',
           )}>
             {stage.status === 'completed' ? <CheckCircle2 className="h-4 w-4" /> :
-             stage.status === 'running' ? <Loader2 className="h-4 w-4 animate-spin" /> :
-             stage.status === 'failed' ? <AlertTriangle className="h-4 w-4" /> :
-             stage.status === 'blocked' ? <AlertTriangle className="h-4 w-4" /> :
-             stage.status === 'cancelled' ? <XCircle className="h-4 w-4" /> :
-             stage.status === 'skipped' ? <SkipForward className="h-4 w-4" /> :
-             <Clock className="h-4 w-4" />}
+              stage.status === 'running' ? <Loader2 className="h-4 w-4 animate-spin" /> :
+                stage.status === 'failed' ? <AlertTriangle className="h-4 w-4" /> :
+                  stage.status === 'blocked' ? <AlertTriangle className="h-4 w-4" /> :
+                    stage.status === 'cancelled' ? <XCircle className="h-4 w-4" /> :
+                      stage.status === 'skipped' ? <SkipForward className="h-4 w-4" /> :
+                        <Clock className="h-4 w-4" />}
           </div>
         )}
       />
+
+      {/* ── Gate Approval Action ── */}
+      {isGatePending && onGateApprove && (
+        <div className="mt-5 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] px-5 py-4">
+          <div className="flex items-center gap-2 mb-3">
+            <ShieldCheck className="h-4 w-4 text-amber-400" />
+            <span className="text-[13px] font-semibold text-amber-200">Gate Awaiting Approval</span>
+          </div>
+          <div className="text-[12px] text-amber-200/60 mb-4">
+            This gate node requires human approval to proceed. Rejecting will cancel the gate and block downstream stages.
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline"
+              className="h-8 rounded-xl border-emerald-400/20 bg-emerald-400/8 text-xs font-semibold text-emerald-300 hover:bg-emerald-400/15 hover:text-emerald-200 disabled:opacity-50"
+              disabled={gateLoading}
+              onClick={(e) => handleGateAction('approve', e)}>
+              {gateLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
+              Approve
+            </Button>
+            <Button size="sm" variant="outline"
+              className="h-8 rounded-xl border-red-400/20 bg-red-400/8 text-xs font-semibold text-red-300 hover:bg-red-400/15 hover:text-red-200 disabled:opacity-50"
+              disabled={gateLoading}
+              onClick={(e) => handleGateAction('reject', e)}>
+              {gateLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <XCircle className="mr-1.5 h-3.5 w-3.5" />}
+              Reject
+            </Button>
+          </div>
+          {gateError && (
+            <div className="mt-2 text-[12px] text-red-300">{gateError}</div>
+          )}
+        </div>
+      )}
+
+      {/* Gate decided — show result */}
+      {stage.nodeKind === 'gate' && stage.gateApproval && stage.gateApproval.status !== 'pending' && (
+        <div className={cn(
+          'mt-5 rounded-2xl border px-5 py-4',
+          stage.gateApproval.status === 'approved'
+            ? 'border-emerald-400/20 bg-emerald-400/[0.06]'
+            : 'border-red-400/20 bg-red-400/[0.06]',
+        )}>
+          <div className="flex items-center gap-2">
+            <ShieldCheck className={cn('h-4 w-4', stage.gateApproval.status === 'approved' ? 'text-emerald-400' : 'text-red-400')} />
+            <span className={cn('text-[13px] font-semibold', stage.gateApproval.status === 'approved' ? 'text-emerald-200' : 'text-red-200')}>
+              Gate {stage.gateApproval.status === 'approved' ? 'Approved' : 'Rejected'}
+            </span>
+            {stage.gateApproval.decidedAt && (
+              <span className="text-[10px] text-white/30 ml-auto font-mono">{new Date(stage.gateApproval.decidedAt).toLocaleString()}</span>
+            )}
+          </div>
+          {stage.gateApproval.approvedBy && (
+            <div className="mt-1 text-[11px] text-white/40">By: {stage.gateApproval.approvedBy}</div>
+          )}
+          {stage.gateApproval.reason && (
+            <div className="mt-1 text-[12px] text-white/50">{stage.gateApproval.reason}</div>
+          )}
+        </div>
+      )}
 
       {/* ── Execution Summary (primary content) ── */}
       {summary && (
@@ -334,6 +414,14 @@ export default function StageDetailPanel({
               disabled={resumeLoading} onClick={(e) => handleResume('skip', e)}>
               {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <SkipForward className="mr-1.5 h-3.5 w-3.5" />}
               Skip
+            </Button>
+          )}
+          {canForceComplete && (
+            <Button size="sm" variant="outline"
+              className="h-8 rounded-xl border-orange-400/20 bg-orange-400/8 text-xs font-semibold text-orange-300 hover:bg-orange-400/15 hover:text-orange-200 disabled:opacity-50"
+              disabled={resumeLoading} onClick={(e) => handleResume('force-complete', e)}>
+              {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FastForward className="mr-1.5 h-3.5 w-3.5" />}
+              Force Complete
             </Button>
           )}
           {run?.childConversationId && onOpenConversation && (

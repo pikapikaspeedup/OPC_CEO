@@ -15,6 +15,8 @@ The API runs on port 3000 by default.
   - `goal` (String, required): Project goal description
   - `workspace` (String, required): Absolute path to the workspace
   - `templateId` (String, optional): Template identification
+  - `projectType` (String, optional): Project type classification
+  - `skillHint` (String, optional): Skill hint for the project
 - **Example Body:**
   ```json
   {
@@ -53,41 +55,39 @@ The API runs on port 3000 by default.
 - **URL:** `POST /api/projects/:id/resume`
 - **Description:** Resumes a project from its first actionable pipeline stage. The project must have a `pipelineState` (i.e., it was created via template dispatch).
 - **Request Body (JSON):**
-  - `stageIndex` (number, optional): Target a specific stage. Defaults to the first actionable stage.
-  - `action` (string, required): `"recover"`, `"nudge"`, `"restart_role"`, or `"cancel"`.
+  - `stageId` (string, optional): Target a specific stage by ID. Defaults to the first actionable stage.
+  - `stageIndex` (number, optional): Target a specific stage by index. Defaults to the first actionable stage.
+  - `branchIndex` (number, optional): Target a specific branch within a fan-out stage.
+  - `action` (string, required): One of:
     - `recover`: Restores the existing Run from artifacts/result envelope.
     - `nudge`: Sends a follow-up prompt to a stale-active Run's existing conversation.
     - `restart_role`: Starts a fresh child conversation for the target role within the same Run.
     - `cancel`: Cancels the canonical Run and marks the stage as `cancelled`.
+    - `skip`: Marks the stage as `skipped` without running. For `pending`/`failed`/`blocked`/`cancelled` stages.
+    - `force-complete`: **Marks the stage as `completed` and emits `stage:completed` event**, triggering downstream dispatch (fan-out, join, etc). Use when the watcher failed to detect completion. For `running`/`failed`/`blocked`/`cancelled`/`pending` stages.
   - `prompt` (string, optional): Custom prompt for `nudge` / `restart_role`.
   - `roleId` (string, optional): Target role for `restart_role`.
-- **Response:** `200 OK` for `recover` and `cancel`, `202 Accepted` for async `nudge` / `restart_role`
-  ```json
-  {
-    "status": "resuming",
-    "requestedAction": "restart_role",
-    "actualAction": "restart_role",
-    "stageIndex": 1,
-    "groupId": "architecture-advisory",
-    "runId": "..."
-  }
-  ```
-- **Conflict Response:** `409 Conflict` when the requested action is not valid for the current canonical run state, or another intervention is already active for the target run.
+- **Response:** `200 OK` for `recover`, `cancel`, `force-complete`, `skip`. `202 Accepted` for async `nudge` / `restart_role`.
 - **Action Selection Guide:**
-  - Use `recover` when artifacts already exist and you only need to restore status.
-  - Use `nudge` only when the canonical run is stale-active (`running/starting` with `liveState.staleSince`).
-  - Use `restart_role` when you want a fresh child conversation but must stay inside the same run.
-  - Use `cancel` to stop the canonical run and mark the stage `cancelled`.
-- **Default Stage Selection:** When `stageIndex` is omitted, the server chooses the first actionable stage: `failed`, `blocked`, `cancelled`, or a stale-active canonical run.
-- **Important:** This endpoint never creates a new run. `redispatch` is not part of normal recovery.
+  - `recover` — artifacts exist, restore status only.
+  - `nudge` — stale-active run (`liveState.staleSince` present).
+  - `restart_role` — fresh child conversation within the same run.
+  - `cancel` — stop and mark `cancelled`.
+  - `skip` — bypass stage, **no downstream dispatch**.
+  - `force-complete` — **manually advance past stuck stage, triggers downstream dispatch**.
 - **Example:**
   ```bash
-  # Recover the canonical run from artifacts
+  # Force-complete a stuck planning stage → triggers fan-out
+  curl -X POST http://localhost:3000/api/projects/<projectId>/resume \
+    -H "Content-Type: application/json" \
+    -d '{ "action": "force-complete", "stageId": "planning" }'
+
+  # Recover from artifacts
   curl -X POST http://localhost:3000/api/projects/<projectId>/resume \
     -H "Content-Type: application/json" \
     -d '{ "action": "recover" }'
 
-  # Restart a role inside the existing run
+  # Restart a role
   curl -X POST http://localhost:3000/api/projects/<projectId>/resume \
     -H "Content-Type: application/json" \
     -d '{ "action": "restart_role", "roleId": "ux-review-critic" }'
@@ -106,13 +106,19 @@ The API runs on port 3000 by default.
   - `sourceRunIds` (Array of Strings, optional): Used to chain dependencies (e.g., provide specs to an architecture run).
   - `templateId` (String, optional): Template ID. If provided without a `groupId`, automatically starts the template pipeline from stage 0. Also supports `pipelineId` as an alias.
   - `pipelineStageIndex` (Number, optional): Current stage index within the pipeline (0-based). Default is 0 when expanding templates. If omitted while `templateId/pipelineId` and `sourceRunIds` are both present, the API infers the next stage from the first source run.
+  - `templateOverrides` (Object, optional, V5.3): Runtime overrides to deep-merge onto the template before compiling the DAG. Any template field can be overridden (e.g., `maxConcurrency`, `defaultModel`). The original template file is never modified; overrides persist in the project's pipeline state.
+  - `conversationMode` (String, optional, V5.5): Controls conversation reuse in review-loop groups. `"shared"` = author reuses cascade across rounds (~73% token saving), `"isolated"` = each role gets a new conversation (default). Only effective for `review-loop` groups. Can also be set globally via `AG_SHARED_CONVERSATION=true`.
+  - `model` (String, optional): Model ID to use for this run (e.g., `MODEL_PLACEHOLDER_M47`). If omitted, uses group recommended model.
+  - `parentConversationId` (String, optional): ID of the parent conversation to create a child cascade under. Used internally by the runtime for hidden child conversations.
 - **Example Body:**
   ```json
   {
     "groupId": "product-spec",
     "workspace": "/Users/user/workspace",
     "prompt": "Draft spec for user authentication",
-    "projectId": "proj-1234"
+    "projectId": "proj-1234",
+    "templateOverrides": { "maxConcurrency": 5 },
+    "conversationMode": "shared"
   }
   ```
 - **Response:** `201 Created`
@@ -184,11 +190,12 @@ The API runs on port 3000 by default.
 #### Intervene on a Run
 - **URL:** `POST /api/agent-runs/:runId/intervene`
 - **Request Body (JSON):**
-  - `action` (String, required): `"nudge"`, `"retry"`, `"restart_role"`, or `"cancel"`.
+  - `action` (String, required): `"nudge"`, `"retry"`, `"restart_role"`, `"cancel"`, or `"evaluate"`.
     - `nudge`: Sends a follow-up message to the existing child conversation for a stale-active run.
     - `retry`: Compatibility alias for `restart_role`.
     - `restart_role`: Creates a fresh child conversation for just the target role, re-executing it within the same Run.
     - `cancel`: Cancels the canonical Run.
+    - `evaluate`: Triggers an evaluation of the current run state.
   - `prompt` (String, optional): Custom prompt for the intervention. If omitted, a sensible default is generated.
   - `roleId` (String, optional): Target role to intervene on. Defaults to the last role in the run.
 - **Response:** `202 Accepted` — intervention runs asynchronously. `cancel` also uses the same route and returns `202`.
@@ -244,6 +251,131 @@ The API runs on port 3000 by default.
     "checkedPackages": 2
   }
   ```
+
+### 5. CEO Command
+
+#### Send CEO Command
+- **URL:** `POST /api/ceo/command`
+- **Description:** CEO 自然语言命令入口。自动进行意图识别、部门匹配和任务派发。
+- **Request Body (JSON):**
+  - `command` (String, required): CEO 的自然语言命令
+- **Response:** `200 OK`
+  ```json
+  {
+    "success": true,
+    "action": "create_project",
+    "message": "已在「后端研发」部门创建项目",
+    "projectId": "abc123"
+  }
+  ```
+
+### 6. Approval
+
+#### List Approval Requests
+- **URL:** `GET /api/approval`
+- **Response:** `200 OK` Array of `ApprovalRequest` objects.
+
+#### Submit Approval Request
+- **URL:** `POST /api/approval`
+- **Request Body (JSON):**
+  - `type` (String, required): `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `other`
+  - `workspace` (String, required): 发起部门的 workspace URI
+  - `title` (String, required): 审批标题
+  - `description` (String, required): 详细描述
+  - `urgency` (String, optional): `low` / `normal` / `high` / `critical`
+  - `runId` (String, optional): 关联的 Run ID
+
+#### Get Approval Details
+- **URL:** `GET /api/approval/:id`
+- **Response:** `200 OK` Full `ApprovalRequest` object.
+
+#### Update Approval Status
+- **URL:** `PATCH /api/approval/:id`
+- **Request Body (JSON):**
+  - `action` (String, required): `approved` / `rejected` / `feedback`
+  - `message` (String, optional): CEO 回复消息
+
+#### Submit Approval Feedback
+- **URL:** `POST /api/approval/:id/feedback`
+- **Request Body (JSON):**
+  - `message` (String, required): 反馈内容
+
+### 7. Departments
+
+#### Get Department Config
+- **URL:** `GET /api/departments?workspace=<absolute_path>`
+- **Description:** 获取部门配置。workspace 参数为绝对路径（不含 `file://`）。
+- **Response:** `200 OK` `DepartmentConfig` object.
+- **Error:** `403` if workspace is not registered (path traversal protection).
+
+#### Update Department Config
+- **URL:** `PUT /api/departments?workspace=<absolute_path>`
+- **Request Body:** Full `DepartmentConfig` JSON object.
+
+#### Sync Department State
+- **URL:** `POST /api/departments/sync`
+
+#### Get Department Digest
+- **URL:** `GET /api/departments/digest`
+
+#### Get Department Quota
+- **URL:** `GET /api/departments/quota`
+
+#### Read/Write Department Memory
+- **URL:** `GET /api/departments/memory` / `POST /api/departments/memory`
+
+### 8. Scheduler
+
+#### List Scheduled Jobs
+- **URL:** `GET /api/scheduler/jobs`
+- **Response:** `200 OK` Array of `ScheduledJob` objects (including `lastRunAt`, `lastRunResult`, `enabled`).
+
+#### Create Scheduled Job
+- **URL:** `POST /api/scheduler/jobs`
+- **Request Body (JSON):**
+  - `name` (String, required): 任务名称
+  - `type` (String, required): `cron` / `interval` / `once`
+  - `cronExpression` (String, conditional): cron 表达式
+  - `action` (Object, required): `{ kind: 'dispatch-pipeline' | 'dispatch-group' | 'health-check', ... }`
+  - `enabled` (Boolean, optional): 默认 `true`
+  - `departmentWorkspaceUri` (String, optional): 关联部门 workspace
+
+#### Get Scheduled Job
+- **URL:** `GET /api/scheduler/jobs/:id`
+
+#### Update Scheduled Job
+- **URL:** `PATCH /api/scheduler/jobs/:id`
+
+#### Delete Scheduled Job
+- **URL:** `DELETE /api/scheduler/jobs/:id`
+
+#### Trigger Scheduled Job
+- **URL:** `POST /api/scheduler/jobs/:id/trigger`
+- **Description:** 立即触发一次执行（不影响 cron 下次触发）。
+
+### 9. Deliverables
+
+#### List Deliverables
+- **URL:** `GET /api/projects/:id/deliverables`
+- **Response:** `200 OK` Array of deliverable objects.
+
+#### Add Deliverable
+- **URL:** `POST /api/projects/:id/deliverables`
+- **Request Body (JSON):**
+  - `stageId` (String, required): 所属 Stage ID
+  - `type` (String, required): `document` / `code` / `data` / `review`
+  - `title` (String, required): 交付物标题
+  - `artifactPath` (String, optional): 产物文件路径
+
+### 10. Operations
+
+#### Audit Log
+- **URL:** `GET /api/operations/audit`
+- **Description:** 获取系统审计事件日志。
+
+#### System Logs
+- **URL:** `GET /api/logs`
+- **Description:** 获取系统运行日志。
 
 ## Task Lifecycle & Workflow
 

@@ -151,7 +151,7 @@ function loadFromDisk(): void {
 
     // Post-load: sync any auto-recovered runs to their project pipeline
     for (const entry of entries) {
-      if (entry.status === 'completed' && entry.projectId && entry.pipelineStageIndex !== undefined) {
+      if (entry.status === 'completed' && entry.projectId && (entry.pipelineStageId || entry.pipelineStageIndex !== undefined)) {
         syncRunStatusToProject(entry);
       }
     }
@@ -180,6 +180,7 @@ export function createRun(input: {
   projectId?: string;
   // V3.5: Pipeline tracking
   pipelineId?: string;
+  pipelineStageId?: string;
   pipelineStageIndex?: number;
 }): AgentRunState {
   const run: AgentRunState = {
@@ -198,6 +199,7 @@ export function createRun(input: {
     sourceRunIds: input.sourceRunIds,
     // V3.5: Pipeline tracking
     pipelineId: input.pipelineId,
+    pipelineStageId: input.pipelineStageId,
     pipelineStageIndex: input.pipelineStageIndex,
   };
   // Runtime will backfill runId into taskEnvelope after creation
@@ -235,7 +237,7 @@ export function updateRun(
 
   // Pipeline state auto-sync: when a run transitions to terminal status,
   // propagate the change to the Project's pipelineState
-  if (updates.status && updates.status !== prevStatus && run.projectId && run.pipelineStageIndex !== undefined) {
+  if (updates.status && updates.status !== prevStatus && run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
     syncRunStatusToProject(run);
   }
 
@@ -248,8 +250,10 @@ export function updateRun(
  */
 function syncRunStatusToProject(run: AgentRunState): void {
   // Lazy import to avoid circular dependency
-  const { updatePipelineStage, getProject } = require('./project-registry');
-  const stageIndex = run.pipelineStageIndex!;
+  const { updatePipelineStage, updatePipelineStageByStageId, getProject } = require('./project-registry');
+  const { emitProjectEvent } = require('./project-events');
+  const stageIdentifier = run.pipelineStageId || run.pipelineStageIndex;
+  if (stageIdentifier === undefined) return;
 
   // Cancel is handled explicitly by the cancel flow to preserve operator intent.
   if (run.status === 'cancelled') {
@@ -257,36 +261,71 @@ function syncRunStatusToProject(run: AgentRunState): void {
   }
 
   const project = getProject(run.projectId!);
-  const stage = project?.pipelineState?.stages[stageIndex];
+  const stage = project?.pipelineState?.stages.find((item: any) =>
+    typeof stageIdentifier === 'string' ? item.stageId === stageIdentifier : item.stageIndex === stageIdentifier,
+  );
   if (stage?.status === 'completed' && (run.status === 'running' || run.status === 'starting')) {
-    log.warn({ runId: run.runId.slice(0, 8), stageIndex }, 'Refusing to overwrite completed stage with running');
+    log.warn({ runId: run.runId.slice(0, 8), stageId: stage.stageId }, 'Refusing to overwrite completed stage with running');
     return;
   }
 
+  const applyStageUpdate = (updates: Record<string, unknown>) => {
+    if (run.pipelineStageId) {
+      updatePipelineStageByStageId(run.projectId!, run.pipelineStageId, updates);
+    } else {
+      updatePipelineStage(run.projectId!, run.pipelineStageIndex!, updates);
+    }
+  };
+
   if (run.status === 'running' || run.status === 'starting') {
     // V3.5 Fix 8: attempts is now managed by trackStageDispatch; only sync status here
-    updatePipelineStage(run.projectId!, stageIndex, {
+    applyStageUpdate({
       status: 'running',
       runId: run.runId,
     });
   } else if (run.status === 'completed') {
-    updatePipelineStage(run.projectId!, stageIndex, {
+    applyStageUpdate({
       status: 'completed',
       runId: run.runId,
       completedAt: run.finishedAt || new Date().toISOString(),
     });
   } else if (run.status === 'blocked') {
-    updatePipelineStage(run.projectId!, stageIndex, {
+    applyStageUpdate({
       status: 'blocked',
       runId: run.runId,
       lastError: run.lastError,
     });
   } else if (run.status === 'failed' || run.status === 'timeout') {
-    updatePipelineStage(run.projectId!, stageIndex, {
+    applyStageUpdate({
       status: 'failed',
       runId: run.runId,
       lastError: run.lastError,
     });
+  }
+
+  const updatedProject = getProject(run.projectId!);
+  const resolvedStageId = typeof stageIdentifier === 'string'
+    ? stageIdentifier
+    : updatedProject?.pipelineState?.stages.find((item: any) => item.stageIndex === stageIdentifier)?.stageId;
+
+  if (run.status === 'completed' && resolvedStageId) {
+    emitProjectEvent({ type: 'stage:completed', projectId: run.projectId!, stageId: resolvedStageId, runId: run.runId });
+  }
+
+  // Emit stage:failed for failed/timeout/blocked runs so approval triggers can fire
+  if ((run.status === 'failed' || run.status === 'timeout' || run.status === 'blocked') && resolvedStageId) {
+    emitProjectEvent({
+      type: 'stage:failed',
+      projectId: run.projectId!,
+      stageId: resolvedStageId,
+      runId: run.runId,
+      status: run.status === 'timeout' ? 'timeout' : run.status === 'blocked' ? 'blocked' : 'failed',
+      error: run.lastError,
+    });
+  }
+
+  if (updatedProject?.pipelineState?.status === 'completed') {
+    emitProjectEvent({ type: 'project:completed', projectId: run.projectId! });
   }
 }
 

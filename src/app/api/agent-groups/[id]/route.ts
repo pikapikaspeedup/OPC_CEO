@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const group = getGroup(id);
-  if (!group) {
+  if (!group || group.executionMode === 'orchestration') {
     return NextResponse.json({ error: `Group not found: ${id}` }, { status: 404 });
   }
   return NextResponse.json(group);

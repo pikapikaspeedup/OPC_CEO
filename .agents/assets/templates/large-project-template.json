@@ -1,0 +1,76 @@
+{
+  "id": "large-project-template",
+  "kind": "template",
+  "title": "大型项目分解开发",
+  "description": "项目规划产出工作包，并行执行子项目，最终汇合集成验证。",
+  "groups": {
+    "project-planning": {
+      "title": "项目规划",
+      "description": "拆解目标并产出工作包清单，供 fan-out 阶段创建子项目。",
+      "executionMode": "review-loop",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true, "advisory": true },
+      "roles": [
+        { "id": "project-planner", "workflow": "/project-planner", "timeoutMs": 900000, "autoApprove": true },
+        { "id": "product-lead-reviewer", "workflow": "/product-lead-reviewer", "timeoutMs": 600000, "autoApprove": true }
+      ],
+      "reviewPolicyId": "default-product"
+    },
+    "wp-execution": {
+      "title": "工作包并行执行",
+      "description": "编排节点：读取工作包并为每个工作包派发一个子项目。",
+      "executionMode": "orchestration",
+      "roles": []
+    },
+    "integration-gate": {
+      "title": "汇合关卡",
+      "description": "编排节点：等待所有分支完成后推进下游集成验证。",
+      "executionMode": "orchestration",
+      "roles": []
+    },
+    "integration-testing": {
+      "title": "集成验证",
+      "description": "在主工作区执行端到端集成验证，并输出最终结果。",
+      "executionMode": "legacy-single",
+      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true },
+      "roles": [
+        { "id": "integration-tester", "workflow": "/integration-tester", "timeoutMs": 1200000, "autoApprove": true }
+      ]
+    }
+  },
+  "pipeline": [
+    {
+      "stageId": "planning",
+      "groupId": "project-planning",
+      "autoTrigger": false
+    },
+    {
+      "stageId": "wp-execution",
+      "groupId": "wp-execution",
+      "autoTrigger": true,
+      "triggerOn": "approved",
+      "stageType": "fan-out",
+      "upstreamStageIds": ["planning"],
+      "fanOutSource": {
+        "workPackagesPath": "specs/work-packages.json",
+        "perBranchTemplateId": "development-template-1"
+      }
+    },
+    {
+      "stageId": "convergence",
+      "groupId": "integration-gate",
+      "autoTrigger": true,
+      "stageType": "join",
+      "joinFrom": "wp-execution",
+      "joinPolicy": "all",
+      "upstreamStageIds": ["wp-execution"]
+    },
+    {
+      "stageId": "integration",
+      "groupId": "integration-testing",
+      "autoTrigger": true,
+      "triggerOn": "completed",
+      "upstreamStageIds": ["convergence"]
+    }
+  ],
+  "defaultModel": "MODEL_PLACEHOLDER_M26"
+}

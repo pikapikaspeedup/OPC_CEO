@@ -1,0 +1,33 @@
+{
+  "projectId": "0445deed-07bf-4023-8a12-d1db4668337c",
+  "name": "TradingAgents 量化选股深度研究 - TradingAgents-MCPmode",
+  "goal": "你是一名量化交易研究员，需要对以下 GitHub 开源项目进行深度源码级别的研究分析。请确保完成以下任务：\n\n1. 请执行 git clone https://github.com/guangxiangdebizi/TradingAgents-MCPmode 到临时目录。\n2. 深度阅读并分析项目源码。\n\n**研究目标项目**：\nTradingAgents-MCPmode (https://github.com/guangxiangdebizi/TradingAgents-MCPmode) — TradingAgents 的 MCP 模式分支。\n\n**研究维度（必须覆盖全部 6 个维度）**：\n1. **核心亮点与使用思路**：项目的核心设计理念是什么？主要解决什么问题？使用者如何上手？架构上有什么独特之处？\n2. **量化选股因子体系**：项目中包含了哪些量化选股因子？每个因子的定义、计算方式和重要性是什么？\n3. **涨跌映射因子逻辑**：从股票的涨跌数据，项目是如何提炼和映射到对应的因子的？映射的具体逻辑和代码路径是什么？\n4. **因子进化逻辑**：项目是否包含因子进化/自适应/自动优化的机制？如果有，进化的触发条件、评估标准和迭代方式是什么？\n5. **条件猎手机制**：项目是否包含条件猎手（Condition Hunter / Signal Scanner）？系统内置了哪些预设条件？用户如何自定义条件？\n6. **选股逻辑总结**：从该项目源码中可以总结出哪些完整的选股逻辑链路？从数据输入到最终的买/卖信号，完整的决策路径是什么？\n\n**输出要求**：\n请用中文撰写详细的分析报告，每个维度都要深入到源码级别，引用关键代码路径和文件名。报告长度不设上限，但必须有实质内容，拒绝泛泛而谈。",
+  "templateId": "research-branch-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-03-29T10:04:25.695Z",
+  "updatedAt": "2026-04-05T20:37:51.984Z",
+  "runIds": [
+    "f7b98f9e-ac7f-422c-8dc0-98d37c66e9f2"
+  ],
+  "parentProjectId": "b11c8717-c8ac-4549-b273-624ddcd87ec1",
+  "parentStageId": "fanout",
+  "branchIndex": 2,
+  "pipelineState": {
+    "templateId": "research-branch-template",
+    "stages": [
+      {
+        "stageId": "research-task",
+        "groupId": "research-task",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "f7b98f9e-ac7f-422c-8dc0-98d37c66e9f2",
+        "startedAt": "2026-03-29T10:04:25.794Z",
+        "completedAt": "2026-03-29T10:06:55.557Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

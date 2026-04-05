@@ -1,0 +1,52 @@
+{
+  "projectId": "c02c6da9-7ad6-46d1-92ba-0ce809c4da8c",
+  "name": "V4 Dry Run Gemini 3.1 Pro Root",
+  "goal": "Build a tiny note-taking web app with note CRUD, local persistence, and a simple smoke test. Keep scope intentionally small for this dry-run.",
+  "templateId": "large-project-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "active",
+  "createdAt": "2026-03-27T23:07:39.670Z",
+  "updatedAt": "2026-04-05T20:37:51.852Z",
+  "runIds": [
+    "157e1c47-250e-46b5-8e59-6ea32bbabf4a"
+  ],
+  "pipelineState": {
+    "templateId": "large-project-template",
+    "stages": [
+      {
+        "stageId": "planning",
+        "groupId": "project-planning",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "157e1c47-250e-46b5-8e59-6ea32bbabf4a",
+        "startedAt": "2026-03-27T23:07:45.435Z",
+        "completedAt": "2026-03-27T23:14:34.984Z",
+        "contractViolations": []
+      },
+      {
+        "stageId": "wp-execution",
+        "groupId": "wp-execution",
+        "stageIndex": 1,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "convergence",
+        "groupId": "integration-gate",
+        "stageIndex": 2,
+        "status": "pending",
+        "attempts": 0
+      },
+      {
+        "stageId": "integration",
+        "groupId": "integration-testing",
+        "stageIndex": 3,
+        "status": "pending",
+        "attempts": 0
+      }
+    ],
+    "activeStageIds": [],
+    "status": "running"
+  }
+}

@@ -363,6 +363,7 @@ export default function AgentRunsPanel({
   const [approvedProductRuns, setApprovedProductRuns] = useState<AgentRun[]>([]);
   const [modelMode, setModelMode] = useState<RunModelMode>('follow-header');
   const [selectedExplicitModel, setSelectedExplicitModel] = useState('');
+  const [conversationMode, setConversationMode] = useState<'isolated' | 'shared'>('isolated');
   const [dispatching, setDispatching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -381,12 +382,26 @@ export default function AgentRunsPanel({
     const initialLoad = setTimeout(() => {
       void loadRuns();
     }, 0);
-    pollRef.current = setInterval(() => {
-      void loadRuns();
-    }, 3000);
+
+    const startPolling = () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => { void loadRuns(); }, 3000);
+    };
+    const stopPolling = () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    };
+
+    startPolling();
+
+    const handleVisibility = () => {
+      if (document.hidden) { stopPolling(); } else { void loadRuns(); startPolling(); }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       clearTimeout(initialLoad);
-      if (pollRef.current) clearInterval(pollRef.current);
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [loadRuns, showRunsList]);
   const runningWs = workspaces.filter(w => w.running);
@@ -461,6 +476,7 @@ export default function AgentRunsPanel({
             inputArtifacts: sourceRun.resultEnvelope.outputArtifacts,
           },
           sourceRunIds: [selectedSourceRunId],
+          conversationMode,
         });
         setPrompt('');
         if (showRunsList) await loadRuns();
@@ -478,6 +494,7 @@ export default function AgentRunsPanel({
           prompt: prompt.trim(),
           model: modelToSend,
           sourceRunIds: [selectedSourceRunId],
+          conversationMode,
         });
         setPrompt('');
         if (showRunsList) await loadRuns();
@@ -488,6 +505,7 @@ export default function AgentRunsPanel({
           workspace: effectiveSelectedWs,
           prompt: prompt.trim(),
           model: modelToSend,
+          conversationMode,
         });
         setPrompt('');
         if (showRunsList) await loadRuns();
@@ -690,6 +708,41 @@ export default function AgentRunsPanel({
                 </div>
               )}
 
+              {/* V5.5: Shared Conversation Mode toggle — only shown for review-loop groups */}
+              {(selectedGroup === 'product-spec' || selectedGroup === 'architecture-advisory') && (
+                <div className="space-y-2">
+                  <div className="agent-kicker">Conversation Mode</div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex-1 rounded-2xl border px-4 py-3 text-left transition-all',
+                        conversationMode === 'isolated'
+                          ? 'border-sky-400/40 bg-sky-400/10 text-sky-300'
+                          : 'border-white/8 bg-white/[0.03] text-[color:var(--agent-text-muted)] hover:bg-white/[0.06]'
+                      )}
+                      onClick={() => setConversationMode('isolated')}
+                    >
+                      <div className="text-sm font-medium">Isolated</div>
+                      <div className="mt-0.5 text-[11px] opacity-70">Each role gets a new conversation (default)</div>
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex-1 rounded-2xl border px-4 py-3 text-left transition-all',
+                        conversationMode === 'shared'
+                          ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
+                          : 'border-white/8 bg-white/[0.03] text-[color:var(--agent-text-muted)] hover:bg-white/[0.06]'
+                      )}
+                      onClick={() => setConversationMode('shared')}
+                    >
+                      <div className="text-sm font-medium">Shared <Badge variant="outline" className="ml-1.5 rounded-full border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0 text-[9px] text-emerald-400">BETA</Badge></div>
+                      <div className="mt-0.5 text-[11px] opacity-70">Reuse conversation across rounds (~73% token saving)</div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <div className="agent-kicker">{t('agent.dispatchTask')}</div>
                 <Textarea
@@ -807,6 +860,21 @@ export default function AgentRunsPanel({
                     </div>
                   )}
                 </>
+              )}
+
+              {/* V5.5: Compact conversation mode toggle */}
+              {(selectedGroup === 'product-spec' || selectedGroup === 'architecture-advisory') && (
+                <Select value={conversationMode} onValueChange={(val: string | null) => { if (val) setConversationMode(val as 'isolated' | 'shared'); }}>
+                  <SelectTrigger className="h-8 text-[11px]">
+                    <span className="truncate">
+                      {conversationMode === 'shared' ? '🔗 Shared Conversation (Beta)' : '🔒 Isolated Conversations'}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="isolated" className="text-[11px]">🔒 Isolated (default)</SelectItem>
+                    <SelectItem value="shared" className="text-[11px]">🔗 Shared (~73% token saving)</SelectItem>
+                  </SelectContent>
+                </Select>
               )}
 
               <div className="flex gap-1.5">

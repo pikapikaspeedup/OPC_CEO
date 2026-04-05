@@ -82,6 +82,35 @@ curl -X POST http://localhost:3000/api/agent-runs \
 
 ---
 
+## 模式 C — 通用批量任务 (Fan-out 模式)
+
+专门用于需要将一件重复的事情（如爬取 40 个不同网页、批量翻译文档、分析竞品）无脑分发给 N 个平行 Agent 同时处理的情况。
+
+> **核心极简理念**：你这辈子只需要这个唯一的模板，**不用为新的爬虫或翻译任务再写一行规则代码**。
+
+工作流会自动：
+1. 阅读你的长 `prompt`，切片成 N 个独立的子任务。
+2. 以安全并发上限（防 API 阻断）同时唤醒 `research-worker` 通用打工人。
+3. **输出隔离 (Dual-Write)**：
+   - AI 通信所需的中间态文件（`result.json`、状态锁等）会被严格沙盒化到当前 Project 的独享空间（如你配置的 `demolong/projects/...`），规避所有高并发覆写导致的冲突崩溃。
+   - 人类需要看的**最终研究交付物**，会被打工人起个通顺的名字，统一汇总到工作区根目录的 `/research/[主题].md`。你可以一口气审阅全部成果而不用翻找沙盒抽屉。
+
+### 派发命令
+
+```bash
+// turbo
+curl -X POST http://localhost:3000/api/agent-runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "templateId": "universal-batch-template",
+    "workspace": "file:///path/to/your/workspace",
+    "projectId": "<projectId>",
+    "prompt": "<目标：你要批量干什么？包含你要处理的长长的数据清单 (例如 40 个 URL)>"
+  }'
+```
+
+---
+
 ## Step 2: 创建 Project（推荐）
 
 ```bash

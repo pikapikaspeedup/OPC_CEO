@@ -246,11 +246,11 @@ Commands:
     --source <runId>               Source run (repeatable)
     --template <id>                Template ID
     --prompt "..."                 Goal
-  intervene <runId> <action>     Intervene (retry|restart_role|nudge|cancel)
+  intervene <runId> <action>     Intervene (retry|restart_role|nudge|cancel|evaluate)
     --prompt "..."                 Feedback
     --role <roleId>                Target role
   resume <projectId>             Resume from first actionable stage
-    --action <action>              recover|nudge|restart_role|cancel
+    --action <action>              recover|nudge|restart_role|cancel|skip|force-complete
     --role <roleId>                Target role for restart_role
 
 Environment:

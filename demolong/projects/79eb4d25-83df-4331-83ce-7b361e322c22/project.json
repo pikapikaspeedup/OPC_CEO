@@ -1,0 +1,33 @@
+{
+  "projectId": "79eb4d25-83df-4331-83ce-7b361e322c22",
+  "name": "Graph Pipeline Final Smoke - Smoke Branch 2",
+  "goal": "Create a minimal branch result for smoke branch 2.",
+  "templateId": "v4-smoke-branch-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "completed",
+  "createdAt": "2026-03-28T11:38:23.994Z",
+  "updatedAt": "2026-03-28T11:38:54.498Z",
+  "runIds": [
+    "d6067c2d-768d-4c85-8d1d-7df7f91bf422"
+  ],
+  "parentProjectId": "a6b2164d-1afd-404b-8255-f149e21657ba",
+  "parentStageId": "fanout",
+  "branchIndex": 1,
+  "pipelineState": {
+    "templateId": "v4-smoke-branch-template",
+    "stages": [
+      {
+        "stageId": "branch-task",
+        "groupId": "smoke-branch-task",
+        "stageIndex": 0,
+        "status": "completed",
+        "attempts": 1,
+        "runId": "d6067c2d-768d-4c85-8d1d-7df7f91bf422",
+        "startedAt": "2026-03-28T11:38:24.066Z",
+        "completedAt": "2026-03-28T11:38:54.492Z"
+      }
+    ],
+    "activeStageIds": [],
+    "status": "completed"
+  }
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { marked } from 'marked';
+import { renderMarkdown } from '@/lib/render-markdown';
 import {
   AlertCircle,
   Ban,
@@ -78,13 +78,7 @@ const inputAuditBadgeConfig: Record<string, string> = {
   not_applicable: 'bg-white/8 text-white/55',
 };
 
-function renderMarkdown(text: string): string {
-  try {
-    return marked.parse(text, { async: false }) as string;
-  } catch {
-    return text;
-  }
-}
+
 
 function SurfaceCard({
   title,
