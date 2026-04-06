@@ -84,8 +84,11 @@ export function buildCompanyContext(
   // Build template summaries
   const templates = AssetLoader.loadAllTemplates();
   const templateSummaries: TemplateSummary[] = templates.map(t => {
-    const groupSummaries = Object.entries(t.groups || {}).map(
-      ([gid, g]: [string, any]) => `${gid}: ${g.title || g.description || gid}`,
+    const stageSummaries = (t.graphPipeline?.nodes ?? t.pipeline ?? []).map(
+      (stage: any) => {
+        const stageId = 'id' in stage ? stage.id : stage.stageId;
+        return `${stageId}: ${stage.title || stage.label || stage.description || stageId}`;
+      },
     );
 
     let stageCount = 0;
@@ -108,7 +111,7 @@ export function buildCompanyContext(
       title: t.title || t.id,
       description: t.description || '',
       stageCount,
-      groupSummaries,
+      groupSummaries: stageSummaries,
       hasFanOut,
       hasGate,
       hasLoop,

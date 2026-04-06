@@ -11,7 +11,7 @@ import type { GraphPipeline } from './pipeline/graph-pipeline-types';
 import type { ContractError, ContractWarning } from './contract-types';
 import type { RiskAssessment } from './risk-assessor';
 import { assessGenerationRisks, hasCriticalRisk } from './risk-assessor';
-import { buildGenerationContext, type GenerationContext, type GroupSummary } from './generation-context';
+import { buildGenerationContext, type GenerationContext } from './generation-context';
 import type { TemplateDefinition } from './pipeline/pipeline-types';
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -105,8 +105,8 @@ export function buildGenerationPrompt(
   input: GenerationInput,
   context: GenerationContext,
 ): string {
-  const groupList = context.availableGroups
-    .map((g: GroupSummary) => `- ${g.id}: ${g.title} — ${g.description} (roles: ${g.roles.join(', ') || 'none'})`)
+  const workflowList = context.workflows
+    .map((workflow) => `- ${workflow}`)
     .join('\n');
 
   const templateList = context.existingTemplates
@@ -131,8 +131,11 @@ export function buildGenerationPrompt(
 Generate a graphPipeline (DAG workflow definition) based on the user's goal.
 Output valid JSON with a "graphPipeline" object and an "explanation" string.
 
-## Available Agent Groups
-${groupList || '(none — use placeholder groupIds)'}
+## Available Workflows
+${workflowList || '(none)'}
+
+## Execution Modes
+${context.executionModes.map((mode) => `- ${mode}`).join('\n')}
 
 ## Existing Templates (for reference)
 ${templateList || '(none)'}
@@ -160,7 +163,7 @@ Respond ONLY with a JSON code block containing:
 - loop-start/loop-end: Repeatable section with max iterations
 
 ## Rules
-1. Every node must have a unique id, a kind, and a groupId
+1. Every node must have a unique id, a kind, executionMode, and roles
 2. Every edge must reference existing node IDs via "from" and "to"
 3. The graph must be acyclic (except within loop-start/loop-end pairs)
 4. Loops must have maxIterations ≤ 5
@@ -239,12 +242,6 @@ export async function generatePipeline(
     kind: 'template',
     title: parsed.title ?? 'AI-Generated Pipeline',
     description: parsed.description ?? '',
-    groups: Object.fromEntries(
-      graphPipeline.nodes.map(n => [
-        n.groupId,
-        { title: n.label ?? n.groupId, description: '', executionMode: 'review-loop' as const, roles: [] },
-      ]),
-    ),
     pipeline: [],
     graphPipeline,
   };

@@ -20,7 +20,7 @@ export type OrchestrationState = 'na' | 'waiting' | 'eligible' | 'completed';
 
 export interface StageDiagnosticsFE {
   stageId: string;
-  groupId: string;
+  stageTitle?: string;
   stageType: 'normal' | 'fan-out' | 'join';
   status: string;
   pendingReason?: string;
@@ -57,7 +57,7 @@ export interface ProjectDiagnosticsResponse {
 
 export interface GraphNode {
   stageId: string;
-  groupId: string;
+  stageTitle?: string;
   stageType: string;
   status: string;
   active: boolean;
@@ -354,19 +354,18 @@ export const api = {
 
   // Agent Runs & Projects
   projects: () => fetchJson<Project[]>('/api/projects'),
-  agentGroups: () => fetchJson<unknown[]>('/api/agent-groups'),
   agentRuns: (status?: string) => fetchJson<AgentRun[]>(`/api/agent-runs${status ? `?status=${status}` : ''}`),
-  agentRunsByFilter: (filter: { groupId?: string; status?: string; reviewOutcome?: string }) => {
+  agentRunsByFilter: (filter: { stageId?: string; status?: string; reviewOutcome?: string }) => {
     const params = new URLSearchParams();
-    if (filter.groupId) params.set('groupId', filter.groupId);
+    if (filter.stageId) params.set('stageId', filter.stageId);
     if (filter.status) params.set('status', filter.status);
     if (filter.reviewOutcome) params.set('reviewOutcome', filter.reviewOutcome);
     return fetchJson<AgentRun[]>(`/api/agent-runs?${params.toString()}`);
   },
   agentRun: (id: string) => fetchJson<AgentRun>(`/api/agent-runs/${id}`),
   dispatchRun: (input: {
-    groupId?: string;
     templateId?: string;
+    stageId?: string;
     projectId?: string;
     workspace: string;
     prompt?: string;

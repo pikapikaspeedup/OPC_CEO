@@ -25,23 +25,39 @@ export async function GET(
     return NextResponse.json({ error: 'Template not found' }, { status: 404 });
   }
 
-  // Resolve workflow content for each role so FE can display rules
-  const groupsWithWorkflows = Object.fromEntries(
-    Object.entries(template.groups).map(([gid, g]) => [
-      gid,
-      {
-        ...g,
-        roles: g.roles.map(r => ({
-          ...r,
-          workflowContent: AssetLoader.resolveWorkflowContent(r.workflow),
-        })),
-      },
-    ]),
-  );
+  const hydrateRoles = <T extends { roles?: Array<{ workflow: string }> }>(node: T) => ({
+    ...node,
+    roles: (node.roles ?? []).map((role: any) => ({
+      ...role,
+      workflowContent: AssetLoader.resolveWorkflowContent(role.workflow),
+    })),
+  });
+  const stageEntries = (template.graphPipeline?.nodes ?? template.pipeline ?? []).map((stage: any) => {
+    const stageId = 'id' in stage ? stage.id : stage.stageId;
+    return [
+      stageId,
+      hydrateRoles({
+        title: stage.title || stage.label || stageId,
+        description: stage.description || '',
+        executionMode: stage.executionMode,
+        roles: stage.roles ?? [],
+        reviewPolicyId: stage.reviewPolicyId,
+        capabilities: stage.capabilities,
+        sourceContract: stage.sourceContract,
+      }),
+    ] as const;
+  });
 
   return NextResponse.json({
     ...template,
-    groups: groupsWithWorkflows,
+    stages: Object.fromEntries(stageEntries),
+    ...(template.pipeline ? { pipeline: template.pipeline.map(hydrateRoles) } : {}),
+    ...(template.graphPipeline ? {
+      graphPipeline: {
+        ...template.graphPipeline,
+        nodes: template.graphPipeline.nodes.map(hydrateRoles),
+      },
+    } : {}),
   });
 }
 

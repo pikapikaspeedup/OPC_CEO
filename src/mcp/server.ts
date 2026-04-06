@@ -133,7 +133,8 @@ server.registerTool(
       }
       
       // We can return the full JSON, but let's provide a summary in text too
-      let textContent = `Status: ${run.status}  Round: ${run.currentRound || "?"}  Group: ${run.groupId}\n`;
+      const stageId = run.pipelineStageId || run.stageId || '?';
+      let textContent = `Status: ${run.status}  Round: ${run.currentRound || "?"}  Stage: ${stageId}\n`;
       if (run.lastError) textContent += `Error: ${run.lastError}\n`;
       const roles = run.roles || [];
       textContent += `Total role entries: ${roles.length}\n`;
@@ -191,38 +192,30 @@ server.registerTool(
 server.registerTool(
   "antigravity_dispatch_pipeline",
   {
-    title: "Dispatch Pipeline or Group",
-    description: "Start a new agent run using a pipeline template or single group ID.",
+    title: "Dispatch Pipeline Stage",
+    description: "Start a new agent run using templateId and an optional stageId.",
     inputSchema: z.object({
       workspace: z.string().describe("Workspace URI (e.g. file:///path/to/project)"),
       prompt: z.string().describe("Goal or prompt for the pipeline/run"),
       projectId: z.string().optional().describe("Optional projectId to attach this run to"),
-      templateId: z.string().optional().describe("Template ID (e.g. development-template-1). If provided, it starts a pipeline."),
-      groupId: z.string().optional().describe("Group ID (e.g. product-spec). Use this for single-group runs instead of full pipelines."),
-      sourceRunIds: z.array(z.string()).optional().describe("For groups that require upstream artifacts")
+      templateId: z.string().describe("Template ID (e.g. development-template-1)."),
+      stageId: z.string().optional().describe("Optional stage ID. Omit to dispatch the entry stage."),
+      sourceRunIds: z.array(z.string()).optional().describe("For stages that require upstream artifacts")
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
   },
-  async ({ workspace, prompt, projectId, templateId, groupId, sourceRunIds }) => {
+  async ({ workspace, prompt, projectId, templateId, stageId, sourceRunIds }) => {
     try {
-      // Forward everything to the Next.js API — let the server handle
-      // all template resolution, stage inference, and group lookup.
-      // Do NOT pre-resolve here; that would bypass server-side auto-inference
-      // for non-first-stage dispatches (e.g. templateId + sourceRunIds).
-      if (!groupId && !templateId) {
-        throw new Error("Missing required parameter: must provide either groupId or templateId");
-      }
-      
       // Forward to the Next.js local API to decouple execution from MCP process
       const res = await fetch('http://127.0.0.1:3000/api/agent-runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          groupId,
           workspace,
           prompt,
           projectId,
           templateId,
+          stageId,
           sourceRunIds,
         })
       });

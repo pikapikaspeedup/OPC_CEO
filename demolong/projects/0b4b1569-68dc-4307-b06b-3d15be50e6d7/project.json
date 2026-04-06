@@ -6,7 +6,7 @@
   "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
   "status": "completed",
   "createdAt": "2026-04-05T22:12:24.108Z",
-  "updatedAt": "2026-04-06T06:44:55.313Z",
+  "updatedAt": "2026-04-06T10:35:21.720Z",
   "runIds": [
     "e89e286a-55ab-4eb7-bbac-abbd5827eebd"
   ],
@@ -23,7 +23,8 @@
         "attempts": 1,
         "runId": "e89e286a-55ab-4eb7-bbac-abbd5827eebd",
         "startedAt": "2026-04-05T22:12:25.519Z",
-        "completedAt": "2026-04-05T22:12:56.384Z"
+        "completedAt": "2026-04-05T22:12:56.384Z",
+        "title": "Coding Worker"
       }
     ],
     "activeStageIds": [],

@@ -51,41 +51,11 @@ export async function POST(
     // Use the confirmed draft (modifications may have been applied by confirmDraft)
     const draft = getDraft(draftId) ?? preDraft;
 
-    // Build groups from DAG nodes — deduplicate by groupId and generate a
-    // default worker role for each group so the template is immediately usable.
-    const groupMap = new Map<string, { title: string; nodeLabels: string[] }>();
-    for (const n of draft.graphPipeline.nodes as any[]) {
-      const existing = groupMap.get(n.groupId);
-      if (existing) {
-        if (n.label) existing.nodeLabels.push(n.label);
-      } else {
-        groupMap.set(n.groupId, { title: n.label ?? n.groupId, nodeLabels: n.label ? [n.label] : [] });
-      }
-    }
-
-    const groups: TemplateDefinition['groups'] = {};
-    for (const [gid, info] of groupMap) {
-      groups[gid] = {
-        title: info.title,
-        description: info.nodeLabels.length > 1 ? `节点: ${info.nodeLabels.join(', ')}` : '',
-        executionMode: 'review-loop' as const,
-        roles: [
-          {
-            id: 'worker',
-            workflow: `/dev-worker`,
-            timeoutMs: 600_000,
-            autoApprove: false,
-          },
-        ],
-      };
-    }
-
     const templateDef: TemplateDefinition = {
       id: result.templateId,
       kind: 'template',
       title: draft.templateMeta.title,
       description: draft.templateMeta.description ?? '',
-      groups,
       pipeline: [],
       graphPipeline: draft.graphPipeline as any,
     };

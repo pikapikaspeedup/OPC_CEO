@@ -17,8 +17,8 @@ function responseForAction(input: {
   actualAction: ResumeAction;
   stageId: string;
   stageIndex: number;
-  groupId: string;
   runId: string;
+  stageTitle?: string;
   branchIndex?: number;
   activeConversationId?: string;
   message?: string;
@@ -161,7 +161,7 @@ export async function POST(
         actualAction: action,
         stageId: effectiveStage.stageId,
         stageIndex: effectiveStage.stageIndex,
-        groupId: effectiveStage.groupId,
+        stageTitle: effectiveStage.title || effectiveStage.stageId,
         runId: effectiveStage.runId || '',
         branchIndex: effectiveBranchIndex,
         message: 'Stage force-completed. Downstream stages will be dispatched automatically.',
@@ -202,7 +202,7 @@ export async function POST(
         actualAction: action,
         stageId: effectiveStage.stageId,
         stageIndex: effectiveStage.stageIndex,
-        groupId: effectiveStage.groupId,
+        stageTitle: effectiveStage.title || effectiveStage.stageId,
         runId: effectiveStage.runId || '',
         branchIndex: effectiveBranchIndex,
         message: 'Stage skipped successfully',
@@ -231,7 +231,7 @@ export async function POST(
       stageId: effectiveStage.stageId,
       stageIndex: effectiveStage.stageIndex,
       action,
-      groupId: effectiveStage.groupId,
+      stageTitle: effectiveStage.title || effectiveStage.stageId,
       runId: effectiveStage.runId.slice(0, 8),
     }, 'Resuming project pipeline');
 
@@ -259,7 +259,7 @@ export async function POST(
           actualAction: action,
           stageId: effectiveStage.stageId,
           stageIndex: effectiveStage.stageIndex,
-          groupId: effectiveStage.groupId,
+          stageTitle: effectiveStage.title || effectiveStage.stageId,
           runId: existingRun.runId,
           branchIndex: effectiveBranchIndex,
           activeConversationId: existingRun.activeConversationId,
@@ -303,7 +303,7 @@ export async function POST(
         actualAction: action,
         stageId: effectiveStage.stageId,
         stageIndex: effectiveStage.stageIndex,
-        groupId: effectiveStage.groupId,
+        stageTitle: effectiveStage.title || effectiveStage.stageId,
         runId: existingRun.runId,
         branchIndex: effectiveBranchIndex,
         activeConversationId: existingRun.activeConversationId,
@@ -340,7 +340,7 @@ export async function POST(
         actualAction: action,
         stageId: effectiveStage.stageId,
         stageIndex: effectiveStage.stageIndex,
-        groupId: effectiveStage.groupId,
+        stageTitle: effectiveStage.title || effectiveStage.stageId,
         runId: existingRun.runId,
         branchIndex: effectiveBranchIndex,
         activeConversationId: existingRun.activeConversationId,
@@ -365,7 +365,7 @@ export async function POST(
       actualAction: action,
       stageId: effectiveStage.stageId,
       stageIndex: effectiveStage.stageIndex,
-      groupId: effectiveStage.groupId,
+      stageTitle: effectiveStage.title || effectiveStage.stageId,
       runId: existingRun.runId,
       branchIndex: effectiveBranchIndex,
       activeConversationId: existingRun.activeConversationId,

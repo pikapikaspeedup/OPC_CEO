@@ -1,6 +1,5 @@
 import { createLogger } from '../../logger';
 import { AssetLoader } from '../asset-loader';
-import { getGroup } from '../group-registry';
 import { getRun } from '../run-registry';
 import type { ProjectPipelineState } from '../project-types';
 import { resolveStageId } from './pipeline-graph';
@@ -25,8 +24,8 @@ export function getPipeline(id: string): TemplateDefinition | null {
 }
 
 /**
- * Given a template and the current stage's groupId, return the next stage (if any).
- * Returns null if the template pipeline is finished or the groupId is not found.
+ * Given a template and the current stageId, return the next stage (if any).
+ * Returns null if the template pipeline is finished or the stageId is not found.
  *
  * Internally delegates to DAG IR for traversal (V5.0).
  */
@@ -70,22 +69,24 @@ export function canActivateStage(
 }
 
 /**
- * Filter source run IDs by the target group's sourceContract.
- *
- * Internally delegates to DAG IR source filtering (V5.0).
+ * Filter source run IDs by the target stage's sourceContract.
  */
-export function filterSourcesByContract(targetGroupId: string, allSourceRunIds: string[]): string[] {
+export function filterSourcesByContract(templateId: string, targetStageId: string, allSourceRunIds: string[]): string[] {
   if (allSourceRunIds.length === 0) return allSourceRunIds;
-  const group = getGroup(targetGroupId);
-  const acceptedSourceGroupIds = group?.sourceContract?.acceptedSourceGroupIds;
-  if (!acceptedSourceGroupIds?.length) {
+  const template = AssetLoader.getTemplate(templateId);
+  if (!template) return allSourceRunIds;
+  const ir = getOrCompileIR(template);
+  const node = ir.nodes.find((item) => item.id === targetStageId);
+  const acceptedSourceStageIds = node?.sourceContract?.acceptedSourceStageIds;
+  if (!acceptedSourceStageIds?.length) {
     return allSourceRunIds;
   }
 
-  const accepted = new Set(acceptedSourceGroupIds);
+  const accepted = new Set(acceptedSourceStageIds);
   return allSourceRunIds.filter(runId => {
     const run = getRun(runId);
-    return !!run && accepted.has(run.groupId);
+    const sourceStageId = run?.pipelineStageId || run?.stageId;
+    return !!sourceStageId && accepted.has(sourceStageId);
   });
 }
 

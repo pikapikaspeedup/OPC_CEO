@@ -274,7 +274,7 @@ async function executeDispatchStage(projectId: string, stageId: string): Promise
     ? activation.upstreamNodeIds
     : [];
 
-  const { filterSourcesByNode } = await import('./dag-runtime');
+  const { filterSourcesByNode } = await import('./pipeline/dag-runtime');
   const allSourceRunIds = upstreamStageIds.flatMap(upId => {
     const upStage = project.pipelineState!.stages.find(s => s.stageId === upId);
     return upStage?.runId ? [upStage.runId] : [];
@@ -285,11 +285,12 @@ async function executeDispatchStage(projectId: string, stageId: string): Promise
   const { addRunToProject, trackStageDispatch } = await import('./project-registry');
 
   const result = await dispatchRun({
-    groupId: irNode.groupId,
+    stageId: stageId,
     workspace: project.workspace,
     prompt: irNode.promptTemplate || project.goal,
     projectId: project.projectId,
     pipelineId: template.id,
+    templateId: template.id,
     pipelineStageId: stageId,
     sourceRunIds,
   });

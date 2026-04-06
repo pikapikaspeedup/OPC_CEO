@@ -8,6 +8,7 @@
 
 import type { StageContract, FanOutContract, JoinMergeContract } from '../contract-types';
 import type { SubgraphRefConfig } from '../subgraph-types';
+import type { StageExecutionConfig } from '../group-types';
 
 // ── Node Types ──────────────────────────────────────────────────────────────
 
@@ -18,13 +19,11 @@ export type DagNodeKind = 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'lo
  * Regardless of the template source format, every logical step
  * is represented as a DagNode after compilation.
  */
-export interface DagNode {
+export interface DagNode extends StageExecutionConfig {
   /** Globally unique node ID (mapped from stageId) */
   id: string;
   /** Node category */
   kind: DagNodeKind;
-  /** Corresponding agent group ID */
-  groupId: string;
   /** Display label (for UI / diagnostics) */
   label?: string;
   /** Auto-trigger configuration */
@@ -92,6 +91,8 @@ export interface DagNode {
   meta?: Record<string, unknown>;
   /** Index in the original pipeline[] array (for traceability) */
   sourceIndex?: number;
+  /** @deprecated Internal compatibility alias; use `id`. */
+  groupId?: string;
 }
 
 // ── Edge Types ──────────────────────────────────────────────────────────────

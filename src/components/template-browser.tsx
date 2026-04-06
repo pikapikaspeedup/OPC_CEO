@@ -41,12 +41,10 @@ import type {
   TemplateSummaryFE,
   TemplateDetailFE,
   TemplateNodeFE,
-  TemplateGroupDetailFE,
   TemplatePipelineStageFE,
 } from '@/lib/types';
 import { DAGView } from '@/components/dag-view';
 import { NODE_KIND_META, EXECUTION_MODE_LABELS } from '@/components/template-constants';
-import { GroupCard } from '@/components/template-group-card';
 import { NodeEditor } from '@/components/template-node-editor';
 import { StageEditor } from '@/components/template-stage-editor';
 import { WorkflowEditor } from '@/components/template-workflow-editor';
@@ -100,7 +98,7 @@ export default function TemplateBrowser({
   const [showAddNodeDialog, setShowAddNodeDialog] = useState(false);
   const [newNodeId, setNewNodeId] = useState('');
   const [newNodeKind, setNewNodeKind] = useState<string>('stage');
-  const [newNodeGroupId, setNewNodeGroupId] = useState('');
+  const [newNodeStageConfigId, setNewNodeStageConfigId] = useState('');
   const [newNodeLabel, setNewNodeLabel] = useState('');
   const [showAddEdgeDialog, setShowAddEdgeDialog] = useState(false);
   const [newEdgeFrom, setNewEdgeFrom] = useState('');
@@ -220,9 +218,9 @@ export default function TemplateBrowser({
     if (stageTypes.includes('gate')) patterns.push('Gate');
     if (stageTypes.includes('switch')) patterns.push('Switch');
     if (stageTypes.includes('loop-start') || stageTypes.includes('loop-end')) patterns.push('Loop');
-    const groupCount = Object.keys(t.groups).length;
+    const stageConfigCount = Object.keys(t.stages).length;
     const stageCount = t.pipeline?.length ?? 0;
-    if (stageCount === 1 && groupCount === 1) patterns.push('单阶段');
+    if (stageCount === 1 && stageConfigCount === 1) patterns.push('单阶段');
     else if (stageCount > 3) patterns.push('多阶段');
     return patterns;
   };
@@ -289,9 +287,9 @@ export default function TemplateBrowser({
           <div className="grid gap-3">
             {filtered.map(t => {
               const patterns = getTemplatePatterns(t);
-              const groupCount = Object.keys(t.groups).length;
+              const stageConfigCount = Object.keys(t.stages).length;
               const stageCount = t.pipeline?.length ?? 0;
-              const roleCount = Object.values(t.groups).reduce((sum, g) => sum + (g.roleIds?.length ?? 0), 0);
+              const roleCount = Object.values(t.stages).reduce((sum, stageConfig) => sum + (stageConfig.roleIds?.length ?? 0), 0);
 
               return (
                 <div
@@ -318,7 +316,7 @@ export default function TemplateBrowser({
 
                   <div className="mt-3 flex items-center gap-4 text-[11px] text-[var(--app-text-muted)]">
                     <span className="flex items-center gap-1"><Layers className="h-3 w-3" /> {stageCount} {t.format === 'graphPipeline' ? '节点' : '阶段'}</span>
-                    <span className="flex items-center gap-1"><Network className="h-3 w-3" /> {groupCount} 组</span>
+                    <span className="flex items-center gap-1"><Network className="h-3 w-3" /> {stageConfigCount} Stage Config</span>
                     <span className="flex items-center gap-1"><Users className="h-3 w-3" /> {roleCount} 角色</span>
                   </div>
 
@@ -331,9 +329,9 @@ export default function TemplateBrowser({
                         return (
                           <div key={i} className="flex items-center gap-1">
                             {i > 0 && <div className="w-3 h-px bg-white/15" />}
-                            <div className={cn('flex items-center gap-1 rounded-full border px-1.5 py-0.5', meta.color)} title={stage.groupId}>
+                            <div className={cn('flex items-center gap-1 rounded-full border px-1.5 py-0.5', meta.color)} title={stage.stageId}>
                               <Icon className="h-2.5 w-2.5" />
-                              <span className="text-[9px] truncate max-w-[60px]">{t.groups[stage.groupId]?.title ?? stage.groupId}</span>
+                              <span className="text-[9px] truncate max-w-[60px]">{t.stages[stage.stageId]?.title ?? stage.title ?? stage.stageId}</span>
                             </div>
                           </div>
                         );
@@ -462,7 +460,7 @@ export default function TemplateBrowser({
                 {isGraphFormat ? 'graphPipeline (DAG)' : 'pipeline (线性)'}
               </Badge>
               <Badge variant="outline" className="text-[10px]">
-                {Object.keys(tmpl.groups).length} Groups
+                {Object.keys(tmpl.stages).length} Stage Configs
               </Badge>
               <Badge variant="outline" className="text-[10px]">
                 {isGraphFormat ? nodes.length : pipelineStages.length} Stages
@@ -494,7 +492,7 @@ export default function TemplateBrowser({
                     onClick={() => {
                       setNewNodeId('');
                       setNewNodeKind('stage');
-                      setNewNodeGroupId(Object.keys(tmpl.groups)[0] ?? '');
+                      setNewNodeStageConfigId(Object.keys(tmpl.stages)[0] ?? '');
                       setNewNodeLabel('');
                       setShowAddNodeDialog(true);
                     }}
@@ -547,11 +545,11 @@ export default function TemplateBrowser({
             {isGraphFormat && dagViewMode === 'graph' && editingNodeId && (() => {
               const node = nodes.find(n => n.id === editingNodeId);
               if (!node) return null;
-              const group = tmpl.groups[node.groupId];
+              const stageConfig = tmpl.stages[node.id];
               return (
                 <NodeEditor
                   node={node}
-                  group={group}
+                  stageConfig={stageConfig}
                   edges={edges}
                   allNodeIds={nodes.map(n => n.id)}
                   onAddEdge={addEdge}
@@ -577,7 +575,7 @@ export default function TemplateBrowser({
                 {nodes.map((node) => {
                   const meta = NODE_KIND_META[node.kind] ?? NODE_KIND_META['stage'];
                   const Icon = meta.icon;
-                  const group = tmpl.groups[node.groupId];
+                  const stageConfig = tmpl.stages[node.id];
                   const isEditing = editingNodeId === node.id;
                   const downstream = edges.filter(e => e.from === node.id).map(e => e.to);
                   const upstream = edges.filter(e => e.to === node.id).map(e => e.from);
@@ -604,7 +602,7 @@ export default function TemplateBrowser({
                           </div>
                           <div className="flex items-center gap-2 mt-0.5 text-[11px] text-[var(--app-text-muted)]">
                             <span className="font-mono">{node.id}</span>
-                            <span>→ group: {node.groupId}</span>
+                            <span>→ stage: {node.id}</span>
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 text-[10px] text-[var(--app-text-muted)]">
@@ -664,7 +662,7 @@ export default function TemplateBrowser({
                       {isEditing && (
                         <NodeEditor
                           node={node}
-                          group={group}
+                          stageConfig={stageConfig}
                           edges={edges}
                           allNodeIds={nodes.map(n => n.id)}
                           onAddEdge={addEdge}
@@ -692,25 +690,25 @@ export default function TemplateBrowser({
               /* --- Linear pipeline stages --- */
               <div className="space-y-2">
                 {pipelineStages.map((stage, i) => {
-                  const group = tmpl.groups[stage.groupId];
-                  const isEditing = editingNodeId === (stage.stageId ?? `stage-${i}`);
+                  const stageConfig = tmpl.stages[stage.stageId];
+                  const isEditing = editingNodeId === stage.stageId;
 
                   return (
                     <div
-                      key={stage.stageId ?? `stage-${i}`}
+                      key={stage.stageId}
                       className={cn(
                         'rounded-xl border p-4 transition-all cursor-pointer',
                         isEditing ? 'border-indigo-500/40 bg-indigo-500/5' : 'border-white/8 bg-white/[0.02] hover:border-white/15',
                       )}
-                      onClick={() => setEditingNodeId(isEditing ? null : (stage.stageId ?? `stage-${i}`))}
+                      onClick={() => setEditingNodeId(isEditing ? null : stage.stageId)}
                     >
                       <div className="flex items-center gap-3">
                         <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-bold">
                           {i + 1}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <span className="text-sm font-semibold text-white">{group?.title ?? stage.groupId}</span>
-                          <div className="text-[11px] text-[var(--app-text-muted)] font-mono">group: {stage.groupId}</div>
+                          <span className="text-sm font-semibold text-white">{stageConfig?.title ?? stage.title ?? stage.stageId}</span>
+                          <div className="text-[11px] text-[var(--app-text-muted)] font-mono">stage: {stage.stageId}</div>
                         </div>
                         <div className="flex items-center gap-1.5 text-[10px]">
                           {/* Reorder & delete */}
@@ -749,7 +747,7 @@ export default function TemplateBrowser({
                               e.stopPropagation();
                               if (!localDetail?.pipeline) return;
                               setLocalDetail({ ...localDetail, pipeline: localDetail.pipeline.filter((_, si) => si !== i) });
-                              if (editingNodeId === (stage.stageId ?? `stage-${i}`)) setEditingNodeId(null);
+                              if (editingNodeId === stage.stageId) setEditingNodeId(null);
                             }}
                           >
                             <Minus className="h-3.5 w-3.5" />
@@ -771,8 +769,7 @@ export default function TemplateBrowser({
                       {isEditing && (
                         <StageEditor
                           stage={stage}
-                          group={group}
-                          allGroupIds={Object.keys(tmpl.groups)}
+                          stageConfig={stageConfig}
                           onChange={(updated) => {
                             if (!localDetail?.pipeline) return;
                             setLocalDetail({
@@ -792,12 +789,17 @@ export default function TemplateBrowser({
                   className="w-full rounded-xl border border-dashed border-white/10 hover:border-white/20 py-3 flex items-center justify-center gap-2 text-xs text-white/30 hover:text-white/60 transition-colors"
                   onClick={() => {
                     if (!localDetail) return;
-                    const groupIds = Object.keys(tmpl.groups);
-                    const defaultGroupId = groupIds[0] ?? 'default';
+                    const defaultStageConfig = Object.values(tmpl.stages)[0];
                     const idx = (localDetail.pipeline?.length ?? 0);
                     const newStage: TemplatePipelineStageFE = {
                       stageId: `stage-${idx + 1}`,
-                      groupId: defaultGroupId,
+                      title: defaultStageConfig?.title || `Stage ${idx + 1}`,
+                      description: defaultStageConfig?.description,
+                      executionMode: defaultStageConfig?.executionMode || 'legacy-single',
+                      roles: defaultStageConfig?.roles || [],
+                      reviewPolicyId: defaultStageConfig?.reviewPolicyId,
+                      capabilities: defaultStageConfig?.capabilities,
+                      sourceContract: defaultStageConfig?.sourceContract,
                       autoTrigger: true,
                       triggerOn: 'approved',
                       stageType: 'normal',
@@ -806,70 +808,13 @@ export default function TemplateBrowser({
                       ...localDetail,
                       pipeline: [...(localDetail.pipeline ?? []), newStage],
                     });
-                    setEditingNodeId(newStage.stageId!);
+                    setEditingNodeId(newStage.stageId);
                   }}
                 >
                   <Plus className="h-3.5 w-3.5" /> 添加阶段
                 </button>
               </div>
             )}
-          </div>
-
-          {/* Groups detail */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--app-text-soft)]">
-                <Users className="h-4 w-4" />
-                Agent Groups ({Object.keys(tmpl.groups).length})
-              </h3>
-              <button
-                className="flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[10px] text-emerald-400 hover:bg-emerald-500/10 transition-colors"
-                onClick={() => {
-                  if (!localDetail) return;
-                  let newId = 'new-group';
-                  let counter = 1;
-                  while (localDetail.groups[newId]) { newId = `new-group-${counter++}`; }
-                  setLocalDetail({
-                    ...localDetail,
-                    groups: {
-                      ...localDetail.groups,
-                      [newId]: {
-                        title: '新 Group',
-                        description: '',
-                        executionMode: 'review-loop',
-                        roles: [],
-                      },
-                    },
-                  });
-                }}
-              >
-                <Plus className="h-3 w-3" /> Group
-              </button>
-            </div>
-            <div className="space-y-2">
-              {Object.entries(tmpl.groups).map(([gid, group]) => (
-                <GroupCard
-                  key={gid}
-                  groupId={gid}
-                  group={group}
-                  onChange={(updates) => {
-                    if (!localDetail) return;
-                    setLocalDetail({
-                      ...localDetail,
-                      groups: {
-                        ...localDetail.groups,
-                        [gid]: { ...localDetail.groups[gid], ...updates },
-                      },
-                    });
-                  }}
-                  onDelete={() => {
-                    if (!localDetail) return;
-                    const { [gid]: _, ...rest } = localDetail.groups;
-                    setLocalDetail({ ...localDetail, groups: rest });
-                  }}
-                />
-              ))}
-            </div>
           </div>
         </>
       )}
@@ -1013,20 +958,20 @@ export default function TemplateBrowser({
               </div>
             </div>
             <div>
-              <label className="text-xs text-[var(--app-text-muted)] mb-1.5 block">所属 Group</label>
+              <label className="text-xs text-[var(--app-text-muted)] mb-1.5 block">复制现有 Stage Config</label>
               <div className="flex flex-wrap gap-1.5">
-                {Object.entries(tmpl?.groups ?? {}).map(([gid, g]) => (
+                {Object.entries(tmpl?.stages ?? {}).map(([stageId, stageConfig]) => (
                   <button
-                    key={gid}
+                    key={stageId}
                     className={cn(
                       'rounded-full px-2.5 py-1 text-[10px] font-medium border transition-colors',
-                      newNodeGroupId === gid
+                      newNodeStageConfigId === stageId
                         ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
                         : 'bg-white/5 text-white/30 border-white/8 hover:text-white/60',
                     )}
-                    onClick={() => setNewNodeGroupId(gid)}
+                    onClick={() => setNewNodeStageConfigId(stageId)}
                   >
-                    {g.title || gid}
+                    {stageConfig.title || stageId}
                   </button>
                 ))}
               </div>
@@ -1036,13 +981,20 @@ export default function TemplateBrowser({
             <Button variant="outline" size="sm" onClick={() => setShowAddNodeDialog(false)}>取消</Button>
             <Button
               size="sm"
-              disabled={!newNodeId || !newNodeGroupId || nodes.some(n => n.id === newNodeId)}
+              disabled={!newNodeId || !newNodeStageConfigId || nodes.some(n => n.id === newNodeId)}
               onClick={() => {
                 const kind = newNodeKind as TemplateNodeFE['kind'];
+                const baseStageConfig = tmpl?.stages?.[newNodeStageConfigId];
                 const base: TemplateNodeFE = {
                   id: newNodeId,
                   kind,
-                  groupId: newNodeGroupId,
+                  title: baseStageConfig?.title || newNodeLabel || newNodeId,
+                  description: baseStageConfig?.description,
+                  executionMode: baseStageConfig?.executionMode || (kind === 'stage' ? 'legacy-single' : 'orchestration'),
+                  roles: baseStageConfig?.roles || [],
+                  reviewPolicyId: baseStageConfig?.reviewPolicyId,
+                  capabilities: baseStageConfig?.capabilities,
+                  sourceContract: baseStageConfig?.sourceContract,
                   label: newNodeLabel || undefined,
                   autoTrigger: true,
                 };

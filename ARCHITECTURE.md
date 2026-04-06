@@ -19,7 +19,7 @@ graph TB
     subgraph Gateway["Antigravity Gateway (Next.js 16, Port 3000)"]
         REST["REST API<br/>/api/*"]
         WS["WebSocket<br/>/ws"]
-        AgentEngine["Agent Engine<br/>group-runtime"]
+        AgentEngine["Agent Engine<br/>Stage Runtime<br/>(group-runtime.ts)"]
         ProjectEngine["Project Engine<br/>project-registry"]
         MCPServer["MCP Server<br/>stdio JSON-RPC"]
         CodexBridge["Codex Bridge<br/>codex-adapter"]
@@ -81,11 +81,11 @@ graph LR
     end
 
     subgraph Engine["引擎层"]
-        GroupRuntime["Group Runtime<br/>调度 + 监控 + 审阅"]
+        GroupRuntime["Stage Runtime<br/>调度 + 监控 + 审阅<br/>(group-runtime.ts)"]
         DispatchService["Dispatch Service<br/>统一派发入口"]
         RunRegistry["Run Registry<br/>Run 状态持久化"]
         ProjectRegistry["Project Registry<br/>项目 + Pipeline"]
-        GroupRegistry["Group Registry<br/>Agent Group 定义"]
+        StageResolver["Stage Resolver<br/>templateId + stageId 解析"]
         AssetLoader["Asset Loader<br/>模板 + 资源加载"]
         ReviewEngine["Review Engine<br/>Supervisor 审阅"]
         WatchConv["Watch Conversation<br/>gRPC 流监听"]
@@ -120,7 +120,7 @@ graph LR
     PAL --> AE & CE
     AE --> Bridge
     CE -->|"MCP/exec"| Bridge
-    GroupRuntime --> RunRegistry & GroupRegistry & AssetLoader & ReviewEngine & WatchConv
+    GroupRuntime --> RunRegistry & StageResolver & AssetLoader & ReviewEngine & WatchConv
     DispatchService --> GroupRuntime & ProjectRegistry
     WatchConv --> StepMerger & Bridge
     ProjectRegistry --> DagRuntime & RunRegistry
@@ -155,7 +155,7 @@ graph TB
 
     subgraph Orchestration["编排引擎层"]
         Template["Template<br/>顶层编排蓝图"]
-        Groups["Agent Groups<br/>角色集合定义"]
+        StageProfiles["Stage Profiles<br/>内联执行配置"]
         Roles["Roles<br/>单角色 (prompt + model + review)"]
         Workflow["Workflow (.md)<br/>角色指令脚本"]
         
@@ -167,7 +167,7 @@ graph TB
     end
 
     subgraph NodeKinds["graphPipeline 节点类型"]
-        StageNode["stage<br/>执行 Agent Group"]
+        StageNode["stage<br/>执行内联 Stage 配置"]
         FanOutNode["fan-out<br/>并行拆分 → 子 Project"]
         JoinNode["join<br/>等待所有分支汇合"]
         GateNode["gate<br/>人工审批门"]
@@ -184,8 +184,8 @@ graph TB
         Policy["Resource Policy<br/>资源配额 (V5.4)"]
     end
 
-    Template -->|"定义"| Groups
-    Groups -->|"包含"| Roles
+    Template -->|"定义"| StageProfiles
+    StageProfiles -->|"包含"| Roles
     Roles -->|"引用"| Workflow
 
     Template -->|"二选一"| Pipeline
@@ -196,7 +196,7 @@ graph TB
 
     GraphPipeline --> StageNode & FanOutNode & JoinNode & GateNode & SwitchNode & LoopNode & SubgraphRef
     SubgraphRef -->|"引用"| Subgraph
-    StageNode -->|"绑定"| Groups
+    StageNode -->|"内联"| StageProfiles
 
     DagIR -->|"驱动"| Project
     Project -->|"派发"| Run
@@ -215,8 +215,8 @@ graph TB
 |:-----|:-----|:---------|
 | **Skill** | Language Server 注册的 AI 能力（如 `edit_file`、`codebase_search`）。通过 gRPC 从 IDE 获取。 | IDE 内置，**不参与 Pipeline 编排** |
 | **Workflow** | 存储在 `assets/workflows/*.md` 的指令脚本。每个 Role 引用一个 workflow 路径（如 `/dev-worker`），运行时注入为 Agent 的 system prompt。 | 由模板作者编写，角色执行时加载 |
-| **Agent Group** | 一组 Role 的集合，定义参与者、分工、审阅链。如 `coding-basic`（单角色）、`autonomous-dev-pilot`（dev + review + supervisor）。 | 在 Template 的 `groups{}` 中定义 |
-| **Template** | 顶层编排蓝图。包含 `groups{}` + `pipeline[]` 或 `graphPipeline`，以及可选的 `contract` 定义。 | 存储在 `assets/templates/*.json` |
+| **Stage Profile** | Stage / node 内联执行配置，定义执行模式、角色、能力、来源约束。 | 内联定义在 `pipeline[]` / `graphPipeline.nodes[]` |
+| **Template** | 顶层编排蓝图。包含 `pipeline[]` 或 `graphPipeline`，以及可选的 `contract` 定义。 | 存储在 `assets/templates/*.json` |
 | **pipeline[]** | 线性 stage 数组，隐式顺序依赖。简单场景推荐。 | Template 内定义，编译时转化为 DagIR |
 | **graphPipeline** | 显式 DAG 定义（`nodes[]` + `edges[]`），支持 8 种节点类型。复杂场景推荐。 | Template 内定义，编译时转化为 DagIR |
 | **DagIR** | 统一的中间表示（V5.0）。运行时只认 DagIR，不区分原始格式。 | 编译时生成，缓存在内存 |
@@ -328,11 +328,11 @@ stateDiagram-v2
     timeout --> [*]
 ```
 
-### Agent Group 及角色
+### Stage Profile 及角色
 
 ```mermaid
 graph TB
-    subgraph Groups["Agent Groups"]
+    subgraph Groups["Stage Profiles"]
         CB["coding-basic<br/>🔧 单任务开发"]
         PS["product-spec<br/>📋 产品规格"]
         AA["architecture-advisory<br/>🏗️ 架构顾问"]
@@ -398,7 +398,7 @@ flowchart LR
 ```
 SourceContract {
   requireReviewOutcome: ['approved']       // 上游必须通过审阅
-  acceptedSourceGroupIds: ['product-spec'] // 可接受的上游 Group
+  acceptedSourceStageIds: ['product-spec'] // 可接受的上游 stage
   autoBuildInputArtifactsFromSources: true // 自动构建输入产物
   autoIncludeUpstreamSourceRuns: true      // 传递性依赖解析
 }
@@ -433,8 +433,10 @@ sequenceDiagram
 
 | 文件 | 职责 |
 |---|---|
-| `src/lib/agents/group-runtime.ts` | 核心调度器: dispatch → watch → compact → review（已拆分，2,214 行） |
+| `src/lib/agents/group-runtime.ts` | 核心 stage runtime: dispatch → watch → compact → review |
 | `src/lib/agents/dispatch-service.ts` | 统一派发入口 `executeDispatch()`，CEO 和 team-dispatch 共用 |
+| `src/lib/agents/stage-resolver.ts` | 基于 `templateId + stageId` 解析 stage 定义 |
+| `src/lib/agents/pipeline/template-normalizer.ts` | 加载期归一化 legacy 模板到 inline-only schema |
 | `src/lib/agents/prompt-builder.ts` | Prompt 构建 + review 决策解析 |
 | `src/lib/agents/supervisor.ts` | Supervisor AI Loop + 步骤摘要 |
 | `src/lib/agents/run-artifacts.ts` | Artifact 扫描/复制 + 交付包读取 + 范围审计 |
@@ -442,8 +444,7 @@ sequenceDiagram
 | `src/lib/agents/finalization.ts` | Advisory/Delivery run 终态处理 |
 | `src/lib/agents/runtime-helpers.ts` | 路径规范化、证据提取、审计构建、终止传播 |
 | `src/lib/agents/run-registry.ts` | Run 状态持久化 (`~/.gemini/antigravity/runs.json`) |
-| `src/lib/agents/group-registry.ts` | Agent Group 模板注册 |
-| `src/lib/agents/asset-loader.ts` | 从磁盘加载 group/template/review-policy |
+| `src/lib/agents/asset-loader.ts` | 从磁盘加载 template/review-policy，并做 inline-only normalize |
 | `src/lib/agents/watch-conversation.ts` | gRPC 流监听子对话，30s 心跳 / 3min 超时 |
 | `src/lib/agents/review-engine.ts` | Supervisor 审阅: approve / revise / reject |
 | `src/lib/agents/step-merger.ts` | 增量步骤合并 |
@@ -483,7 +484,7 @@ erDiagram
         string status
     }
     PipelineStage {
-        string groupId
+        string stageId
         int stageIndex
         string status
         int attempts
@@ -491,7 +492,7 @@ erDiagram
     }
     AgentRun {
         UUID runId
-        string groupId
+        string stageId
         string status
         string workspace
     }
@@ -681,14 +682,14 @@ flowchart LR
 
 ### 概述
 
-Provider Abstraction Layer 是多 Provider 支持的核心。所有 AI 交互（Agent 任务执行、Supervisor 审阅、Nudge）都通过统一的 `TaskExecutor` 接口进行，`group-runtime` 不直接调用 gRPC 或 Codex MCP。
+Provider Abstraction Layer 是多 Provider 支持的核心。所有 AI 交互（Agent 任务执行、Supervisor 审阅、Nudge）都通过统一的 `TaskExecutor` 接口进行。运行时仍由 `group-runtime.ts` 承载，但它现在是 stage-centric 的 Stage Runtime，不直接调用 gRPC 或 Codex MCP。
 
 ### 架构
 
 ```mermaid
 flowchart TB
     subgraph Orchestration["编排层"]
-        GR["group-runtime.ts<br/>resolveProvider()"]
+        GR["Stage Runtime<br/>(group-runtime.ts)<br/>resolveProvider()"]
         SUP["supervisor.ts<br/>resolveProvider('supervisor')"]
     end
 
@@ -745,7 +746,7 @@ interface TaskExecutor {
 |:------|:-----|:-------------|
 | `executive` | （保留，用于未来 CEO AI 决策） | antigravity |
 | `management` | Supervisor 巡检、Evaluate 干预、记忆提取 | antigravity |
-| `execution` | Pipeline 任务执行（group-runtime 角色执行） | antigravity |
+| `execution` | Pipeline 任务执行（Stage Runtime 角色执行） | antigravity |
 | `utility` | Review 决策解析、代码摘要 | antigravity |
 
 ### Scene 覆盖
@@ -1040,9 +1041,10 @@ mindmap
       list 列出 Run
       run detail Run 详情
     dispatch
+      <templateId> 模板
+      --stage 指定 stage
       --project 关联项目
       --source 上游 Run
-      --template 模板
       --prompt 目标描述
     intervene
       retry 重试
@@ -1066,7 +1068,7 @@ CLI (scripts/ag.ts) → HTTP REST → http://localhost:3000/api/*
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/ag.ts` | 主 CLI：项目、Run、调度、介入 |
+| `scripts/ag.ts` | 主 CLI：项目、Run、`dispatch <templateId> [--stage <stageId>]`、介入 |
 | `scripts/ag-wechat.ts` | 微信辅助：模型切换、状态查看 |
 | `scripts/antigravity-acp.ts` | ACP Adapter（被 cc-connect 调用）|
 | `scripts/ag-migrate.sh` | 数据迁移脚本 |
@@ -1215,8 +1217,6 @@ flowchart TB
 | `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run |
 | `/api/agent-runs/{id}` | GET / DELETE | Agent | 详情 / 取消 Run |
 | `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate) |
-| `/api/agent-groups` | GET | Agent | 列出 Agent Groups |
-| `/api/agent-groups/{id}` | GET | Agent | Group 详情 |
 | `/api/scope-check` | POST | Agent | 写入范围校验 |
 | `/api/projects` | GET / POST | Project | 列表 / 创建项目 |
 | `/api/projects/{id}` | GET / PATCH / DELETE | Project | 项目 CRUD |
@@ -1317,7 +1317,7 @@ flowchart TB
 │   │   └── ui/              # shadcn/ui 基础组件
 │   ├── lib/
 │   │   ├── bridge/          # gateway.ts + grpc.ts + discovery.ts
-│   │   ├── agents/          # group-runtime + registry + asset-loader + review
+│   │   ├── agents/          # Stage Runtime (group-runtime.ts) + registry + asset-loader + review
 │   │   ├── i18n/            # 国际化
 │   │   └── types.ts         # 核心类型定义
 │   └── mcp/

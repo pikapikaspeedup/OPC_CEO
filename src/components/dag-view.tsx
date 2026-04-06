@@ -354,13 +354,13 @@ export function DAGView({ nodes, edges, onNodeClick, selectedNodeId, className, 
               >
                 {truncate(ln.node.label ?? ln.node.id, 18)}
               </text>
-              {/* Group ID */}
+              {/* Stage ID */}
               <text
                 x={pos.x + 10}
                 y={pos.y + 48}
                 className="fill-white/30 text-[9px] font-mono"
               >
-                {truncate(ln.node.groupId, 20)}
+                {truncate(ln.node.id, 20)}
               </text>
               {/* Drag handle indicator (only when drag is enabled) */}
               {onNodeDragEnd && !isDragging && (

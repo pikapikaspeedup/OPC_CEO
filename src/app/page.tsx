@@ -550,9 +550,9 @@ export default function Home() {
       setSidebarSection('projects');
     } else if (suggestion.type === 'reassign_department' && suggestion.payload) {
       // Re-dispatch to the suggested department
-      const { workspace, templateId, groupId } = suggestion.payload;
-      if (workspace && (templateId || groupId)) {
-        api.dispatchRun({ workspace, ...(templateId ? { templateId } : { groupId }), prompt: '' }).then(() => loadAgentState()).catch(() => { });
+      const { workspace, templateId, stageId } = suggestion.payload;
+      if (workspace && templateId) {
+        api.dispatchRun({ workspace, templateId, ...(stageId ? { stageId } : {}), prompt: '' }).then(() => loadAgentState()).catch(() => { });
       }
     }
   }, [loadAgentState]);

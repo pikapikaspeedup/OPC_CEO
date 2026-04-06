@@ -14,7 +14,6 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     const result = await executeDispatch({
-      groupId: body.groupId,
       workspace: body.workspace,
       prompt: body.prompt,
       model: body.model,
@@ -24,6 +23,7 @@ export async function POST(req: Request) {
       projectId: body.projectId,
       pipelineId: body.pipelineId,
       templateId: body.templateId,
+      stageId: body.stageId,
       pipelineStageId: body.pipelineStageId,
       pipelineStageIndex: body.pipelineStageIndex,
       templateOverrides: body.templateOverrides,
@@ -42,16 +42,19 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const statusFilter = searchParams.get('status') as RunStatus | null;
-  const groupIdFilter = searchParams.get('groupId');
+  const stageIdFilter = searchParams.get('stageId');
   const reviewOutcomeFilter = searchParams.get('reviewOutcome');
   const projectIdFilter = searchParams.get('projectId');
 
-  const filter: { status?: RunStatus; groupId?: string; reviewOutcome?: string; projectId?: string } = {};
+  const filter: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string } = {};
   if (statusFilter) filter.status = statusFilter;
-  if (groupIdFilter) filter.groupId = groupIdFilter;
+  if (stageIdFilter) filter.stageId = stageIdFilter;
   if (reviewOutcomeFilter) filter.reviewOutcome = reviewOutcomeFilter;
   if (projectIdFilter) filter.projectId = projectIdFilter;
 
   const runs = listRuns(Object.keys(filter).length > 0 ? filter : undefined);
-  return NextResponse.json(runs);
+  return NextResponse.json(runs.map((run) => ({
+    ...run,
+    stageId: run.pipelineStageId || run.stageId,
+  })));
 }

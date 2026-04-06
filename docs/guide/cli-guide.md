@@ -63,6 +63,9 @@ npm run ag -- runs
 # 按状态过滤
 npm run ag -- runs --status=running
 npm run ag -- runs --status=failed
+
+# 按 stage 过滤
+npm run ag -- runs --stage=product-spec
 ```
 
 ---
@@ -76,7 +79,7 @@ npm run ag -- run 90b9e6b9-9787-4d97-be7f-458d8e870fc6
 输出示例：
 ```
 🔍 Run 90b9e6b9
-   Group: autonomous-dev-pilot  |  Status: running  |  Round: 1
+   Stage: autonomous-dev-pilot  |  Status: running  |  Round: 1
    Review: —  |  Template: development-template-1
 
    Roles:
@@ -87,33 +90,35 @@ npm run ag -- run 90b9e6b9-9787-4d97-be7f-458d8e870fc6
 
 ---
 
-### `dispatch <groupId>` — 派发新 Run
+### `dispatch <templateId>` — 派发新 Run
 
 ```bash
-# 最简用法：直接派发一个 coding-basic 任务
-npm run ag -- dispatch coding-basic \
+# 最简用法：派发模板入口 stage
+npm run ag -- dispatch coding-basic-template \
   --prompt "Fix the login bug"
 
-# 完整用法：在项目内派发流水线下一阶段
-npm run ag -- dispatch autonomous-dev-pilot \
+# 完整用法：在项目内派发模板的指定 stage
+npm run ag -- dispatch development-template-1 \
+  --stage autonomous-dev-pilot \
   --project 01748476-3e33-47fb-be86-5bb57628d46c \
   --source 22946833-7867-4926-9e90-0a2e2c44f5fd \
-  --template development-template-1 \
   --prompt "Implement the frontend workbench"
 ```
 
 | 参数 | 说明 |
 |------|------|
+| `<templateId>` | 模板 ID，位置参数 |
+| `--stage <stageId>` | 指定模板中的某个 stage；省略时派发入口 stage |
 | `--project <id>` | 关联到指定项目 |
 | `--source <runId>` | 上游 Source Run（可重复多次） |
-| `--template <id>` | 模板 ID |
 | `--prompt "..."` | 任务目标描述 |
 | `--workspace <uri>` | 工作区 URI（默认当前项目） |
 
 补充说明：
 
-- 同时提供 `--source` 和 `--template` 时，服务端会自动推断下一个 `pipelineStageIndex`
-- 只有展开 template 的首 stage 时，stage index 才会默认从 `0` 开始
+- 同时提供 `--source` 和 `<templateId>` 时，服务端会优先尝试自动推断下游 stage
+- 不传 `--stage` 时，线性模板默认派发第一个 stage；graph 模板默认派发入口 node
+- `ag dispatch` 不再接受 `--template`，位置参数就是模板 ID
 
 ---
 

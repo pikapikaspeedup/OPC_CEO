@@ -115,42 +115,43 @@ function loadFromDisk(): void {
       return;
     }
 
-    if (!existsSync(PERSIST_FILE)) {
-      // Fallback: try legacy path for backward compatibility
-      const legacyFile = path.join(process.cwd(), 'data', 'agent_runs.json');
-      if (existsSync(legacyFile)) {
-        log.info('Loading runs from legacy path, will save to new path on next write');
-        const raw = readFileSync(legacyFile, 'utf-8');
-        const entries: AgentRunState[] = JSON.parse(raw);
-        for (const entry of entries) { runs.set(entry.runId, entry); }
-        saveToDisk();  // migrate to new path
-        return;
-      }
-      return;
-    }
+    if (!existsSync(PERSIST_FILE)) return;
     const raw = readFileSync(PERSIST_FILE, 'utf-8');
     const entries: AgentRunState[] = JSON.parse(raw);
     let recovered = 0;
     let autoRecovered = 0;
+    let skippedLegacy = 0;
     for (const entry of entries) {
+      const canonicalStageId = entry.pipelineStageId || entry.stageId;
+      if (!canonicalStageId) {
+        skippedLegacy++;
+        log.warn({ runId: entry.runId }, 'Skipping persisted run without stageId/pipelineStageId; legacy fallback removed');
+        continue;
+      }
+      const { groupId: _legacyGroupId, ...rest } = entry as AgentRunState & { groupId?: string };
+      const normalizedEntry: AgentRunState = {
+        ...rest,
+        stageId: canonicalStageId,
+        pipelineStageId: entry.pipelineStageId || canonicalStageId,
+      };
       // In-progress runs that survived a true process restart.
       // Try to recover from completed artifacts, otherwise mark failed.
-      if (!TERMINAL_STATUSES.has(entry.status)) {
-        if (recoverInterruptedRun(entry)) {
+      if (!TERMINAL_STATUSES.has(normalizedEntry.status)) {
+        if (recoverInterruptedRun(normalizedEntry)) {
           autoRecovered++;
         } else {
-          entry.status = 'failed';
-          entry.lastError = 'Process restarted while run was in progress';
-          entry.finishedAt = new Date().toISOString();
+          normalizedEntry.status = 'failed';
+          normalizedEntry.lastError = 'Process restarted while run was in progress';
+          normalizedEntry.finishedAt = new Date().toISOString();
         }
         recovered++;
       }
-      runs.set(entry.runId, entry);
+      runs.set(normalizedEntry.runId, normalizedEntry);
     }
-    log.info({ total: entries.length, recovered, autoRecovered }, 'Runs loaded from disk');
+    log.info({ total: entries.length, recovered, autoRecovered, skippedLegacy }, 'Runs loaded from disk');
 
     // Post-load: sync any auto-recovered runs to their project pipeline
-    for (const entry of entries) {
+    for (const entry of runs.values()) {
       if (entry.status === 'completed' && entry.projectId && (entry.pipelineStageId || entry.pipelineStageIndex !== undefined)) {
         syncRunStatusToProject(entry);
       }
@@ -168,7 +169,7 @@ loadFromDisk();
 // ---------------------------------------------------------------------------
 
 export function createRun(input: {
-  groupId: string;
+  stageId: string;
   workspace: string;
   prompt: string;
   model?: string;
@@ -186,7 +187,7 @@ export function createRun(input: {
   const run: AgentRunState = {
     runId: randomUUID(),
     projectId: input.projectId,
-    groupId: input.groupId,
+    stageId: input.stageId,
     workspace: input.workspace,
     prompt: input.prompt,
     model: input.model,
@@ -199,7 +200,7 @@ export function createRun(input: {
     sourceRunIds: input.sourceRunIds,
     // V3.5: Pipeline tracking
     pipelineId: input.pipelineId,
-    pipelineStageId: input.pipelineStageId,
+    pipelineStageId: input.pipelineStageId || input.stageId,
     pipelineStageIndex: input.pipelineStageIndex,
   };
   // Runtime will backfill runId into taskEnvelope after creation
@@ -208,13 +209,13 @@ export function createRun(input: {
   }
   runs.set(run.runId, run);
   saveToDisk();
-  log.info({ runId: run.runId.slice(0, 8), groupId: run.groupId, templateId: run.templateId }, 'Run created');
+  log.info({ runId: run.runId.slice(0, 8), stageId: run.stageId, templateId: run.templateId }, 'Run created');
   return run;
 }
 
 export function updateRun(
   runId: string,
-  updates: Partial<Omit<AgentRunState, 'runId' | 'groupId' | 'workspace' | 'prompt' | 'createdAt'>>,
+  updates: Partial<Omit<AgentRunState, 'runId' | 'stageId' | 'workspace' | 'prompt' | 'createdAt'>>,
 ): AgentRunState | null {
   const run = runs.get(runId);
   if (!run) return null;
@@ -333,13 +334,13 @@ export function getRun(runId: string): AgentRunState | null {
   return runs.get(runId) ?? null;
 }
 
-export function listRuns(filter?: { status?: RunStatus; groupId?: string; reviewOutcome?: string; projectId?: string }): AgentRunState[] {
+export function listRuns(filter?: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string }): AgentRunState[] {
   let all = Array.from(runs.values());
   if (filter?.status) {
     all = all.filter(r => r.status === filter.status);
   }
-  if (filter?.groupId) {
-    all = all.filter(r => r.groupId === filter.groupId);
+  if (filter?.stageId) {
+    all = all.filter(r => (r.pipelineStageId || r.stageId) === filter.stageId);
   }
   if (filter?.reviewOutcome) {
     all = all.filter(r => r.reviewOutcome === filter.reviewOutcome);

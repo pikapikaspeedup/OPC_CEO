@@ -7,7 +7,7 @@
  */
 
 import type { GraphPipeline } from './pipeline/graph-pipeline-types';
-import type { GenerationContext, GroupSummary } from './generation-context';
+import type { GenerationContext } from './generation-context';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -58,19 +58,39 @@ export function assessGenerationRisks(
     });
   }
 
-  // ── Unknown groupIds ──
-  const availableIds = new Set(context.availableGroups.map((g: GroupSummary) => g.id));
-  const unknownGroups = graph.nodes
-    .filter(n => !availableIds.has(n.groupId))
-    .map(n => n.groupId);
-  const uniqueUnknown = [...new Set(unknownGroups)];
-
-  if (uniqueUnknown.length > 0) {
+  // ── Missing execution config ──
+  const missingExecution = graph.nodes.filter((node) => !node.executionMode || !Array.isArray(node.roles));
+  if (missingExecution.length > 0) {
     risks.push({
       severity: 'critical',
       category: 'availability',
-      message: `References ${uniqueUnknown.length} unknown group(s): ${uniqueUnknown.join(', ')}`,
-      suggestion: 'Ensure all referenced groups exist or create them first.',
+      message: `${missingExecution.length} node(s) are missing execution config: ${missingExecution.map((node) => node.id).join(', ')}`,
+      suggestion: 'Populate executionMode and roles for every node before saving.',
+    });
+  }
+
+  const missingRoles = graph.nodes
+    .filter((node) => node.kind === 'stage' && (!node.roles || node.roles.length === 0))
+    .map((node) => node.id);
+  if (missingRoles.length > 0) {
+    risks.push({
+      severity: 'critical',
+      category: 'availability',
+      message: `${missingRoles.length} stage node(s) have no roles: ${missingRoles.join(', ')}`,
+      suggestion: 'Add at least one executable role to each stage node.',
+    });
+  }
+
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const invalidContracts = graph.nodes
+    .filter((node) => node.sourceContract?.acceptedSourceStageIds?.some((id) => !nodeIds.has(id)))
+    .map((node) => node.id);
+  if (invalidContracts.length > 0) {
+    risks.push({
+      severity: 'critical',
+      category: 'reliability',
+      message: `${invalidContracts.length} node(s) reference missing acceptedSourceStageIds: ${invalidContracts.join(', ')}`,
+      suggestion: 'Update sourceContract.acceptedSourceStageIds to reference existing stage IDs.',
     });
   }
 

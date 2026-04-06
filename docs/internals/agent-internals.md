@@ -15,7 +15,7 @@ API Request
           → Workspace 执行
 ```
 
-当前版本（V3.5）中 `group-runtime.ts` 通过 `AssetLoader` 从 `.agents/assets/templates/*.json` 加载 Template 定义，Template 中内联了 Groups 和 Pipeline。调用链不经过 Adapter 抽象层，直接调用 Bridge 层（`gateway.ts` + `grpc.ts`）。
+当前版本中 `group-runtime.ts` 虽然保留旧文件名，但实际已经按 stage-centric 语义工作。`AssetLoader` 会先归一化 `.agents/assets/templates/*.json`，再由 stage resolver 提供 inline stage/node execution config。调用链不经过 Adapter 抽象层，直接调用 Bridge 层（`gateway.ts` + `grpc.ts`）。
 
 ---
 
@@ -70,7 +70,7 @@ POST /exa.language_server_pb.LanguageServerService/UpdateConversationAnnotations
   "annotations": {
     "antigravity.task.hidden": "true",
     "antigravity.task.parentId": "...",
-    "antigravity.task.groupId": "coding-basic",
+    "antigravity.task.stageId": "coding-basic",
     "antigravity.task.runId": "...",
     "lastUserViewTime": "2026-03-21T..."
   },
@@ -215,9 +215,10 @@ POST /exa.language_server_pb.LanguageServerService/CancelCascadeInvocation
 ```
 src/lib/agents/
 ├── group-types.ts          # 类型定义（V3.5: 含 maxRetries, staleThresholdMs, pipelineId）
-├── group-registry.ts       # Group 注册表（委托 AssetLoader 从 Template 加载）
-├── asset-loader.ts         # V3.5: 从 .agents/assets/templates/*.json 加载 Template，扁平化为 GroupDefinition[]
+├── asset-loader.ts         # 加载 Template 资产并在启动期校验
 ├── asset-types.ts          # Group/ReviewPolicy/TemplatePack 资产类型
+├── stage-resolver.ts       # templateId + stageId → resolved stage config
+├── pipeline/template-normalizer.ts # 兼容旧模板到 inline stage/node schema
 ├── pipeline-types.ts       # TemplateDefinition + PipelineStage 类型
 ├── pipeline-registry.ts    # Pipeline 查询（委托 AssetLoader.loadAllTemplates()）
 ├── run-registry.ts         # Run 状态 + JSON 持久化（V3.5: 含 pipelineId, pipelineStageIndex）
@@ -235,7 +236,7 @@ src/lib/bridge/
 └── statedb.ts              # SQLite 读取
 
 .agents/assets/
-├── templates/              # V3.5: Template 配置（每个文件 = groups + pipeline）
+├── templates/              # Template 配置（每个文件 = inline stage/node pipeline）
 │   ├── development-template-1.json
 │   ├── design-review-template.json
 │   ├── ux-driven-dev-template.json

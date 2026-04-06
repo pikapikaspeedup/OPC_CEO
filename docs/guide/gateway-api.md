@@ -8,6 +8,11 @@
 
 本文档面向 **Headless CLI** 及所有需要程序化调用 Antigravity 对话能力的场景。
 
+> V6.1 Stage-Centric Migration:
+> 对外编排接口已经改为 `templateId + stageId`。
+> 模板持久化不再包含 `groups{}`，而是把 `executionMode`、`roles`、`sourceContract.acceptedSourceStageIds` 直接内联到 stage / node。
+> `/api/agent-groups` 与 scheduler `dispatch-group` 已移除。
+
 ---
 
 ## 快速开始：一个完整的对话生命周期
@@ -522,8 +527,19 @@ done
 {
   "direction": "pipeline-to-graph",
   "pipeline": [
-    { "groupId": "project-planning", "autoTrigger": true },
-    { "groupId": "development" }
+    {
+      "stageId": "project-planning",
+      "title": "项目规划",
+      "executionMode": "review-loop",
+      "roles": [],
+      "autoTrigger": true
+    },
+    {
+      "stageId": "development",
+      "title": "开发执行",
+      "executionMode": "review-loop",
+      "roles": []
+    }
   ]
 }
 ```
@@ -595,6 +611,8 @@ done
 ### `POST /api/projects/:id/resume` — 恢复 Project Pipeline
 
 **功能**: 恢复项目的 Pipeline 执行。支持多种恢复动作：`recover`、`nudge`、`restart_role`、`cancel`、`skip`、`force-complete`。
+
+> 迁移边界：`recover` 仅适用于当前 stage-centric 持久化 run。旧的 `groupId`-only run/project 状态已不再加载。
 
 详细参数说明请参阅 [cli-api-reference.md](./cli-api-reference.md#resume-project-pipeline)。
 
@@ -895,8 +913,7 @@ done
 
 | kind | 说明 | 必填字段 |
 |------|------|---------|
-| `dispatch-pipeline` | 派发 Pipeline | `templateId`, `workspace`, `prompt` |
-| `dispatch-group` | 派发 Agent Group | `groupId`, `workspace`, `prompt` |
+| `dispatch-pipeline` | 派发 Pipeline / Stage | `templateId`, `workspace`, `prompt`，可选 `stageId` |
 | `health-check` | 项目健康检查 | `projectId` |
 
 ### `GET /api/scheduler/jobs/:id` — 任务详情

@@ -408,10 +408,15 @@ export default function AgentRunsPanel({
   const preferredWorkspace = runningWs[0]?.uri || workspaces[0]?.uri || '';
   const effectiveSelectedWs = workspaces.some(w => w.uri === selectedWs) ? selectedWs : preferredWorkspace;
 
+  const resolveStageDispatch = (stageId: string) => ({
+    templateId: stageId === 'coding-basic' ? 'coding-basic-template' : 'development-template-1',
+    stageId,
+  });
+
   // Fetch approved source runs when architecture-advisory or autonomous-dev-pilot is selected
   useEffect(() => {
     if (selectedGroup === 'architecture-advisory') {
-      api.agentRunsByFilter({ groupId: 'product-spec', reviewOutcome: 'approved' })
+      api.agentRunsByFilter({ stageId: 'product-spec', reviewOutcome: 'approved' })
         .then(runs => {
           const validRuns = runs.filter(r =>
             r.resultEnvelope && r.artifactManifestPath && r.workspace === effectiveSelectedWs
@@ -423,7 +428,7 @@ export default function AgentRunsPanel({
         })
         .catch(() => setApprovedProductRuns([]));
     } else if (selectedGroup === 'autonomous-dev-pilot') {
-      api.agentRunsByFilter({ groupId: 'architecture-advisory', reviewOutcome: 'approved' })
+      api.agentRunsByFilter({ stageId: 'architecture-advisory', reviewOutcome: 'approved' })
         .then(runs => {
           const validRuns = runs.filter(r =>
             r.resultEnvelope && r.artifactManifestPath && r.workspace === effectiveSelectedWs
@@ -466,7 +471,7 @@ export default function AgentRunsPanel({
           return;
         }
         const response = await api.dispatchRun({
-          groupId: 'architecture-advisory',
+          ...resolveStageDispatch('architecture-advisory'),
           workspace: effectiveSelectedWs,
           prompt: prompt.trim(),
           model: modelToSend,
@@ -489,7 +494,7 @@ export default function AgentRunsPanel({
           return;
         }
         const response = await api.dispatchRun({
-          groupId: 'autonomous-dev-pilot',
+          ...resolveStageDispatch('autonomous-dev-pilot'),
           workspace: effectiveSelectedWs,
           prompt: prompt.trim(),
           model: modelToSend,
@@ -501,7 +506,7 @@ export default function AgentRunsPanel({
         if (onDispatched) await onDispatched(response.runId);
       } else {
         const response = await api.dispatchRun({
-          groupId: selectedGroup,
+          ...resolveStageDispatch(selectedGroup),
           workspace: effectiveSelectedWs,
           prompt: prompt.trim(),
           model: modelToSend,

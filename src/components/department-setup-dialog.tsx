@@ -144,13 +144,13 @@ export default function DepartmentSetupDialog({
   // ── Derived: all roleIds from selected templates ────────────────────────
 
   const allRoleIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const tpl of templates) {
-      if (selectedTemplateIds.includes(tpl.id)) {
-        for (const g of Object.values(tpl.groups)) {
-          for (const rid of g.roleIds ?? []) ids.add(rid);
+      const ids = new Set<string>();
+      for (const tpl of templates) {
+        if (selectedTemplateIds.includes(tpl.id)) {
+          for (const g of Object.values(tpl.stages)) {
+            for (const rid of g.roleIds ?? []) ids.add(rid);
+          }
         }
-      }
     }
     return Array.from(ids);
   }, [templates, selectedTemplateIds]);
@@ -504,7 +504,7 @@ export default function DepartmentSetupDialog({
             )}
             {templates.map(tpl => {
               const selected = selectedTemplateIds.includes(tpl.id);
-              const roleIds = Object.values(tpl.groups).flatMap(g => g.roleIds ?? []);
+              const roleIds = Object.values(tpl.stages).flatMap(g => g.roleIds ?? []);
               const uniqueRoles = [...new Set(roleIds)];
               return (
                 <button

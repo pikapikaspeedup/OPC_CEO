@@ -7,7 +7,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import type { TemplatePipelineStageFE, TemplateGroupDetailFE } from '@/lib/types';
+import type { TemplatePipelineStageFE, TemplateStageConfigFE } from '@/lib/types';
 import { EXECUTION_MODE_LABELS } from '@/components/template-constants';
 
 // ---------------------------------------------------------------------------
@@ -16,14 +16,12 @@ import { EXECUTION_MODE_LABELS } from '@/components/template-constants';
 
 export function StageEditor({
   stage,
-  group,
+  stageConfig,
   onChange,
-  allGroupIds,
 }: {
   stage: TemplatePipelineStageFE;
-  group?: TemplateGroupDetailFE;
+  stageConfig?: TemplateStageConfigFE;
   onChange: (updates: Partial<TemplatePipelineStageFE>) => void;
-  allGroupIds?: string[];
 }) {
   return (
     <div
@@ -42,29 +40,6 @@ export function StageEditor({
           placeholder="stage-id"
         />
       </div>
-
-      {/* Group ID selector */}
-      {allGroupIds && allGroupIds.length > 0 && (
-        <div className="flex items-center justify-between">
-          <label className="text-xs text-[var(--app-text-soft)]">所属 Group</label>
-          <div className="flex flex-wrap gap-1">
-            {allGroupIds.map(gid => (
-              <button
-                key={gid}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-[10px] font-medium border transition-colors',
-                  stage.groupId === gid
-                    ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
-                    : 'bg-white/5 text-white/30 border-white/8 hover:text-white/60',
-                )}
-                onClick={() => onChange({ groupId: gid })}
-              >
-                {gid}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Auto trigger */}
       <div className="flex items-center justify-between">
@@ -148,10 +123,10 @@ export function StageEditor({
         </div>
       )}
 
-      {/* Group info */}
-      {group && (
+      {/* Stage execution info */}
+      {stageConfig && (
         <div className="rounded-lg border border-white/6 bg-white/[0.02] p-2 text-[10px] text-[var(--app-text-muted)]">
-          <span className="font-semibold">Group:</span> {group.title} · {EXECUTION_MODE_LABELS[group.executionMode ?? ''] ?? group.executionMode} · {group.roles.length} 角色
+          <span className="font-semibold">Stage Config:</span> {stageConfig.title} · {EXECUTION_MODE_LABELS[stageConfig.executionMode ?? ''] ?? stageConfig.executionMode} · {stageConfig.roles.length} 角色
         </div>
       )}
     </div>

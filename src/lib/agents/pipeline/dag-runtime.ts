@@ -7,7 +7,6 @@
  */
 
 import { getRun } from '../run-registry';
-import { getGroup } from '../group-registry';
 import type { DagIR, DagNode, DagNodeActivation, FlowCondition } from './dag-ir-types';
 import type { ProjectPipelineState } from '../project-types';
 import { evaluateCondition, type ConditionContext } from '../flow-condition';
@@ -154,11 +153,7 @@ export function getActivatableNodes(
 // ── Source Filtering ────────────────────────────────────────────────────────
 
 /**
- * Filter source run IDs based on the target node's group sourceContract.
- * This is the IR-aware wrapper around the existing group-level filtering.
- *
- * Note: keeps the same runId-based interface as the legacy
- * filterSourcesByContract() for backward compatibility.
+ * Filter source run IDs based on the target node's stage sourceContract.
  */
 export function filterSourcesByNode(
   ir: DagIR,
@@ -170,14 +165,14 @@ export function filterSourcesByNode(
 
   if (allSourceRunIds.length === 0) return allSourceRunIds;
 
-  const group = getGroup(node.groupId);
-  const acceptedSourceGroupIds = group?.sourceContract?.acceptedSourceGroupIds;
-  if (!acceptedSourceGroupIds?.length) return allSourceRunIds;
+  const acceptedSourceStageIds = node.sourceContract?.acceptedSourceStageIds;
+  if (!acceptedSourceStageIds?.length) return allSourceRunIds;
 
-  const accepted = new Set(acceptedSourceGroupIds);
+  const accepted = new Set(acceptedSourceStageIds);
   return allSourceRunIds.filter(runId => {
     const run = getRun(runId);
-    return !!run && accepted.has(run.groupId);
+    const sourceStageId = run?.pipelineStageId || run?.stageId;
+    return !!sourceStageId && accepted.has(sourceStageId);
   });
 }
 

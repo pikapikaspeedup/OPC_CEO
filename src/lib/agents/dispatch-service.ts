@@ -10,11 +10,11 @@
  */
 
 import { dispatchRun } from './group-runtime';
-import { getGroup } from './group-registry';
 import { getRun } from './run-registry';
 import { AssetLoader } from './asset-loader';
 import { getDownstreamStages } from './pipeline/pipeline-registry';
 import { resolveStageId } from './pipeline/pipeline-graph';
+import { getStageDefinition } from './stage-resolver';
 import {
   addRunToProject,
   initializePipelineState,
@@ -29,7 +29,6 @@ const log = createLogger('DispatchService');
 // ---------------------------------------------------------------------------
 
 export interface ExecuteDispatchInput {
-  groupId?: string;
   workspace: string;
   prompt?: string;
   model?: string;
@@ -44,6 +43,7 @@ export interface ExecuteDispatchInput {
   /** Can be passed as `templateId` or `pipelineId` — both are accepted. */
   pipelineId?: string;
   templateId?: string;
+  stageId?: string;
   pipelineStageId?: string;
   pipelineStageIndex?: number;
   templateOverrides?: Record<string, unknown>;
@@ -71,7 +71,7 @@ export class DispatchError extends Error {
  * Execute a dispatch — the single source of truth for running agent tasks.
  *
  * This function:
- *   1. Resolves templateId → groupId + pipelineStageId (if needed)
+ *   1. Resolves templateId → stageId + pipelineStageId (if needed)
  *   2. Validates source contracts
  *   3. Calls `dispatchRun()` to start the run
  *   4. Links run to project (`addRunToProject`)
@@ -79,13 +79,17 @@ export class DispatchError extends Error {
  *   6. Tracks stage dispatch (`trackStageDispatch`)
  */
 export async function executeDispatch(input: ExecuteDispatchInput): Promise<ExecuteDispatchResult> {
-  let finalGroupId = input.groupId;
+  let finalStageId = input.stageId || input.pipelineStageId;
   let finalPipelineStageId = input.pipelineStageId;
   let finalPipelineStageIndex = input.pipelineStageIndex;
   const finalPipelineId = input.pipelineId || input.templateId;
 
-  // ── Step 1: Resolve template → groupId ──
-  if (!finalGroupId && finalPipelineId) {
+  if (!finalPipelineId) {
+    throw new DispatchError('Missing required field: templateId');
+  }
+
+  // ── Step 1: Resolve template → stageId ──
+  if (finalPipelineId) {
     const template = AssetLoader.getTemplate(finalPipelineId);
     if (!template) {
       throw new DispatchError(`Template not found: ${finalPipelineId}`);
@@ -95,62 +99,55 @@ export async function executeDispatch(input: ExecuteDispatchInput): Promise<Exec
     }
 
     // Auto-resolve from source run
-    if (!finalPipelineStageId && finalPipelineStageIndex === undefined && input.sourceRunIds?.length) {
+    if (!finalStageId && !finalPipelineStageId && finalPipelineStageIndex === undefined && input.sourceRunIds?.length) {
       const sourceRun = getRun(input.sourceRunIds[0]);
-      if (sourceRun?.pipelineStageId) {
-        const downstreams = getDownstreamStages(finalPipelineId, sourceRun.pipelineStageId);
+      const sourceStageId = sourceRun?.pipelineStageId || sourceRun?.stageId;
+      if (sourceStageId) {
+        const downstreams = getDownstreamStages(finalPipelineId, sourceStageId);
         if (downstreams.length === 1) {
           finalPipelineStageId = resolveStageId(downstreams[0]);
-          finalGroupId = downstreams[0].groupId;
+          finalStageId = finalPipelineStageId;
         }
       } else if (sourceRun?.pipelineStageIndex !== undefined) {
         finalPipelineStageIndex = sourceRun.pipelineStageIndex + 1;
       }
     }
 
-    if (!finalPipelineStageId && finalPipelineStageIndex === undefined) {
-      finalPipelineStageIndex = 0;
+    if (!finalStageId && !finalPipelineStageId && finalPipelineStageIndex === undefined) {
+      if (template.pipeline?.length) {
+        finalPipelineStageIndex = 0;
+      } else if (template.graphPipeline?.nodes.length) {
+        finalStageId = template.graphPipeline.nodes.find((node: any) => node.autoTrigger !== false)?.id || template.graphPipeline.nodes[0].id;
+      }
     }
 
     if (template.pipeline) {
-      const stageDef = finalPipelineStageId
-        ? template.pipeline.find((stage: any) => resolveStageId(stage) === finalPipelineStageId)
+      const resolvedStageId = finalStageId || finalPipelineStageId;
+      const stageDef = resolvedStageId
+        ? template.pipeline.find((stage: any) => resolveStageId(stage) === resolvedStageId)
         : template.pipeline[finalPipelineStageIndex!];
       if (!stageDef) {
         throw new DispatchError(`Pipeline stage is out of bounds for template ${finalPipelineId}`);
       }
       finalPipelineStageId = resolveStageId(stageDef);
+      finalStageId = finalPipelineStageId;
       finalPipelineStageIndex = template.pipeline.findIndex((stage: any) => resolveStageId(stage) === finalPipelineStageId);
-      finalGroupId = stageDef.groupId || stageDef.stageId;
     } else if (template.graphPipeline) {
-      const node = finalPipelineStageId
-        ? template.graphPipeline.nodes.find((n: any) => n.id === finalPipelineStageId)
+      const resolvedStageId = finalStageId || finalPipelineStageId;
+      const node = resolvedStageId
+        ? template.graphPipeline.nodes.find((n: any) => n.id === resolvedStageId)
         : template.graphPipeline.nodes.find((n: any) => n.autoTrigger);
       if (!node) {
         throw new DispatchError(`No matching internal node found for template ${finalPipelineId}`);
       }
       finalPipelineStageId = node.id;
-      finalGroupId = node.groupId || node.id;
-    }
-  } else {
-    // groupId provided — still try to resolve downstream if source info given
-    if (!finalPipelineStageId && finalPipelineStageIndex === undefined && finalPipelineId && input.sourceRunIds?.length) {
-      const sourceRun = getRun(input.sourceRunIds[0]);
-      if (sourceRun?.pipelineStageId) {
-        const downstreams = getDownstreamStages(finalPipelineId, sourceRun.pipelineStageId);
-        if (downstreams.length === 1) {
-          finalPipelineStageId = resolveStageId(downstreams[0]);
-          finalGroupId = finalGroupId || downstreams[0].groupId;
-        }
-      } else if (sourceRun?.pipelineStageIndex !== undefined) {
-        finalPipelineStageIndex = sourceRun.pipelineStageIndex + 1;
-      }
+      finalStageId = node.id;
     }
   }
 
   // ── Step 2: Validate ──
-  if (!finalGroupId) {
-    throw new DispatchError('Missing required field: groupId (or pipelineId/templateId)');
+  if (!finalStageId) {
+    throw new DispatchError('Missing required field: stageId');
   }
   if (!input.workspace) {
     throw new DispatchError('Missing required field: workspace');
@@ -162,42 +159,46 @@ export async function executeDispatch(input: ExecuteDispatchInput): Promise<Exec
   }
 
   // Source contract validation
-  const group = getGroup(finalGroupId);
-  if (group?.sourceContract) {
+  const stage = getStageDefinition(finalPipelineId, finalStageId);
+  if (!stage) {
+    throw new DispatchError(`Stage not found: ${finalPipelineId}/${finalStageId}`, 404);
+  }
+  if (stage.sourceContract) {
     if (!input.sourceRunIds || input.sourceRunIds.length === 0) {
-      throw new DispatchError(`Group ${finalGroupId} requires sourceRunIds per its source contract`);
+      throw new DispatchError(`Stage ${finalStageId} requires sourceRunIds per its source contract`);
     }
-    if (!group.sourceContract.autoBuildInputArtifactsFromSources) {
+    if (!stage.sourceContract.autoBuildInputArtifactsFromSources) {
       if (!input.taskEnvelope?.inputArtifacts?.length) {
-        throw new DispatchError(`Group ${finalGroupId} requires inputArtifacts (source contract does not auto-build)`);
+        throw new DispatchError(`Stage ${finalStageId} requires inputArtifacts (source contract does not auto-build)`);
       }
     }
-  } else if (group?.capabilities?.requiresInputArtifacts) {
+  } else if (stage.capabilities?.requiresInputArtifacts) {
     if (!input.taskEnvelope?.inputArtifacts?.length) {
-      throw new DispatchError(`Group ${finalGroupId} requires inputArtifacts from an approved source run`);
+      throw new DispatchError(`Stage ${finalStageId} requires inputArtifacts from an approved source run`);
     }
   }
 
   // ── Step 3: Dispatch ──
   log.info({
-    groupId: finalGroupId,
+    stageId: finalStageId,
     workspace: input.workspace.split('/').pop(),
     goalLength: (goal as string).length,
     hasEnvelope: !!input.taskEnvelope,
-    pipelineId: finalPipelineId,
+    templateId: finalPipelineId,
     model: input.model,
   }, 'Dispatching run');
 
   const result = await dispatchRun({
-    groupId: finalGroupId,
+    stageId: finalStageId,
     workspace: input.workspace,
     prompt: goal as string,
     model: input.model,
     parentConversationId: input.parentConversationId,
-    taskEnvelope: input.taskEnvelope,
+    taskEnvelope: input.taskEnvelope as any,
     sourceRunIds: input.sourceRunIds,
     projectId: input.projectId,
     pipelineId: finalPipelineId,
+    templateId: finalPipelineId,
     pipelineStageId: finalPipelineStageId,
     pipelineStageIndex: finalPipelineStageIndex,
     conversationMode: input.conversationMode,

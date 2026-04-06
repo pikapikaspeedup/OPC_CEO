@@ -87,7 +87,7 @@ export class AntigravityExecutor implements TaskExecutor {
     await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, cascadeId, {
       'antigravity.task.hidden': 'true',
       'antigravity.task.parentId': opts.parentConversationId || '',
-      'antigravity.task.groupId': opts.groupId || '',
+      'antigravity.task.stageId': opts.stageId || '',
       'antigravity.task.runId': opts.runId || '',
       'antigravity.task.roleId': opts.roleId || '',
       lastUserViewTime: new Date().toISOString(),

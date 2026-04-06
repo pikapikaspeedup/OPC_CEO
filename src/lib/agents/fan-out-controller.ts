@@ -82,18 +82,15 @@ async function dispatchInitialProjectStage(projectId: string): Promise<string> {
   }
 
   // Support both pipeline[] and graphPipeline formats
-  let initialGroupId: string;
   let initialStageId: string;
   if (template.pipeline && template.pipeline.length > 0) {
     const initialStage = template.pipeline[0];
-    initialGroupId = initialStage.groupId;
     initialStageId = resolveStageId(initialStage);
   } else if (template.graphPipeline && template.graphPipeline.nodes.length > 0) {
     const ir = getOrCompileIR(template);
     const entryNodeId = ir.entryNodeIds[0];
     const entryNode = ir.nodes.find(n => n.id === entryNodeId);
     if (!entryNode) throw new Error(`Entry node not found in IR: ${entryNodeId}`);
-    initialGroupId = entryNode.groupId;
     initialStageId = entryNode.id;
   } else {
     throw new Error(`Template ${project.templateId} has no pipeline or graphPipeline`);
@@ -101,11 +98,12 @@ async function dispatchInitialProjectStage(projectId: string): Promise<string> {
 
   initializePipelineState(project.projectId, project.templateId);
   const result = await dispatchRun({
-    groupId: initialGroupId,
+    stageId: initialStageId,
     workspace: project.workspace,
     prompt: project.goal,
     projectId: project.projectId,
     pipelineId: project.templateId,
+    templateId: project.templateId,
     pipelineStageId: initialStageId,
     pipelineStageIndex: 0,
   });
@@ -154,14 +152,15 @@ async function dispatchDownstreamStages(projectId: string, completedStageId: str
     const sourceRunIds = filterSourcesByNode(ir, node.id, allSourceRunIds);
 
     const pipelineStage = template.pipeline?.find(s => resolveStageId(s) === node.id);
-    const pipelineStageIndex = pipelineStage ? template.pipeline.indexOf(pipelineStage) : undefined;
+    const pipelineStageIndex = pipelineStage && template.pipeline ? template.pipeline.indexOf(pipelineStage) : undefined;
 
     const result = await dispatchRun({
-      groupId: node.groupId,
+      stageId: node.id,
       workspace: project.workspace,
       prompt: node.promptTemplate || project.goal,
       projectId: project.projectId,
       pipelineId: template.id,
+      templateId: template.id,
       pipelineStageId: node.id,
       sourceRunIds,
       ...(pipelineStageIndex !== undefined ? { pipelineStageIndex } : {}),

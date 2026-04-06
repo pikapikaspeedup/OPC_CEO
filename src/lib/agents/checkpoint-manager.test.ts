@@ -31,7 +31,6 @@ import type { ProjectPipelineState, PipelineStageProgress } from './project-type
 function makeStage(id: string, status: PipelineStageProgress['status'] = 'completed'): PipelineStageProgress {
   return {
     stageId: id,
-    groupId: `group-${id}`,
     stageIndex: 0,
     status,
     attempts: 1,

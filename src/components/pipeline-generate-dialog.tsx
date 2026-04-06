@@ -172,7 +172,7 @@ export default function PipelineGenerateDialog({
 
   // Extract nodes from result for preview
   const nodes = result?.graphPipeline
-    ? (result.graphPipeline as { nodes?: Array<{ id: string; kind?: string; groupId?: string }> }).nodes ?? []
+    ? (result.graphPipeline as { nodes?: Array<{ id: string; kind?: string; title?: string; executionMode?: string }> }).nodes ?? []
     : [];
 
   return (
@@ -409,8 +409,10 @@ export default function PipelineGenerateDialog({
                             {node.kind}
                           </Badge>
                         )}
-                        {node.groupId && (
-                          <span className="text-[var(--app-text-muted)]">{node.groupId}</span>
+                        {(node.title || node.executionMode) && (
+                          <span className="text-[var(--app-text-muted)]">
+                            {node.title || node.executionMode}
+                          </span>
                         )}
                       </div>
                     ))}

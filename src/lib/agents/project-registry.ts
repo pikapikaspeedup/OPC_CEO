@@ -57,30 +57,27 @@ function loadFromDisk(): void {
       return;
     }
 
-    if (!existsSync(PERSIST_FILE)) {
-      // Fallback: try legacy path for backward compatibility
-      const legacyFile = path.join(process.cwd(), 'data', 'projects.json');
-      if (existsSync(legacyFile)) {
-        log.info('Loading projects from legacy path, will save to new path on next write');
-        const raw = readFileSync(legacyFile, 'utf-8');
-        const entries: ProjectDefinition[] = JSON.parse(raw);
-        for (const entry of entries) { projects.set(entry.projectId, entry); }
-        saveToDisk();  // migrate to new path
-        return;
-      }
-      return;
-    }
+    if (!existsSync(PERSIST_FILE)) return;
     const raw = readFileSync(PERSIST_FILE, 'utf-8');
     const entries: ProjectDefinition[] = JSON.parse(raw);
+    let skippedLegacy = 0;
     for (const entry of entries) {
       if (entry.pipelineState) {
+        const hasLegacyOnlyStages = entry.pipelineState.stages.some((stage) => !stage.stageId);
+        if (hasLegacyOnlyStages) {
+          skippedLegacy++;
+          log.warn({ projectId: entry.projectId }, 'Skipping persisted project with legacy stage entries; stageId fallback removed');
+          continue;
+        }
         const template = entry.pipelineState.templateId ? AssetLoader.getTemplate(entry.pipelineState.templateId) : null;
         entry.pipelineState.stages = entry.pipelineState.stages.map((stage, idx) => {
-          const templateStage = template?.pipeline[idx];
+          const templateStage = template?.pipeline?.[idx];
+          const resolvedStageId = stage.stageId;
           return {
             ...stage,
-            stageId: stage.stageId || (templateStage ? resolveStageId(templateStage) : stage.groupId),
+            stageId: resolvedStageId,
             stageIndex: stage.stageIndex ?? idx,
+            title: stage.title || templateStage?.title,
           };
         });
         entry.pipelineState.activeStageIds = entry.pipelineState.activeStageIds
@@ -88,7 +85,7 @@ function loadFromDisk(): void {
       }
       projects.set(entry.projectId, entry);
     }
-    log.info({ total: entries.length }, 'Projects loaded from disk');
+    log.info({ total: entries.length, skippedLegacy }, 'Projects loaded from disk');
   } catch (err: any) {
     log.warn({ err: err.message }, 'Failed to load projects from disk');
   }
@@ -236,9 +233,9 @@ export function initializePipelineState(
 
   let stages: PipelineStageProgress[] = [];
   if (template.pipeline) {
-    stages = template.pipeline.map((stage: any, idx: number) => ({
+      stages = template.pipeline.map((stage: any, idx: number) => ({
       stageId: resolveStageId(stage),
-      groupId: stage.groupId,
+      title: stage.title,
       stageIndex: idx,
       status: 'pending',
       attempts: 0,
@@ -246,7 +243,7 @@ export function initializePipelineState(
   } else if (template.graphPipeline) {
     stages = template.graphPipeline.nodes.map((node: any, idx: number) => ({
       stageId: node.id,
-      groupId: node.groupId || node.id,
+      title: node.title || node.label,
       stageIndex: idx,
       status: 'pending',
       attempts: 0,

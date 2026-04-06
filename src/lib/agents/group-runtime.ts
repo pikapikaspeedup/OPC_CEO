@@ -18,7 +18,6 @@ import {
   grpc,
 } from '../bridge/gateway';
 import { extractAndPersistMemory } from './department-memory';
-import { getGroup } from './group-registry';
 import { createRun, updateRun, getRun } from './run-registry';
 import { watchConversation, type ConversationWatchState } from './watch-conversation';
 import type {
@@ -77,6 +76,7 @@ import { finalizeAdvisoryRun, finalizeDeliveryRun } from './finalization';
 import { checkWriteScopeConflicts } from "./scope-governor";
 import { getExecutor, resolveProvider } from '../providers';
 import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline/pipeline-registry';
+import { getStageDefinition } from './stage-resolver';
 
 const log = createLogger('Runtime');
 
@@ -106,7 +106,7 @@ const activeRuns = new Map<string, ActiveRun>();
 // ---------------------------------------------------------------------------
 
 export interface DispatchRunInput {
-  groupId: string;
+  stageId: string;
   workspace: string;
   prompt?: string;
   model?: string;
@@ -115,6 +115,7 @@ export interface DispatchRunInput {
   sourceRunIds?: string[];
   projectId?: string;
   pipelineId?: string;
+  templateId?: string;
   pipelineStageId?: string;
   pipelineStageIndex?: number;
   /** V5.5: Override conversation mode for this run. 'shared' = reuse cascade, 'isolated' = default */
@@ -153,8 +154,9 @@ function resolveSourceContext(
     const srcRun = getRun(srcRunId);
     if (!srcRun) throw new Error(`Source run ${srcRunId} not found`);
 
-    if (!contract.acceptedSourceGroupIds.includes(srcRun.groupId)) {
-      throw new Error(`Source run ${srcRunId} has groupId '${srcRun.groupId}', but group '${group.id}' only accepts: ${contract.acceptedSourceGroupIds.join(', ')}`);
+    const sourceStageId = srcRun.pipelineStageId || srcRun.stageId;
+    if (!sourceStageId || !contract.acceptedSourceStageIds.includes(sourceStageId)) {
+      throw new Error(`Source run ${srcRunId} has stageId '${sourceStageId || 'unknown'}', but stage '${group.id}' only accepts: ${contract.acceptedSourceStageIds.join(', ')}`);
     }
 
     if (!srcRun.reviewOutcome || !requiredOutcomes.includes(srcRun.reviewOutcome)) {
@@ -293,13 +295,19 @@ function buildDevelopmentWorkPackage(
 // ---------------------------------------------------------------------------
 
 export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: string }> {
-  // 1. Validate group
-  const group = getGroup(input.groupId);
+  const resolvedStageId = input.pipelineStageId || input.stageId;
+  const templateId = input.templateId || input.pipelineId;
+  if (!resolvedStageId || !templateId) {
+    throw new Error('dispatchRun requires templateId and stageId');
+  }
+
+  // 1. Validate stage
+  const group = getStageDefinition(templateId, resolvedStageId);
   if (!group) {
-    throw new Error(`Unknown group: ${input.groupId}`);
+    throw new Error(`Unknown stage: ${templateId}/${resolvedStageId}`);
   }
   if (group.executionMode === 'orchestration') {
-    const err: any = new Error(`Group '${input.groupId}' is an orchestration node and cannot be dispatched directly`);
+    const err: any = new Error(`Stage '${resolvedStageId}' is an orchestration node and cannot be dispatched directly`);
     err.statusCode = 400;
     throw err;
   }
@@ -320,10 +328,10 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     // Legacy V2 path: caller must provide inputArtifacts directly
     const inputArtifacts = input.taskEnvelope?.inputArtifacts;
     if (!inputArtifacts || inputArtifacts.length === 0) {
-      throw new Error(`Group ${input.groupId} requires inputArtifacts from an approved source run`);
+      throw new Error(`Stage ${resolvedStageId} requires inputArtifacts from an approved source run`);
     }
     if (!input.sourceRunIds || input.sourceRunIds.length === 0) {
-      throw new Error(`Group ${input.groupId} requires sourceRunIds`);
+      throw new Error(`Stage ${resolvedStageId} requires sourceRunIds`);
     }
     resolvedSource = { sourceRuns: [], inputArtifacts };
   }
@@ -338,7 +346,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
       await submitApprovalRequest({
         type: 'token_increase' as const,
         workspace: workspacePath,
-        title: `Token 配额超限: ${input.groupId}`,
+        title: `Token 配额超限: ${resolvedStageId}`,
         description: `部门 ${workspacePath} 的 Token 配额已用尽，无法执行新任务。`,
         urgency: 'high' as const,
       });
@@ -351,7 +359,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
       await submitApprovalRequest({
         type: 'token_increase' as const,
         workspace: workspacePath,
-        title: `Token 配额预警: ${input.groupId}`,
+        title: `Token 配额预警: ${resolvedStageId}`,
         description: `部门 ${workspacePath} 的 Token 使用量即将达到上限（剩余 ${quotaCheck.remaining}），建议增加配额。`,
         urgency: 'normal' as const,
       });
@@ -410,7 +418,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
 
   // 6. Create run record
   const run = createRun({
-    groupId: input.groupId,
+    stageId: resolvedStageId,
     workspace: input.workspace,
     prompt: goal,
     model: finalModel,
@@ -445,7 +453,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
       // ── Single-role path (V1 backward-compat) ──────────────────────────
       const workflowContent = AssetLoader.resolveWorkflowContent(group.roles[0].workflow);
       const cascadeId = await createAndDispatchChild(
-        server, apiKey, wsUri, runId, input.groupId, group.roles[0].id,
+        server, apiKey, wsUri, runId, resolvedStageId, group.roles[0].id,
         `${workflowContent}\n\n${goal}`,
         finalModel, input.parentConversationId,
       );
@@ -480,7 +488,7 @@ async function createAndDispatchChild(
   apiKey: string,
   wsUri: string,
   runId: string,
-  groupId: string,
+  stageId: string,
   roleId: string,
   prompt: string,
   model: string,
@@ -526,7 +534,7 @@ async function createAndDispatchChild(
   await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, cascadeId, {
     'antigravity.task.hidden': 'true',
     'antigravity.task.parentId': parentConversationId || '',
-    'antigravity.task.groupId': groupId,
+    'antigravity.task.stageId': stageId,
     'antigravity.task.runId': runId,
     'antigravity.task.roleId': roleId,
     lastUserViewTime: new Date().toISOString(),
@@ -760,8 +768,10 @@ export async function interveneRun(
       throw new Error(`Cannot ${effectiveAction} run ${runId}: status '${run.status}' is not actionable`);
     }
 
-    const group = getGroup(run.groupId);
-    if (!group) throw new Error(`Unknown group: ${run.groupId}`);
+    const currentStageId = run.pipelineStageId || run.stageId;
+    const templateId = run.templateId || run.pipelineId;
+    const group = currentStageId && templateId ? getStageDefinition(templateId, currentStageId) : null;
+    if (!group) throw new Error(`Unknown stage: ${templateId || 'unknown'}/${currentStageId || 'unknown'}`);
 
     const shortRunId = runId.slice(0, 8);
     const workspacePath = run.workspace.replace(/^file:\/\//, '');
@@ -985,7 +995,7 @@ Reply with ONLY a JSON object: {"status": "HEALTHY|STUCK|LOOPING|DONE", "analysi
       const retryTaskEnvelope = getCanonicalTaskEnvelope(runId, run.taskEnvelope);
       const retryPrompt = prompt || buildRetryPrompt(roleDef, goal, artifactDir, round, isReviewer, retryTaskEnvelope);
       const cascadeId = await createAndDispatchChild(
-        server, apiKey, wsUri, runId, run.groupId, targetRoleId,
+        server, apiKey, wsUri, runId, run.pipelineStageId || run.stageId || group.id, targetRoleId,
         retryPrompt,
         run.model || 'MODEL_PLACEHOLDER_M26',
         run.parentConversationId,
@@ -1108,10 +1118,11 @@ export async function processInterventionResult(
       finalizeAdvisoryRun(runId, group, artifactAbsDir, 'approved', result);
       // Pipeline auto-trigger
       const input: DispatchRunInput = {
-        groupId: group.id,
+        stageId: group.id,
         workspace: originalRun.workspace,
         projectId: originalRun.projectId,
         pipelineId: originalRun.pipelineId,
+        templateId: originalRun.templateId,
         pipelineStageId: originalRun.pipelineStageId,
         pipelineStageIndex: originalRun.pipelineStageIndex,
       };
@@ -1148,11 +1159,12 @@ export async function processInterventionResult(
       }
 
       const input: DispatchRunInput = {
-        groupId: group.id,
+        stageId: group.id,
         workspace: originalRun.workspace,
         prompt: originalRun.prompt,
         projectId: originalRun.projectId,
         pipelineId: originalRun.pipelineId,
+        templateId: originalRun.templateId,
         pipelineStageId: originalRun.pipelineStageId,
         pipelineStageIndex: originalRun.pipelineStageIndex,
         taskEnvelope: originalRun.taskEnvelope,
@@ -1196,11 +1208,12 @@ export async function processInterventionResult(
     }
 
     const input: DispatchRunInput = {
-      groupId: group.id,
+      stageId: group.id,
       workspace: originalRun.workspace,
       prompt: originalRun.prompt,
       projectId: originalRun.projectId,
       pipelineId: originalRun.pipelineId,
+      templateId: originalRun.templateId,
       pipelineStageId: originalRun.pipelineStageId,
       pipelineStageIndex: originalRun.pipelineStageIndex,
       taskEnvelope: originalRun.taskEnvelope,
@@ -1232,10 +1245,11 @@ export async function processInterventionResult(
     // Delivery finalization
     finalizeDeliveryRun(runId, group, artifactAbsDir, result, undefined);
     const input: DispatchRunInput = {
-      groupId: group.id,
+      stageId: group.id,
       workspace: originalRun.workspace,
       projectId: originalRun.projectId,
       pipelineId: originalRun.pipelineId,
+      templateId: originalRun.templateId,
       pipelineStageId: originalRun.pipelineStageId,
       pipelineStageIndex: originalRun.pipelineStageIndex,
     };
@@ -1532,8 +1546,8 @@ async function executeSerialEnvelopeRun(
   // V2.5: Build work package for delivery groups
   let workPackage: DevelopmentWorkPackage | undefined;
   if (group.executionMode === 'delivery-single-pass' && group.capabilities?.delivery) {
-    const archRuns = resolvedSource.sourceRuns.filter(r => r.groupId === 'architecture-advisory');
-    const prodRuns = resolvedSource.sourceRuns.filter(r => r.groupId === 'product-spec');
+    const archRuns = resolvedSource.sourceRuns.filter(r => (r.pipelineStageId || r.stageId) === 'architecture-advisory');
+    const prodRuns = resolvedSource.sourceRuns.filter(r => (r.pipelineStageId || r.stageId) === 'product-spec');
     const archRun = archRuns[0];
     if (archRun) {
       workPackage = buildDevelopmentWorkPackage(
@@ -1605,7 +1619,7 @@ async function executeDeliverySinglePass(
   const prompt = buildDeliveryPrompt(role, goal, artifactDir, artifactAbsDir, taskEnvelope);
 
   const cascadeId = await createAndDispatchChild(
-    server, apiKey, wsUri, runId, input.groupId, role.id,
+    server, apiKey, wsUri, runId, input.pipelineStageId || input.stageId || group.id, role.id,
     prompt, finalModel, input.parentConversationId,
   );
 
@@ -1777,7 +1791,7 @@ async function executeReviewRound(
         model: finalModel,
         artifactDir,
         runId,
-        groupId: input.groupId,
+        stageId: input.pipelineStageId || input.stageId || group.id,
         roleId: role.id,
       });
       cascadeId = execResult.handle || `codex-${randomUUID()}`;
@@ -1807,7 +1821,7 @@ async function executeReviewRound(
     } else {
       // ── Isolated mode: create new child conversation (existing behavior) ──
       cascadeId = await createAndDispatchChild(
-        server, apiKey, wsUri, runId, input.groupId, role.id,
+        server, apiKey, wsUri, runId, input.pipelineStageId || input.stageId || group.id, role.id,
         rolePrompt, finalModel, input.parentConversationId,
       );
 
@@ -1990,20 +2004,23 @@ async function tryAutoTriggerNextStage(
   if (!project?.pipelineState || !template) return;
 
   for (const stage of downstreams) {
-    const stageId = stage.stageId || stage.groupId;
+    const stageId = stage.stageId || '';
+    if (!stageId) {
+      log.warn({ runId: shortRunId, templateId }, 'Skipping downstream stage with missing stageId');
+      continue;
+    }
     const nextStage = project.pipelineState.stages.find((item: any) => item.stageId === stageId);
     if (nextStage?.runId && nextStage.status !== 'pending') {
       log.info({
         runId: shortRunId,
         stageId,
-        nextGroupId: stage.groupId,
         existingStatus: nextStage.status,
       }, 'Downstream stage already has a canonical run, skipping auto-trigger');
       continue;
     }
 
     if (!stage.autoTrigger) {
-      log.info({ runId: shortRunId, stageId, nextGroupId: stage.groupId }, 'Downstream stage exists but autoTrigger is false');
+      log.info({ runId: shortRunId, stageId, nextStageId: stage.stageId }, 'Downstream stage exists but autoTrigger is false');
       continue;
     }
 
@@ -2021,25 +2038,26 @@ async function tryAutoTriggerNextStage(
     const allSourceRunIds = upstreamStageIds
       .map(upstreamStageId => project.pipelineState.stages.find((item: any) => item.stageId === upstreamStageId)?.runId)
       .filter(Boolean) as string[];
-    const filteredSourceRunIds = filterSourcesByContract(stage.groupId, allSourceRunIds);
+    const filteredSourceRunIds = filterSourcesByContract(templateId, stageId, allSourceRunIds);
 
     log.info({
       runId: shortRunId,
       templateId,
-      nextGroupId: stage.groupId,
+      nextStageId: stageId,
       stageId,
       sourceRunCount: filteredSourceRunIds.length,
     }, 'Auto-triggering downstream pipeline stage');
 
     try {
       const nextInput: DispatchRunInput = {
-        groupId: stage.groupId,
+        stageId,
         workspace: input.workspace,
         prompt: stage.promptTemplate || run.prompt,
         model: input.model || run.model,
         projectId: run.projectId,
         sourceRunIds: filteredSourceRunIds,
         pipelineId: templateId,
+        templateId,
         pipelineStageId: stageId,
         taskEnvelope: run.taskEnvelope ? {
           ...run.taskEnvelope,
@@ -2052,7 +2070,7 @@ async function tryAutoTriggerNextStage(
         trackStageDispatch(run.projectId, stageId, result.runId);
       }
     } catch (err: any) {
-      log.error({ runId: shortRunId, stageId, nextGroupId: stage.groupId, err: err.message }, 'Failed to auto-trigger downstream pipeline stage');
+      log.error({ runId: shortRunId, stageId, nextStageId: stageId, err: err.message }, 'Failed to auto-trigger downstream pipeline stage');
     }
   }
 }

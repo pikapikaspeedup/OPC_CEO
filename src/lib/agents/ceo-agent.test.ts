@@ -179,7 +179,7 @@ describe('processCEOCommand — intervention intents', () => {
       } as any,
     ]);
     vi.mocked(listRuns).mockReturnValue([
-      { runId: 'run-001', status: 'running', groupId: 'g1', projectId: 'proj-001' } as any,
+      { runId: 'run-001', status: 'running', stageId: 'stage-0', projectId: 'proj-001' } as any,
     ]);
     vi.mocked(updateProject).mockImplementation((id, updates) => ({ projectId: id, ...updates } as any));
     vi.mocked(cancelRun).mockResolvedValue(undefined);

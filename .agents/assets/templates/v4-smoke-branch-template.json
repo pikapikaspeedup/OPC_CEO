@@ -3,22 +3,26 @@
   "kind": "template",
   "title": "V4 Smoke Branch",
   "description": "A minimal child template used to validate fan-out branch execution.",
-  "groups": {
-    "smoke-branch-task": {
-      "title": "Smoke Branch Task",
-      "description": "A trivial child stage that completes quickly.",
-      "executionMode": "legacy-single",
-      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true },
-      "roles": [
-        { "id": "smoke-branch-worker", "workflow": "/smoke-branch-worker", "timeoutMs": 300000, "autoApprove": true }
-      ]
-    }
-  },
   "pipeline": [
     {
       "stageId": "branch-task",
-      "groupId": "smoke-branch-task",
-      "autoTrigger": false
+      "autoTrigger": false,
+      "title": "Smoke Branch Task",
+      "description": "A trivial child stage that completes quickly.",
+      "executionMode": "legacy-single",
+      "roles": [
+        {
+          "id": "smoke-branch-worker",
+          "workflow": "/smoke-branch-worker",
+          "timeoutMs": 300000,
+          "autoApprove": true
+        }
+      ],
+      "capabilities": {
+        "acceptsEnvelope": true,
+        "emitsManifest": true
+      },
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     }
   ],
   "defaultModel": "MODEL_PLACEHOLDER_M26"

@@ -62,12 +62,13 @@ export function compilePipelineToIR(template: TemplateDefinition): DagIR {
     throw new Error(`Cannot compile template '${template.id}': ${errors.join('; ')}`);
   }
 
+  const pipeline = template.pipeline ?? [];
   const nodes: DagNode[] = [];
   const edges: DagEdge[] = [];
 
   // Pass 1: Build nodes
-  for (let i = 0; i < template.pipeline.length; i++) {
-    const stage = template.pipeline[i];
+  for (let i = 0; i < pipeline.length; i++) {
+    const stage = pipeline[i];
     const stageId = resolveStageId(stage);
 
     const kind = stage.stageType === 'fan-out'
@@ -79,7 +80,15 @@ export function compilePipelineToIR(template: TemplateDefinition): DagIR {
     const node: DagNode = {
       id: stageId,
       kind,
-      groupId: stage.groupId,
+      title: stage.title,
+      description: stage.description,
+      executionMode: stage.executionMode,
+      roles: stage.roles,
+      capabilities: stage.capabilities,
+      sourceContract: stage.sourceContract,
+      reviewPolicyId: stage.reviewPolicyId,
+      defaultModel: stage.defaultModel,
+      groupId: stageId,
       autoTrigger: stage.autoTrigger,
       triggerOn: stage.triggerOn || 'approved',
       promptTemplate: stage.promptTemplate,
@@ -112,8 +121,8 @@ export function compilePipelineToIR(template: TemplateDefinition): DagIR {
   // Pass 2: Build edges
   const nodesWithIncoming = new Set<string>();
 
-  for (let i = 0; i < template.pipeline.length; i++) {
-    const stage = template.pipeline[i];
+  for (let i = 0; i < pipeline.length; i++) {
+    const stage = pipeline[i];
     const stageId = resolveStageId(stage);
 
     if (stage.upstreamStageIds) {
@@ -124,7 +133,7 @@ export function compilePipelineToIR(template: TemplateDefinition): DagIR {
       }
     } else if (i > 0) {
       // Implicit linear dependency on previous stage
-      const prevId = resolveStageId(template.pipeline[i - 1]);
+      const prevId = resolveStageId(pipeline[i - 1]);
       edges.push({ from: prevId, to: stageId });
       nodesWithIncoming.add(stageId);
     }

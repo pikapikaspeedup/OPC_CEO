@@ -2,11 +2,11 @@ import type { PipelineStage, TemplateDefinition } from './pipeline-types';
 import { validateTemplateContracts } from '../contract-validator';
 
 export function resolveStageId(stage: PipelineStage): string {
-  return stage.stageId || stage.groupId;
+  return stage.stageId || stage.groupId || '';
 }
 
 export function getStageIndex(template: TemplateDefinition, stageId: string): number {
-  return template.pipeline.findIndex(stage => resolveStageId(stage) === stageId);
+  return (template.pipeline ?? []).findIndex(stage => resolveStageId(stage) === stageId);
 }
 
 export function validateTemplatePipeline(template: TemplateDefinition): string[] {
@@ -39,7 +39,7 @@ export function validateTemplatePipeline(template: TemplateDefinition): string[]
     if (visited.has(stageId)) return true;
 
     visiting.add(stageId);
-    const stage = template.pipeline.find(item => resolveStageId(item) === stageId);
+    const stage = (template.pipeline ?? []).find(item => resolveStageId(item) === stageId);
     for (const upstreamStageId of stage?.upstreamStageIds || []) {
       if (!visit(upstreamStageId)) {
         return false;

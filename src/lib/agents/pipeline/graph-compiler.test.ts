@@ -6,8 +6,29 @@ import type { TemplateDefinition } from './pipeline-types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeLinearGraph(): GraphPipeline {
+function withExecutionConfig(graph: GraphPipeline): GraphPipeline {
   return {
+    ...graph,
+    nodes: graph.nodes.map((node) => ({
+      executionMode: node.kind === 'stage' ? 'review-loop' as const : 'orchestration' as const,
+      roles: [],
+      ...node,
+    })),
+  };
+}
+
+function makePipelineStage(stageId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    stageId,
+    autoTrigger: true,
+    executionMode: 'review-loop' as const,
+    roles: [],
+    ...overrides,
+  };
+}
+
+function makeLinearGraph(): GraphPipeline {
+  return withExecutionConfig({
     nodes: [
       { id: 'spec', kind: 'stage', groupId: 'planning' },
       { id: 'dev', kind: 'stage', groupId: 'development' },
@@ -17,11 +38,11 @@ function makeLinearGraph(): GraphPipeline {
       { from: 'spec', to: 'dev' },
       { from: 'dev', to: 'review' },
     ],
-  };
+  });
 }
 
 function makeDiamondGraph(): GraphPipeline {
-  return {
+  return withExecutionConfig({
     nodes: [
       { id: 'design', kind: 'stage', groupId: 'design' },
       { id: 'frontend', kind: 'stage', groupId: 'frontend-dev' },
@@ -34,11 +55,11 @@ function makeDiamondGraph(): GraphPipeline {
       { from: 'frontend', to: 'integration' },
       { from: 'backend', to: 'integration' },
     ],
-  };
+  });
 }
 
 function makeFanOutJoinGraph(): GraphPipeline {
-  return {
+  return withExecutionConfig({
     nodes: [
       { id: 'planning', kind: 'stage', groupId: 'project-planning' },
       {
@@ -60,7 +81,7 @@ function makeFanOutJoinGraph(): GraphPipeline {
       { from: 'wp-fanout', to: 'wp-join' },
       { from: 'wp-join', to: 'final' },
     ],
-  };
+  });
 }
 
 // ── Validation Tests ────────────────────────────────────────────────────────
@@ -84,50 +105,50 @@ describe('validateGraphPipeline', () => {
   });
 
   it('rejects duplicate node IDs', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'a', kind: 'stage', groupId: 'g1' },
         { id: 'a', kind: 'stage', groupId: 'g2' },
       ],
       edges: [],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("Duplicate node id: 'a'"));
   });
 
   it('rejects edge referencing unknown nodes', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [{ id: 'a', kind: 'stage', groupId: 'g1' }],
       edges: [{ from: 'a', to: 'nonexistent' }],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("unknown target node: 'nonexistent'"));
   });
 
   it('rejects self-loops', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [{ id: 'a', kind: 'stage', groupId: 'g1' }],
       edges: [{ from: 'a', to: 'a' }],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("Self-loop"));
   });
 
   it('rejects fan-out node without fanOut config', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [{ id: 'a', kind: 'fan-out', groupId: 'g1' }],
       edges: [],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("must have fanOut configuration"));
   });
 
   it('rejects join node without join config', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [{ id: 'a', kind: 'join', groupId: 'g1' }],
       edges: [],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("must have join configuration"));
   });
 
   it('rejects kind mismatch: stage with fanOut config', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [{
         id: 'a',
         kind: 'stage',
@@ -135,23 +156,23 @@ describe('validateGraphPipeline', () => {
         fanOut: { workPackagesPath: 'x', perBranchTemplateId: 'y' },
       }],
       edges: [],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("has fanOut configuration but kind is 'stage'"));
   });
 
   it('rejects join sourceNodeId pointing to non-fan-out node', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'a', kind: 'stage', groupId: 'g1' },
         { id: 'b', kind: 'join', groupId: 'g2', join: { sourceNodeId: 'a' } },
       ],
       edges: [{ from: 'a', to: 'b' }],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("must be a fan-out node"));
   });
 
   it('detects cycles', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'a', kind: 'stage', groupId: 'g1' },
         { id: 'b', kind: 'stage', groupId: 'g2' },
@@ -162,16 +183,18 @@ describe('validateGraphPipeline', () => {
         { from: 'b', to: 'c' },
         { from: 'c', to: 'a' },
       ],
-    };
+    });
     expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("Cycle detected"));
   });
 
-  it('rejects node without groupId', () => {
+  it('rejects node without execution config', () => {
     const graph: GraphPipeline = {
-      nodes: [{ id: 'a', kind: 'stage', groupId: '' }],
+      nodes: [{ id: 'a', kind: 'stage', groupId: 'legacy-only' }],
       edges: [],
     };
-    expect(validateGraphPipeline(graph)).toContainEqual(expect.stringContaining("must have a groupId"));
+    const errors = validateGraphPipeline(graph);
+    expect(errors).toContainEqual(expect.stringContaining("must have an executionMode"));
+    expect(errors).toContainEqual(expect.stringContaining("must have a roles array"));
   });
 });
 
@@ -212,7 +235,7 @@ describe('compileGraphPipelineToIR', () => {
   });
 
   it('carries maxConcurrency from graphPipeline fan-out node into IR', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'planning', kind: 'stage', groupId: 'project-planning' },
         {
@@ -223,7 +246,7 @@ describe('compileGraphPipelineToIR', () => {
         },
       ],
       edges: [{ from: 'planning', to: 'wp-fanout' }],
-    };
+    });
     const ir = compileGraphPipelineToIR('t', graph);
     expect(ir.nodes.find(n => n.id === 'wp-fanout')?.fanOut?.maxConcurrency).toBe(3);
   });
@@ -247,18 +270,18 @@ describe('compileGraphPipelineToIR', () => {
   });
 
   it('preserves explicit autoTrigger=false', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'a', kind: 'stage', groupId: 'g1', autoTrigger: false },
       ],
       edges: [],
-    };
+    });
     const ir = compileGraphPipelineToIR('t', graph);
     expect(ir.nodes[0].autoTrigger).toBe(false);
   });
 
   it('identifies multiple entry nodes', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'a', kind: 'stage', groupId: 'g1' },
         { id: 'b', kind: 'stage', groupId: 'g2' },
@@ -268,7 +291,7 @@ describe('compileGraphPipelineToIR', () => {
         { from: 'a', to: 'c' },
         { from: 'b', to: 'c' },
       ],
-    };
+    });
     const ir = compileGraphPipelineToIR('t', graph);
     expect(ir.entryNodeIds).toEqual(['a', 'b']);
   });
@@ -279,13 +302,13 @@ describe('compileGraphPipelineToIR', () => {
   });
 
   it('preserves edge conditions', () => {
-    const graph: GraphPipeline = {
+    const graph: GraphPipeline = withExecutionConfig({
       nodes: [
         { id: 'a', kind: 'stage', groupId: 'g1' },
         { id: 'b', kind: 'stage', groupId: 'g2' },
       ],
       edges: [{ from: 'a', to: 'b', condition: 'result.score > 80' }],
-    };
+    });
     const ir = compileGraphPipelineToIR('t', graph);
     expect(ir.edges[0].condition).toBe('result.score > 80');
   });
@@ -303,15 +326,15 @@ describe('graphPipeline ↔ pipeline[] IR equivalence', () => {
       description: '',
       groups: {},
       pipeline: [
-        { stageId: 'spec', groupId: 'planning', autoTrigger: false },
-        { stageId: 'dev', groupId: 'development', autoTrigger: true, upstreamStageIds: ['spec'] },
-        { stageId: 'review', groupId: 'review', autoTrigger: true, upstreamStageIds: ['dev'] },
+        makePipelineStage('spec', { autoTrigger: false, groupId: 'planning' }),
+        makePipelineStage('dev', { groupId: 'development', upstreamStageIds: ['spec'] }),
+        makePipelineStage('review', { groupId: 'review', upstreamStageIds: ['dev'] }),
       ],
     };
     const pipelineIR = compilePipelineToIR(pipelineTemplate);
 
     // Compile via graphPipeline
-    const graphIR = compileGraphPipelineToIR('equiv-test', {
+    const graphIR = compileGraphPipelineToIR('equiv-test', withExecutionConfig({
       nodes: [
         { id: 'spec', kind: 'stage', groupId: 'planning', autoTrigger: false },
         { id: 'dev', kind: 'stage', groupId: 'development' },
@@ -321,7 +344,7 @@ describe('graphPipeline ↔ pipeline[] IR equivalence', () => {
         { from: 'spec', to: 'dev' },
         { from: 'dev', to: 'review' },
       ],
-    });
+    }));
 
     // Structural equivalence (ignoring compiledAt timestamp)
     expect(graphIR.templateId).toBe(pipelineIR.templateId);
@@ -346,7 +369,7 @@ describe('graphPipeline ↔ pipeline[] IR equivalence', () => {
 
 describe('gate node validation', () => {
   it('accepts valid gate node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev' },
         { id: 'gate', kind: 'gate', groupId: 'approval', gate: { autoApprove: false } },
@@ -356,35 +379,35 @@ describe('gate node validation', () => {
         { from: 'dev', to: 'gate' },
         { from: 'gate', to: 'deploy' },
       ],
-    });
+    }));
     expect(errors).toEqual([]);
   });
 
   it('accepts gate node without explicit gate config', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev' },
         { id: 'gate', kind: 'gate', groupId: 'approval' },
       ],
       edges: [{ from: 'dev', to: 'gate' }],
-    });
+    }));
     expect(errors).toEqual([]);
   });
 
   it('rejects gate config on non-gate node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev', gate: { autoApprove: true } } as any,
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('gate configuration') && e.includes("'dev'"))).toBe(true);
   });
 });
 
 describe('gate node compilation', () => {
   it('compiles gate node with explicit config', () => {
-    const ir = compileGraphPipelineToIR('tpl', {
+    const ir = compileGraphPipelineToIR('tpl', withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev' },
         { id: 'gate', kind: 'gate', groupId: 'approval', gate: { autoApprove: true, approvalPrompt: 'OK?' } },
@@ -394,7 +417,7 @@ describe('gate node compilation', () => {
         { from: 'dev', to: 'gate' },
         { from: 'gate', to: 'deploy' },
       ],
-    });
+    }));
 
     const gateNode = ir.nodes.find(n => n.id === 'gate')!;
     expect(gateNode.kind).toBe('gate');
@@ -404,13 +427,13 @@ describe('gate node compilation', () => {
   });
 
   it('compiles gate node with default config', () => {
-    const ir = compileGraphPipelineToIR('tpl', {
+    const ir = compileGraphPipelineToIR('tpl', withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev' },
         { id: 'gate', kind: 'gate', groupId: 'approval' },
       ],
       edges: [{ from: 'dev', to: 'gate' }],
-    });
+    }));
 
     const gateNode = ir.nodes.find(n => n.id === 'gate')!;
     expect(gateNode.gate).toBeDefined();
@@ -422,7 +445,7 @@ describe('gate node compilation', () => {
 
 describe('switch node validation', () => {
   it('accepts valid switch node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'analysis', kind: 'stage', groupId: 'analysis' },
         {
@@ -437,32 +460,32 @@ describe('switch node validation', () => {
         { id: 'quick', kind: 'stage', groupId: 'quick' },
       ],
       edges: [{ from: 'analysis', to: 'router' }, { from: 'router', to: 'quick' }],
-    });
+    }));
     expect(errors).toEqual([]);
   });
 
   it('rejects switch node without config', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'router', kind: 'switch', groupId: 'router' },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('switch configuration'))).toBe(true);
   });
 
   it('rejects switch config on non-switch node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev', switch: { branches: [], defaultTargetNodeId: 'x' } } as any,
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('switch configuration') && e.includes("'dev'"))).toBe(true);
   });
 
   it('rejects switch branch referencing unknown target', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         {
           id: 'router', kind: 'switch', groupId: 'router',
@@ -474,12 +497,12 @@ describe('switch node validation', () => {
         },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('nonexistent'))).toBe(true);
   });
 
   it('rejects switch default referencing unknown node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         {
           id: 'router', kind: 'switch', groupId: 'router',
@@ -490,14 +513,14 @@ describe('switch node validation', () => {
         },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('ghost'))).toBe(true);
   });
 });
 
 describe('switch node compilation', () => {
   it('compiles switch node with branches', () => {
-    const ir = compileGraphPipelineToIR('tpl', {
+    const ir = compileGraphPipelineToIR('tpl', withExecutionConfig({
       nodes: [
         { id: 'analysis', kind: 'stage', groupId: 'analysis' },
         {
@@ -518,7 +541,7 @@ describe('switch node compilation', () => {
         { from: 'router', to: 'fast-path' },
         { from: 'router', to: 'slow-path' },
       ],
-    });
+    }));
 
     const switchNode = ir.nodes.find(n => n.id === 'router')!;
     expect(switchNode.kind).toBe('switch');
@@ -533,7 +556,7 @@ describe('switch node compilation', () => {
 
 describe('loop node validation', () => {
   it('accepts valid loop-start / loop-end pair', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'init', kind: 'stage', groupId: 'init' },
         {
@@ -551,32 +574,32 @@ describe('loop node validation', () => {
         { from: 'ls', to: 'body' },
         { from: 'body', to: 'le' },
       ],
-    });
+    }));
     expect(errors).toEqual([]);
   });
 
   it('rejects loop-start without loop config', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'ls', kind: 'loop-start', groupId: 'ls' },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('loop configuration'))).toBe(true);
   });
 
   it('rejects loop config on non-loop node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         { id: 'dev', kind: 'stage', groupId: 'dev', loop: { maxIterations: 3, terminationCondition: { type: 'always' }, pairedNodeId: 'x' } } as any,
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('loop configuration') && e.includes("'dev'"))).toBe(true);
   });
 
   it('rejects maxIterations < 1', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         {
           id: 'ls', kind: 'loop-start', groupId: 'ls',
@@ -588,12 +611,12 @@ describe('loop node validation', () => {
         },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('maxIterations') && e.includes('>= 1'))).toBe(true);
   });
 
   it('rejects pairedNodeId referencing non-existent node', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         {
           id: 'ls', kind: 'loop-start', groupId: 'ls',
@@ -601,12 +624,12 @@ describe('loop node validation', () => {
         },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('ghost'))).toBe(true);
   });
 
   it('rejects loop-start paired with another loop-start', () => {
-    const errors = validateGraphPipeline({
+    const errors = validateGraphPipeline(withExecutionConfig({
       nodes: [
         {
           id: 'ls1', kind: 'loop-start', groupId: 'ls1',
@@ -618,14 +641,14 @@ describe('loop node validation', () => {
         },
       ],
       edges: [],
-    });
+    }));
     expect(errors.some(e => e.includes('loop-end') && e.includes("'ls1'"))).toBe(true);
   });
 });
 
 describe('loop node compilation', () => {
   it('compiles loop-start and loop-end nodes', () => {
-    const ir = compileGraphPipelineToIR('tpl', {
+    const ir = compileGraphPipelineToIR('tpl', withExecutionConfig({
       nodes: [
         {
           id: 'ls', kind: 'loop-start', groupId: 'ls',
@@ -641,7 +664,7 @@ describe('loop node compilation', () => {
         { from: 'ls', to: 'body' },
         { from: 'body', to: 'le' },
       ],
-    });
+    }));
 
     const loopStart = ir.nodes.find(n => n.id === 'ls')!;
     expect(loopStart.kind).toBe('loop-start');

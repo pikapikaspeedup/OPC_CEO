@@ -61,7 +61,7 @@ export function generateCEOEvents(projects: Project[], stages: PipelineStageProg
         id: nextId(),
         type: 'critical',
         title: 'Gate 待审批',
-        description: `Stage ${stage.groupId} awaiting approval`,
+        description: `Stage ${stage.title || stage.stageId} awaiting approval`,
         projectId: project.projectId,
         workspaceUri: project.workspace,
         timestamp: new Date().toISOString(),
@@ -77,7 +77,7 @@ export function generateCEOEvents(projects: Project[], stages: PipelineStageProg
         id: nextId(),
         type: 'critical',
         title: 'Gate 待审批',
-        description: `Stage ${stage.groupId} awaiting approval`,
+        description: `Stage ${stage.title || stage.stageId} awaiting approval`,
         timestamp: new Date().toISOString(),
         actions: [
           { label: '打开调度', action: 'navigate', payload: { target: 'scheduler' } },

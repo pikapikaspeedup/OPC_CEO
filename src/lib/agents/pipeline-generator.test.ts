@@ -11,7 +11,12 @@ import {
 import { buildGenerationContext } from './generation-context';
 import type { TemplateDefinition } from './pipeline/pipeline-types';
 
-const baseGroup = { title: 'G', description: 'g', executionMode: 'review-loop' as const, roles: [] };
+const baseStage = {
+  title: 'G',
+  description: 'g',
+  executionMode: 'review-loop' as const,
+  roles: [{ id: 'worker', workflow: '/dev-worker', timeoutMs: 600000, autoApprove: true }],
+};
 
 function makeTemplate(): TemplateDefinition {
   return {
@@ -19,16 +24,36 @@ function makeTemplate(): TemplateDefinition {
     kind: 'template',
     title: 'Test',
     description: 'test',
-    groups: { dev: baseGroup, review: baseGroup },
-    pipeline: [{ groupId: 'dev' }, { groupId: 'review' }],
+    pipeline: [
+      { stageId: 'dev', autoTrigger: false, ...baseStage },
+      {
+        stageId: 'review',
+        autoTrigger: true,
+        upstreamStageIds: ['dev'],
+        executionMode: 'review-loop',
+        roles: [{ id: 'reviewer', workflow: '/review-worker', timeoutMs: 600000, autoApprove: true }],
+      },
+    ],
   };
 }
 
 const VALID_LLM_RESPONSE = JSON.stringify({
   graphPipeline: {
     nodes: [
-      { id: 'dev', kind: 'stage', groupId: 'dev' },
-      { id: 'review', kind: 'stage', groupId: 'review' },
+      {
+        id: 'dev',
+        kind: 'stage',
+        title: 'Development',
+        executionMode: 'review-loop',
+        roles: [{ id: 'worker', workflow: '/dev-worker', timeoutMs: 600000, autoApprove: true }],
+      },
+      {
+        id: 'review',
+        kind: 'stage',
+        title: 'Review',
+        executionMode: 'review-loop',
+        roles: [{ id: 'reviewer', workflow: '/review-worker', timeoutMs: 600000, autoApprove: true }],
+      },
     ],
     edges: [{ from: 'dev', to: 'review' }],
   },
@@ -85,11 +110,11 @@ describe('buildGenerationPrompt', () => {
     expect(prompt).toContain('React');
   });
 
-  it('includes available groups', () => {
+  it('includes available workflows', () => {
     const ctx = buildGenerationContext([makeTemplate()]);
     const prompt = buildGenerationPrompt({ goal: 'test' }, ctx);
-    expect(prompt).toContain('dev:');
-    expect(prompt).toContain('review:');
+    expect(prompt).toContain('/dev-worker');
+    expect(prompt).toContain('/review-worker');
   });
 });
 
@@ -190,7 +215,7 @@ describe('confirmDraft', () => {
     // Modify to have a loop-start without config → validation error
     const result = await confirmDraft(draft.draftId, {
       graphPipeline: {
-        nodes: [{ id: 'ls', kind: 'loop-start', groupId: 'dev' }],
+        nodes: [{ id: 'ls', kind: 'loop-start', executionMode: 'orchestration', roles: [] }],
         edges: [],
       },
     });

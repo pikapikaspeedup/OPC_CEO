@@ -38,8 +38,11 @@ export function validateGraphPipeline(graph: GraphPipeline): string[] {
 
   // Node-level validation
   for (const node of graph.nodes) {
-    if (!node.groupId) {
-      errors.push(`Node '${node.id}' must have a groupId`);
+    if (!node.executionMode) {
+      errors.push(`Node '${node.id}' must have an executionMode`);
+    }
+    if (!Array.isArray(node.roles)) {
+      errors.push(`Node '${node.id}' must have a roles array`);
     }
     if (!node.kind) {
       errors.push(`Node '${node.id}' must have a kind`);
@@ -385,7 +388,15 @@ function mapNodeToIR(gn: GraphPipelineNode, index: number): DagNode {
   return {
     id: gn.id,
     kind: gn.kind,
-    groupId: gn.groupId,
+    title: gn.title,
+    description: gn.description,
+    executionMode: gn.executionMode,
+    roles: gn.roles,
+    capabilities: gn.capabilities,
+    sourceContract: gn.sourceContract,
+    reviewPolicyId: gn.reviewPolicyId,
+    defaultModel: gn.defaultModel,
+    groupId: gn.id,
     label: gn.label,
     autoTrigger: gn.autoTrigger ?? true,
     triggerOn: gn.triggerOn ?? 'approved',

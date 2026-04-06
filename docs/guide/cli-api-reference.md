@@ -4,6 +4,11 @@
 This document provides reference for the REST API exposed by the V3.5 Multi-Agent system. These APIs can be used by external CLI tools, CI/CD pipelines, or other systems to orchestrate and manage autonomous agent tasks.
 The API runs on port 3000 by default.
 
+> V6.1 Stage-Centric Migration:
+> Public dispatch now uses `templateId + stageId`.
+> Persisted templates are inline-only (`pipeline[]` / `graphPipeline.nodes[]` carry execution config directly).
+> `groupId`, `/api/agent-groups`, and scheduler `dispatch-group` are removed from the public contract.
+
 ## API Endpoints
 
 ### 1. Projects
@@ -68,6 +73,7 @@ The API runs on port 3000 by default.
   - `prompt` (string, optional): Custom prompt for `nudge` / `restart_role`.
   - `roleId` (string, optional): Target role for `restart_role`.
 - **Response:** `200 OK` for `recover`, `cancel`, `force-complete`, `skip`. `202 Accepted` for async `nudge` / `restart_role`.
+- **Migration Boundary:** `recover` only works for current persisted runs that already carry `stageId` / `pipelineStageId`. Pre-migration `groupId`-only run state is no longer loaded.
 - **Action Selection Guide:**
   - `recover` — artifacts exist, restore status only.
   - `nudge` — stale-active run (`liveState.staleSince` present).
@@ -98,22 +104,23 @@ The API runs on port 3000 by default.
 #### Dispatch a Run
 - **URL:** `POST /api/agent-runs`
 - **Request Body (JSON):**
-  - `groupId` (String, required if not using `templateId`): The ID of the group to execute (`coding-basic`, `product-spec`, `architecture-advisory`, `autonomous-dev-pilot`, `ux-review`). If omitted but `templateId` is provided, the system automatically resolves to the first stage of the template.
+  - `templateId` (String, required): Template ID. Also supports `pipelineId` as an alias.
+  - `stageId` (String, optional): Target stage ID inside the template. If omitted, the API dispatches the template entry stage.
   - `workspace` (String, required): Absolute path to the workspace.
   - `prompt` (String): Free-text prompt describing the goal (either `prompt` or `taskEnvelope.goal` is required).
   - `taskEnvelope` (Object): Structured task data (`goal`, `inputArtifacts`, etc.).
   - `projectId` (String, optional): ID of the project to associate this run with.
   - `sourceRunIds` (Array of Strings, optional): Used to chain dependencies (e.g., provide specs to an architecture run).
-  - `templateId` (String, optional): Template ID. If provided without a `groupId`, automatically starts the template pipeline from stage 0. Also supports `pipelineId` as an alias.
   - `pipelineStageIndex` (Number, optional): Current stage index within the pipeline (0-based). Default is 0 when expanding templates. If omitted while `templateId/pipelineId` and `sourceRunIds` are both present, the API infers the next stage from the first source run.
   - `templateOverrides` (Object, optional, V5.3): Runtime overrides to deep-merge onto the template before compiling the DAG. Any template field can be overridden (e.g., `maxConcurrency`, `defaultModel`). The original template file is never modified; overrides persist in the project's pipeline state.
-  - `conversationMode` (String, optional, V5.5): Controls conversation reuse in review-loop groups. `"shared"` = author reuses cascade across rounds (~73% token saving), `"isolated"` = each role gets a new conversation (default). Only effective for `review-loop` groups. Can also be set globally via `AG_SHARED_CONVERSATION=true`.
-  - `model` (String, optional): Model ID to use for this run (e.g., `MODEL_PLACEHOLDER_M47`). If omitted, uses group recommended model.
+  - `conversationMode` (String, optional, V5.5): Controls conversation reuse in review-loop stages. `"shared"` = author reuses cascade across rounds (~73% token saving), `"isolated"` = each role gets a new conversation (default). Only effective for `review-loop` stages. Can also be set globally via `AG_SHARED_CONVERSATION=true`.
+  - `model` (String, optional): Model ID to use for this run (e.g., `MODEL_PLACEHOLDER_M47`). If omitted, uses the template/stage recommended model.
   - `parentConversationId` (String, optional): ID of the parent conversation to create a child cascade under. Used internally by the runtime for hidden child conversations.
 - **Example Body:**
   ```json
   {
-    "groupId": "product-spec",
+    "templateId": "development-template-1",
+    "stageId": "product-spec",
     "workspace": "/Users/user/workspace",
     "prompt": "Draft spec for user authentication",
     "projectId": "proj-1234",
@@ -133,7 +140,7 @@ The API runs on port 3000 by default.
 - **URL:** `GET /api/agent-runs`
 - **Query Parameters (Optional):**
   - `status`: Filter by status (`queued`, `completed`, etc.)
-  - `groupId`: Filter by group (`product-spec`, etc.)
+  - `stageId`: Filter by stage (`product-spec`, `planning`, etc.)
   - `projectId`: Filter by project association
   - `reviewOutcome`: Filter by outcome (`approved`, `rejected`, etc.)
 - **Response:** `200 OK` Array of `AgentRunState` objects.
@@ -167,7 +174,7 @@ The API runs on port 3000 by default.
 
 #### List Available Templates
 - **URL:** `GET /api/pipelines`
-- **Response:** `200 OK` Array of `TemplateDefinition` objects. Each template contains inline `groups` and `pipeline` definitions.
+- **Response:** `200 OK` Array of `TemplateDefinition` objects. Each template contains inline stage / node execution config.
 - **Example Response:**
   ```json
   [
@@ -175,11 +182,13 @@ The API runs on port 3000 by default.
       "id": "development-template-1",
       "kind": "template",
       "title": "完整产研链",
-      "groups": { "product-spec": {...}, "architecture-advisory": {...}, "autonomous-dev-pilot": {...} },
+      "stages": {
+        "product-spec": { "title": "产品规格", "executionMode": "review-loop", "roleIds": ["pm-author", "product-lead-reviewer"] }
+      },
       "pipeline": [
-        { "groupId": "product-spec", "autoTrigger": false },
-        { "groupId": "architecture-advisory", "autoTrigger": true, "triggerOn": "approved" },
-        { "groupId": "autonomous-dev-pilot", "autoTrigger": true, "triggerOn": "approved" }
+        { "stageId": "product-spec", "title": "产品规格" },
+        { "stageId": "architecture-advisory", "title": "架构顾问", "stageType": "normal" },
+        { "stageId": "autonomous-dev-pilot", "title": "自主开发（含交付审核）", "stageType": "normal" }
       ]
     }
   ]
@@ -336,9 +345,10 @@ The API runs on port 3000 by default.
   - `name` (String, required): 任务名称
   - `type` (String, required): `cron` / `interval` / `once`
   - `cronExpression` (String, conditional): cron 表达式
-  - `action` (Object, required): `{ kind: 'dispatch-pipeline' | 'dispatch-group' | 'health-check', ... }`
+  - `action` (Object, required): `{ kind: 'dispatch-pipeline' | 'health-check', ... }`
   - `enabled` (Boolean, optional): 默认 `true`
   - `departmentWorkspaceUri` (String, optional): 关联部门 workspace
+  - `action.kind = "dispatch-pipeline"` 时使用 `templateId`，可选 `stageId` 指定非入口阶段
 
 #### Get Scheduled Job
 - **URL:** `GET /api/scheduler/jobs/:id`
@@ -382,7 +392,7 @@ The API runs on port 3000 by default.
 To programmatically drive tasks using the V3.5 multi-agent system, follow a state-machine lifecycle:
 
 1. **Create a Project:** First, execute `POST /api/projects` to initialize a workspace scope. You will get a `projectId` which ensures unified artifact routing.
-2. **Dispatch Runs within the Project:** Fire off an initial task by `POST /api/agent-runs` using `groupId: "product-spec"`, attaching the `projectId`.
+2. **Dispatch Runs within the Project:** Fire off an initial task by `POST /api/agent-runs` using `templateId: "development-template-1"` plus `stageId: "product-spec"`, attaching the `projectId`.
 3. **Poll Run Status:** Periodically (e.g., every 5-10 seconds) call `GET /api/agent-runs/:id` to check the `status`. Note: Active states are `queued`, `starting`, `running`. When it transitions to one of the terminal status codes (e.g. `completed` or `failed`), stop polling.
 4. **Read Results:** Upon a `completed` status:
    - For legacy or simpler tasks, read `result.json` located dynamically parsing the `artifactDir` returned in the task details.
@@ -420,7 +430,8 @@ echo "Created Project: $PROJECT_ID"
 SPEC_RESP=$(curl -s -X POST $API_BASE/agent-runs \
   -H "Content-Type: application/json" \
   -d '{
-    "groupId": "product-spec",
+    "templateId": "development-template-1",
+    "stageId": "product-spec",
     "workspace": "'$WORKSPACE'",
     "projectId": "'$PROJECT_ID'",
     "prompt": "Specify OAuth 2.0 implementation requirements"
@@ -435,7 +446,8 @@ echo "Dispatched Spec Run: $SPEC_RUN_ID"
 ARCH_RESP=$(curl -s -X POST $API_BASE/agent-runs \
   -H "Content-Type: application/json" \
   -d '{
-    "groupId": "architecture-advisory",
+    "templateId": "development-template-1",
+    "stageId": "architecture-advisory",
     "workspace": "'$WORKSPACE'",
     "projectId": "'$PROJECT_ID'",
     "sourceRunIds": ["'$SPEC_RUN_ID'"],
@@ -469,8 +481,8 @@ DEV_RESP=$(curl -s -X POST $API_BASE/agent-runs \
   }')
 echo "Dispatched Pipeline Run: $(echo $DEV_RESP | jq -r .runId)"
 
-# Note: By passing templateId without a groupId, the system
-# automatically starts at stage 0. Since development-template-1 
+# Note: By passing templateId without a stageId, the system
+# automatically starts at the entry stage. Since development-template-1
 # uses pipeline autoTrigger rules, it will execute product-spec -> 
 # architecture-advisory -> autonomous-dev-pilot sequentially.
 ```

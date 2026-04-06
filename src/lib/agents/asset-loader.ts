@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../logger';
-import type { GroupAsset, ReviewPolicyAsset } from './asset-types';
-import type { GroupDefinition } from './group-types';
+import type { ReviewPolicyAsset } from './asset-types';
 import type { TemplateDefinition } from './pipeline/pipeline-types';
 import type { SubgraphDefinition } from './subgraph-types';
 import { GLOBAL_ASSETS_DIR } from './gateway-home';
@@ -10,6 +9,7 @@ import { validateTemplatePipeline } from './pipeline/pipeline-graph';
 import { validateTemplateContracts } from './contract-validator';
 import { getOrCompileIR, clearIRCache } from './pipeline/dag-compiler';
 import { validateGraphPipeline } from './pipeline/graph-compiler';
+import { normalizeTemplateDefinition } from './pipeline/template-normalizer';
 
 const log = createLogger('AssetLoader');
 
@@ -42,8 +42,9 @@ function loadTemplates(): TemplateDefinition[] {
     const files = fs.readdirSync(templatesDir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       const content = fs.readFileSync(path.join(templatesDir, file), 'utf-8');
-      const def = JSON.parse(content) as TemplateDefinition;
-      if (def.kind === 'template' && def.id && def.groups) {
+      const raw = JSON.parse(content);
+      const def = normalizeTemplateDefinition(raw);
+      if (def.kind === 'template' && def.id && (def.pipeline?.length || def.graphPipeline)) {
         // Format detection: graphPipeline takes priority over pipeline[]
         if (def.graphPipeline && def.pipeline?.length) {
           log.warn({ templateId: def.id }, 'Template has both pipeline and graphPipeline; using graphPipeline');
@@ -140,86 +141,6 @@ function loadSubgraphs(): SubgraphDefinition[] {
 }
 
 // ---------------------------------------------------------------------------
-// Fallback groups — used ONLY when no template files exist
-// ---------------------------------------------------------------------------
-
-const FALLBACK_GROUPS: GroupDefinition[] = [
-  {
-    id: 'coding-basic',
-    title: 'Coding Worker',
-    description: 'Single dev-worker.',
-    templateId: 'coding-basic-template',
-    executionMode: 'legacy-single',
-    capabilities: { acceptsEnvelope: false, emitsManifest: false, advisory: false },
-    roles: [{ id: 'dev-worker', workflow: '/dev-worker', timeoutMs: 20 * 60 * 1000, autoApprove: true }],
-    defaultModel: 'MODEL_PLACEHOLDER_M26',
-  },
-  {
-    id: 'product-spec',
-    title: '产品规格',
-    description: 'PM author drafts spec, lead reviewer validates.',
-    templateId: 'development-template-1',
-    executionMode: 'review-loop',
-    capabilities: { acceptsEnvelope: true, emitsManifest: true, advisory: true },
-    roles: [
-      { id: 'pm-author', workflow: '/pm-author', timeoutMs: 10 * 60 * 1000, autoApprove: true },
-      { id: 'product-lead-reviewer', workflow: '/product-lead-reviewer', timeoutMs: 8 * 60 * 1000, autoApprove: true },
-    ],
-    reviewPolicyId: 'default-product',
-    defaultModel: 'MODEL_PLACEHOLDER_M26',
-  },
-  {
-    id: 'architecture-advisory',
-    title: '架构顾问',
-    description: 'Architecture author drafts plan, reviewer validates.',
-    templateId: 'development-template-1',
-    executionMode: 'review-loop',
-    capabilities: { acceptsEnvelope: true, emitsManifest: true, requiresInputArtifacts: true, advisory: true },
-    sourceContract: {
-      acceptedSourceGroupIds: ['product-spec'],
-      requireReviewOutcome: ['approved'],
-      autoBuildInputArtifactsFromSources: true
-    },
-    roles: [
-      { id: 'architect-author', workflow: '/architect-author', timeoutMs: 12 * 60 * 1000, autoApprove: true },
-      { id: 'architecture-reviewer', workflow: '/architecture-reviewer', timeoutMs: 10 * 60 * 1000, autoApprove: true },
-    ],
-    reviewPolicyId: 'default-architecture',
-    defaultModel: 'MODEL_PLACEHOLDER_M26',
-  },
-  {
-    id: 'autonomous-dev-pilot',
-    title: '自主开发试点',
-    description: 'Autonomous dev team.',
-    templateId: 'development-template-1',
-    executionMode: 'delivery-single-pass',
-    capabilities: { acceptsEnvelope: true, emitsManifest: true, requiresInputArtifacts: true, delivery: true },
-    sourceContract: {
-      acceptedSourceGroupIds: ['architecture-advisory'],
-      requireReviewOutcome: ['approved'],
-      autoIncludeUpstreamSourceRuns: true,
-      autoBuildInputArtifactsFromSources: true,
-    },
-    roles: [{ id: 'autonomous-dev', workflow: '/autonomous-dev', timeoutMs: 30 * 60 * 1000, autoApprove: true }],
-    defaultModel: 'MODEL_PLACEHOLDER_M26',
-  },
-  {
-    id: 'ux-review',
-    title: '产品体验评审',
-    description: 'UX Review Author + Critic, 3-round adversarial review.',
-    templateId: 'design-review-template',
-    executionMode: 'review-loop',
-    capabilities: { acceptsEnvelope: true, emitsManifest: true, advisory: true },
-    roles: [
-      { id: 'ux-review-author', workflow: '/ux-review-author', timeoutMs: 12 * 60 * 1000, autoApprove: true },
-      { id: 'ux-review-critic', workflow: '/ux-review-critic', timeoutMs: 10 * 60 * 1000, autoApprove: true },
-    ],
-    reviewPolicyId: 'default-strict',
-    defaultModel: 'MODEL_PLACEHOLDER_M26',
-  },
-];
-
-// ---------------------------------------------------------------------------
 // AssetLoader
 // ---------------------------------------------------------------------------
 
@@ -262,37 +183,6 @@ export class AssetLoader {
    */
   static getSubgraph(subgraphId: string): SubgraphDefinition | null {
     return AssetLoader.loadAllSubgraphs().find(s => s.id === subgraphId) ?? null;
-  }
-
-  /**
-   * Load all groups — flattened from templates.
-   * This maintains backward compatibility with group-registry.ts
-   */
-  static loadAllGroups(): GroupDefinition[] {
-    const templates = AssetLoader.loadAllTemplates();
-
-    if (templates.length === 0) {
-      // No template files on disk — use fallbacks
-      return FALLBACK_GROUPS;
-    }
-
-    const groups: GroupDefinition[] = [];
-    const seen = new Set<string>();
-
-    for (const template of templates) {
-      for (const [groupId, groupDef] of Object.entries(template.groups)) {
-        if (seen.has(groupId)) continue; // first template wins for duplicate groupIds
-        seen.add(groupId);
-        groups.push({
-          ...groupDef,
-          id: groupId,
-          templateId: template.id,
-          defaultModel: (groupDef as any).defaultModel || template.defaultModel || 'MODEL_PLACEHOLDER_M26',
-        } as GroupDefinition);
-      }
-    }
-
-    return groups;
   }
 
   static getReviewPolicy(id: string): ReviewPolicyAsset | null {

@@ -16,7 +16,6 @@ export type PipelineStageStatus =
 
 export interface PipelineStageProgress {
   stageId: string;
-  groupId: string;
   stageIndex: number;
   runId?: string;
   status: PipelineStageStatus;
@@ -25,6 +24,7 @@ export interface PipelineStageProgress {
   lastError?: string;
   startedAt?: string;
   completedAt?: string;
+  title?: string;
   /** Gate approval state (V5.2 — only for gate nodes) */
   gateApproval?: GateApproval;
 }

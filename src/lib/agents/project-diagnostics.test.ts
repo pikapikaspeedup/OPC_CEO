@@ -15,12 +15,8 @@ vi.mock('./project-registry', () => ({
 
 vi.mock('./run-registry', () => ({
   getRun: vi.fn((runId: string) => {
-    return { runId, reviewOutcome: 'approved', groupId: 'mock-group' };
+    return { runId, reviewOutcome: 'approved', stageId: 'mock-stage' };
   }),
-}));
-
-vi.mock('./group-registry', () => ({
-  getGroup: vi.fn(() => ({ id: 'mock-group' })),
 }));
 
 vi.mock('./pipeline/pipeline-graph', () => ({
@@ -50,9 +46,9 @@ function makeProject(overrides?: Partial<ProjectDefinition>): ProjectDefinition 
     pipelineState: {
       templateId: 'tmpl-1',
       stages: [
-        { stageId: 'spec', groupId: 'spec-group', stageIndex: 0, status: 'completed', attempts: 1, runId: 'run-1' },
-        { stageId: 'dev', groupId: 'dev-group', stageIndex: 1, status: 'running', attempts: 1, runId: 'run-2' },
-        { stageId: 'test', groupId: 'test-group', stageIndex: 2, status: 'pending', attempts: 0 },
+        { stageId: 'spec', stageIndex: 0, status: 'completed', attempts: 1, runId: 'run-1' },
+        { stageId: 'dev', stageIndex: 1, status: 'running', attempts: 1, runId: 'run-2' },
+        { stageId: 'test', stageIndex: 2, status: 'pending', attempts: 0 },
       ],
       activeStageIds: ['dev'],
       status: 'running',
@@ -80,7 +76,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearIRCache();
   // Re-establish default getRun implementation (clearAllMocks doesn't reset mockReturnValue)
-  mockGetRun.mockImplementation((runId: string) => ({ runId, reviewOutcome: 'approved', groupId: 'mock-group' }));
+  mockGetRun.mockImplementation((runId: string) => ({ runId, reviewOutcome: 'approved', stageId: 'mock-stage' }));
 });
 
 describe('analyzeProject', () => {

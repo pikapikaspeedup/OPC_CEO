@@ -50,7 +50,7 @@ type StageMap = Map<string, PipelineStage>;
 
 function buildStageMap(template: TemplateDefinition): StageMap {
   const map = new Map<string, PipelineStage>();
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     map.set(resolveStageId(stage), stage);
   }
   return map;
@@ -66,7 +66,7 @@ function checkOutputInputCompat(
   errors: ContractError[],
   warnings: ContractWarning[],
 ): void {
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     const stageId = resolveStageId(stage);
     const inputContract = stage.contract?.inputContract;
     if (!inputContract?.length) continue;
@@ -109,7 +109,7 @@ function checkFanOutContracts(
   errors: ContractError[],
   warnings: ContractWarning[],
 ): void {
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     if (stage.stageType !== 'fan-out') continue;
     const stageId = resolveStageId(stage);
 
@@ -147,7 +147,7 @@ function checkJoinMergeContracts(
   errors: ContractError[],
   warnings: ContractWarning[],
 ): void {
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     if (stage.stageType !== 'join') continue;
     const stageId = resolveStageId(stage);
     const joinContract = stage.joinMergeContract;
@@ -195,7 +195,7 @@ function checkArtifactConflicts(
   const seenIds = new Map<string, string>(); // artifactId → stageId
   const seenPaths = new Map<string, string>(); // pathPattern → stageId
 
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     const stageId = resolveStageId(stage);
     const promises = stage.contract?.outputContract || [];
 
@@ -269,7 +269,7 @@ function checkStageTypeConsistency(
   template: TemplateDefinition,
   warnings: ContractWarning[],
 ): void {
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     const stageId = resolveStageId(stage);
     const stageType = stage.stageType || 'normal';
 
@@ -310,9 +310,10 @@ function resolveUpstreams(
   }
 
   // Linear fallback: previous stage in pipeline
-  const idx = template.pipeline.findIndex(s => resolveStageId(s) === stageId);
+  const pipeline = template.pipeline ?? [];
+  const idx = pipeline.findIndex(s => resolveStageId(s) === stageId);
   if (idx > 0) {
-    return [resolveStageId(template.pipeline[idx - 1])];
+    return [resolveStageId(pipeline[idx - 1])];
   }
   return [];
 }
@@ -323,7 +324,7 @@ function findDownstreams(
   stageMap: StageMap,
 ): string[] {
   const result: string[] = [];
-  for (const stage of template.pipeline) {
+  for (const stage of template.pipeline ?? []) {
     const sid = resolveStageId(stage);
     const upstreams = resolveUpstreams(template, sid, stageMap);
     if (upstreams.includes(stageId)) {

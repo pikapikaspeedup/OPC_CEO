@@ -34,7 +34,7 @@ export interface ProjectDiagnostics {
 
 export interface StageDiagnostics {
   stageId: string;
-  groupId: string;
+  stageTitle?: string;
   stageType: 'normal' | 'fan-out' | 'join';
   status: string;
   pendingReason?: string;
@@ -65,7 +65,7 @@ export interface ProjectGraph {
 
 export interface GraphNode {
   stageId: string;
-  groupId: string;
+  stageTitle?: string;
   stageType: string;
   status: string;
   active: boolean;
@@ -104,7 +104,7 @@ export function analyzeProject(projectId: string): ProjectDiagnostics | null {
   const template = AssetLoader.getTemplate(pipelineState.templateId);
   const ir = template ? getOrCompileIR(template) : null;
   const stageDiagnostics = pipelineState.stages.map(stage => {
-    const templateStage = template?.pipeline.find(s => resolveStageId(s) === stage.stageId);
+    const templateStage = template?.pipeline?.find(s => resolveStageId(s) === stage.stageId);
     // Derive stageType from IR node kind instead of PipelineStage.stageType
     const irNode = ir?.nodes.find(n => n.id === stage.stageId);
     const stageType = irNode
@@ -161,7 +161,7 @@ function analyzeStage(
 ): StageDiagnostics {
   const result: StageDiagnostics = {
     stageId: stage.stageId,
-    groupId: stage.groupId,
+    stageTitle: stage.title || stage.stageId,
     stageType,
     status: stage.status,
     recommendedActions: [],
@@ -414,7 +414,7 @@ export function buildProjectGraph(projectId: string): ProjectGraph | null {
 
     return {
       stageId: node.id,
-      groupId: node.groupId,
+      stageTitle: node.title || node.label || node.id,
       stageType: node.kind === 'stage' ? 'normal' : node.kind,
       status: progress?.status || 'pending',
       active: project.pipelineState!.activeStageIds.includes(node.id),

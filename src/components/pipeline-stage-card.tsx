@@ -135,7 +135,7 @@ export default function PipelineStageCard({
 }: PipelineStageCardProps) {
   const { locale } = useI18n();
   const config = stageStatusConfig[stage.status] || stageStatusConfig.pending;
-  const displayTitle = stageTitle || stage.groupId;
+  const displayTitle = stageTitle || stage.title || stage.stageId;
   const isPending = stage.status === 'pending';
   const elapsed = formatElapsedTime(stage.startedAt, stage.completedAt);
 

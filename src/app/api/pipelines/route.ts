@@ -10,26 +10,27 @@ export async function GET() {
       const isGraph = !!t.graphPipeline;
       const pipeline = isGraph
         ? (t.graphPipeline?.nodes ?? []).map((n: any) => ({
-            groupId: n.groupId,
             stageId: n.id,
+            title: n.title || n.label || n.id,
             stageType: n.kind === 'stage' ? 'normal' : n.kind,
           }))
         : (t.pipeline?.map(s => ({
-            groupId: s.groupId,
-            ...(s.stageId ? { stageId: s.stageId } : {}),
+            stageId: s.stageId,
+            title: s.title || s.stageId,
             ...('stageType' in s ? { stageType: (s as any).stageType } : {}),
           })) ?? []);
 
       return {
         id: t.id,
         title: t.title,
-        groups: Object.fromEntries(
-          Object.entries(t.groups).map(([gid, g]) => [
-            gid,
+        stages: Object.fromEntries(
+          (t.graphPipeline?.nodes ?? t.pipeline ?? []).map((stage: any) => [
+            'id' in stage ? stage.id : stage.stageId,
             {
-              title: g.title,
-              description: g.description,
-              roleIds: g.roles.map(r => r.id),
+              title: stage.title || stage.label || ('id' in stage ? stage.id : stage.stageId),
+              description: stage.description,
+              roleIds: (stage.roles ?? []).map((r: any) => r.id),
+              executionMode: stage.executionMode,
             },
           ]),
         ),

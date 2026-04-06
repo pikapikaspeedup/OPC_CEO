@@ -857,13 +857,13 @@ export default function ProjectsPanel({
                 (() => {
                   const templateId = viewProject.pipelineState?.templateId || viewProject.templateId || '';
                   const template = templates?.find(t => t.id === templateId);
-                  const templateGroups = template?.groups || {};
+                  const templateStages = template?.stages || {};
 
                   return (
                     <ProjectWorkbench
                       project={viewProject}
                       agentRuns={agentRuns}
-                      templateGroups={templateGroups}
+                      templateStages={templateStages}
                       models={models || []}
                       onResume={onResume || (async () => { })}
                       onCancelRun={onCancelRun || (() => { })}
@@ -927,7 +927,8 @@ export default function ProjectsPanel({
                                     try {
                                       await api.dispatchRun({
                                         workspace: s.payload.workspace,
-                                        groupId: s.payload.groupId || '',
+                                        templateId: s.payload.templateId || '',
+                                        stageId: s.payload.stageId || '',
                                         projectId: viewProject.projectId,
                                         prompt: viewProject.goal,
                                       });

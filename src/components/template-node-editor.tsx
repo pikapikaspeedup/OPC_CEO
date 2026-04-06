@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
-import type { TemplateNodeFE, TemplateGroupDetailFE } from '@/lib/types';
+import type { TemplateNodeFE, TemplateStageConfigFE } from '@/lib/types';
 import { EXECUTION_MODE_LABELS } from '@/components/template-constants';
 
 // ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ import { EXECUTION_MODE_LABELS } from '@/components/template-constants';
 
 export function NodeEditor({
   node,
-  group,
+  stageConfig,
   onChange,
   onRemove,
   edges,
@@ -30,7 +30,7 @@ export function NodeEditor({
   onRemoveEdge,
 }: {
   node: TemplateNodeFE;
-  group?: TemplateGroupDetailFE;
+  stageConfig?: TemplateStageConfigFE;
   onChange: (updates: Partial<TemplateNodeFE>) => void;
   onRemove?: () => void;
   edges?: { from: string; to: string; condition?: string }[];
@@ -165,9 +165,9 @@ export function NodeEditor({
       </div>
 
       {/* Group info (read-only) */}
-      {group && (
+      {stageConfig && (
         <div className="rounded-lg border border-white/6 bg-white/[0.02] p-2 text-[10px] text-[var(--app-text-muted)]">
-          <span className="font-semibold">Group:</span> {group.title} · {EXECUTION_MODE_LABELS[group.executionMode ?? ''] ?? group.executionMode} · {group.roles.length} 角色
+          <span className="font-semibold">Stage Config:</span> {stageConfig.title} · {EXECUTION_MODE_LABELS[stageConfig.executionMode ?? ''] ?? stageConfig.executionMode} · {stageConfig.roles.length} 角色
         </div>
       )}
 

@@ -6,7 +6,7 @@ import type {
   AgentRun,
   ModelConfig,
   ResumeAction,
-  TemplateGroupSummary,
+  TemplateStageSummaryFE,
   RoleProgressFE,
   TemplateSummaryFE,
 } from '@/lib/types';
@@ -23,14 +23,16 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Layers, ArrowRight, Activity, List, Network, ShieldCheck, Package } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// Helper: resolve human-readable stage title from template groups
+// Helper: resolve human-readable stage title from template stage summaries
 // ---------------------------------------------------------------------------
 
 export function resolveStageTitle(
-  groupId: string,
-  templateGroups?: Record<string, TemplateGroupSummary>,
+  stageId: string | undefined,
+  templateStages?: Record<string, TemplateStageSummaryFE>,
+  fallbackTitle?: string,
 ): string {
-  return templateGroups?.[groupId]?.title || groupId;
+  if (!stageId) return 'Unknown Stage';
+  return fallbackTitle || templateStages?.[stageId]?.title || stageId;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ type SelectionTarget =
 interface ProjectWorkbenchProps {
   project: Project;
   agentRuns: AgentRun[];
-  templateGroups: Record<string, TemplateGroupSummary>;
+  templateStages: Record<string, TemplateStageSummaryFE>;
   models: ModelConfig[];
   onResume: (projectId: string, stageId: string, action: ResumeAction, branchIndex?: number) => Promise<void>;
   onCancelRun: (runId: string) => void;
@@ -67,7 +69,7 @@ interface ProjectWorkbenchProps {
 export default function ProjectWorkbench({
   project,
   agentRuns,
-  templateGroups,
+  templateStages,
   models,
   onResume,
   onCancelRun,
@@ -238,7 +240,7 @@ export default function ProjectWorkbench({
                   }}
                 >
                   <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                  {resolveStageTitle(gate.groupId, templateGroups)}
+                  {resolveStageTitle(gate.stageId, templateStages, gate.title)}
                   <span className="text-[10px] text-amber-400/50">→ Review</span>
                 </button>
               ))}
@@ -340,7 +342,7 @@ export default function ProjectWorkbench({
                     : undefined;
 
                   return (
-                    <div key={`${stage.groupId}-${stage.stageIndex}`} className="relative">
+                    <div key={`${stage.stageId}-${stage.stageIndex}`} className="relative">
                       {index > 0 && (
                         <div className="flex justify-center -mt-1 mb-1">
                           <ArrowRight className="h-3 w-3 text-white/15 rotate-90" />
@@ -348,7 +350,7 @@ export default function ProjectWorkbench({
                       )}
                       <PipelineStageCard
                         stage={stage}
-                        stageTitle={resolveStageTitle(stage.groupId, templateGroups)}
+                        stageTitle={resolveStageTitle(stage.stageId, templateStages, stage.title)}
                         isSelected={selection?.stageIndex === index && selection.type === 'stage'}
                         isCurrentStage={pipeline?.activeStageIds?.includes(stage.stageId) || false}
                         roles={run?.roles}
@@ -385,7 +387,7 @@ export default function ProjectWorkbench({
                 {selection.type === 'stage' && selectedStage ? (
                   <StageDetailPanel
                     stage={selectedStage}
-                    stageTitle={resolveStageTitle(selectedStage.groupId, templateGroups)}
+                    stageTitle={resolveStageTitle(selectedStage.stageId, templateStages, selectedStage.title)}
                     run={selectedRun}
                     onResume={handleResume}
                     resumeLoading={resumeLoadingStage === selectedStage.stageId}
@@ -399,8 +401,9 @@ export default function ProjectWorkbench({
                     role={selectedRole}
                     run={selectedRun}
                     stageTitle={resolveStageTitle(
-                      stages[selection.stageIndex]?.groupId || '',
-                      templateGroups,
+                      stages[selection.stageIndex]?.stageId || '',
+                      templateStages,
+                      stages[selection.stageIndex]?.title,
                     )}
                     onOpenConversation={onOpenConversation}
                   />

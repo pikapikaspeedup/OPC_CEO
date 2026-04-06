@@ -168,11 +168,12 @@ export default function DeliverablesPanel({ projectId, stages }: DeliverablesPan
       {/* Deliverables grouped by stage */}
       {Object.entries(byStage).map(([stageId, items]) => {
         const stageDef = stages?.find(s => s.stageId === stageId);
+        const stageTitle = stageDef?.title || stageId;
         return (
           <div key={stageId} className="rounded-xl border border-white/8 bg-white/[0.02] overflow-hidden">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/6 bg-white/[0.02]">
               <span className="text-xs font-medium text-white/60">
-                {stageDef?.groupId || stageId}
+                {stageTitle}
               </span>
               <span className="text-[10px] text-white/25">{items.length} items</span>
             </div>
@@ -214,7 +215,7 @@ export default function DeliverablesPanel({ projectId, stages }: DeliverablesPan
                 <option value="" disabled>Select stage</option>
                 {(stages || []).map(s => (
                   <option key={s.stageId} value={s.stageId}>
-                    {s.groupId} (#{s.stageIndex})
+                    {(s.title || s.stageId)} (#{s.stageIndex})
                   </option>
                 ))}
               </NativeSelect>

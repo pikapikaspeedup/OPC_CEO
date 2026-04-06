@@ -1,23 +1,16 @@
 /**
  * Generation Context — assembles context for AI pipeline generation.
  *
- * Gathers available groups, existing templates, reference template,
+ * Gathers reusable workflows, existing templates, reference template,
  * and output schema so the LLM has everything it needs to produce
  * a valid graphPipeline.
  */
 
 import type { TemplateDefinition } from './pipeline/pipeline-types';
 import type { GraphPipelineNode } from './pipeline/graph-pipeline-types';
+import type { StageExecutionMode } from './group-types';
 
 // ── Types ───────────────────────────────────────────────────────────────────
-
-export interface GroupSummary {
-  id: string;
-  title: string;
-  description: string;
-  roles: string[];
-  executionMode?: string;
-}
 
 export interface TemplateSummary {
   id: string;
@@ -29,8 +22,12 @@ export interface TemplateSummary {
 }
 
 export interface GenerationContext {
-  /** Available agent groups (for the LLM to reference) */
-  availableGroups: GroupSummary[];
+  /** Reusable workflow IDs observed in existing templates */
+  workflows: string[];
+  /** Supported execution modes */
+  executionModes: StageExecutionMode[];
+  /** Supported graph node kinds */
+  nodeKinds: GraphPipelineNode['kind'][];
   /** Existing template summaries (for structure inspiration) */
   existingTemplates: TemplateSummary[];
   /** Full reference template (when user specifies one) */
@@ -50,14 +47,31 @@ const GRAPH_PIPELINE_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'kind', 'groupId'],
+        required: ['id', 'kind', 'executionMode', 'roles'],
         properties: {
           id: { type: 'string', description: 'Globally unique node ID' },
           kind: {
             type: 'string',
             enum: ['stage', 'fan-out', 'join', 'gate', 'switch', 'loop-start', 'loop-end'],
           },
-          groupId: { type: 'string', description: 'Agent group ID from available groups' },
+          title: { type: 'string', description: 'Human-readable stage title' },
+          executionMode: {
+            type: 'string',
+            enum: ['legacy-single', 'review-loop', 'delivery-single-pass', 'orchestration'],
+          },
+          roles: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id', 'workflow', 'timeoutMs', 'autoApprove'],
+              properties: {
+                id: { type: 'string' },
+                workflow: { type: 'string', description: 'Workflow path such as /dev-worker' },
+                timeoutMs: { type: 'number' },
+                autoApprove: { type: 'boolean' },
+              },
+            },
+          },
           label: { type: 'string', description: 'Display label' },
           autoTrigger: { type: 'boolean', default: true },
           triggerOn: { type: 'string', enum: ['approved', 'completed', 'any'] },
@@ -109,26 +123,17 @@ function summarizeTemplate(t: TemplateDefinition): TemplateSummary {
   };
 }
 
-function extractGroups(templates: TemplateDefinition[]): GroupSummary[] {
-  const seen = new Set<string>();
-  const groups: GroupSummary[] = [];
-
-  for (const t of templates) {
-    if (!t.groups) continue;
-    for (const [gid, g] of Object.entries(t.groups)) {
-      if (seen.has(gid)) continue;
-      seen.add(gid);
-      groups.push({
-        id: gid,
-        title: g.title,
-        description: g.description ?? '',
-        roles: (g.roles ?? []).map((r: any) => r.id ?? r.title ?? String(r)),
-        executionMode: g.executionMode,
-      });
+function extractWorkflows(templates: TemplateDefinition[]): string[] {
+  const workflows = new Set<string>();
+  for (const template of templates) {
+    for (const stage of template.pipeline ?? []) {
+      for (const role of stage.roles ?? []) workflows.add(role.workflow);
+    }
+    for (const node of template.graphPipeline?.nodes ?? []) {
+      for (const role of node.roles ?? []) workflows.add(role.workflow);
     }
   }
-
-  return groups;
+  return [...workflows].sort();
 }
 
 /**
@@ -139,14 +144,16 @@ export function buildGenerationContext(
   allTemplates: TemplateDefinition[],
   referenceTemplateId?: string,
 ): GenerationContext {
-  const availableGroups = extractGroups(allTemplates);
+  const workflows = extractWorkflows(allTemplates);
   const existingTemplates = allTemplates.map(summarizeTemplate);
   const referenceTemplate = referenceTemplateId
     ? allTemplates.find(t => t.id === referenceTemplateId) ?? undefined
     : undefined;
 
   return {
-    availableGroups,
+    workflows,
+    executionModes: ['legacy-single', 'review-loop', 'delivery-single-pass', 'orchestration'],
+    nodeKinds: ['stage', 'fan-out', 'join', 'gate', 'switch', 'loop-start', 'loop-end', 'subgraph-ref'],
     existingTemplates,
     referenceTemplate,
     outputSchema: GRAPH_PIPELINE_SCHEMA,

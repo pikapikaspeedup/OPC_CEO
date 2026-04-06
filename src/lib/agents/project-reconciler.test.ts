@@ -17,12 +17,8 @@ vi.mock('./project-registry', () => ({
 vi.mock('./run-registry', () => ({
   getRun: vi.fn((runId: string) => {
     // Default: return run with reviewOutcome 'approved' for completed upstream stages
-    return { runId, reviewOutcome: 'approved', groupId: 'mock-group' };
+    return { runId, reviewOutcome: 'approved', stageId: 'mock-stage' };
   }),
-}));
-
-vi.mock('./group-registry', () => ({
-  getGroup: vi.fn(() => ({ id: 'mock-group' })),
 }));
 
 vi.mock('./pipeline/pipeline-graph', () => ({
@@ -63,8 +59,8 @@ function makeProject(overrides?: Partial<ProjectDefinition>): ProjectDefinition 
     pipelineState: {
       templateId: 'tmpl-1',
       stages: [
-        { stageId: 'spec', groupId: 'spec-group', stageIndex: 0, status: 'completed', attempts: 1, runId: 'run-1' },
-        { stageId: 'dev', groupId: 'dev-group', stageIndex: 1, status: 'pending', attempts: 0 },
+        { stageId: 'spec', stageIndex: 0, status: 'completed', attempts: 1, runId: 'run-1' },
+        { stageId: 'dev', stageIndex: 1, status: 'pending', attempts: 0 },
       ],
       activeStageIds: [],
       status: 'running',
@@ -165,7 +161,6 @@ describe('reconcileProject', () => {
     const project = makeProject();
     project.pipelineState!.stages[1] = {
       stageId: 'wp-exec',
-      groupId: 'wp-group',
       stageIndex: 1,
       status: 'pending',
       attempts: 0,
@@ -205,10 +200,9 @@ describe('reconcileProject', () => {
 
     const project = makeProject();
     project.pipelineState!.stages = [
-      { stageId: 'spec', groupId: 'spec-group', stageIndex: 0, status: 'completed', attempts: 1, runId: 'run-1' },
+      { stageId: 'spec', stageIndex: 0, status: 'completed', attempts: 1, runId: 'run-1' },
       {
         stageId: 'wp-exec',
-        groupId: 'wp-group',
         stageIndex: 1,
         status: 'running',
         attempts: 1,
@@ -217,7 +211,7 @@ describe('reconcileProject', () => {
           { branchIndex: 1, workPackageId: 'wp-2', workPackageName: 'WP2', subProjectId: 'p-3', status: 'completed', runId: 'r-2' },
         ],
       },
-      { stageId: 'convergence', groupId: 'conv-group', stageIndex: 2, status: 'pending', attempts: 0 },
+      { stageId: 'convergence', stageIndex: 2, status: 'pending', attempts: 0 },
     ];
     project.pipelineState!.activeStageIds = ['wp-exec'];
 
@@ -234,7 +228,6 @@ describe('reconcileProject', () => {
     const project = makeProject();
     project.pipelineState!.stages[1] = {
       stageId: 'wp-exec',
-      groupId: 'wp-group',
       stageIndex: 1,
       status: 'running',
       attempts: 1,

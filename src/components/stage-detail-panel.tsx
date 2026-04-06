@@ -362,7 +362,7 @@ export default function StageDetailPanel({
 
       {/* ── Metadata grid ── */}
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <MetaCell label="Group ID">{stage.groupId}</MetaCell>
+        <MetaCell label="Stage ID">{stage.stageId}</MetaCell>
         <MetaCell label="Stage Index">{stage.stageIndex}</MetaCell>
         {stage.startedAt && <MetaCell label="Started">{new Date(stage.startedAt).toLocaleString()}</MetaCell>}
         {stage.completedAt && <MetaCell label="Completed">{new Date(stage.completedAt).toLocaleString()}</MetaCell>}

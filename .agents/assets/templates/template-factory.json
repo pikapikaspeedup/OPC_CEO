@@ -3,38 +3,62 @@
   "kind": "template",
   "title": "模板工厂",
   "description": "基于用户需求和业界最佳实践，设计并生成新的 Pipeline 模板及其 Workflow 文件",
-
-  "groups": {
-    "template-requirements": {
+  "pipeline": [
+    {
+      "stageId": "template-requirements",
+      "autoTrigger": false,
       "title": "需求分析",
       "description": "理解用户想要什么类型的流水线，调研该领域的业界最佳实践，输出标准化的模板需求规格。",
       "executionMode": "review-loop",
       "roles": [
-        { "id": "template-analyst", "workflow": "/template-analyst", "timeoutMs": 600000, "autoApprove": true },
-        { "id": "template-analyst-reviewer", "workflow": "/product-lead-reviewer", "timeoutMs": 480000, "autoApprove": true }
+        {
+          "id": "template-analyst",
+          "workflow": "/template-analyst",
+          "timeoutMs": 600000,
+          "autoApprove": true
+        },
+        {
+          "id": "template-analyst-reviewer",
+          "workflow": "/product-lead-reviewer",
+          "timeoutMs": 480000,
+          "autoApprove": true
+        }
       ],
-      "reviewPolicyId": "default-product"
+      "reviewPolicyId": "default-product",
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     },
-    "template-design": {
+    {
+      "stageId": "template-design",
+      "autoTrigger": true,
+      "triggerOn": "approved",
       "title": "模板设计",
       "description": "基于需求规格和设计标准，生成 template JSON 和所有 workflow markdown 文件。",
       "executionMode": "review-loop",
-      "sourceContract": {
-        "acceptedSourceGroupIds": ["template-requirements"],
-        "requireReviewOutcome": ["approved"]
-      },
       "roles": [
-        { "id": "template-designer", "workflow": "/template-designer", "timeoutMs": 720000, "autoApprove": true },
-        { "id": "template-design-reviewer", "workflow": "/template-validator", "timeoutMs": 600000, "autoApprove": true }
+        {
+          "id": "template-designer",
+          "workflow": "/template-designer",
+          "timeoutMs": 720000,
+          "autoApprove": true
+        },
+        {
+          "id": "template-design-reviewer",
+          "workflow": "/template-validator",
+          "timeoutMs": 600000,
+          "autoApprove": true
+        }
       ],
-      "reviewPolicyId": "default-architecture"
+      "sourceContract": {
+        "acceptedSourceStageIds": [
+          "template-requirements"
+        ],
+        "requireReviewOutcome": [
+          "approved"
+        ]
+      },
+      "reviewPolicyId": "default-architecture",
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     }
-  },
-
-  "pipeline": [
-    { "groupId": "template-requirements", "autoTrigger": false },
-    { "groupId": "template-design",       "autoTrigger": true, "triggerOn": "approved" }
   ],
-
   "defaultModel": "MODEL_PLACEHOLDER_M26"
 }

@@ -1,7 +1,9 @@
 # GraphPipeline 完整指南
 
 > 适用版本：V5.1+  
-> 前置知识：了解 Template、Pipeline、Agent Group 基本概念
+> 前置知识：了解 Template、Pipeline、Stage 基本概念
+>
+> V6.1 更新：GraphPipeline 节点不再引用 `groupId`。每个 node 直接内联 `executionMode`、`roles`、`sourceContract` 等执行配置。
 
 ---
 
@@ -70,7 +72,9 @@ GraphPipeline 由两个数组组成：
 {
   "id": "planning",
   "kind": "stage",
-  "groupId": "project-planning",
+  "title": "项目规划",
+  "executionMode": "review-loop",
+  "roles": [],
   "label": "项目规划",
   "autoTrigger": true,
   "triggerOn": "completed",
@@ -88,7 +92,8 @@ GraphPipeline 由两个数组组成：
 |:-----|:-----|:-----|
 | `id` | string | 全局唯一节点 ID |
 | `kind` | string | 节点类型（见下） |
-| `groupId` | string | 关联的 Agent Group ID |
+| `executionMode` | string | 执行模式 |
+| `roles` | array | 角色列表 |
 
 **可选字段**：
 
@@ -121,7 +126,8 @@ GraphPipeline 由两个数组组成：
 {
   "id": "wp-execution",
   "kind": "fan-out",
-  "groupId": "wp-executor",
+  "executionMode": "orchestration",
+  "roles": [],
   "fanOut": {
     "workPackagesPath": "docs/work-packages.json",
     "perBranchTemplateId": "wp-dev-template",
@@ -140,7 +146,8 @@ fan-out 节点读取上游产出的 `workPackagesPath` JSON 文件，为每个 w
 {
   "id": "convergence",
   "kind": "join",
-  "groupId": "convergence-review",
+  "executionMode": "orchestration",
+  "roles": [],
   "join": {
     "sourceNodeId": "wp-execution",
     "policy": "all"
@@ -156,7 +163,8 @@ join 节点等待 `sourceNodeId` 指定的 fan-out 的所有分支完成后触�
 {
   "id": "approval-gate",
   "kind": "gate",
-  "groupId": "approval",
+  "executionMode": "orchestration",
+  "roles": [],
   "gate": {
     "autoApprove": false,
     "approvalTimeout": 3600000,
@@ -184,7 +192,8 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
 {
   "id": "quality-check",
   "kind": "switch",
-  "groupId": "router",
+  "executionMode": "orchestration",
+  "roles": [],
   "switch": {
     "branches": [
       {
@@ -219,7 +228,8 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
   {
     "id": "review-loop-start",
     "kind": "loop-start",
-    "groupId": "loop-control",
+    "executionMode": "orchestration",
+    "roles": [],
     "loop": {
       "maxIterations": 3,
       "terminationCondition": { "type": "field-match", "field": "review.decision", "value": "approved" },
@@ -230,7 +240,8 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
   {
     "id": "review-loop-end",
     "kind": "loop-end",
-    "groupId": "loop-control",
+    "executionMode": "orchestration",
+    "roles": [],
     "loop": {
       "maxIterations": 3,
       "terminationCondition": { "type": "field-match", "field": "review.decision", "value": "approved" },
@@ -252,7 +263,8 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
 {
   "id": "code-review",
   "kind": "subgraph-ref",
-  "groupId": "placeholder",
+  "executionMode": "orchestration",
+  "roles": [],
   "subgraphRef": {
     "subgraphId": "code-review-subgraph"
   }
@@ -303,9 +315,9 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
   "title": "简单线性流程",
   "graphPipeline": {
     "nodes": [
-      { "id": "planning", "kind": "stage", "groupId": "project-planning", "autoTrigger": true },
-      { "id": "development", "kind": "stage", "groupId": "development" },
-      { "id": "review", "kind": "stage", "groupId": "code-review", "triggerOn": "approved" }
+      { "id": "planning", "kind": "stage", "title": "项目规划", "executionMode": "review-loop", "roles": [{ "id": "planner", "workflow": "/planner", "timeoutMs": 600000 }], "autoTrigger": true },
+      { "id": "development", "kind": "stage", "title": "开发实现", "executionMode": "delivery-single-pass", "roles": [{ "id": "dev", "workflow": "/dev-worker", "timeoutMs": 1800000 }] },
+      { "id": "review", "kind": "stage", "title": "代码评审", "executionMode": "review-loop", "roles": [{ "id": "reviewer", "workflow": "/code-reviewer", "timeoutMs": 600000 }], "triggerOn": "approved" }
     ],
     "edges": [
       { "from": "planning", "to": "development" },
@@ -324,19 +336,19 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
   "title": "并行开发流程",
   "graphPipeline": {
     "nodes": [
-      { "id": "planning", "kind": "stage", "groupId": "project-planning", "autoTrigger": true },
+      { "id": "planning", "kind": "stage", "title": "项目规划", "executionMode": "review-loop", "roles": [{ "id": "planner", "workflow": "/planner", "timeoutMs": 600000 }], "autoTrigger": true },
       {
-        "id": "wp-fanout", "kind": "fan-out", "groupId": "wp-executor",
+        "id": "wp-fanout", "kind": "fan-out", "executionMode": "orchestration", "roles": [],
         "fanOut": {
           "workPackagesPath": "docs/work-packages.json",
           "perBranchTemplateId": "wp-dev-template"
         }
       },
       {
-        "id": "convergence", "kind": "join", "groupId": "convergence-review",
+        "id": "convergence", "kind": "join", "executionMode": "orchestration", "roles": [],
         "join": { "sourceNodeId": "wp-fanout", "policy": "all" }
       },
-      { "id": "integration", "kind": "stage", "groupId": "integration-testing" }
+      { "id": "integration", "kind": "stage", "title": "集成验证", "executionMode": "delivery-single-pass", "roles": [{ "id": "integration", "workflow": "/integration-tester", "timeoutMs": 1200000 }] }
     ],
     "edges": [
       { "from": "planning", "to": "wp-fanout" },
@@ -356,10 +368,10 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
   "title": "审批 + 条件分支流程",
   "graphPipeline": {
     "nodes": [
-      { "id": "planning", "kind": "stage", "groupId": "project-planning", "autoTrigger": true },
-      { "id": "gate1", "kind": "gate", "groupId": "approval", "gate": { "autoApprove": false } },
+      { "id": "planning", "kind": "stage", "title": "项目规划", "executionMode": "review-loop", "roles": [{ "id": "planner", "workflow": "/planner", "timeoutMs": 600000 }], "autoTrigger": true },
+      { "id": "gate1", "kind": "gate", "executionMode": "orchestration", "roles": [], "gate": { "autoApprove": false } },
       {
-        "id": "router", "kind": "switch", "groupId": "router",
+        "id": "router", "kind": "switch", "executionMode": "orchestration", "roles": [],
         "switch": {
           "branches": [
             { "label": "large", "condition": { "type": "field-compare", "field": "plan.stageCount", "operator": "gt", "value": 5 }, "targetNodeId": "wp-fanout" },
@@ -368,13 +380,13 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
           "defaultTargetNodeId": "simple-dev"
         }
       },
-      { "id": "simple-dev", "kind": "stage", "groupId": "development" },
+      { "id": "simple-dev", "kind": "stage", "title": "简单开发", "executionMode": "delivery-single-pass", "roles": [{ "id": "dev", "workflow": "/dev-worker", "timeoutMs": 1800000 }] },
       {
-        "id": "wp-fanout", "kind": "fan-out", "groupId": "wp-executor",
+        "id": "wp-fanout", "kind": "fan-out", "executionMode": "orchestration", "roles": [],
         "fanOut": { "workPackagesPath": "docs/work-packages.json", "perBranchTemplateId": "wp-dev-template" }
       },
-      { "id": "wp-join", "kind": "join", "groupId": "convergence-review", "join": { "sourceNodeId": "wp-fanout", "policy": "all" } },
-      { "id": "final-review", "kind": "stage", "groupId": "code-review" }
+      { "id": "wp-join", "kind": "join", "executionMode": "orchestration", "roles": [], "join": { "sourceNodeId": "wp-fanout", "policy": "all" } },
+      { "id": "final-review", "kind": "stage", "title": "最终评审", "executionMode": "review-loop", "roles": [{ "id": "reviewer", "workflow": "/code-reviewer", "timeoutMs": 600000 }] }
     ],
     "edges": [
       { "from": "planning", "to": "gate1" },
@@ -398,18 +410,18 @@ antigravity_gate_approve(projectId, nodeId, decision: "approved", reason: "...")
   "title": "循环审查流程",
   "graphPipeline": {
     "nodes": [
-      { "id": "dev", "kind": "stage", "groupId": "development", "autoTrigger": true },
+      { "id": "dev", "kind": "stage", "title": "开发实现", "executionMode": "delivery-single-pass", "roles": [{ "id": "dev", "workflow": "/dev-worker", "timeoutMs": 1800000 }], "autoTrigger": true },
       {
-        "id": "loop-start", "kind": "loop-start", "groupId": "loop-control",
+        "id": "loop-start", "kind": "loop-start", "executionMode": "orchestration", "roles": [],
         "loop": { "maxIterations": 3, "terminationCondition": { "type": "field-match", "field": "review.decision", "value": "approved" }, "pairedNodeId": "loop-end", "checkpointPerIteration": true }
       },
-      { "id": "review", "kind": "stage", "groupId": "code-review" },
-      { "id": "fix", "kind": "stage", "groupId": "development" },
+      { "id": "review", "kind": "stage", "title": "代码评审", "executionMode": "review-loop", "roles": [{ "id": "reviewer", "workflow": "/code-reviewer", "timeoutMs": 600000 }] },
+      { "id": "fix", "kind": "stage", "title": "返修", "executionMode": "delivery-single-pass", "roles": [{ "id": "dev", "workflow": "/dev-worker", "timeoutMs": 1800000 }] },
       {
-        "id": "loop-end", "kind": "loop-end", "groupId": "loop-control",
+        "id": "loop-end", "kind": "loop-end", "executionMode": "orchestration", "roles": [],
         "loop": { "maxIterations": 3, "terminationCondition": { "type": "field-match", "field": "review.decision", "value": "approved" }, "pairedNodeId": "loop-start", "checkpointPerIteration": true }
       },
-      { "id": "deploy", "kind": "stage", "groupId": "deployment" }
+      { "id": "deploy", "kind": "stage", "title": "部署", "executionMode": "delivery-single-pass", "roles": [{ "id": "deploy", "workflow": "/deploy-worker", "timeoutMs": 1200000 }] }
     ],
     "edges": [
       { "from": "dev", "to": "loop-start" },
@@ -461,7 +473,7 @@ GraphPipeline 在 template 加载时自动执行以下校验：
 | 检查项 | 说明 |
 |:-------|:-----|
 | 节点 ID 唯一 | 不允许重复 ID |
-| 必填字段 | `id`、`kind`、`groupId` |
+| 必填字段 | `id`、`kind`、`executionMode`、`roles` |
 | 边引用完整 | `from` 和 `to` 必须引用存在的节点 |
 | 环检测 | 不允许循环依赖（loop-start/loop-end 除外） |
 | Kind 配置一致 | fan-out 必须有 `fanOut`，join 必须有 `join` 等 |
@@ -489,7 +501,8 @@ antigravity_validate_template(templateId: "test")
 {
   "id": "planning",
   "kind": "stage",
-  "groupId": "project-planning",
+  "executionMode": "review-loop",
+  "roles": [{ "id": "planner", "workflow": "/planner", "timeoutMs": 600000 }],
   "contract": {
     "outputContract": [
       {

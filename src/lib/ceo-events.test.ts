@@ -5,7 +5,7 @@ import type { Project, PipelineStageProgressFE } from './types';
 describe('generateCEOEvents', () => {
   it('generates critical event for pending gate', () => {
     const stages = [{
-      stageId: 'g1', groupId: 'gate-1', status: 'pending', stageIndex: 0, attempts: 1,
+      stageId: 'g1', status: 'pending', stageIndex: 0, attempts: 1,
       nodeKind: 'gate', gateApproval: { status: 'pending' },
     }] as PipelineStageProgressFE[];
     const events = generateCEOEvents([], stages);
@@ -19,7 +19,7 @@ describe('generateCEOEvents', () => {
       updatedAt: new Date().toISOString(), goal: '', createdAt: '', runIds: [],
     }] as Project[];
     const stages = [{
-      stageId: 'g1', groupId: 'g', status: 'pending', stageIndex: 0, attempts: 1,
+      stageId: 'g1', status: 'pending', stageIndex: 0, attempts: 1,
       nodeKind: 'gate', gateApproval: { status: 'pending' },
     }] as PipelineStageProgressFE[];
     const events = generateCEOEvents(projects, stages);

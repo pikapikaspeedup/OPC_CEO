@@ -68,10 +68,7 @@ function loadJobs(): void {
 
 function getActionSummary(action: ScheduledAction): string {
   if (action.kind === 'dispatch-pipeline') {
-    return `dispatch template ${action.templateId}`;
-  }
-  if (action.kind === 'dispatch-group') {
-    return `dispatch group ${action.groupId}`;
+    return `dispatch template ${action.templateId}${action.stageId ? ` stage ${action.stageId}` : ''}`;
   }
   return `health-check project ${action.projectId}`;
 }
@@ -149,32 +146,34 @@ async function triggerAction(action: ScheduledAction): Promise<string | undefine
 
   if (action.kind === 'dispatch-pipeline') {
     const template = AssetLoader.getTemplate(action.templateId);
-    if (!template || template.pipeline.length === 0) {
+    if (!template || ((!template.pipeline || template.pipeline.length === 0) && !template.graphPipeline?.nodes.length)) {
       throw new Error(`Template not found or empty: ${action.templateId}`);
     }
-    const initialStage = template.pipeline[0];
+    const initialStage = action.stageId
+      ? (template.pipeline?.find((stage: any) => resolveStageId(stage) === action.stageId)
+        || template.graphPipeline?.nodes.find((node: any) => node.id === action.stageId))
+      : (template.pipeline?.[0] || template.graphPipeline?.nodes[0]);
+    const initialStageId = initialStage ? ('stageId' in initialStage ? resolveStageId(initialStage as any) : initialStage.id) : undefined;
+    const initialStageIndex = template.pipeline && initialStageId
+      ? template.pipeline.findIndex((stage: any) => resolveStageId(stage) === initialStageId)
+      : undefined;
+    if (!initialStage || !initialStageId) {
+      throw new Error(`Stage not found: ${action.templateId}/${action.stageId}`);
+    }
     const result = await dispatchRun({
-      groupId: initialStage.groupId,
+      stageId: initialStageId,
       workspace: action.workspace,
       prompt: action.prompt,
       model: action.model,
       projectId: action.projectId,
       pipelineId: action.templateId,
-      pipelineStageId: resolveStageId(initialStage),
-      pipelineStageIndex: 0,
+      templateId: action.templateId,
+      pipelineStageId: initialStageId,
+      pipelineStageIndex: initialStageIndex,
+      sourceRunIds: action.sourceRunIds,
     });
     return `runId=${result.runId}`;
   }
-
-  const result = await dispatchRun({
-    groupId: action.groupId,
-    workspace: action.workspace,
-    prompt: action.prompt,
-    model: action.model,
-    projectId: action.projectId,
-    sourceRunIds: action.sourceRunIds,
-  });
-  return `runId=${result.runId}`;
 }
 
 export async function triggerScheduledJob(jobId: string): Promise<SchedulerTriggerResult> {

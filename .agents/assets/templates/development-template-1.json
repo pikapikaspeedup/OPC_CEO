@@ -3,60 +3,114 @@
   "kind": "template",
   "title": "完整产研链",
   "description": "从产品规格到架构设计到代码交付的全流程软件开发模板",
-
-  "groups": {
-    "product-spec": {
+  "pipeline": [
+    {
+      "stageId": "product-spec",
+      "autoTrigger": false,
       "title": "产品规格",
       "description": "PM author drafts spec, lead reviewer validates. Up to 3 review rounds.",
       "executionMode": "review-loop",
-      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true, "advisory": true },
       "roles": [
-        { "id": "pm-author", "workflow": "/pm-author", "timeoutMs": 600000, "autoApprove": true },
-        { "id": "product-lead-reviewer", "workflow": "/product-lead-reviewer", "timeoutMs": 480000, "autoApprove": true }
+        {
+          "id": "pm-author",
+          "workflow": "/pm-author",
+          "timeoutMs": 600000,
+          "autoApprove": true
+        },
+        {
+          "id": "product-lead-reviewer",
+          "workflow": "/product-lead-reviewer",
+          "timeoutMs": 480000,
+          "autoApprove": true
+        }
       ],
-      "reviewPolicyId": "default-product"
+      "capabilities": {
+        "acceptsEnvelope": true,
+        "emitsManifest": true,
+        "advisory": true
+      },
+      "reviewPolicyId": "default-product",
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     },
-    "architecture-advisory": {
+    {
+      "stageId": "architecture-advisory",
+      "autoTrigger": true,
+      "triggerOn": "approved",
       "title": "架构顾问",
       "description": "Architecture author drafts technical plan, reviewer validates and refines it.",
       "executionMode": "review-loop",
-      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true, "requiresInputArtifacts": true, "advisory": true },
+      "roles": [
+        {
+          "id": "architect-author",
+          "workflow": "/architect-author",
+          "timeoutMs": 720000,
+          "autoApprove": true
+        },
+        {
+          "id": "architecture-reviewer",
+          "workflow": "/architecture-reviewer",
+          "timeoutMs": 600000,
+          "autoApprove": true
+        }
+      ],
+      "capabilities": {
+        "acceptsEnvelope": true,
+        "emitsManifest": true,
+        "requiresInputArtifacts": true,
+        "advisory": true
+      },
       "sourceContract": {
-        "acceptedSourceGroupIds": ["product-spec"],
-        "requireReviewOutcome": ["approved"],
+        "acceptedSourceStageIds": [
+          "product-spec"
+        ],
+        "requireReviewOutcome": [
+          "approved"
+        ],
         "autoBuildInputArtifactsFromSources": true
       },
-      "roles": [
-        { "id": "architect-author", "workflow": "/architect-author", "timeoutMs": 720000, "autoApprove": true },
-        { "id": "architecture-reviewer", "workflow": "/architecture-reviewer", "timeoutMs": 600000, "autoApprove": true }
-      ],
-      "reviewPolicyId": "default-architecture"
+      "reviewPolicyId": "default-architecture",
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     },
-    "autonomous-dev-pilot": {
+    {
+      "stageId": "autonomous-dev-pilot",
+      "autoTrigger": true,
+      "triggerOn": "approved",
       "title": "自主开发（含交付审核）",
       "description": "Autonomous dev implements, then delivery reviewer audits completeness. Up to 3 rounds.",
       "executionMode": "review-loop",
-      "capabilities": { "acceptsEnvelope": true, "emitsManifest": true, "requiresInputArtifacts": true },
+      "roles": [
+        {
+          "id": "autonomous-dev",
+          "workflow": "/autonomous-dev",
+          "timeoutMs": 1800000,
+          "autoApprove": true,
+          "maxRetries": 1
+        },
+        {
+          "id": "dev-delivery-reviewer",
+          "workflow": "/dev-delivery-reviewer",
+          "timeoutMs": 600000,
+          "autoApprove": true
+        }
+      ],
+      "capabilities": {
+        "acceptsEnvelope": true,
+        "emitsManifest": true,
+        "requiresInputArtifacts": true
+      },
       "sourceContract": {
-        "acceptedSourceGroupIds": ["architecture-advisory"],
-        "requireReviewOutcome": ["approved"],
+        "acceptedSourceStageIds": [
+          "architecture-advisory"
+        ],
+        "requireReviewOutcome": [
+          "approved"
+        ],
         "autoIncludeUpstreamSourceRuns": true,
         "autoBuildInputArtifactsFromSources": true
       },
-      "roles": [
-        { "id": "autonomous-dev", "workflow": "/autonomous-dev", "timeoutMs": 1800000, "autoApprove": true, "maxRetries": 1 },
-        { "id": "dev-delivery-reviewer", "workflow": "/dev-delivery-reviewer", "timeoutMs": 600000, "autoApprove": true }
-      ],
       "reviewPolicyId": "default-strict",
-      "maxRounds": 3
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     }
-  },
-
-  "pipeline": [
-    { "groupId": "product-spec", "autoTrigger": false },
-    { "groupId": "architecture-advisory", "autoTrigger": true, "triggerOn": "approved" },
-    { "groupId": "autonomous-dev-pilot", "autoTrigger": true, "triggerOn": "approved" }
   ],
-
   "defaultModel": "MODEL_PLACEHOLDER_M26"
 }

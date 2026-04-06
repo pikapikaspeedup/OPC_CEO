@@ -1,12 +1,10 @@
-import type { GroupDefinition } from '../group-types';
+import type { StageExecutionConfig } from '../group-types';
 import type { StageContract, FanOutContract, JoinMergeContract } from '../contract-types';
 import type { GraphPipeline } from './graph-pipeline-types';
 
-export interface PipelineStage {
+export interface PipelineStage extends StageExecutionConfig {
   /** Stable stage identifier, unique within the template */
-  stageId?: string;
-  /** Which agent group to run at this stage */
-  groupId: string;
+  stageId: string;
   /** Automatically dispatch this stage when the previous stage completes? */
   autoTrigger: boolean;
   /** What outcome from the previous stage triggers this stage (default: 'approved') */
@@ -33,6 +31,8 @@ export interface PipelineStage {
   fanOutContract?: FanOutContract;
   /** Join merge contract — only meaningful when stageType === 'join' (V4.4) */
   joinMergeContract?: JoinMergeContract;
+  /** @deprecated Internal compatibility alias; use `stageId`. */
+  groupId?: string;
 }
 
 /**
@@ -50,14 +50,14 @@ export interface TemplateDefinition {
   kind: 'template';
   title: string;
   description: string;
-  /** Groups defined within this template, keyed by groupId */
-  groups: Record<string, Omit<GroupDefinition, 'id' | 'templateId' | 'defaultModel'>>;
   /** Ordered pipeline stages — defines execution order */
-  pipeline: PipelineStage[];
+  pipeline?: PipelineStage[];
   /** Explicit graph definition (alternative to pipeline[], mutually exclusive; takes priority) */
   graphPipeline?: GraphPipeline;
   /** Default model for all groups in this template */
   defaultModel?: string;
+  /** @deprecated Legacy template shape accepted only during load-time normalization */
+  groups?: Record<string, Omit<StageExecutionConfig, 'defaultModel'>>;
 }
 
 // Re-export for backward compat

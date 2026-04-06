@@ -26,14 +26,7 @@ export type ScheduledAction =
   | {
       kind: 'dispatch-pipeline';
       templateId: string;
-      workspace: string;
-      prompt: string;
-      projectId?: string;
-      model?: string;
-    }
-  | {
-      kind: 'dispatch-group';
-      groupId: string;
+      stageId?: string;
       workspace: string;
       prompt: string;
       projectId?: string;

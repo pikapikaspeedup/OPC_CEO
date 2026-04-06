@@ -67,7 +67,7 @@ interface JobFormState {
   actionWorkspace: string;
   actionPrompt: string;
   actionTemplateId: string;
-  actionGroupId: string;
+  actionStageId: string;
   actionProjectId: string;
   enabled: boolean;
   departmentWorkspaceUri: string;
@@ -85,7 +85,7 @@ const emptyForm: JobFormState = {
   actionWorkspace: '',
   actionPrompt: '',
   actionTemplateId: '',
-  actionGroupId: '',
+  actionStageId: '',
   actionProjectId: '',
   enabled: true,
   departmentWorkspaceUri: '',
@@ -180,7 +180,7 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
       actionWorkspace: (action.workspace as string) || '',
       actionPrompt: (action.prompt as string) || '',
       actionTemplateId: (action.templateId as string) || '',
-      actionGroupId: (action.groupId as string) || '',
+      actionStageId: (action.stageId as string) || '',
       actionProjectId: (action.projectId as string) || '',
       enabled: job.enabled ?? true,
       departmentWorkspaceUri: job.departmentWorkspaceUri || '',
@@ -203,7 +203,7 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
       if (form.actionWorkspace) action.workspace = form.actionWorkspace;
       if (form.actionPrompt) action.prompt = form.actionPrompt;
       if (form.actionKind === 'dispatch-pipeline' && form.actionTemplateId) action.templateId = form.actionTemplateId;
-      if (form.actionKind === 'dispatch-group' && form.actionGroupId) action.groupId = form.actionGroupId;
+      if (form.actionKind === 'dispatch-pipeline' && form.actionStageId) action.stageId = form.actionStageId;
       if (form.actionProjectId) action.projectId = form.actionProjectId;
 
       const payload: Record<string, unknown> = {
@@ -453,7 +453,6 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
               <label className="text-xs text-white/60 mb-1 block">Action Kind</label>
               <NativeSelect value={form.actionKind} onChange={(e) => setForm(f => ({ ...f, actionKind: e.target.value ?? 'dispatch-pipeline' }))}>
                 <option value="dispatch-pipeline">Dispatch Pipeline</option>
-                <option value="dispatch-group">Dispatch Group</option>
                 <option value="health-check">Health Check</option>
                 <option value="create-project">Create Ad-hoc Project</option>
               </NativeSelect>
@@ -481,23 +480,23 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
             )}
 
             {form.actionKind === 'dispatch-pipeline' && (
-              <div>
-                <label className="text-xs text-white/60 mb-1 block">Template ID</label>
-                <Input
-                  value={form.actionTemplateId}
-                  onChange={(e) => setForm(f => ({ ...f, actionTemplateId: e.target.value }))}
-                />
-              </div>
-            )}
-
-            {form.actionKind === 'dispatch-group' && (
-              <div>
-                <label className="text-xs text-white/60 mb-1 block">Group ID</label>
-                <Input
-                  value={form.actionGroupId}
-                  onChange={(e) => setForm(f => ({ ...f, actionGroupId: e.target.value }))}
-                />
-              </div>
+              <>
+                <div>
+                  <label className="text-xs text-white/60 mb-1 block">Template ID</label>
+                  <Input
+                    value={form.actionTemplateId}
+                    onChange={(e) => setForm(f => ({ ...f, actionTemplateId: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-white/60 mb-1 block">Stage ID (optional)</label>
+                  <Input
+                    value={form.actionStageId}
+                    onChange={(e) => setForm(f => ({ ...f, actionStageId: e.target.value }))}
+                    placeholder="Leave empty to dispatch entry stage"
+                  />
+                </div>
+              </>
             )}
 
             <div>

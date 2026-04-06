@@ -49,9 +49,9 @@ function makeRequest(body?: any): Request {
 const mockDraft = {
   graphPipeline: {
     nodes: [
-      { id: 'dev', kind: 'stage', groupId: 'dev', label: 'Development' },
-      { id: 'review', kind: 'gate', groupId: 'review', label: 'Code Review' },
-      { id: 'deploy', kind: 'stage', groupId: 'dev', label: 'Deploy' },
+      { id: 'dev', kind: 'stage', title: 'Development', executionMode: 'review-loop', roles: [] },
+      { id: 'review', kind: 'gate', title: 'Code Review', executionMode: 'orchestration', roles: [] },
+      { id: 'deploy', kind: 'stage', title: 'Deploy', executionMode: 'review-loop', roles: [] },
     ],
     edges: [
       { from: 'dev', to: 'review' },
@@ -87,7 +87,7 @@ describe('POST /api/pipelines/generate/[draftId]/confirm', () => {
     expect(json.validationErrors).toContain('nodes must not be empty');
   });
 
-  it('saves template and deduplicates groups', async () => {
+  it('saves template as inline graph without groups', async () => {
     const fs = (await import('fs')).default;
     mockGetDraft.mockReturnValue(mockDraft);
     mockConfirmDraft.mockResolvedValue({
@@ -101,17 +101,12 @@ describe('POST /api/pipelines/generate/[draftId]/confirm', () => {
     expect(json.saved).toBe(true);
     expect(json.templateId).toBe('ai-dev-pipeline');
 
-    // Verify the saved template has deduplicated groups
     const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
     const saved = JSON.parse(writeCall[1] as string);
-    // 'dev' groupId appears twice in nodes, but should be deduplicated
-    expect(Object.keys(saved.groups)).toHaveLength(2); // 'dev' and 'review'
-    expect(saved.groups.dev).toBeDefined();
-    expect(saved.groups.review).toBeDefined();
-    // Each group should have a default worker role
-    expect(saved.groups.dev.roles).toHaveLength(1);
-    expect(saved.groups.dev.roles[0].id).toBe('worker');
-    expect(saved.groups.review.roles).toHaveLength(1);
+    expect(saved.groups).toBeUndefined();
+    expect(saved.graphPipeline.nodes).toHaveLength(3);
+    expect(saved.graphPipeline.nodes[0].title).toBe('Development');
+    expect(saved.graphPipeline.nodes[1].executionMode).toBe('orchestration');
   });
 
   it('builds correct template shape', async () => {

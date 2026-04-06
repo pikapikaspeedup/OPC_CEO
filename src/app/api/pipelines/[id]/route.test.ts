@@ -42,9 +42,9 @@ import { GET, PUT, DELETE, POST } from '@/app/api/pipelines/[id]/route';
 
 // ---- Helpers ----
 
-const baseGroup = {
+const baseStage = {
   title: 'Dev',
-  description: 'dev group',
+  description: 'dev stage',
   executionMode: 'review-loop' as const,
   roles: [{ id: 'worker', workflow: '/dev-worker', timeoutMs: 600000, autoApprove: false }],
 };
@@ -55,8 +55,7 @@ function makeTemplate(overrides?: Partial<TemplateDefinition>): TemplateDefiniti
     kind: 'template',
     title: 'Test Template',
     description: 'A test template',
-    groups: { dev: baseGroup },
-    pipeline: [{ groupId: 'dev' }],
+    pipeline: [{ stageId: 'dev', autoTrigger: false, ...baseStage }],
     ...overrides,
   };
 }
@@ -94,7 +93,7 @@ describe('GET /api/pipelines/[id]', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.id).toBe('test-tmpl');
-    expect(json.groups.dev.roles[0].workflowContent).toBe('content-of-/dev-worker');
+    expect(json.stages.dev.roles[0].workflowContent).toBe('content-of-/dev-worker');
   });
 });
 
@@ -136,7 +135,7 @@ describe('PUT /api/pipelines/[id]', () => {
     vi.mocked(validateGraphPipeline).mockReturnValue(['edge to unknown node']);
     mockGetTemplate.mockReturnValue(makeTemplate({
       graphPipeline: {
-        nodes: [{ id: 'a', kind: 'stage', groupId: 'dev' }],
+        nodes: [{ id: 'a', kind: 'stage', executionMode: 'review-loop', roles: [] }],
         edges: [{ from: 'a', to: 'missing' }],
       },
     }));

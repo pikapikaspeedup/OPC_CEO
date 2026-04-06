@@ -28,8 +28,8 @@ export interface TaskExecutionOptions {
 
   /** Run ID for tracking. */
   runId?: string
-  /** Group ID for tracking. */
-  groupId?: string
+  /** Stage ID for tracking. */
+  stageId?: string
   /** Role ID for tracking. */
   roleId?: string
   /** Parent conversation ID (for grouping in IDE). */

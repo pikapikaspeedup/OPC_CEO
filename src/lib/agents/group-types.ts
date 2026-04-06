@@ -17,56 +17,79 @@ export type ReviewOutcome = 'approved' | 'rejected' | 'revise-exhausted';
 // V2.5: Execution Mode & Source Contract
 // ---------------------------------------------------------------------------
 
-export type GroupExecutionMode =
+export type StageExecutionMode =
   | 'legacy-single'
   | 'review-loop'
   | 'delivery-single-pass'
   | 'orchestration';
 
-export interface GroupSourceContract {
-  /** Which upstream group IDs this group accepts as source */
-  acceptedSourceGroupIds: string[];
+export interface StageSourceContract {
+  /** Which upstream stage IDs this stage accepts as source */
+  acceptedSourceStageIds: string[];
   /** Required review outcome on the source run (default: ['approved']) */
   requireReviewOutcome?: ReviewOutcome[];
   /** Auto-include the source run's own sourceRunIds (transitive upstream) */
   autoIncludeUpstreamSourceRuns?: boolean;
   /** Auto-build inputArtifacts from all resolved source runs' outputArtifacts */
   autoBuildInputArtifactsFromSources?: boolean;
+  /** @deprecated Legacy compat field loaded from pre-migration templates */
+  acceptedSourceGroupIds?: string[];
 }
 
-export interface GroupRoleDefinition {
+export interface StageRoleDefinition {
   id: string;
   workflow: string;
   timeoutMs: number;
   autoApprove: boolean;
+  maxRetries?: number;
+  staleThresholdMs?: number;
 }
 
-export interface GroupCapabilities {
-  /** Group accepts TaskEnvelope as structured input */
+export interface StageCapabilities {
+  /** Stage accepts TaskEnvelope as structured input */
   acceptsEnvelope?: boolean;
-  /** Group emits ArtifactManifest on completion */
+  /** Stage emits ArtifactManifest on completion */
   emitsManifest?: boolean;
-  /** Group requires inputArtifacts from a source run */
+  /** Stage requires inputArtifacts from a source run */
   requiresInputArtifacts?: boolean;
-  /** Group is advisory (produces documents, not code) */
+  /** Stage is advisory (produces documents, not code) */
   advisory?: boolean;
-  /** Group is a delivery team (produces code + delivery packet) */
+  /** Stage is a delivery team (produces code + delivery packet) */
   delivery?: boolean;
 }
 
-export interface GroupDefinition {
-  id: string;
-  title: string;
-  description: string;
-  templateId: string;
-  executionMode: GroupExecutionMode;
-  capabilities?: GroupCapabilities;
-  sourceContract?: GroupSourceContract;
-  roles: GroupRoleDefinition[];
+export interface StageExecutionConfig {
+  title?: string;
+  description?: string;
+  executionMode: StageExecutionMode;
+  capabilities?: StageCapabilities;
+  sourceContract?: StageSourceContract;
+  roles: StageRoleDefinition[];
   reviewPolicyId?: string;
-  /** Group recommended default model */
+  /** Stage recommended default model */
   defaultModel?: string;
 }
+
+/**
+ * Resolved stage definition used by the runtime after template normalization.
+ * `id` is the canonical stageId. `groupId` is kept only as an internal
+ * compatibility alias for legacy code paths and should equal `id`.
+ */
+export interface StageDefinition extends StageExecutionConfig {
+  id: string;
+  templateId: string;
+  label?: string;
+  nodeKind?: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end' | 'subgraph-ref';
+  /** @deprecated Internal compatibility alias; use `id`. */
+  groupId?: string;
+}
+
+// Backward-compatible aliases used by still-migrating internals.
+export type GroupExecutionMode = StageExecutionMode;
+export type GroupSourceContract = StageSourceContract;
+export type GroupRoleDefinition = StageRoleDefinition;
+export type GroupCapabilities = StageCapabilities;
+export type GroupDefinition = StageDefinition;
 
 // ---------------------------------------------------------------------------
 // Run Status & Result
@@ -222,7 +245,7 @@ export interface RunLiveState {
 export interface AgentRunState {
   runId: string;
   projectId?: string;
-  groupId: string;
+  stageId: string;
   workspace: string;
   parentConversationId?: string;
   childConversationId?: string;

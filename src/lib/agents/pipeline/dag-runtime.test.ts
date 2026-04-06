@@ -3,47 +3,41 @@ import { canActivateNode, getDownstreamNodes, getActivatableNodes, filterSources
 import { compilePipelineToIR, clearIRCache } from './dag-compiler';
 import type { TemplateDefinition } from './pipeline-types';
 import type { ProjectPipelineState, PipelineStageProgress, PipelineStageStatus } from '../project-types';
-import type { DagNode } from './dag-ir-types';
 import type { DagIR } from './dag-ir-types';
 
-// Mock run-registry and group-registry
+// Mock run-registry
 vi.mock('../run-registry', () => ({
   getRun: vi.fn((runId: string) => {
-    if (runId === 'run-approved') return { runId: 'run-approved', reviewOutcome: 'approved', groupId: 'g1' };
-    if (runId === 'run-rejected') return { runId: 'run-rejected', reviewOutcome: 'rejected', groupId: 'g1' };
-    if (runId === 'run-none') return { runId: 'run-none', groupId: 'g1' };
-    if (runId === 'run-g2') return { runId: 'run-g2', groupId: 'g2' };
+    if (runId === 'run-approved') return { runId: 'run-approved', reviewOutcome: 'approved', stageId: 'g1' };
+    if (runId === 'run-rejected') return { runId: 'run-rejected', reviewOutcome: 'rejected', stageId: 'g1' };
+    if (runId === 'run-none') return { runId: 'run-none', stageId: 'g1' };
+    if (runId === 'run-g2') return { runId: 'run-g2', stageId: 'g2' };
     return null;
-  }),
-}));
-
-vi.mock('../group-registry', () => ({
-  getGroup: vi.fn((groupId: string) => {
-    if (groupId === 'filtered-group') {
-      return { id: 'filtered-group', sourceContract: { acceptedSourceGroupIds: ['g1'] } };
-    }
-    return { id: groupId };
   }),
 }));
 
 const baseGroup = { title: 'G', description: 'g', executionMode: 'review-loop' as const, roles: [] };
 
 function makeTemplate(overrides: Partial<TemplateDefinition> = {}): TemplateDefinition {
+  const pipeline = (overrides.pipeline ?? []).map((stage: any) => ({
+    executionMode: stage.executionMode ?? 'review-loop',
+    roles: stage.roles ?? [],
+    ...stage,
+  }));
   return {
     id: 'test',
     kind: 'template',
     title: 'Test',
     description: 'test',
     groups: { a: baseGroup, b: baseGroup, c: baseGroup },
-    pipeline: [],
     ...overrides,
+    pipeline,
   };
 }
 
 function makeStageProgress(stageId: string, status: PipelineStageStatus, runId?: string): PipelineStageProgress {
   return {
     stageId,
-    groupId: stageId,
     stageIndex: 0,
     status,
     attempts: 0,
@@ -285,14 +279,18 @@ describe('dag-runtime', () => {
   // ── filterSourcesByNode ─────────────────────────────────────────────
 
   describe('filterSourcesByNode', () => {
-    it('filters runs by group sourceContract', () => {
+    it('filters runs by stage sourceContract', () => {
       const ir = compileTemplate({
         pipeline: [
-          { stageId: 'target', groupId: 'filtered-group', autoTrigger: false },
+          {
+            stageId: 'target',
+            autoTrigger: false,
+            sourceContract: { acceptedSourceStageIds: ['g1'] },
+          },
         ],
       });
       const result = filterSourcesByNode(ir, 'target', ['run-approved', 'run-g2']);
-      // filtered-group accepts g1 only; run-approved is g1, run-g2 is g2
+      // target accepts g1 only; run-approved is g1, run-g2 is g2
       expect(result).toEqual(['run-approved']);
     });
 

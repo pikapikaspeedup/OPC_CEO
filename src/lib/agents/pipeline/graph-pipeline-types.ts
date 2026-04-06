@@ -8,6 +8,7 @@
 import type { StageContract, FanOutContract, JoinMergeContract } from '../contract-types';
 import type { FlowCondition } from './dag-ir-types';
 import type { SubgraphRefConfig } from '../subgraph-types';
+import type { StageExecutionConfig } from '../group-types';
 
 // ── Graph Pipeline ──────────────────────────────────────────────────────────
 
@@ -20,13 +21,11 @@ export interface GraphPipeline {
 
 // ── Graph Node ──────────────────────────────────────────────────────────────
 
-export interface GraphPipelineNode {
+export interface GraphPipelineNode extends StageExecutionConfig {
   /** Globally unique node ID */
   id: string;
   /** Node category */
   kind: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end' | 'subgraph-ref';
-  /** Corresponding agent group ID */
-  groupId: string;
   /** Display label */
   label?: string;
   /** Auto-trigger (default true) */
@@ -85,6 +84,8 @@ export interface GraphPipelineNode {
   };
   /** Subgraph reference configuration (only when kind === 'subgraph-ref') */
   subgraphRef?: SubgraphRefConfig;
+  /** @deprecated Internal compatibility alias; use `id`. */
+  groupId?: string;
 }
 
 // ── Graph Edge ──────────────────────────────────────────────────────────────

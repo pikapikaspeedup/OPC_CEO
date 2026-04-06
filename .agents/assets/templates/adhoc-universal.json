@@ -3,20 +3,28 @@
   "kind": "template",
   "title": "Ad-hoc Universal",
   "description": "单 Agent 直接执行临时任务的万能模板，Ad-hoc 项目专用",
-
-  "groups": {
-    "adhoc-general": {
+  "pipeline": [
+    {
+      "stageId": "adhoc-general",
+      "autoTrigger": false,
       "title": "Ad-hoc Executor",
       "description": "单 Agent 直接执行临时任务",
       "executionMode": "legacy-single",
-      "capabilities": { "acceptsEnvelope": false, "emitsManifest": false, "advisory": false },
       "roles": [
-        { "id": "executor", "workflow": "/dev-worker", "timeoutMs": 1200000, "autoApprove": true }
-      ]
+        {
+          "id": "executor",
+          "workflow": "/dev-worker",
+          "timeoutMs": 1200000,
+          "autoApprove": true
+        }
+      ],
+      "capabilities": {
+        "acceptsEnvelope": false,
+        "emitsManifest": false,
+        "advisory": false
+      },
+      "defaultModel": "MODEL_PLACEHOLDER_M26"
     }
-  },
-
-  "pipeline": [],
-
+  ],
   "defaultModel": "MODEL_PLACEHOLDER_M26"
 }

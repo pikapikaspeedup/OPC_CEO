@@ -155,7 +155,6 @@ export type PipelineStageStatusFE =
 
 export interface PipelineStageProgressFE {
   stageId: string;
-  groupId: string;
   stageIndex: number;
   runId?: string;
   status: PipelineStageStatusFE;
@@ -164,6 +163,7 @@ export interface PipelineStageProgressFE {
   lastError?: string;
   startedAt?: string;
   completedAt?: string;
+  title?: string;
   /** V5.2: node kind for control-flow rendering */
   nodeKind?: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end';
   /** V5.2: gate approval state */
@@ -201,17 +201,21 @@ export interface ProjectPipelineStateFE {
 // Template Summary (lightweight frontend-only projection)
 // ---------------------------------------------------------------------------
 
-export interface TemplateGroupSummary {
+export interface TemplateStageSummaryFE {
   title: string;
   description?: string;
   roleIds?: string[];
+  executionMode?: string;
 }
+
+/** @deprecated Use TemplateStageSummaryFE directly. */
+export type TemplateGroupSummary = TemplateStageSummaryFE;
 
 export interface TemplateSummaryFE {
   id: string;
   title: string;
-  groups: Record<string, TemplateGroupSummary>;
-  pipeline: Array<{ stageId?: string; groupId: string; stageType?: string }>;
+  stages: Record<string, TemplateStageSummaryFE>;
+  pipeline: Array<{ stageId: string; title?: string; stageType?: string }>;
   /** V5.1: template format — graphPipeline templates always have a DAG */
   format?: 'pipeline' | 'graphPipeline';
 }
@@ -228,25 +232,27 @@ export interface TemplateRoleDetailFE {
   workflowContent?: string;
 }
 
-export interface TemplateGroupDetailFE {
-  title: string;
-  description: string;
+export interface TemplateStageConfigFE {
+  title?: string;
+  description?: string;
   executionMode?: string;
   roles: TemplateRoleDetailFE[];
   reviewPolicyId?: string;
   capabilities?: Record<string, boolean>;
   sourceContract?: {
-    acceptedSourceGroupIds?: string[];
+    acceptedSourceStageIds?: string[];
     requireReviewOutcome?: string[];
     autoBuildInputArtifactsFromSources?: boolean;
     autoIncludeUpstreamSourceRuns?: boolean;
   };
 }
 
-export interface TemplateNodeFE {
+/** @deprecated Use TemplateStageConfigFE. */
+export type TemplateGroupDetailFE = TemplateStageConfigFE;
+
+export interface TemplateNodeFE extends TemplateStageConfigFE {
   id: string;
   kind: 'stage' | 'fan-out' | 'join' | 'gate' | 'switch' | 'loop-start' | 'loop-end' | 'subgraph-ref';
-  groupId: string;
   label?: string;
   autoTrigger?: boolean;
   triggerOn?: 'approved' | 'completed' | 'any';
@@ -254,6 +260,8 @@ export interface TemplateNodeFE {
   fanOut?: { workPackagesPath: string; perBranchTemplateId: string; maxConcurrency?: number };
   join?: { sourceNodeId: string; policy?: 'all' };
   loop?: { maxIterations: number; pairedNodeId: string };
+  /** @deprecated Legacy compatibility alias */
+  groupId?: string;
 }
 
 export interface TemplateEdgeFE {
@@ -262,9 +270,8 @@ export interface TemplateEdgeFE {
   condition?: string;
 }
 
-export interface TemplatePipelineStageFE {
-  stageId?: string;
-  groupId: string;
+export type TemplatePipelineStageFE = TemplateStageConfigFE & {
+  stageId: string;
   autoTrigger: boolean;
   triggerOn?: string;
   stageType?: string;
@@ -272,14 +279,16 @@ export interface TemplatePipelineStageFE {
   fanOutSource?: { workPackagesPath: string; perBranchTemplateId: string; maxConcurrency?: number };
   joinFrom?: string;
   joinPolicy?: string;
-}
+  /** @deprecated Legacy compatibility alias */
+  groupId?: string;
+};
 
 export interface TemplateDetailFE {
   id: string;
   kind: 'template';
   title: string;
   description: string;
-  groups: Record<string, TemplateGroupDetailFE>;
+  stages: Record<string, TemplateStageConfigFE>;
   pipeline?: TemplatePipelineStageFE[];
   graphPipeline?: { nodes: TemplateNodeFE[]; edges: TemplateEdgeFE[] };
   defaultModel?: string;
@@ -306,11 +315,11 @@ export interface ResumeProjectResponse {
   actualAction: ResumeAction;
   stageId: string;
   stageIndex: number;
-  groupId: string;
   runId: string;
   branchIndex?: number;
   activeConversationId?: string;
   message?: string;
+  stageTitle?: string;
 }
 
 /** Phase 6: CEO AI decision record (frontend representation) */
@@ -428,7 +437,7 @@ export interface RoleProgressFE {
 export interface AgentRun {
   runId: string;
   projectId?: string;
-  groupId: string;
+  stageId: string;
   workspace: string;
   parentConversationId?: string;
   childConversationId?: string;

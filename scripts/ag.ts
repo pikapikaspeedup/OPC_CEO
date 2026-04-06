@@ -11,12 +11,12 @@
  * Commands:
  *   projects                       List all projects
  *   project <id>                   Show project detail + pipeline status
- *   runs [--status=running]        List runs (optionally filter by status)
+ *   runs [--status=running]        List runs (optionally filter by status/stage)
  *   run <runId>                    Show run detail
- *   dispatch <groupId>             Dispatch a new run
+ *   dispatch <templateId>          Dispatch a new run
+ *     --stage <stageId>            Optional stage ID (omit for entry stage)
  *     --project <projectId>        Attach to project
  *     --source <runId>             Source run ID (repeatable)
- *     --template <templateId>      Template ID
  *     --prompt "..."               Goal / prompt
  *   intervene <runId> <action>     Intervene on a run (retry|restart_role|nudge|cancel)
  *     --prompt "..."               Optional feedback
@@ -70,6 +70,15 @@ function table(rows: Record<string, any>[], columns?: string[]) {
 
 function shortId(id: string) { return id?.slice(0, 8) || '—'; }
 
+function firstFlag(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function describeStage(title?: string, stageId?: string): string {
+  if (title && stageId && title !== stageId) return `${title} (${stageId})`;
+  return title || stageId || '—';
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────
 
 async function cmdProjects() {
@@ -100,7 +109,7 @@ async function cmdProject(projectId: string) {
     console.log('Pipeline Stages:');
     for (const s of stages) {
       const icon = icons[s.status] || '❓';
-      console.log(`  ${icon} Stage ${s.stageIndex}: ${s.groupId}  [${s.status}]  attempts=${s.attempts}  run=${shortId(s.runId || '')}`);
+      console.log(`  ${icon} Stage ${s.stageIndex}: ${describeStage(s.title, s.stageId)}  [${s.status}]  attempts=${s.attempts}  run=${shortId(s.runId || '')}`);
     }
   }
 
@@ -109,13 +118,20 @@ async function cmdProject(projectId: string) {
   }
 }
 
-async function cmdRuns(statusFilter?: string) {
-  const data = await api('GET', `/api/agent-runs${statusFilter ? `?status=${statusFilter}` : ''}`);
+async function cmdRuns(filters: { status?: string; stageId?: string }) {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.stageId) params.set('stageId', filters.stageId);
+  const query = params.toString();
+  const data = await api('GET', `/api/agent-runs${query ? `?${query}` : ''}`);
   const runs = Array.isArray(data) ? data : data.runs || [];
-  console.log(`\n🏃 Runs (${runs.length}${statusFilter ? ` — filtered: ${statusFilter}` : ''})\n`);
+  const filterSummary = [filters.status ? `status=${filters.status}` : '', filters.stageId ? `stage=${filters.stageId}` : '']
+    .filter(Boolean)
+    .join(', ');
+  console.log(`\n🏃 Runs (${runs.length}${filterSummary ? ` — filtered: ${filterSummary}` : ''})\n`);
   table(runs.slice(0, 30).map((r: any) => ({
     id: shortId(r.runId),
-    group: r.groupId,
+    stage: r.stageId,
     status: r.status,
     round: r.currentRound || '—',
     review: r.reviewOutcome || '—',
@@ -129,7 +145,7 @@ async function cmdRun(runId: string) {
   if (data.error) die(data.error);
 
   console.log(`\n🔍 Run ${shortId(data.runId)}`);
-  console.log(`   Group: ${data.groupId}  |  Status: ${data.status}  |  Round: ${data.currentRound || '—'}`);
+  console.log(`   Stage: ${data.stageId || '—'}  |  Status: ${data.status}  |  Round: ${data.currentRound || '—'}`);
   console.log(`   Review: ${data.reviewOutcome || '—'}  |  Template: ${data.templateId || '—'}`);
   if (data.lastError) console.log(`   ⚠️  Error: ${data.lastError}`);
   if (data.result?.summary) console.log(`   📝 ${data.result.summary.slice(0, 150)}`);
@@ -148,19 +164,23 @@ async function cmdRun(runId: string) {
   }
 }
 
-async function cmdDispatch(groupId: string, args: Record<string, string | string[]>) {
+async function cmdDispatch(templateId: string, args: Record<string, string | string[]>) {
+  if (args.template) {
+    die('`ag dispatch` no longer accepts `--template`. Use `ag dispatch <templateId> [--stage <stageId>]`.');
+  }
+
   const body: any = {
-    groupId,
-    workspace: args.workspace || `file://${process.cwd()}`,
+    templateId,
+    workspace: firstFlag(args.workspace) || `file://${process.cwd()}`,
   };
-  if (args.project) body.projectId = args.project;
-  if (args.template) body.templateId = args.template;
-  if (args.prompt) body.prompt = args.prompt;
+  if (args.stage) body.stageId = firstFlag(args.stage);
+  if (args.project) body.projectId = firstFlag(args.project);
+  if (args.prompt) body.prompt = firstFlag(args.prompt);
   if (args.source) {
     body.sourceRunIds = Array.isArray(args.source) ? args.source : [args.source];
   }
 
-  console.log(`\n🚀 Dispatching ${groupId}...`);
+  console.log(`\n🚀 Dispatching template ${templateId}${body.stageId ? ` @ ${body.stageId}` : ' (entry stage)'}...`);
   const data = await api('POST', '/api/agent-runs', body);
   if (data.error) die(data.error);
   console.log(`   ✅ Run created: ${data.runId}`);
@@ -240,11 +260,12 @@ Commands:
   projects                       List all projects
   project <id>                   Show project detail + pipeline
   runs [--status=running]        List runs
+    --stage <stageId>              Filter by stage
   run <runId>                    Show run detail
-  dispatch <groupId> [options]   Dispatch a new run
+  dispatch <templateId> [options] Dispatch a new run
+    --stage <stageId>              Optional stage ID (omit for entry stage)
     --project <id>                 Attach to project
     --source <runId>               Source run (repeatable)
-    --template <id>                Template ID
     --prompt "..."                 Goal
   intervene <runId> <action>     Intervene (retry|restart_role|nudge|cancel|evaluate)
     --prompt "..."                 Feedback
@@ -262,9 +283,9 @@ Environment:
   switch (cmd) {
     case 'projects': return cmdProjects();
     case 'project':  return cmdProject(positional[1] || die('Usage: ag project <projectId>'));
-    case 'runs':     return cmdRuns(flags.status as string);
+    case 'runs':     return cmdRuns({ status: firstFlag(flags.status), stageId: firstFlag(flags.stage) });
     case 'run':      return cmdRun(positional[1] || die('Usage: ag run <runId>'));
-    case 'dispatch': return cmdDispatch(positional[1] || die('Usage: ag dispatch <groupId>'), flags);
+    case 'dispatch': return cmdDispatch(positional[1] || die('Usage: ag dispatch <templateId> [--stage <stageId>]'), flags);
     case 'intervene': return cmdIntervene(
       positional[1] || die('Usage: ag intervene <runId> <action>'),
       (positional[2] as string) || die('Usage: ag intervene <runId> <action>'),
