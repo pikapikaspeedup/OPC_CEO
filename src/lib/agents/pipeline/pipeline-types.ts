@@ -1,5 +1,5 @@
-import type { GroupDefinition } from './group-types';
-import type { StageContract, FanOutContract, JoinMergeContract } from './contract-types';
+import type { GroupDefinition } from '../group-types';
+import type { StageContract, FanOutContract, JoinMergeContract } from '../contract-types';
 import type { GraphPipeline } from './graph-pipeline-types';
 
 export interface PipelineStage {

@@ -1,5 +1,0 @@
-{
-  "templateId": "large-project-template",
-  "goal": "Build a tiny note-taking web app with note CRUD, local persistence, and a simple smoke test. Keep scope intentionally small for this dry-run.",
-  "runId": "157e1c47-250e-46b5-8e59-6ea32bbabf4a"
-}

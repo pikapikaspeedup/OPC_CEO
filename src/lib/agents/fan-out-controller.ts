@@ -6,9 +6,9 @@ import { AssetLoader } from './asset-loader';
 import { dispatchRun } from './group-runtime';
 import { emitProjectEvent, onProjectEvent, type ProjectEvent } from './project-events';
 import { getProject, listProjects, updateBranchProgress, updatePipelineStageByStageId, createProject, initializePipelineState, addRunToProject, trackStageDispatch } from './project-registry';
-import { resolveStageId } from './pipeline-graph';
-import { getOrCompileIR } from './dag-compiler';
-import { getDownstreamNodes, canActivateNode, filterSourcesByNode } from './dag-runtime';
+import { resolveStageId } from './pipeline/pipeline-graph';
+import { getOrCompileIR } from './pipeline/dag-compiler';
+import { getDownstreamNodes, canActivateNode, filterSourcesByNode } from './pipeline/dag-runtime';
 import { getRun } from './run-registry';
 
 const log = createLogger('FanOutController');

@@ -1,13 +1,13 @@
 import { createLogger } from '../logger';
 import { AssetLoader } from './asset-loader';
-import { resolveStageId } from './pipeline-graph';
+import { resolveStageId } from './pipeline/pipeline-graph';
 import { validateTemplateContracts } from './contract-validator';
-import { getOrCompileIR } from './dag-compiler';
-import { canActivateNode } from './dag-runtime';
+import { getOrCompileIR } from './pipeline/dag-compiler';
+import { canActivateNode } from './pipeline/dag-runtime';
 import { getProject, listProjects } from './project-registry';
 import { getRun } from './run-registry';
 import type { ProjectDefinition, PipelineStageProgress, BranchProgress } from './project-types';
-import type { PipelineStage } from './pipeline-types';
+import type { PipelineStage } from './pipeline/pipeline-types';
 
 const log = createLogger('ProjectDiagnostics');
 

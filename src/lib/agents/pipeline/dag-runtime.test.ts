@@ -2,12 +2,12 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { canActivateNode, getDownstreamNodes, getActivatableNodes, filterSourcesByNode, evaluateSwitch, evaluateLoopEnd } from './dag-runtime';
 import { compilePipelineToIR, clearIRCache } from './dag-compiler';
 import type { TemplateDefinition } from './pipeline-types';
-import type { ProjectPipelineState, PipelineStageProgress, PipelineStageStatus } from './project-types';
+import type { ProjectPipelineState, PipelineStageProgress, PipelineStageStatus } from '../project-types';
 import type { DagNode } from './dag-ir-types';
 import type { DagIR } from './dag-ir-types';
 
 // Mock run-registry and group-registry
-vi.mock('./run-registry', () => ({
+vi.mock('../run-registry', () => ({
   getRun: vi.fn((runId: string) => {
     if (runId === 'run-approved') return { runId: 'run-approved', reviewOutcome: 'approved', groupId: 'g1' };
     if (runId === 'run-rejected') return { runId: 'run-rejected', reviewOutcome: 'rejected', groupId: 'g1' };
@@ -17,7 +17,7 @@ vi.mock('./run-registry', () => ({
   }),
 }));
 
-vi.mock('./group-registry', () => ({
+vi.mock('../group-registry', () => ({
   getGroup: vi.fn((groupId: string) => {
     if (groupId === 'filtered-group') {
       return { id: 'filtered-group', sourceContract: { acceptedSourceGroupIds: ['g1'] } };

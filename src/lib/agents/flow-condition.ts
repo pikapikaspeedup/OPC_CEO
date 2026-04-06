@@ -6,7 +6,7 @@
  * Only field extraction + literal comparison.
  */
 
-import type { FlowCondition } from './dag-ir-types';
+import type { FlowCondition } from './pipeline/dag-ir-types';
 
 // ---------------------------------------------------------------------------
 // Types

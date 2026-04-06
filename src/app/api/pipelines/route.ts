@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { listPipelines } from '@/lib/agents/pipeline-registry';
+import { listPipelines } from '@/lib/agents/pipeline/pipeline-registry';
 import type { TemplateSummaryFE } from '@/lib/types';
 
 export async function GET() {

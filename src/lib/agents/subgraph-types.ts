@@ -5,7 +5,7 @@
  * Node IDs are prefixed with the referencing node's ID to avoid collisions.
  */
 
-import type { GraphPipeline } from './graph-pipeline-types';
+import type { GraphPipeline } from './pipeline/graph-pipeline-types';
 import type { StageContract } from './contract-types';
 
 // ── Subgraph I/O Ports ──────────────────────────────────────────────────────

@@ -23,13 +23,13 @@ vi.mock('./group-registry', () => ({
   getGroup: vi.fn(() => ({ id: 'mock-group' })),
 }));
 
-vi.mock('./pipeline-graph', () => ({
+vi.mock('./pipeline/pipeline-graph', () => ({
   validateTemplatePipeline: vi.fn(() => []),
   resolveStageId: vi.fn((stage: any) => stage.stageId || stage.groupId),
 }));
 
 import { analyzeProject, buildProjectGraph } from './project-diagnostics';
-import { clearIRCache } from './dag-compiler';
+import { clearIRCache } from './pipeline/dag-compiler';
 import { AssetLoader } from './asset-loader';
 import { getProject } from './project-registry';
 import { getRun } from './run-registry';

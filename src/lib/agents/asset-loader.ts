@@ -3,13 +3,13 @@ import path from 'path';
 import { createLogger } from '../logger';
 import type { GroupAsset, ReviewPolicyAsset } from './asset-types';
 import type { GroupDefinition } from './group-types';
-import type { TemplateDefinition } from './pipeline-types';
+import type { TemplateDefinition } from './pipeline/pipeline-types';
 import type { SubgraphDefinition } from './subgraph-types';
 import { GLOBAL_ASSETS_DIR } from './gateway-home';
-import { validateTemplatePipeline } from './pipeline-graph';
+import { validateTemplatePipeline } from './pipeline/pipeline-graph';
 import { validateTemplateContracts } from './contract-validator';
-import { getOrCompileIR, clearIRCache } from './dag-compiler';
-import { validateGraphPipeline } from './graph-compiler';
+import { getOrCompileIR, clearIRCache } from './pipeline/dag-compiler';
+import { validateGraphPipeline } from './pipeline/graph-compiler';
 
 const log = createLogger('AssetLoader');
 

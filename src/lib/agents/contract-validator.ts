@@ -1,4 +1,4 @@
-import type { TemplateDefinition, PipelineStage } from './pipeline-types';
+import type { TemplateDefinition, PipelineStage } from './pipeline/pipeline-types';
 import type {
   ArtifactExpectation,
   ArtifactPromise,
@@ -6,7 +6,7 @@ import type {
   ContractError,
   ContractWarning,
 } from './contract-types';
-import { resolveStageId } from './pipeline-graph';
+import { resolveStageId } from './pipeline/pipeline-graph';
 
 /**
  * Validate all typed contracts within a template definition.

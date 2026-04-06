@@ -1,8 +1,8 @@
-import { createLogger } from '../logger';
-import { AssetLoader } from './asset-loader';
-import { getGroup } from './group-registry';
-import { getRun } from './run-registry';
-import type { ProjectPipelineState } from './project-types';
+import { createLogger } from '../../logger';
+import { AssetLoader } from '../asset-loader';
+import { getGroup } from '../group-registry';
+import { getRun } from '../run-registry';
+import type { ProjectPipelineState } from '../project-types';
 import { resolveStageId } from './pipeline-graph';
 import type { PipelineStage, TemplateDefinition } from './pipeline-types';
 import { getOrCompileIR } from './dag-compiler';

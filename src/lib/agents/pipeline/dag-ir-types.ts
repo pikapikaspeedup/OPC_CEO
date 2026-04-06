@@ -6,8 +6,8 @@
  * only operates on DagIR — there is no second runner.
  */
 
-import type { StageContract, FanOutContract, JoinMergeContract } from './contract-types';
-import type { SubgraphRefConfig } from './subgraph-types';
+import type { StageContract, FanOutContract, JoinMergeContract } from '../contract-types';
+import type { SubgraphRefConfig } from '../subgraph-types';
 
 // ── Node Types ──────────────────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import cronParser from 'cron-parser';
 import { createLogger } from '../logger';
 import { GATEWAY_HOME, SCHEDULED_JOBS_FILE } from './gateway-home';
 import { AssetLoader } from './asset-loader';
-import { resolveStageId } from './pipeline-graph';
+import { resolveStageId } from './pipeline/pipeline-graph';
 import type { ScheduledAction, ScheduledJob, SchedulerTriggerResult } from './scheduler-types';
 
 const log = createLogger('Scheduler');

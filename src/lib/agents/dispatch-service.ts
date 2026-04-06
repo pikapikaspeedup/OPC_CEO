@@ -13,8 +13,8 @@ import { dispatchRun } from './group-runtime';
 import { getGroup } from './group-registry';
 import { getRun } from './run-registry';
 import { AssetLoader } from './asset-loader';
-import { getDownstreamStages } from './pipeline-registry';
-import { resolveStageId } from './pipeline-graph';
+import { getDownstreamStages } from './pipeline/pipeline-registry';
+import { resolveStageId } from './pipeline/pipeline-graph';
 import {
   addRunToProject,
   initializePipelineState,

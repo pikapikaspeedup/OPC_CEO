@@ -76,7 +76,7 @@ import { compactCodingResult } from './result-parser';
 import { finalizeAdvisoryRun, finalizeDeliveryRun } from './finalization';
 import { checkWriteScopeConflicts } from "./scope-governor";
 import { getExecutor, resolveProvider } from '../providers';
-import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline-registry';
+import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline/pipeline-registry';
 
 const log = createLogger('Runtime');
 

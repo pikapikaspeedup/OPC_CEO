@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessGenerationRisks, hasCriticalRisk, type RiskAssessment } from './risk-assessor';
-import type { GraphPipeline } from './graph-pipeline-types';
+import type { GraphPipeline } from './pipeline/graph-pipeline-types';
 import type { GenerationContext } from './generation-context';
 
 function makeContext(groups: string[] = ['dev', 'review', 'deploy']): GenerationContext {

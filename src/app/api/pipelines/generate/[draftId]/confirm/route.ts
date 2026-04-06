@@ -5,7 +5,7 @@ import { confirmDraft, getDraft } from '@/lib/agents/pipeline-generator';
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
 import { GLOBAL_ASSETS_DIR } from '@/lib/agents/gateway-home';
 import { AssetLoader } from '@/lib/agents/asset-loader';
-import type { TemplateDefinition } from '@/lib/agents/pipeline-types';
+import type { TemplateDefinition } from '@/lib/agents/pipeline/pipeline-types';
 
 export const dynamic = 'force-dynamic';
 

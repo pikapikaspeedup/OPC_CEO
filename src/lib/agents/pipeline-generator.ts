@@ -7,12 +7,12 @@
  */
 
 import { randomUUID } from 'crypto';
-import type { GraphPipeline } from './graph-pipeline-types';
+import type { GraphPipeline } from './pipeline/graph-pipeline-types';
 import type { ContractError, ContractWarning } from './contract-types';
 import type { RiskAssessment } from './risk-assessor';
 import { assessGenerationRisks, hasCriticalRisk } from './risk-assessor';
 import { buildGenerationContext, type GenerationContext, type GroupSummary } from './generation-context';
-import type { TemplateDefinition } from './pipeline-types';
+import type { TemplateDefinition } from './pipeline/pipeline-types';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -229,7 +229,7 @@ export async function generatePipeline(
 
   // Validate
   // Dynamic import to avoid circular deps
-  const { validateGraphPipeline } = await import('./graph-compiler');
+  const { validateGraphPipeline } = await import('./pipeline/graph-compiler');
   const dagErrors = validateGraphPipeline(graphPipeline);
 
   // We build a minimal template to run contract validation
@@ -324,7 +324,7 @@ export async function confirmDraft(
   }
 
   // Re-validate DAG structure only (group availability was checked during generation)
-  const { validateGraphPipeline } = await import('./graph-compiler');
+  const { validateGraphPipeline } = await import('./pipeline/graph-compiler');
   const dagErrors = validateGraphPipeline(graph);
 
   if (dagErrors.length > 0) {

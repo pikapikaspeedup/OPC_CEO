@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateTemplateContracts } from './contract-validator';
-import type { TemplateDefinition } from './pipeline-types';
+import type { TemplateDefinition } from './pipeline/pipeline-types';
 import type { StageContract, FanOutContract, JoinMergeContract } from './contract-types';
 
 // ── Test helpers ────────────────────────────────────────────────────────────
@@ -496,7 +496,7 @@ describe('validateTemplateContracts', () => {
 
   describe('pipeline-graph integration', () => {
     it('validateTemplatePipeline surfaces contract errors', async () => {
-      const { validateTemplatePipeline } = await import('./pipeline-graph');
+      const { validateTemplatePipeline } = await import('./pipeline/pipeline-graph');
 
       const t = makeTemplate({
         pipeline: [
@@ -529,7 +529,7 @@ describe('validateTemplateContracts', () => {
     });
 
     it('validateTemplatePipeline passes when contracts match', async () => {
-      const { validateTemplatePipeline } = await import('./pipeline-graph');
+      const { validateTemplatePipeline } = await import('./pipeline/pipeline-graph');
 
       const t = makeTemplate({
         pipeline: [

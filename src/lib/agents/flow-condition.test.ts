@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateCondition, resolveFieldPath } from './flow-condition';
-import type { FlowCondition } from './dag-ir-types';
+import type { FlowCondition } from './pipeline/dag-ir-types';
 import type { ConditionContext } from './flow-condition';
 
 // ---------------------------------------------------------------------------

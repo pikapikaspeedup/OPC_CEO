@@ -6,7 +6,7 @@
  * to accept a draft.
  */
 
-import type { GraphPipeline } from './graph-pipeline-types';
+import type { GraphPipeline } from './pipeline/graph-pipeline-types';
 import type { GenerationContext, GroupSummary } from './generation-context';
 
 // ── Types ───────────────────────────────────────────────────────────────────

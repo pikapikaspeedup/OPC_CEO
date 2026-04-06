@@ -5,9 +5,9 @@
  * Both formats compile to the same DagIR; there is no second runtime.
  */
 
-import type { StageContract, FanOutContract, JoinMergeContract } from './contract-types';
+import type { StageContract, FanOutContract, JoinMergeContract } from '../contract-types';
 import type { FlowCondition } from './dag-ir-types';
-import type { SubgraphRefConfig } from './subgraph-types';
+import type { SubgraphRefConfig } from '../subgraph-types';
 
 // ── Graph Pipeline ──────────────────────────────────────────────────────────
 

@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateGraphPipeline, compileGraphPipelineToIR } from './graph-compiler';
-import type { GraphPipeline } from './graph-pipeline-types';
+import { validateGraphPipeline, compileGraphPipelineToIR } from './pipeline/graph-compiler';
+import type { GraphPipeline } from './pipeline/graph-pipeline-types';
 import type { SubgraphDefinition } from './subgraph-types';
 
 // ── Test Helpers ────────────────────────────────────────────────────────────

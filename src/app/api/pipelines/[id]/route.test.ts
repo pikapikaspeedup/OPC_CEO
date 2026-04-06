@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { TemplateDefinition } from '@/lib/agents/pipeline-types';
+import type { TemplateDefinition } from '@/lib/agents/pipeline/pipeline-types';
 
 // ---- Mocks (must be before imports) ----
 
@@ -21,11 +21,11 @@ vi.mock('@/lib/agents/gateway-home', () => ({
   GLOBAL_ASSETS_DIR: '/tmp/test-assets',
 }));
 
-vi.mock('@/lib/agents/graph-compiler', () => ({
+vi.mock('@/lib/agents/pipeline/graph-compiler', () => ({
   validateGraphPipeline: vi.fn(() => []),
 }));
 
-vi.mock('@/lib/agents/pipeline-graph', () => ({
+vi.mock('@/lib/agents/pipeline/pipeline-graph', () => ({
   validateTemplatePipeline: vi.fn(() => []),
 }));
 
@@ -132,7 +132,7 @@ describe('PUT /api/pipelines/[id]', () => {
   });
 
   it('returns 422 when validation fails', async () => {
-    const { validateGraphPipeline } = await import('@/lib/agents/graph-compiler');
+    const { validateGraphPipeline } = await import('@/lib/agents/pipeline/graph-compiler');
     vi.mocked(validateGraphPipeline).mockReturnValue(['edge to unknown node']);
     mockGetTemplate.mockReturnValue(makeTemplate({
       graphPipeline: {

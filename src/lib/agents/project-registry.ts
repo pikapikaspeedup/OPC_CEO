@@ -5,7 +5,7 @@ import type { BranchProgress, ProjectDefinition, ProjectPipelineState, PipelineS
 import { AssetLoader } from './asset-loader';
 import { createLogger } from '../logger';
 import { GATEWAY_HOME, PROJECTS_FILE, ARTIFACT_ROOT_DIR } from './gateway-home';
-import { resolveStageId } from './pipeline-graph';
+import { resolveStageId } from './pipeline/pipeline-graph';
 
 const log = createLogger('ProjectRegistry');
 

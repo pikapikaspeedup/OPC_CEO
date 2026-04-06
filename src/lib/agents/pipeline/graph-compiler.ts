@@ -7,7 +7,7 @@
 
 import type { GraphPipeline, GraphPipelineNode } from './graph-pipeline-types';
 import type { DagIR, DagNode, DagEdge } from './dag-ir-types';
-import type { SubgraphDefinition } from './subgraph-types';
+import type { SubgraphDefinition } from '../subgraph-types';
 
 // ── Validation ──────────────────────────────────────────────────────────────
 

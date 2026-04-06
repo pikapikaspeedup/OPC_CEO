@@ -357,7 +357,7 @@ server.registerTool(
   async ({ templateId }) => {
     try {
       const { AssetLoader } = await import("../lib/agents/asset-loader.js");
-      const { validateTemplatePipeline } = await import("../lib/agents/pipeline-graph.js");
+      const { validateTemplatePipeline } = await import("../lib/agents/pipeline/pipeline-graph.js");
       const { validateTemplateContracts } = await import("../lib/agents/contract-validator.js");
 
       const template = AssetLoader.getTemplate(templateId);
@@ -406,9 +406,9 @@ server.registerTool(
   async ({ templateId, template: inlineTemplate }) => {
     try {
       const { AssetLoader } = await import("../lib/agents/asset-loader.js");
-      const { validateTemplatePipeline } = await import("../lib/agents/pipeline-graph.js");
+      const { validateTemplatePipeline } = await import("../lib/agents/pipeline/pipeline-graph.js");
       const { validateTemplateContracts } = await import("../lib/agents/contract-validator.js");
-      const { validateGraphPipeline } = await import("../lib/agents/graph-compiler.js");
+      const { validateGraphPipeline } = await import("../lib/agents/pipeline/graph-compiler.js");
 
       let template = inlineTemplate;
       if (!template && templateId) {
@@ -465,7 +465,7 @@ server.registerTool(
   },
   async ({ direction, pipeline, graphPipeline }) => {
     try {
-      const { pipelineToGraphPipeline, graphPipelineToPipeline } = await import("../lib/agents/graph-pipeline-converter.js");
+      const { pipelineToGraphPipeline, graphPipelineToPipeline } = await import("../lib/agents/pipeline/graph-pipeline-converter.js");
 
       if (direction === 'pipeline-to-graph') {
         if (!pipeline) {

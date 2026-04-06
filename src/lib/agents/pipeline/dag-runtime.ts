@@ -6,11 +6,11 @@
  * pipeline-registry.ts delegates to these functions for backward compat.
  */
 
-import { getRun } from './run-registry';
-import { getGroup } from './group-registry';
+import { getRun } from '../run-registry';
+import { getGroup } from '../group-registry';
 import type { DagIR, DagNode, DagNodeActivation, FlowCondition } from './dag-ir-types';
-import type { ProjectPipelineState } from './project-types';
-import { evaluateCondition, type ConditionContext } from './flow-condition';
+import type { ProjectPipelineState } from '../project-types';
+import { evaluateCondition, type ConditionContext } from '../flow-condition';
 
 // ── Node Activation ─────────────────────────────────────────────────────────
 

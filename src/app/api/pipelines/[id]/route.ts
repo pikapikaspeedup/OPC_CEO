@@ -4,9 +4,9 @@ import path from 'path';
 import { AssetLoader } from '@/lib/agents/asset-loader';
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
 import { GLOBAL_ASSETS_DIR } from '@/lib/agents/gateway-home';
-import { validateGraphPipeline } from '@/lib/agents/graph-compiler';
-import { validateTemplatePipeline } from '@/lib/agents/pipeline-graph';
-import type { TemplateDefinition } from '@/lib/agents/pipeline-types';
+import { validateGraphPipeline } from '@/lib/agents/pipeline/graph-compiler';
+import { validateTemplatePipeline } from '@/lib/agents/pipeline/pipeline-graph';
+import type { TemplateDefinition } from '@/lib/agents/pipeline/pipeline-types';
 
 export const dynamic = 'force-dynamic';
 

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AssetLoader } from '@/lib/agents/asset-loader';
-import { validateTemplatePipeline } from '@/lib/agents/pipeline-graph';
+import { validateTemplatePipeline } from '@/lib/agents/pipeline/pipeline-graph';
 import { validateTemplateContracts } from '@/lib/agents/contract-validator';
-import { validateGraphPipeline } from '@/lib/agents/graph-compiler';
+import { validateGraphPipeline } from '@/lib/agents/pipeline/graph-compiler';
 
 export const dynamic = 'force-dynamic';
 

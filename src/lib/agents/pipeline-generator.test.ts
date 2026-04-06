@@ -9,7 +9,7 @@ import {
   _clearDrafts,
 } from './pipeline-generator';
 import { buildGenerationContext } from './generation-context';
-import type { TemplateDefinition } from './pipeline-types';
+import type { TemplateDefinition } from './pipeline/pipeline-types';
 
 const baseGroup = { title: 'G', description: 'g', executionMode: 'review-loop' as const, roles: [] };
 

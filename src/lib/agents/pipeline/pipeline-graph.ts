@@ -1,5 +1,5 @@
 import type { PipelineStage, TemplateDefinition } from './pipeline-types';
-import { validateTemplateContracts } from './contract-validator';
+import { validateTemplateContracts } from '../contract-validator';
 
 export function resolveStageId(stage: PipelineStage): string {
   return stage.stageId || stage.groupId;

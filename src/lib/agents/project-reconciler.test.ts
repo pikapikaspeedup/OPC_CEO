@@ -25,7 +25,7 @@ vi.mock('./group-registry', () => ({
   getGroup: vi.fn(() => ({ id: 'mock-group' })),
 }));
 
-vi.mock('./pipeline-graph', () => ({
+vi.mock('./pipeline/pipeline-graph', () => ({
   validateTemplatePipeline: vi.fn(() => []),
   resolveStageId: vi.fn((stage: any) => stage.stageId || stage.groupId),
 }));
@@ -44,7 +44,7 @@ vi.mock('../logger', () => ({
 }));
 
 import { reconcileProject } from './project-reconciler';
-import { clearIRCache } from './dag-compiler';
+import { clearIRCache } from './pipeline/dag-compiler';
 import { getProject } from './project-registry';
 import { AssetLoader } from './asset-loader';
 

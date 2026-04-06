@@ -11,6 +11,11 @@ import {
   grpc,
 } from '../bridge/gateway';
 import { createLogger } from '../logger';
+import { resolveProvider, getExecutor } from '../providers';
+import type { AILayer, AIScene } from '../providers/types';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 
 const log = createLogger('LLM-Oneshot');
 
@@ -19,16 +24,50 @@ const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 120_000; // 2 minutes
 
 /**
+ * Get or create the global CEO workspace path.
+ */
+export function getCEOWorkspacePath(): string {
+  const wsPath = path.join(os.homedir(), '.gemini/antigravity/ceo-workspace');
+  if (!fs.existsSync(wsPath)) {
+    fs.mkdirSync(wsPath, { recursive: true });
+  }
+  return wsPath;
+}
+
+/**
  * Send a prompt to the LLM and return the text response.
- * Creates a temporary cascade conversation, sends the prompt, polls for
- * the response, and returns the raw text.
+ * Integrates with the Provider Architecture to support different models/providers.
  *
  * @param prompt The prompt text
- * @param model Optional model override (defaults to M47)
+ * @param model Optional model override
+ * @param layer Optional AI Layer (defaults to 'executive')
  * @returns The LLM's text response
- * @throws If no language server is available or the call times out
  */
-export async function callLLMOneshot(prompt: string, model?: string): Promise<string> {
+export async function callLLMOneshot(
+  prompt: string, 
+  model?: string, 
+  layer: AILayer | AIScene = 'executive'
+): Promise<string> {
+  const wsPath = getCEOWorkspacePath();
+  const { provider, model: resolvedModel, source } = resolveProvider(layer, wsPath);
+  const targetModel = model || resolvedModel || DEFAULT_MODEL;
+
+  log.info({ provider, targetModel, source, promptLen: prompt.length }, 'callLLMOneshot dispatching via provider');
+
+  const executor = getExecutor(provider);
+
+  // If the provider supports synchronous blocking execution (e.g., Codex)
+  if (provider === 'codex' || provider !== 'antigravity') {
+    const res = await executor.executeTask({
+      workspace: wsPath,
+      prompt,
+      model: targetModel,
+      timeout: POLL_TIMEOUT_MS,
+    });
+    return res.content;
+  }
+
+  // Fallback for antigravity (requires manual polling since executeTask returns immediately in Phase 1)
   const servers = discoverLanguageServers();
   const apiKey = getApiKey();
 
@@ -39,41 +78,17 @@ export async function callLLMOneshot(prompt: string, model?: string): Promise<st
   }
 
   const server = servers[0];
-  const targetModel = model || DEFAULT_MODEL;
 
-  // Start a temporary cascade conversation
-  // Use a generic workspace URI — the prompt doesn't need file access
-  const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, 'file:///tmp');
-  const cascadeId = startResult?.cascadeId;
+  // Try to use the executor to create the child cascade (standardizes dispatch)
+  const dispatchRes = await executor.executeTask({
+    workspace: wsPath,
+    prompt,
+    model: targetModel,
+    timeout: POLL_TIMEOUT_MS,
+  });
 
-  if (!cascadeId) {
-    throw new Error('Failed to start cascade for LLM call');
-  }
-
-  log.debug({ cascadeId: cascadeId.slice(0, 8), model: targetModel, promptLen: prompt.length }, 'Sending one-shot prompt');
-
-  // Mark as hidden system task
-  try {
-    await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, cascadeId, {
-      'antigravity.task.hidden': 'true',
-      'antigravity.task.type': 'llm-oneshot',
-    });
-  } catch {
-    // Non-critical — annotations may fail on some server versions
-  }
-
-  // Get initial step count before sending
-  const preResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, cascadeId);
-  const preStepCount = (preResp?.steps || []).filter((s: any) => s != null).length;
-
-  // Send the prompt
-  await grpc.sendMessage(
-    server.port, server.csrf, apiKey, cascadeId,
-    prompt, targetModel,
-    false, // non-agentic mode (no tool calls)
-    undefined,
-    'ARTIFACT_REVIEW_MODE_TURBO',
-  );
+  const cascadeId = dispatchRes.handle;
+  if (!cascadeId) throw new Error('Execution failed to return a handle for polling');
 
   // Poll for response
   const pollStart = Date.now();
@@ -87,7 +102,7 @@ export async function callLLMOneshot(prompt: string, model?: string): Promise<st
       const steps = (stepsResp?.steps || []).filter((s: any) => s != null);
 
       // Look for planner response steps after our prompt
-      for (let j = steps.length - 1; j >= preStepCount; j--) {
+      for (let j = steps.length - 1; j >= 0; j--) {
         const step = steps[j];
         if (step?.type === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
           const planner = step.plannerResponse || step.response || {};

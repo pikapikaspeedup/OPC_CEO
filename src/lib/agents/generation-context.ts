@@ -6,8 +6,8 @@
  * a valid graphPipeline.
  */
 
-import type { TemplateDefinition } from './pipeline-types';
-import type { GraphPipelineNode } from './graph-pipeline-types';
+import type { TemplateDefinition } from './pipeline/pipeline-types';
+import type { GraphPipelineNode } from './pipeline/graph-pipeline-types';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

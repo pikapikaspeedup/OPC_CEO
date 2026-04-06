@@ -1,7 +1,7 @@
 import { createLogger } from '../logger';
 import { AssetLoader } from './asset-loader';
-import { getOrCompileIR } from './dag-compiler';
-import { canActivateNode } from './dag-runtime';
+import { getOrCompileIR } from './pipeline/dag-compiler';
+import { canActivateNode } from './pipeline/dag-runtime';
 import { getProject, updatePipelineStageByStageId, updateBranchProgress } from './project-registry';
 import { getRun } from './run-registry';
 import { emitProjectEvent } from './project-events';

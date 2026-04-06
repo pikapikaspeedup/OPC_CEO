@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { pipelineToGraphPipeline, graphPipelineToPipeline } from '@/lib/agents/graph-pipeline-converter';
+import { pipelineToGraphPipeline, graphPipelineToPipeline } from '@/lib/agents/pipeline/graph-pipeline-converter';
 
 export const dynamic = 'force-dynamic';
 
