@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import cronParser from 'cron-parser';
 import { createLogger } from '../logger';
+import { validateCron } from '../cron-utils';
 import { GATEWAY_HOME, SCHEDULED_JOBS_FILE } from './gateway-home';
 import { AssetLoader } from './asset-loader';
 import { resolveStageId } from './pipeline/pipeline-graph';
@@ -70,7 +71,115 @@ function getActionSummary(action: ScheduledAction): string {
   if (action.kind === 'dispatch-pipeline') {
     return `dispatch template ${action.templateId}${action.stageId ? ` stage ${action.stageId}` : ''}`;
   }
+  if (action.kind === 'create-project') {
+    return 'create ad-hoc project';
+  }
   return `health-check project ${action.projectId}`;
+}
+
+function getScheduledJobProjectId(job: ScheduledJob, linkedProjectId?: string): string | undefined {
+  if (linkedProjectId) {
+    return linkedProjectId;
+  }
+  if (job.action.kind === 'health-check') {
+    return job.action.projectId;
+  }
+  if (job.action.kind === 'dispatch-pipeline') {
+    return job.action.projectId;
+  }
+  return undefined;
+}
+
+function normalizeWorkspaceUri(uri?: string): string | undefined {
+  if (!uri) return undefined;
+  if (uri.startsWith('file://')) return uri;
+  if (uri.startsWith('/')) return `file://${uri}`;
+  return uri;
+}
+
+function normalizeScheduledAction(action: ScheduledAction): ScheduledAction {
+  if (action.kind === 'dispatch-pipeline') {
+    return {
+      ...action,
+      workspace: normalizeWorkspaceUri(action.workspace) || action.workspace,
+      prompt: action.prompt.trim(),
+      ...(action.stageId ? { stageId: action.stageId } : {}),
+      ...(action.projectId ? { projectId: action.projectId } : {}),
+      ...(action.model ? { model: action.model } : {}),
+      ...(action.sourceRunIds?.length ? { sourceRunIds: action.sourceRunIds } : {}),
+    };
+  }
+
+  return action;
+}
+
+export function normalizeScheduledJobDefinition(job: ScheduledJob): ScheduledJob {
+  const normalized: ScheduledJob = {
+    ...job,
+    name: job.name.trim(),
+    action: normalizeScheduledAction(job.action),
+    ...(job.intentSummary ? { intentSummary: job.intentSummary.trim() } : {}),
+  };
+
+  if (!normalized.name) {
+    throw new Error('Scheduled job name is required');
+  }
+
+  if (normalized.type === 'cron') {
+    const cronError = validateCron(normalized.cronExpression || '');
+    if (cronError) {
+      throw new Error(cronError);
+    }
+    delete normalized.intervalMs;
+    delete normalized.scheduledAt;
+  }
+
+  if (normalized.type === 'interval') {
+    if (!normalized.intervalMs || normalized.intervalMs <= 0) {
+      throw new Error('interval jobs require intervalMs > 0');
+    }
+    delete normalized.cronExpression;
+    delete normalized.scheduledAt;
+  }
+
+  if (normalized.type === 'once') {
+    if (!normalized.scheduledAt) {
+      throw new Error('once jobs require scheduledAt');
+    }
+    delete normalized.cronExpression;
+    delete normalized.intervalMs;
+  }
+
+  if (normalized.action.kind === 'dispatch-pipeline') {
+    if (!normalized.action.workspace || !normalized.action.prompt || !normalized.action.templateId) {
+      throw new Error('dispatch-pipeline jobs require workspace, prompt and templateId');
+    }
+    delete normalized.departmentWorkspaceUri;
+    delete normalized.opcAction;
+  }
+
+  if (normalized.action.kind === 'health-check') {
+    if (!normalized.action.projectId) {
+      throw new Error('health-check jobs require projectId');
+    }
+    delete normalized.departmentWorkspaceUri;
+    delete normalized.opcAction;
+  }
+
+  if (normalized.action.kind === 'create-project') {
+    normalized.departmentWorkspaceUri = normalizeWorkspaceUri(normalized.departmentWorkspaceUri);
+    if (!normalized.departmentWorkspaceUri || !normalized.opcAction?.goal) {
+      throw new Error('create-project jobs require departmentWorkspaceUri and opcAction.goal');
+    }
+    normalized.opcAction = {
+      type: 'create_project',
+      projectType: 'adhoc',
+      goal: normalized.opcAction.goal.trim(),
+      ...(normalized.opcAction.skillHint ? { skillHint: normalized.opcAction.skillHint } : {}),
+    };
+  }
+
+  return normalized;
 }
 
 export function isScheduledJobDue(job: ScheduledJob, now: Date): boolean {
@@ -142,6 +251,10 @@ async function triggerAction(action: ScheduledAction): Promise<string | undefine
     return `health=${health}`;
   }
 
+  if (action.kind === 'create-project') {
+    throw new Error('Create-project jobs must include opcAction and departmentWorkspaceUri');
+  }
+
   const { dispatchRun } = await import('./group-runtime');
 
   if (action.kind === 'dispatch-pipeline') {
@@ -184,9 +297,12 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
 
   const triggeredAt = new Date().toISOString();
   try {
-    // OPC: handle opcAction (create ad-hoc project)
     let message: string | undefined;
-    if (job.opcAction?.type === 'create_project' && job.departmentWorkspaceUri) {
+    let linkedProjectId: string | undefined;
+    if (job.action.kind === 'create-project' || job.opcAction?.type === 'create_project') {
+      if (!job.departmentWorkspaceUri || !job.opcAction?.goal) {
+        throw new Error('Create-project scheduled job is missing departmentWorkspaceUri or opcAction.goal');
+      }
       const { createProject } = await import('./project-registry');
       const project = createProject({
         name: job.name,
@@ -196,6 +312,7 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
         projectType: 'adhoc',
         skillHint: job.opcAction.skillHint,
       });
+      linkedProjectId = project.projectId;
       message = `projectId=${project.projectId}`;
     } else {
       message = await triggerAction(job.action);
@@ -213,6 +330,7 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
       appendAuditEvent({
         kind: 'scheduler:triggered',
         jobId,
+        projectId: getScheduledJobProjectId(job, linkedProjectId),
         message: `Job '${job.name}' triggered: ${message || 'ok'}`,
         meta: { action: job.action.kind },
       });
@@ -230,6 +348,7 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
       appendAuditEvent({
         kind: 'scheduler:failed',
         jobId,
+        projectId: getScheduledJobProjectId(job),
         message: `Job '${job.name}' failed: ${err.message}`,
         meta: { action: job.action.kind },
       });
@@ -293,28 +412,95 @@ export function getScheduledJob(jobId: string): ScheduledJob | null {
 }
 
 export function createScheduledJob(input: Omit<ScheduledJob, 'jobId' | 'createdAt'>): ScheduledJob {
-  const job: ScheduledJob = {
+  const job = normalizeScheduledJobDefinition({
     ...input,
     jobId: randomUUID(),
     createdAt: new Date().toISOString(),
-  };
+  });
   state.jobs.set(job.jobId, job);
   saveJobs();
+  try {
+    const { appendAuditEvent } = require('./ops-audit') as typeof import('./ops-audit');
+    appendAuditEvent({
+      kind: 'scheduler:created',
+      jobId: job.jobId,
+      projectId: getScheduledJobProjectId(job),
+      message: `Job '${job.name}' created`,
+      meta: {
+        action: job.action.kind,
+        createdBy: job.createdBy,
+        type: job.type,
+      },
+    });
+  } catch {
+    // non-critical
+  }
   return job;
 }
 
 export function updateScheduledJob(jobId: string, updates: Partial<Omit<ScheduledJob, 'jobId' | 'createdAt'>>): ScheduledJob | null {
   const existing = state.jobs.get(jobId);
   if (!existing) return null;
-  Object.assign(existing, updates);
+  const previousEnabled = existing.enabled;
+  const normalized = normalizeScheduledJobDefinition({
+    ...existing,
+    ...updates,
+    action: (updates.action as ScheduledAction | undefined) || existing.action,
+  });
+
+  const shouldResetOnceExecution = normalized.type === 'once' && (
+    (typeof updates.scheduledAt === 'string' && updates.scheduledAt !== existing.scheduledAt)
+    || (updates.enabled === true && !existing.enabled)
+  );
+
+  if (shouldResetOnceExecution) {
+    normalized.lastRunAt = undefined;
+    normalized.lastRunResult = undefined;
+    normalized.lastRunError = undefined;
+  }
+
+  state.jobs.set(jobId, normalized);
   saveJobs();
-  return existing;
+  try {
+    const { appendAuditEvent } = require('./ops-audit') as typeof import('./ops-audit');
+    const enabledChanged = typeof updates.enabled === 'boolean' && updates.enabled !== previousEnabled;
+    appendAuditEvent({
+      kind: 'scheduler:updated',
+      jobId,
+      projectId: getScheduledJobProjectId(normalized),
+      message: enabledChanged
+        ? `Job '${normalized.name}' ${normalized.enabled ? 'enabled' : 'disabled'}`
+        : `Job '${normalized.name}' updated`,
+      meta: {
+        action: normalized.action.kind,
+        enabled: normalized.enabled,
+      },
+    });
+  } catch {
+    // non-critical
+  }
+  return normalized;
 }
 
 export function deleteScheduledJob(jobId: string): boolean {
+  const existing = state.jobs.get(jobId);
   const deleted = state.jobs.delete(jobId);
   if (deleted) {
     saveJobs();
+    try {
+      const { appendAuditEvent } = require('./ops-audit') as typeof import('./ops-audit');
+      appendAuditEvent({
+        kind: 'scheduler:deleted',
+        jobId,
+        projectId: existing ? getScheduledJobProjectId(existing) : undefined,
+        message: `Job '${existing?.name || jobId}' deleted`,
+        meta: {
+          action: existing?.action.kind,
+        },
+      });
+    } catch {
+      // non-critical
+    }
   }
   return deleted;
 }

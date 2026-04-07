@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { CheckCircle2, Clock, ArrowUpRight, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import DepartmentSetupDialog from '@/components/department-setup-dialog';
@@ -8,7 +8,8 @@ import DailyDigestCard from '@/components/daily-digest-card';
 import DepartmentDetailDrawer from '@/components/department-detail-drawer';
 import AuditLogWidget from '@/components/audit-log-widget';
 import DepartmentComparisonWidget from '@/components/department-comparison-widget';
-import { api, type SchedulerJobResponse } from '@/lib/api';
+import CEOSchedulerCommandCard from '@/components/ceo-scheduler-command-card';
+import { api, type AuditEvent, type SchedulerJobResponse } from '@/lib/api';
 import type { Workspace, Project, DepartmentConfig, DailyDigestFE } from '@/lib/types';
 
 interface CEODashboardProps {
@@ -33,6 +34,7 @@ export default function CEODashboard({
   const [digests, setDigests] = useState<DailyDigestFE[]>([]);
   const [digestPeriod, setDigestPeriod] = useState<'day' | 'week' | 'month'>('day');
   const [schedulerJobs, setSchedulerJobs] = useState<SchedulerJobResponse[]>([]);
+  const [schedulerAuditEvents, setSchedulerAuditEvents] = useState<AuditEvent[]>([]);
   const [schedulerLoading, setSchedulerLoading] = useState(true);
 
   // Load digests for all workspaces (supports day/week/month period)
@@ -48,20 +50,18 @@ export default function CEODashboard({
     });
   }, [wsKey, digestPeriod]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
+  const refreshSchedulerData = useCallback(() => {
     let cancelled = false;
     setSchedulerLoading(true);
 
-    api.schedulerJobs()
-      .then((jobs) => {
-        if (!cancelled) {
-          setSchedulerJobs(jobs);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSchedulerJobs([]);
-        }
+    Promise.all([
+      api.schedulerJobs().catch(() => [] as SchedulerJobResponse[]),
+      api.auditEvents({ limit: 50 }).catch(() => [] as AuditEvent[]),
+    ])
+      .then(([jobs, auditEvents]) => {
+        if (cancelled) return;
+        setSchedulerJobs(jobs);
+        setSchedulerAuditEvents(auditEvents.filter((event) => event.kind.startsWith('scheduler:')).slice(0, 6));
       })
       .finally(() => {
         if (!cancelled) {
@@ -73,6 +73,18 @@ export default function CEODashboard({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const dispose = refreshSchedulerData();
+    const interval = setInterval(() => {
+      void refreshSchedulerData();
+    }, 10000);
+
+    return () => {
+      dispose?.();
+      clearInterval(interval);
+    };
+  }, [refreshSchedulerData]);
 
   const recentJobs = useMemo(() => {
     const getSortKey = (job: SchedulerJobResponse) => job.nextRunAt || job.lastRunAt || '';
@@ -89,6 +101,11 @@ export default function CEODashboard({
   const enabledJobCount = useMemo(
     () => schedulerJobs.filter(job => job.enabled).length,
     [schedulerJobs],
+  );
+
+  const failedSchedulerCount = useMemo(
+    () => schedulerAuditEvents.filter((event) => event.kind === 'scheduler:failed').length,
+    [schedulerAuditEvents],
   );
 
   const [setupWorkspaceUri, setSetupWorkspaceUri] = useState<string | null>(null);
@@ -195,6 +212,16 @@ export default function CEODashboard({
         departments={departments}
       />
 
+      <CEOSchedulerCommandCard
+        workspaces={workspaces}
+        projects={projects}
+        departments={departments}
+        onScheduled={() => {
+          void refreshSchedulerData();
+        }}
+        onOpenScheduler={onOpenScheduler}
+      />
+
       {/* Recent completions (G5) */}
       {(() => {
         const recentCompleted = projects
@@ -295,7 +322,7 @@ export default function CEODashboard({
         <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4 space-y-3">
           <div className="flex items-center justify-between text-xs text-[var(--app-text-muted)]">
             <span>{enabledJobCount}/{schedulerJobs.length} enabled</span>
-            <span>{schedulerLoading ? 'Loading...' : 'Recent jobs'}</span>
+            <span>{schedulerLoading ? 'Loading...' : `Recent jobs · ${failedSchedulerCount} failed recently`}</span>
           </div>
 
           {schedulerLoading ? (
@@ -323,6 +350,7 @@ export default function CEODashboard({
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--app-text-muted)]">
                     <span>{job.opcAction ? 'create-project' : job.action?.kind || 'job'}</span>
                     {job.departmentWorkspaceUri && <span>{job.departmentWorkspaceUri.split('/').pop()}</span>}
+                    {job.createdBy && <span>via {job.createdBy}</span>}
                     {job.nextRunAt && <span>Next: {new Date(job.nextRunAt).toLocaleString()}</span>}
                     {!job.nextRunAt && job.lastRunAt && <span>Last: {new Date(job.lastRunAt).toLocaleString()}</span>}
                   </div>
@@ -334,6 +362,30 @@ export default function CEODashboard({
               还没有任何定时任务。可从这里进入 Scheduler 面板进行创建。
             </div>
           )}
+
+          {schedulerAuditEvents.length > 0 ? (
+            <div className="border-t border-white/6 pt-3 space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/35">Recent activity</div>
+              {schedulerAuditEvents.map((event) => (
+                <div key={`${event.timestamp}-${event.kind}-${event.jobId || 'scheduler'}`} className="rounded-lg border border-white/6 bg-white/[0.02] px-3 py-2 text-xs text-white/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className={cn(
+                      'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                      event.kind === 'scheduler:failed'
+                        ? 'bg-red-500/10 text-red-300'
+                        : event.kind === 'scheduler:triggered'
+                        ? 'bg-emerald-500/10 text-emerald-300'
+                        : 'bg-white/8 text-white/55',
+                    )}>
+                      {event.kind}
+                    </span>
+                    <span className="text-[10px] text-white/35">{new Date(event.timestamp).toLocaleString()}</span>
+                  </div>
+                  <div className="mt-1 leading-relaxed text-white/55">{event.message}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
 

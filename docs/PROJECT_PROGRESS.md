@@ -1,3 +1,284 @@
+## 任务：CEO 原生定时调度能力闭环落地
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+围绕“CEO 应该能直接创建 cron / schedule，而不是逼用户去填底层表单”这一目标，完成了一次从后端能力、CEO Workflow、MCP 工具、Web UI 到结果回流的端到端收口。当前系统已经不再只有一个技术向的 Scheduler Panel，而是具备了 CEO 原生的自然语言调度主链路。
+
+### 本次完成的关键改动
+1. **补齐缺失的 CEO 调度后端**：新增 `src/lib/agents/ceo-agent.ts`，让 `POST /api/ceo/command` 真正可用，并支持自然语言解析为 Scheduler Job。
+2. **建立自然语言调度主链路**：支持从中文指令中解析 `cron / interval / once`，并自动映射为三种动作模板：`create-project`、`health-check`、`dispatch-pipeline`。
+3. **修复 Scheduler 契约缺口**：`src/lib/agents/scheduler-types.ts` 补充 `create-project` action 类型，同时增加 `createdBy`、`intentSummary` 等元数据字段。
+4. **补齐 Scheduler 审计闭环**：`src/lib/agents/ops-audit.ts` 和 `src/lib/agents/scheduler.ts` 新增 `scheduler:created / updated / deleted / triggered / failed` 事件写入，且能带回 `projectId`。
+5. **补齐 CEO 结果回看链路**：`src/lib/ceo-events.ts` 现在会把 scheduler 审计事件转成 CEO 事件；`src/app/page.tsx` 头部通知和 `src/components/ceo-dashboard.tsx` 仪表盘已能显示调度结果。
+6. **补 CEO 原生 UI 入口**：新增 `src/components/ceo-scheduler-command-card.tsx`，在 CEO Dashboard 中提供“用一句话创建定时任务”的原生入口。
+7. **修复 Operations 主舞台入口断层**：`src/app/page.tsx` 的 operations 区域已经直接挂载 `SchedulerPanel`，不再只有侧边栏隐藏入口。
+8. **补齐 MCP 写能力**：`src/mcp/server.ts` 新增 `antigravity_create_scheduler_job`、`antigravity_update_scheduler_job`、`antigravity_trigger_scheduler_job`、`antigravity_delete_scheduler_job`。
+9. **优化 CEO Workflow**：更新 `src/lib/agents/ceo-environment.ts` 与真实 CEO 工作区 `~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-playbook.md`，加入 scheduler 分支，并修正旧的 `groupId` 口径为 `templateId + stageId`；新增 `ceo-scheduler-playbook.md`。
+10. **补齐接口与使用文档**：新增 `docs/guide/ceo-scheduler-guide.md`，并更新 `docs/guide/mcp-server.md`、`docs/guide/agent-user-guide.md`。
+
+### 新增 / 更新的核心文件
+- `src/lib/agents/ceo-agent.ts`
+- `src/components/ceo-scheduler-command-card.tsx`
+- `src/lib/agents/scheduler.ts`
+- `src/lib/agents/scheduler-types.ts`
+- `src/lib/agents/ops-audit.ts`
+- `src/lib/ceo-events.ts`
+- `src/mcp/server.ts`
+- `src/lib/agents/ceo-environment.ts`
+- `docs/guide/ceo-scheduler-guide.md`
+- `docs/guide/mcp-server.md`
+- `docs/guide/agent-user-guide.md`
+- `~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-playbook.md`
+- `~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-scheduler-playbook.md`
+
+### 验证证据
+1. **单元测试通过**
+  - 执行：`npm test -- src/lib/agents/scheduler.test.ts src/lib/agents/ceo-agent.test.ts src/lib/ceo-events.test.ts`
+  - 结果：`3` 个测试文件全部通过，`14` 个测试全部通过，`0` 失败。
+2. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成，所有相关 API 路由与页面编译成功。
+3. **真实接口 smoke test 通过**
+  - 调用：`POST /api/ceo/command`
+  - 指令：`明天上午 9 点让超级 IT 研发部创建一个 ad-hoc 项目，目标是 smoke test`
+  - 返回：成功创建 `jobId = 38d088ad-37f0-4c13-be62-966d7a4be32b`，`nextRunAt = 2026-04-09T07:00:00.000Z`
+  - 进一步验证：`GET /api/scheduler/jobs` 能查到该 job，随后已通过 `DELETE /api/scheduler/jobs/:id` 清理，避免残留脏数据。
+4. **Scheduler 契约回归 smoke test 通过**
+  - 验证 1：通过 `POST /api/scheduler/jobs` 创建 `create-project` job，再 `PATCH` 更新成 `health-check`，返回结果中 `opcAction` 与 `departmentWorkspaceUri` 已被正确清空。
+  - 验证 2：对 `PATCH /api/scheduler/jobs/:id` 发送非法 JSON，请求返回 `400` 与 `{"error":"Invalid JSON body"}`，不再把坏请求吞成空更新。
+
+### 结果判断
+本轮已把此前文档中定义的核心缺口真正打通：
+
+1. CEO 现在**可以原生创建定时任务**。
+2. Scheduler 不再只是“系统能跑”的 infra，而是有了 **CEO 可用的自然语言入口**。
+3. 调度结果已经能回流到 **CEO Dashboard / Header Event Flow / 审计链路**。
+4. MCP 与 Workflow 现在都具备了与 Web UI 一致的调度能力和接口文档。
+
+## 任务：制定 Antigravity 长期演进大节点路线图
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+基于当前仓库真实实现、前一轮与 craft-agents 的架构比较，以及用户进一步明确的“虚拟公司”产品愿景，整理出一份未来 6-18 个月的长期演进路线图，不再停留在“下一步做哪个功能”，而是明确主线顺序、阶段边界和不该做的事。
+
+### 关键结论
+1. **Antigravity 的主线应该是 AI 软件组织系统，而不是通用 coding shell**：长期路线应围绕 CEO、Department、Project/Run/Stage、规则、记忆、OKR、Scheduler 这些组织对象展开，而不是继续拿 shell 成熟度做唯一目标。
+2. **正确顺序是“执行底座 → 治理内核 → CEO 经营台 → 部门操作系统 → OKR/记忆闭环 → 自治运营”**：节点顺序不能反，否则会得到一个看起来像公司的 UI，但底层仍然松散。
+3. **最优先的根问题仍然是执行后端契约没有完全收口**：现阶段不应先扩 provider 或继续堆前端，而应先补统一的 execution backend / event / capability 抽象。
+4. **短期两周内最值得做的是三份蓝图，而不是直接散着开发**：执行后端契约蓝图、治理状态机蓝图、CEO 经营台信息架构。
+
+### 产出
+- 新增设计文档：`docs/design/antigravity-long-term-evolution-roadmap.md`
+
+### 说明
+- 本次为架构规划与产品路线设计，没有修改业务代码。
+- 本次路线图明确延续此前结论：**不建议直接基于 craft 重构 Antigravity**，只建议借鉴其 backend/event/capability 抽象思路。
+- 已进一步补充一条关键实施原则：**不要先做空中抽象，也不要继续带着耦合堆功能；应先打通一条最小主链路，再围绕真实链路抽象边界。**
+- 已继续补充三个当前高风险能力的优先级：**Department Memory 先于 Scheduler，Scheduler 先于 Self-Evolution**；自治只能先从“生成改进建议并走审批”开始，不能直接自改系统。
+
+## 任务：补充 Antigravity 与 craft 的成熟度评分矩阵
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+在上一轮“是否直接基于 craft 继续开发”的可行性结论基础上，继续补充了一份更硬的成熟度评分矩阵，避免只凭直觉觉得 “craft 更完整，所以 Antigravity 没价值”。这次把比较拆成两个战场：
+1. **通用 coding agent shell**
+2. **AI 软件组织 / 治理平台**
+
+### 关键结论
+1. **如果按通用 coding agent shell 比，craft 目前更成熟**：workspace/session 一致性、backend/provider 抽象、多 provider 覆盖、session 持久化等层面，craft 的收口度明显更高。
+2. **如果按 AI 软件组织 / 治理平台比，Antigravity 反而更成熟**：`Project / Run / Stage` 编排、交付治理、CEO / Department / Approval 模型、多阶段交付流，都是 Antigravity 已经成型而 craft 基本不解决的层。
+3. **Antigravity 当前不是“没价值”，而是“价值点已经出现，但底层执行抽象还没完全收口”**：真正的短板是 provider/runtime 中层还不够干净，不是产品方向本身没价值。
+4. **最危险的误判是拿错标尺**：如果用 craft 擅长的 session shell 标尺去衡量 Antigravity，会低估它在组织编排与治理层的独特价值。
+
+### 产出
+- 更新研究文档：`docs/internals/antigravity-vs-craft-feasibility-study.md`
+
+### 说明
+- 本次没有新增代码改动，属于前一份研究文档的深化补充。
+- 成熟度分值是基于当前源码结构与主链路收口情况给出的工程判断，不是市场判断或情绪判断。
+
+## 任务：评估 Antigravity 是否应直接基于 craft-agents 继续开发
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+围绕用户提出的核心问题，基于当前 Antigravity 与 craft-agents-oss 两个仓库的真实源码，对“是否可以直接基于 craft 继续开发”做了系统梳理。重点核对了 workspace 模型、conversation/session 模型、provider 抽象、多 Agent 编排层、产品形态与集成成本，避免只凭 README 或表面功能相似度下结论。
+
+### 关键结论
+1. **不建议直接以 craft 作为 Antigravity 的开发基座**：两边都看起来有 workspace、会话、provider，但它们所在层次不同。craft 的中心是 `workspace + session + backend + event`，Antigravity 的中心是 `project + stage + run + governance`。
+2. **两边的 workspace 含义不一样**：Antigravity 的 workspace 更像被外部 IDE / language_server 驱动的执行目标；craft 的 workspace 更像应用自己管理的工作容器。
+3. **两边的会话对象也不是同构的**：Antigravity 的 `cascadeId/codex thread` 只是 transport handle，真正的一等业务对象是 `runId/projectId/pipelineState`；craft 的 session 则本身就是产品核心对象。
+4. **最值得借鉴的是 backend/event 抽象思路，而不是 craft 整体产品壳**：包括 capability-driven backend、统一事件模型、session/backend 分层方式；不建议整体搬运 craft 的 workspace/session/UI 层。
+5. **更现实的路线是“Antigravity 为主系统，craft 只做局部参考或叶子执行器”**：先继续把 Antigravity 自己的 provider/runtime 边界收口，再考虑增加实验性 backend，而不是整体迁到 craft。
+
+### 产出
+- 新增研究文档：`docs/internals/antigravity-vs-craft-feasibility-study.md`
+
+### 验证依据
+- Antigravity 架构与运行时：`ARCHITECTURE.md`
+- Antigravity dispatch/runtime：`src/lib/agents/dispatch-service.ts`、`src/lib/agents/group-runtime.ts`
+- Antigravity provider：`src/lib/providers/ai-config.ts`、`src/lib/providers/index.ts`、`src/lib/providers/types.ts`
+- Antigravity conversation/workspace：`src/app/api/conversations/route.ts`、`src/app/api/conversations/[id]/send/route.ts`、`src/app/api/workspaces/launch/route.ts`
+- Antigravity orchestration state：`src/lib/agents/project-registry.ts`、`src/lib/agents/run-registry.ts`
+- craft backend/provider：`craft-agents-oss/packages/shared/src/agent/backend/factory.ts`、`craft-agents-oss/packages/shared/src/agent/backend/types.ts`
+- craft workspace/session：`craft-agents-oss/packages/shared/src/workspaces/storage.ts`、`craft-agents-oss/packages/shared/src/sessions/storage.ts`
+- craft session orchestration：`craft-agents-oss/packages/server-core/src/sessions/SessionManager.ts`
+
+### 说明
+- 本次为架构研究与本地文档写作，没有修改 craft-agents-oss 源码。
+- 中途尝试调用研究子代理，但遇到网络切换错误，最终改为主代理直接完成源码对比。
+- 待下一步如果需要落地 PoC，建议优先验证“实验性 backend 能否接入 Antigravity 单 stage 执行”，而不是直接迁移产品层。
+
+## 任务：Grok CLI (`~/bin/grok`) 稳定性修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+修复基于 bb-browser 的 Grok CLI 中多个导致超时的稳定性问题。CLI 现已能可靠地完成所有核心功能：问答、模型切换、继续对话、管道输入、历史查看/恢复、文件输出。
+
+### 修复的问题
+1. **Stale ref 问题**：grok.com 使用 Radix UI，DOM 频繁重渲染导致 `bb-browser click <ref>` 失败。新增 `clickRef()` 辅助函数，自动重试3次（每次取新 snapshot + 新 ref）。
+2. **编辑器残留文本**：`sendMessage` 之前没有清空编辑器，导致新消息追加到旧文本后。现在发送前先执行 `selectAll → delete → insertText`。
+3. **自动补全干扰**：grok.com 的自动补全建议会修改输入内容。现在插入文本后按 Escape 关闭建议，并验证内容长度。
+4. **Cookie banner 遮挡**：模型切换后可能触发 cookie consent / 偏好中心弹窗，遮挡编辑器和提交按钮。新增 `dismissOverlays()` 独立函数，在发送消息前和模型切换后都会调用。
+5. **`bbEval` shell 注入问题**：原来用 `execSync` 拼接字符串导致 `a[href]` 等选择器被 shell 解释。改用 `spawnSync` 传数组参数绕过 shell。
+
+### 验证结果
+全部 7 项功能测试通过：Expert/Fast/Heavy 模型问答、继续对话、管道输入、历史记录、关键词恢复、文件输出。
+
+---
+
+## 任务：补齐 CEO Playbook 状态查阅与干预 curl 指南
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+遵照指令要求，对 `src/lib/agents/ceo-environment.ts` 和系统内真实工作区的 `ceo-playbook.md` 中的 `Step 0: 快速通道` 进行了重写。明确加入了通过纯 Restful API（基于 `curl`）执行项目状态查询（`antigravity_list_projects`）和执行干预（`antigravity_intervene_run`）的实际代码范例，防止 MCP 未启用时 CEO Agent 不知所措。
+
+### 改动
+1. **`src/lib/agents/ceo-environment.ts`**：
+   - 丰富了「A. 状态查询」的 `curl` 示例，指示读取 `/api/projects` 接口
+   - 丰富了「B. 干预操作」的 `curl` 示例，指示发送 action 到 `/api/agent-runs/<runId>/intervene`
+2. **`~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-playbook.md`**：同步更新一致。
+
+---
+
+## 任务：CEO 管理中心 — 右侧面板升级为多 Tab 管理视角
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+将 CEO Office 右侧面板从原来仅有 Persona/Playbook 两个文本编辑 Tab 的「配置面板」，升级为包含 **仪表盘、模板工坊、项目速览、配置** 四个 Tab 的「CEO 管理中心」。CEO 在左侧进行对话的同时，可在右侧快速切换管理视角，无需离开 CEO 面板。
+
+### 改动
+1. **`src/components/ceo-office-settings.tsx`**：
+   - 新增 `CeoOfficeSettingsProps` 接口，接收 `workspaces`、`projects`、`departments`、`templates` 等管理数据
+   - 顶级 Tabs 改为 4 个：「仪表盘」（嵌入 `CEODashboard`）、「模板」（嵌入 `TemplateBrowser`）、「项目」（项目运行态卡片速览 + 进度条）、「配置」（原 Persona/Playbook 被收纳为二级 Tab）
+   - 项目 Tab 包含 4 格统计（进行中/已完成/失败/暂停）+ 按状态分组的项目卡片列表，点击可跳转到 OPC 项目详情
+
+2. **`src/app/page.tsx`**：
+   - `<CeoOfficeSettings />` 调用处新增 props 透传：`workspaces`、`projects`、`departments`、`templates`、`onDepartmentSaved`、`onNavigateToProject`、`onOpenScheduler`、`onRefresh`
+
+3. **`src/components/projects-panel.tsx`**：
+   - 移除 `CEODashboard` 组件嵌入（空态 + 列表态两处）
+   - 移除 `TemplateBrowser` 组件及模板工坊 toggle（`browseView` 状态 + 切换按钮）
+   - 清理未使用的 imports：`TemplateBrowser`、`CEODashboard`、`Layers` icon、`browseView` state
+   - OPC 面板现在只聚焦项目列表和项目详情
+
+### 验证
+- TypeScript 编译：三个文件零错误
+
+---
+
+## 任务：CEO Chat Window 专属会话入口与配置门户
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+彻底移除了前端历史遗留的 CEO "顶部指令栏" (`api.ceoCommand`) 的同步阻塞式调用模式，在 UI 的侧边栏重构出了全新的 **CEO Office 专属房间**。该入口不仅复用了底层的 Conversation 并发与历史记录机制，更创新性地增加了纯原生的「配置大屏」，可以允许用户边聊天边修改 CEO 的记忆和派发管线逻辑。
+
+### 预期改动
+1. **清理遗留系统**：移除了 `src/components/ceo-dashboard.tsx` 以及 `projects-panel.tsx` 中涉及快捷指令框的所有代码和冗余状态。
+2. **新增配置侧边栏**：开发了全新的 `src/components/ceo-office-settings.tsx`，与底层的 `src/app/api/ceo/setup/route.ts` API 进行双工通讯，实时渲染并高频热更新位于 `~/.gemini/antigravity/ceo-workspace/` 内部的 `department-identity.md` (Persona) 和 `ceo-playbook.md` (Playbook) 文件。
+3. **集成进布局逻辑**：拓展 `SidebarSection` 类型，新增了 `ceo` 枚举。利用已有的 `page.tsx` Chat WebSocket 机制，只要用户从左侧导航栏点击「👔 CEO Office」，系统即可使用原有的 `handleSelect(ceoConv.id)` 机制自动吸附并载入该 Workspace 的活跃回话；在页面布局上采用了纯左右两栏（左边流式会话界面、右手边配置大屏界面）分离模式，彻底贯彻了 CEO "开箱即用 + 配置驱动"的产品哲学。
+
+### 验证
+- ✅ 编译通过，Sidebar / page.tsx 中对新模块的路由与 React Hooks 生命周期已完美对接。
+- ✅ 取消历史的 `api.ceoCommand` 调用使得之前 404 的问题从源头上被瓦解。
+
+---
+
+## 任务：CEO 原生化：实现跨 Provider 的统一会话底层支持
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-06
+
+### 概要
+开始实施“CEO 原生化：极简落地架构”设计。不新增复杂的专属中间件，而是将系统底层的 Conversation Router (`src/app/api/conversations/[id]/send/route.ts`) 升级为跨 Provider 支持（解耦 IDE gRPC 强依赖）。然后通过建立原生的 CEO Workspace 资产，使 CEO Agent 成为一个标准的 Department，并利用通用的会话链路通过 MCP 工具调度系统。
+
+### 预期改动
+1. **CEO 工作区搭建**：剥离旧的硬编码环境搭建逻辑，在 `src/lib/agents/ceo-environment.ts` 集中创建 `.department` 控制文件以及制定人设 (`ceo-mission.md`) 和操作流 (`ceo-playbook.md`)。
+2. **底层路由修改**：修改 `conversations/[id]/send` 接口以侦测 provider，支持 `codex` 的子进程通讯以彻底根除 IDE 依赖死穴。
+3. **前端接驳与收口**：调整现有 UI 可选择连入 CEO 空间，同时弃用 `ceo-prompts.ts` 的命令构建器。
+4. **根除 IDE 上下文污染 (IDE Context Poisoning)**：此前曾尝试用 `grpc.addTrackedWorkspace` 把 CEO 工作区附加到现存任意活动的 IDE Server (例如 `fishairss`) 上，或使用离线的 `codex` 原生提供绕行方案。但这偏离了“标准的 Conversation 新建链路”。
+5. **恢复原生 Workspace 处理逻辑**：已移除所有对 CEO 工作区的特殊硬编码与强制 Codex/追踪截断逻辑。在 `src/app/page.tsx` 中新增调度，当通过 Command Bar 呼叫 CEO 且对应系统不在运行中时（`workspace_not_running`），则**使用标准架构一样的 `/api/workspaces/launch` 触发**。这将原生启动 `antigravity --new-window` 拉起 CEO 项目专用的 IDE 窗口。
+6. **实现完美上下文隔离**：通过上述改动，CEO 工作区不仅完美继承了原始界面的新建 Conversation 逻辑，同时因为开辟了独立的 IDE 工作区后端，也天然隔绝了跟其它活动窗口产生交叉污染的可能，实现了符合用户预期的完美上下文隔离。
+
+---
+
+## 任务：审阅 CEO 原生化与统一会话引擎设计
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-06
+
+### 概要
+按要求对 `docs/design/ceo-native-conversation-design.md` 做了架构审阅，并结合真实实现逐项核对以下源码：
+- `src/lib/agents/ceo-agent.ts`
+- `src/lib/agents/llm-oneshot.ts`
+- `src/lib/agents/dispatch-service.ts`
+- `src/lib/agents/department-memory.ts`
+- `src/lib/agents/department-sync.ts`
+- `src/lib/providers/types.ts`
+
+本次输出结论为：**设计方向正确，但需要在“现状边界、无 IDE 路径、受控治理层、会话抽象”四个方面收口后再进入实施。**
+
+### 产出
+- 新增审阅报告：`docs/design/ceo-design-review.md`
+- 报告覆盖五个维度：
+  - 现状准确性
+  - 方案可行性
+  - Group Elimination 兼容性
+  - 架构完整性
+  - 三个决策点推荐（A/B/C）
+
+### 关键结论
+- 当前 `ceo-agent.ts` / `llm-oneshot.ts` / `dispatch-service.ts` 的主链路与设计文档描述大体一致。
+- `ceo-workspace` 初始化能力已经以 `getCEOWorkspacePath()` 形式存在，Phase 1 不应重复造轮子。
+- `department-memory.ts` 目前是 Markdown 持久化与 run 完成后的简易提取，不等于完整的会话记忆系统。
+- `TaskExecutor` 当前不足以直接承载 `chat-runtime.ts` 所需的会话生命周期与流式 `ChatStep` 抽象。
+- 推荐采用：
+  - 决策边界：**C 混合模式**
+  - 无 IDE 优先级：**C 分层落地**
+  - 前端形态：**C 混合入口**
+
+### 验证
+- 静态核对：逐文件比对设计文档与实现，确认 CEO 路径、Provider 能力、dispatch 契约、memory/rules 能力边界。
+- 输出校验：确认审阅报告文件已写入并包含要求的四类结构（通过项、风险项、建议修改项、三个决策点推荐）。
+- 仓库检查：执行 `git diff --check`，结果：**通过**。
+- 相关单测：执行 `node node_modules/vitest/vitest.mjs run --config vitest.review.config.mts src/lib/providers/providers.test.ts src/lib/providers/ai-config.test.ts`，结果：**2 个测试文件通过，26 个测试通过，0 失败**。
+- 说明：仓库默认 `npm test -- ...` 会因现有 `vitest.config.ts` / Vite ESM 加载问题报 `ERR_REQUIRE_ESM`；本次未修复该无关问题，改用临时 ESM config 完成只读验证。
+
 ## Git Version Checkpoint: Phase 6 & Core Architecture Align
 
 **状态**: ✅ 已完成
@@ -19,6 +300,127 @@
 > 项目进度跟踪文档，每次任务完成后更新。
 
 ---
+
+## 任务：分析 CEO 原生创建 cron 能力的现状与差距
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+围绕“CEO 应该具备创建 cron 的能力，而不是依赖用户直接配置”这个问题，对当前仓库的前端交互、Scheduler 后端、CEO Command 链路、MCP 工具层和既有设计文档做了交叉分析，目标是判断：问题到底是没有 scheduler，还是 scheduler 没有被产品化成 CEO 能力。
+
+### 关键结论
+1. **Scheduler 基础设施已经完整**：`src/lib/agents/scheduler.ts` 与 `/api/scheduler/jobs*` 已具备 create/list/update/delete/trigger 主链路，不是“没有 cron 能力”。
+2. **当前真正缺的是 CEO 原生能力层**：CEO Dashboard 只能查看最近 jobs 并跳转到 Scheduler 面板，没有直接创建动作；CEO Command / MCP 也没有 create scheduler job 的能力。
+3. **当前创建交互仍是技术参数表单**：`src/components/scheduler-panel.tsx` 直接要求用户填写 `Cron Expression`、`Workspace`、`Prompt`、`Department Workspace URI`、`Task Goal` 等底层字段，说明产品仍在让用户替系统做对象建模。
+4. **问题已经在文档中被识别，但实现没有跟上**：`delivery/ceo-memo-context-and-scheduler.md` 已明确提出“把 Scheduler 抬到 CEO 主视角”和“从 CEO 自然语言命令直接创建 scheduler job”的方向，但仓库实现尚未落地。
+5. **根问题是架构分层断开**：Scheduler 被实现成运行时基础设施，CEO 被实现成 one-shot 决策派发器，中间缺少“经营意图 → 调度对象”的翻译层。
+
+### 产出
+- 新增分析文档：`docs/design/ceo-cron-capability-gap-analysis.md`
+
+### 验证依据
+- 前端入口与表单：`src/components/ceo-dashboard.tsx`、`src/components/ceo-office-settings.tsx`、`src/components/scheduler-panel.tsx`
+- 后端调度：`src/lib/agents/scheduler.ts`、`src/lib/agents/scheduler-types.ts`
+- API：`src/app/api/scheduler/jobs/route.ts`、`src/app/api/scheduler/jobs/[id]/route.ts`、`src/app/api/scheduler/jobs/[id]/trigger/route.ts`
+- CEO 与事件流：`src/app/api/ceo/command/route.ts`、`src/lib/ceo-events.ts`
+- MCP 与设计文档：`src/mcp/server.ts`、`delivery/ceo-memo-context-and-scheduler.md`、`docs/design/ceo-native-conversation-design.md`
+
+### 说明
+- 本次为只读分析与本地文档沉淀，没有修改业务代码。
+- 分析结论已经收口为一句话：**现在的 Scheduler 是“系统能跑”，不是“CEO 能用”。**
+
+## 任务：补充 craft-agents 中 PiAgent 与 provider 路由研究文档
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+在上一轮静态源码分析的基础上，继续把用户最关心的歧义点彻底收口：
+1. **非 Anthropic API 是否会经过 Claude Agent SDK**
+2. **PiAgent 是否是在把第三方 provider 的响应“翻译成 Claude 风格”**
+3. **PiAgent 在 Craft 架构中的真实职责是什么**
+
+### 关键结论
+1. **非 Anthropic API 当前基本走 PiAgent，而不是 ClaudeAgent**：`providerType = anthropic` 才会落到 ClaudeAgent；`pi` 与 `pi_compat` 都会映射到 PiAgent。
+2. **PiAgent 不是在 Craft 层把所有 provider 的原始响应转换成 Anthropic message 协议**：它更准确的职责是把 Pi SDK / `pi-agent-server` 的事件流适配到 Craft 自己统一的 `AgentEvent`。
+3. **“Claude 风格”只在局部 UI 兼容层成立**：`PiEventAdapter` 的确会把部分工具字段整理成接近 Claude Code 展示层的形状，但这不等于整个底层协议都被转成 Claude API。
+4. **README 与当前实现存在一处值得警惕的偏差**：README 里对 third-party endpoints 的描述更像“继续走 Claude backend”，但当前代码实际会把 custom endpoint / `baseUrl` 路由到 `pi_compat`，最终进入 PiAgent。
+
+### 产出
+- 新增研究文档：`docs/internals/craft-agents-provider-routing-and-pi-agent-study.md`
+
+### 验证依据
+- 双 backend 与 provider 分流：`craft-agents-oss/packages/shared/src/agent/backend/factory.ts`
+- Claude backend：`craft-agents-oss/packages/shared/src/agent/claude-agent.ts`
+- Pi backend：`craft-agents-oss/packages/shared/src/agent/pi-agent.ts`
+- Pi 子进程与真实 provider session：`craft-agents-oss/packages/pi-agent-server/src/index.ts`
+- 事件适配：`craft-agents-oss/packages/shared/src/agent/backend/pi/event-adapter.ts`、`craft-agents-oss/packages/shared/src/agent/backend/claude/event-adapter.ts`
+- 连接保存与 compat 路由：`craft-agents-oss/packages/server-core/src/handlers/rpc/llm-connections.ts`
+- README 对照：`craft-agents-oss/README.md`
+
+### 说明
+- 本次为本地研究文档写作，没有修改 craft-agents-oss 源码。
+- 未运行测试；结论基于静态源码交叉核对与研究子代理结果复核。
+
+### 追加更新
+- 根据后续指示，已继续补充“完整时序图”到 `docs/internals/craft-agents-provider-routing-and-pi-agent-study.md`
+- 时序图覆盖四段：连接创建、session 创建与 backend 选择、Claude 路径、Pi 路径与统一事件落盘
+- 已继续补充 `PiEventAdapter` 的事件映射表与字段重写表，单独拆开“事件统一”和“Claude 风格兼容”两个层次，避免把 UI 兼容误解为底层协议转换
+- 已继续补充 `Claude SDK` 路径与 `Pi SDK` 路径的对比节，从协议控制权、认证方式、事件适配复杂度和产品定位四个维度解释为什么两条链路并存
+- 已继续补充 `ClaudeEventAdapter` 与 `PiEventAdapter` 的对照节，明确“Claude 更偏原生 message 直译，Pi 更偏兼容 runtime 归一化”
+
+## 任务：分析 craft-agents 的 Claude SDK / 第三方 API / Workspace 架构
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+对 workspace 中的 craft-agents-oss 仓库进行了静态源码分析，重点核对三件事：
+1. 它如何一边接入 Claude Agent SDK，一边兼容第三方模型与第三方 API。
+2. 第三方兼容是否真的完全走 Claude backend，还是通过独立 provider backend 分流。
+3. 它的 workspace 是否本质上以文件夹为根，接近 IDE / Obsidian 风格。
+
+### 关键结论
+1. **不是“用一个 SDK 兼容全部”**：craft-agents 的核心做法是双后端架构，`ClaudeAgent` 负责 Anthropic / Claude 路径，`PiAgent` 负责 Google、OpenAI/Codex、GitHub Copilot 以及兼容端点路径。
+2. **Provider 抽象是关键**：`providerType` 决定使用哪个 backend，`anthropic -> ClaudeAgent`，`pi / pi_compat -> PiAgent`，从而把 Claude SDK 与其他 provider 解耦。
+3. **第三方兼容存在“文档与实现不完全一致”**：README 说明第三方 endpoint 可通过 Claude backend，但当前连接保存逻辑中，只要配置 custom endpoint / baseUrl，通常会被归一到 `pi_compat`，也就是实际转到 Pi backend。
+4. **Workspace 本质上是按文件夹组织**：服务端明确是“Obsidian-style: folder IS the workspace”；session 数据也直接存放在 `{workspaceRootPath}/sessions/{id}` 下。
+5. **同时还有全局注册层**：`~/.craft-agent/config.json` 负责登记 workspace 列表与激活状态，`~/.craft-agent/workspaces/{id}` 还承载部分补充性 workspace 数据（如 conversation / plan），但不是主工作目录本体。
+
+### 验证依据
+- 文档与说明：`craft-agents-oss/README.md`
+- CLI 连接与 workspace 引导：`craft-agents-oss/apps/cli/src/index.ts`
+- Backend 工厂与 provider 解析：`craft-agents-oss/packages/shared/src/agent/backend/factory.ts`
+- Claude backend：`craft-agents-oss/packages/shared/src/agent/claude-agent.ts`
+- Pi backend：`craft-agents-oss/packages/shared/src/agent/pi-agent.ts`
+- Pi 子进程服务：`craft-agents-oss/packages/pi-agent-server/src/index.ts`
+- LLM connection 配置与 auth env 解析：`craft-agents-oss/packages/shared/src/config/llm-connections.ts`
+- workspace / session 存储：`craft-agents-oss/packages/shared/src/workspaces/storage.ts`、`craft-agents-oss/packages/shared/src/sessions/storage.ts`
+
+### 说明
+- 本次为静态代码审阅，没有修改 craft-agents-oss 业务代码。
+- 未运行集成测试；结论基于 README、CLI、server-core、shared agent/backend 与 storage 代码交叉核对。
+
+## 任务：分析 React 前端 OPC CEO 页面用户旅程关键差距
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-07
+
+### 概要
+对当前 React 前端中的 CEO Office / OPC 相关页面做了静态旅程审查，交叉核对了真实入口、通知机制、项目工作台、CEO 决策面板以及历史设计文档。结论是：当前 CEO 旅程已经具备基础聊天、项目查看和配置能力，但仍存在 5 个会直接影响决策效率的关键差距，且其中一部分与旧文档“已全部修复”的表述不再一致。
+
+### 关键差距
+1. **全局 CEO 命令入口缺位**：仓库中仍保留 `GlobalCommandBar` / `QuickTaskInput` 组件，但主页面当前没有挂载；实际 Header 仅保留通知和工具按钮，导致“随时一句话派发任务”的旅程在现状中断开。
+2. **CEO Office 与 OPC 项目页是割裂的双入口**：CEO 在 CEO Office 右侧仪表盘或项目 Tab 点击项目后，会被直接切换到 OPC 项目页，无法在同一工作面内连续完成“对话 → 监控 → 干预 → 返回对话”。
+3. **全局事件感知不完整**：Header 的 `generateCEOEvents(projects, [])` 没有带入 stage 维度，导致顶层事件流主要基于项目状态，缺少 stage/gate 之外的执行态细节；`needs_decision` 也没有成为一级全局事件。
+4. **CEO 决策入口埋在项目详情深处**：`ceoDecision` 和 `needs_decision` 的可操作 UI 主要存在于 `projects-panel.tsx` 的详情态，CEO 若停留在 CEO Office 会话页，不会获得统一的待决策工作台。
+5. **运行监控闭环不足**：Header 的 Runs Drawer 只展示 active runs，没有把“最近完成 / 最近失败 / 下一步建议”串回 CEO 的监控流；CEO 仍需手动跳项目、跳详情才能形成完整判断。
+
+### 验证
+- 静态核对：`src/app/page.tsx`、`src/components/ceo-office-settings.tsx`、`src/components/ceo-dashboard.tsx`、`src/components/projects-panel.tsx`、`src/components/project-workbench.tsx`、`src/components/notification-indicators.tsx`、`src/lib/ceo-events.ts`
+- 文档对照：`docs/opc-interaction-design-v2.md`、`docs/user-journey-gaps.md`
+- 结论依据：通过源码阅读和关键词回扫确认当前实际挂载关系、导航跳转、事件来源与决策入口分布；本次为前端静态分析，无运行时代码改动
 
 ## 任务：创建本地 Git 快照提交（不 push）
 

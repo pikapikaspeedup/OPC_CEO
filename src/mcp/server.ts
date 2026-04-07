@@ -243,7 +243,113 @@ server.registerTool(
 
 const { analyzeProject, buildProjectGraph } = await import("../lib/agents/project-diagnostics.js");
 const { reconcileProject } = await import("../lib/agents/project-reconciler.js");
-const { listScheduledJobsEnriched } = await import("../lib/agents/scheduler.js");
+const {
+  createScheduledJob,
+  deleteScheduledJob,
+  getScheduledJob,
+  listScheduledJobsEnriched,
+  triggerScheduledJob,
+  updateScheduledJob,
+} = await import("../lib/agents/scheduler.js");
+
+function buildSchedulerAction(input: {
+  actionKind: 'dispatch-pipeline' | 'health-check' | 'create-project';
+  workspace?: string;
+  prompt?: string;
+  templateId?: string;
+  stageId?: string;
+  projectId?: string;
+}) {
+  if (input.actionKind === 'health-check') {
+    if (!input.projectId) {
+      throw new Error('health-check requires projectId');
+    }
+    return { kind: 'health-check' as const, projectId: input.projectId };
+  }
+
+  if (input.actionKind === 'create-project') {
+    return { kind: 'create-project' as const };
+  }
+
+  if (!input.workspace || !input.prompt || !input.templateId) {
+    throw new Error('dispatch-pipeline requires workspace, prompt and templateId');
+  }
+
+  return {
+    kind: 'dispatch-pipeline' as const,
+    workspace: input.workspace,
+    prompt: input.prompt,
+    templateId: input.templateId,
+    ...(input.stageId ? { stageId: input.stageId } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+  };
+}
+
+function buildSchedulerJobPayload(input: {
+  name: string;
+  type: 'cron' | 'interval' | 'once';
+  cronExpression?: string;
+  intervalMs?: number;
+  scheduledAt?: string;
+  actionKind: 'dispatch-pipeline' | 'health-check' | 'create-project';
+  workspace?: string;
+  prompt?: string;
+  templateId?: string;
+  stageId?: string;
+  projectId?: string;
+  enabled?: boolean;
+  departmentWorkspaceUri?: string;
+  goal?: string;
+  skillHint?: string;
+  createdBy?: 'ceo-command' | 'ceo-workflow' | 'mcp' | 'web' | 'api';
+  intentSummary?: string;
+}) {
+  const payload: Record<string, unknown> = {
+    name: input.name,
+    type: input.type,
+    enabled: input.enabled ?? true,
+    createdBy: input.createdBy ?? 'mcp',
+    ...(input.intentSummary ? { intentSummary: input.intentSummary } : {}),
+  };
+
+  if (input.type === 'cron') {
+    if (!input.cronExpression) {
+      throw new Error('cron jobs require cronExpression');
+    }
+    payload.cronExpression = input.cronExpression;
+  }
+
+  if (input.type === 'interval') {
+    if (!input.intervalMs || input.intervalMs <= 0) {
+      throw new Error('interval jobs require intervalMs > 0');
+    }
+    payload.intervalMs = input.intervalMs;
+  }
+
+  if (input.type === 'once') {
+    if (!input.scheduledAt) {
+      throw new Error('once jobs require scheduledAt');
+    }
+    payload.scheduledAt = input.scheduledAt;
+  }
+
+  payload.action = buildSchedulerAction(input);
+
+  if (input.actionKind === 'create-project') {
+    if (!input.departmentWorkspaceUri || !input.goal) {
+      throw new Error('create-project jobs require departmentWorkspaceUri and goal');
+    }
+    payload.departmentWorkspaceUri = input.departmentWorkspaceUri;
+    payload.opcAction = {
+      type: 'create_project',
+      projectType: 'adhoc',
+      goal: input.goal,
+      ...(input.skillHint ? { skillHint: input.skillHint } : {}),
+    };
+  }
+
+  return payload;
+}
 
 // Tool: antigravity_get_project_diagnostics
 server.registerTool(
@@ -295,6 +401,206 @@ server.registerTool(
       const jobs = listScheduledJobsEnriched();
       return {
         content: [{ type: "text", text: JSON.stringify(jobs, null, 2) }],
+      };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
+  },
+);
+
+// Tool: antigravity_create_scheduler_job
+server.registerTool(
+  "antigravity_create_scheduler_job",
+  {
+    title: "Create Scheduler Job",
+    description: "Create a scheduled job for recurring pipeline dispatch, project health checks, or CEO ad-hoc project creation.",
+    inputSchema: z.object({
+      name: z.string().describe("Job display name"),
+      type: z.enum(["cron", "interval", "once"]).describe("Schedule type"),
+      cronExpression: z.string().optional().describe("Five-field cron expression for cron jobs"),
+      intervalMs: z.number().int().positive().optional().describe("Interval in milliseconds for interval jobs"),
+      scheduledAt: z.string().optional().describe("ISO timestamp for once jobs"),
+      actionKind: z.enum(["dispatch-pipeline", "health-check", "create-project"]).describe("What the job should do"),
+      workspace: z.string().optional().describe("Workspace URI for dispatch-pipeline"),
+      prompt: z.string().optional().describe("Prompt for dispatch-pipeline"),
+      templateId: z.string().optional().describe("Template ID for dispatch-pipeline"),
+      stageId: z.string().optional().describe("Optional stage ID for dispatch-pipeline"),
+      projectId: z.string().optional().describe("Project ID for health-check or pipeline attachment"),
+      enabled: z.boolean().default(true).describe("Whether the job starts enabled"),
+      departmentWorkspaceUri: z.string().optional().describe("Department workspace URI for create-project jobs"),
+      goal: z.string().optional().describe("Ad-hoc project goal for create-project jobs"),
+      skillHint: z.string().optional().describe("Optional skill hint for create-project jobs"),
+      intentSummary: z.string().optional().describe("Original natural-language intent"),
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async (input) => {
+    try {
+      const job = createScheduledJob(buildSchedulerJobPayload(input as any) as any);
+      return {
+        content: [{ type: "text", text: JSON.stringify(job, null, 2) }],
+        structuredContent: job as any,
+      };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
+  },
+);
+
+// Tool: antigravity_update_scheduler_job
+server.registerTool(
+  "antigravity_update_scheduler_job",
+  {
+    title: "Update Scheduler Job",
+    description: "Update an existing scheduled job. Most commonly used to pause/resume a job by toggling enabled.",
+    inputSchema: z.object({
+      jobId: z.string().describe("Scheduled job ID"),
+      name: z.string().optional().describe("Updated display name"),
+      type: z.enum(["cron", "interval", "once"]).optional().describe("Updated schedule type"),
+      cronExpression: z.string().optional().describe("Updated cron expression"),
+      intervalMs: z.number().int().positive().optional().describe("Updated interval in milliseconds"),
+      scheduledAt: z.string().optional().describe("Updated ISO timestamp for once jobs"),
+      enabled: z.boolean().optional().describe("Pause or resume the job"),
+      actionKind: z.enum(["dispatch-pipeline", "health-check", "create-project"]).optional().describe("Updated action kind"),
+      workspace: z.string().optional().describe("Workspace URI for dispatch-pipeline"),
+      prompt: z.string().optional().describe("Prompt for dispatch-pipeline"),
+      templateId: z.string().optional().describe("Template ID for dispatch-pipeline"),
+      stageId: z.string().optional().describe("Optional stage ID for dispatch-pipeline"),
+      projectId: z.string().optional().describe("Project ID for health-check or pipeline attachment"),
+      departmentWorkspaceUri: z.string().optional().describe("Department workspace URI for create-project jobs"),
+      goal: z.string().optional().describe("Ad-hoc project goal for create-project jobs"),
+      skillHint: z.string().optional().describe("Optional skill hint for create-project jobs"),
+      intentSummary: z.string().optional().describe("Updated natural-language intent"),
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ jobId, actionKind, ...input }) => {
+    try {
+      const existing = getScheduledJob(jobId);
+      if (!existing) {
+        throw new Error(`Scheduled job not found: ${jobId}`);
+      }
+      const updates: Record<string, unknown> = { ...input };
+
+      const hasActionOverrides = Boolean(
+        actionKind
+        || input.workspace !== undefined
+        || input.prompt !== undefined
+        || input.templateId !== undefined
+        || input.stageId !== undefined
+        || input.projectId !== undefined
+        || input.departmentWorkspaceUri !== undefined
+        || input.goal !== undefined
+        || input.skillHint !== undefined,
+      );
+
+      if (hasActionOverrides) {
+        const nextActionKind = actionKind || existing.action.kind;
+        if (nextActionKind === 'dispatch-pipeline') {
+          updates.action = buildSchedulerAction({
+            actionKind: 'dispatch-pipeline',
+            workspace: input.workspace ?? (existing.action.kind === 'dispatch-pipeline' ? existing.action.workspace : undefined),
+            prompt: input.prompt ?? (existing.action.kind === 'dispatch-pipeline' ? existing.action.prompt : undefined),
+            templateId: input.templateId ?? (existing.action.kind === 'dispatch-pipeline' ? existing.action.templateId : undefined),
+            stageId: input.stageId ?? (existing.action.kind === 'dispatch-pipeline' ? existing.action.stageId : undefined),
+            projectId: input.projectId ?? (existing.action.kind === 'dispatch-pipeline' ? existing.action.projectId : undefined),
+          } as any);
+        } else if (nextActionKind === 'health-check') {
+          updates.action = buildSchedulerAction({
+            actionKind: 'health-check',
+            projectId: input.projectId ?? (existing.action.kind === 'health-check' ? existing.action.projectId : undefined),
+          } as any);
+        } else {
+          const departmentWorkspaceUri = input.departmentWorkspaceUri ?? existing.departmentWorkspaceUri;
+          const goal = input.goal ?? existing.opcAction?.goal;
+          if (!departmentWorkspaceUri || !goal) {
+            throw new Error('create-project updates require departmentWorkspaceUri and goal');
+          }
+          updates.action = { kind: 'create-project' };
+          updates.departmentWorkspaceUri = departmentWorkspaceUri;
+          updates.opcAction = {
+            type: 'create_project',
+            projectType: 'adhoc',
+            goal,
+            ...((input.skillHint ?? existing.opcAction?.skillHint) ? { skillHint: input.skillHint ?? existing.opcAction?.skillHint } : {}),
+          };
+        }
+      }
+      const job = updateScheduledJob(jobId, updates as any);
+      return {
+        content: [{ type: "text", text: JSON.stringify(job, null, 2) }],
+        structuredContent: job as any,
+      };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
+  },
+);
+
+// Tool: antigravity_trigger_scheduler_job
+server.registerTool(
+  "antigravity_trigger_scheduler_job",
+  {
+    title: "Trigger Scheduler Job",
+    description: "Run a scheduled job immediately once without changing its future schedule.",
+    inputSchema: z.object({
+      jobId: z.string().describe("Scheduled job ID"),
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ jobId }) => {
+    try {
+      const result = await triggerScheduledJob(jobId);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as any,
+      };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }] };
+    }
+  },
+);
+
+// Tool: antigravity_delete_scheduler_job
+server.registerTool(
+  "antigravity_delete_scheduler_job",
+  {
+    title: "Delete Scheduler Job",
+    description: "Delete a scheduled job permanently.",
+    inputSchema: z.object({
+      jobId: z.string().describe("Scheduled job ID"),
+    }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ jobId }) => {
+    try {
+      const deleted = deleteScheduledJob(jobId);
+      if (!deleted) {
+        throw new Error(`Scheduled job not found: ${jobId}`);
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({ success: true, jobId }, null, 2) }],
+        structuredContent: { success: true, jobId } as any,
       };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }] };

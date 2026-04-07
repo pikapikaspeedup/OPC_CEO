@@ -12,16 +12,17 @@ import AnalyticsDashboard from '@/components/analytics-dashboard';
 import TokenQuotaWidget from '@/components/token-quota-widget';
 import McpStatusWidget from '@/components/mcp-status-widget';
 import CodexWidget from '@/components/codex-widget';
+import CeoOfficeSettings from '@/components/ceo-office-settings';
+import SchedulerPanel from '@/components/scheduler-panel';
 import TunnelStatusWidget from '@/components/tunnel-status-widget';
 import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
-import GlobalCommandBar from '@/components/global-command-bar';
 import NotificationIndicators from '@/components/notification-indicators';
 import { useI18n } from '@/components/locale-provider';
-import { api, connectWs } from '@/lib/api';
+import { api, connectWs, type AuditEvent } from '@/lib/api';
 import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
-import { generateCEOEvents } from '@/lib/ceo-events';
+import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
 import { Download, Menu, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -30,7 +31,7 @@ import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
 import { getModelLabel } from '@/lib/model-labels';
 import { AppShell, StatusChip, WorkspaceHeader } from '@/components/ui/app-shell';
 
-type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations';
+type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
 
 export default function Home() {
   const { t } = useI18n();
@@ -70,6 +71,7 @@ export default function Home() {
   const apiLoadedRef = useRef(false);
   const agentStateLoadedRef = useRef(false);
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
+  const [recentAuditEvents, setRecentAuditEvents] = useState<AuditEvent[]>([]);
 
   useEffect(() => {
     api.models().then(data => {
@@ -205,8 +207,8 @@ export default function Home() {
     setLoading(false);
   }, []);
 
-  const handleSelect = (id: string, title: string) => {
-    setSidebarSection('conversations');
+  const handleSelect = (id: string, title: string, targetSection?: SidebarSection) => {
+    setSidebarSection(targetSection || 'conversations');
     lastStepCountRef.current = 0;
     apiLoadedRef.current = false;
     setActiveId(id);
@@ -252,6 +254,27 @@ export default function Home() {
       alert('Failed: ' + (error instanceof Error ? error.message : 'unknown'));
     }
   };
+
+  useEffect(() => {
+    if (sidebarSection === 'ceo') {
+      api.conversations().then(data => {
+         const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace');
+         if (!isCurrentlyCeo) {
+           const ceoConv = data.find(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace');
+           if (ceoConv) {
+             handleSelect(ceoConv.id, 'CEO Office', 'ceo');
+           } else {
+             api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace').then(res => {
+               if (res.cascadeId) {
+                 handleSelect(res.cascadeId, 'CEO Office', 'ceo');
+               }
+             });
+           }
+         }
+      }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarSection]);
 
   const handleSend = async (text: string, attachments?: unknown) => {
     if (!activeId) return;
@@ -419,7 +442,7 @@ export default function Home() {
   const isRunning = isActive;
   const currentModelLabel = getModelLabel(currentModel, models, { autoLabel: t('composer.autoSelect') });
   const agentWorkspaces = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces)
-    .filter(workspace => workspace.running && !workspace.hidden)
+    .filter(workspace => (workspace.running || workspace.uri.includes('ceo-workspace')) && !workspace.hidden)
     .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
 
   // OPC Phase 3: load department configs for all workspaces
@@ -462,11 +485,26 @@ export default function Home() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      api.auditEvents({ limit: 50 })
+        .then((events) => { if (!cancelled) setRecentAuditEvents(events); })
+        .catch(() => { if (!cancelled) setRecentAuditEvents([]); });
+    };
+    poll();
+    const interval = setInterval(poll, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   // CEO events derived from projects
   const ceoEvents = useMemo(() => {
-    try { return generateCEOEvents(projects, []); }
+    try { return generateCEOEventsWithAudit(projects, [], recentAuditEvents); }
     catch { return [] as CEOEvent[]; }
-  }, [projects]);
+  }, [projects, recentAuditEvents]);
 
   // Active runs for header ▶ indicator
   const headerActiveRuns = useMemo(
@@ -474,88 +512,7 @@ export default function Home() {
     [agentRuns],
   );
 
-  // CEO command handler for GlobalCommandBar
-  const handleCEOCommand = useCallback(async (text: string) => {
-    try {
-      const result = await api.ceoCommand(text);
-      if (result.projectId || result.action === 'create_project' || result.action === 'multi_create') {
-        loadAgentState();
-      }
-      return {
-        success: result.success,
-        message: result.message,
-        suggestions: result.suggestions,
-      };
-    } catch {
-      return { success: false, message: '命令执行失败' };
-    }
-  }, [loadAgentState]);
 
-  const handleSuggestionAction = useCallback(async (suggestion: import('@/lib/api').CEOSuggestion) => {
-    if (suggestion.type === 'suggest_add_template' && suggestion.payload) {
-      // Add template to department, then dispatch
-      const { workspace, templateId, projectId, goal } = suggestion.payload;
-      if (workspace && templateId) {
-        try {
-          // 1. Add template to department config
-          const deptConfig = await api.getDepartment(workspace);
-          const existingIds = deptConfig.templateIds || [];
-          if (!existingIds.includes(templateId)) {
-            await api.updateDepartment(workspace, {
-              ...deptConfig,
-              templateIds: [...existingIds, templateId],
-            });
-          }
-          // 2. If project exists, dispatch it
-          if (projectId && goal) {
-            await api.dispatchRun({ workspace, templateId, projectId, prompt: goal });
-          }
-          loadAgentState();
-        } catch {
-          // best effort
-        }
-      }
-    } else if (suggestion.type === 'auto_generate_and_dispatch' && suggestion.payload) {
-      // AI generate template, then dispatch
-      const { workspace, goal, projectId, departmentName } = suggestion.payload;
-      if (workspace && goal) {
-        try {
-          const genResult = await api.generatePipeline({ goal: `为部门 ${departmentName || '未知'} 设计工作模板：${goal}` });
-          if (genResult.draftId) {
-            // Auto-confirm the draft
-            const confirmed = await api.confirmDraft(genResult.draftId);
-            if (confirmed.templateId) {
-              // Add to department
-              const deptConfig = await api.getDepartment(workspace);
-              await api.updateDepartment(workspace, {
-                ...deptConfig,
-                templateIds: [...(deptConfig.templateIds || []), confirmed.templateId],
-              });
-              // Dispatch if project exists
-              if (projectId) {
-                await api.dispatchRun({ workspace, templateId: confirmed.templateId, projectId, prompt: goal });
-              }
-            }
-          }
-          loadAgentState();
-        } catch {
-          // best effort
-        }
-      }
-    } else if (suggestion.type === 'use_template' && suggestion.payload?.workspace) {
-      // Open department settings
-      setSidebarSection('projects');
-    } else if (suggestion.type === 'create_template') {
-      // Navigate to template browser
-      setSidebarSection('projects');
-    } else if (suggestion.type === 'reassign_department' && suggestion.payload) {
-      // Re-dispatch to the suggested department
-      const { workspace, templateId, stageId } = suggestion.payload;
-      if (workspace && templateId) {
-        api.dispatchRun({ workspace, templateId, ...(stageId ? { stageId } : {}), prompt: '' }).then(() => loadAgentState()).catch(() => { });
-      }
-    }
-  }, [loadAgentState]);
 
   const selectedAgentRun = agentRuns.find(run => run.runId === selectedAgentRunId) || null;
   const displayTitle = sidebarSection === 'knowledge'
@@ -607,13 +564,7 @@ export default function Home() {
               <span className="hidden md:block text-xs font-semibold text-white/60">{displayTitle || t('common.appName')}</span>
             </div>
 
-            {/* Global Command Bar — center */}
-            <GlobalCommandBar
-              workspaces={agentWorkspaces}
-              departments={departmentsMap}
-              onSubmitCommand={handleCEOCommand}
-              onSuggestionAction={handleSuggestionAction}
-            />
+            <div className="flex-1" />
 
             {/* Right: Notifications + Utils */}
             <div className="flex items-center gap-1.5 shrink-0">
@@ -624,6 +575,12 @@ export default function Home() {
                 pendingApprovals={pendingApprovals}
                 onEventAction={(event, action) => {
                   const payload = action.payload || {};
+                  const target = typeof payload.target === 'string' ? payload.target : undefined;
+                  if (target === 'scheduler') {
+                    setSidebarSection('operations');
+                    setSidebarOpen(true);
+                    return;
+                  }
                   const projectId = typeof payload.projectId === 'string' ? payload.projectId : event.projectId;
                   if (projectId) {
                     setSidebarSection('projects');
@@ -759,6 +716,7 @@ export default function Home() {
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                <SchedulerPanel />
                 <AnalyticsDashboard />
                 <div className="grid gap-4 md:grid-cols-2">
                   <TokenQuotaWidget workspaces={agentWorkspaces} />
@@ -768,6 +726,67 @@ export default function Home() {
                 <CodexWidget />
               </div>
             </ScrollArea>
+          </div>
+        ) : sidebarSection === 'ceo' ? (
+          <div className="app-shell-stage relative flex-1 overflow-hidden">
+            <div className="pointer-events-none absolute inset-0 agent-grid opacity-25" />
+            <div className="relative flex h-full flex-col px-3 pb-3 pt-3 md:flex-row md:px-5 md:pb-5 md:pt-5 gap-5">
+              {/* Left Chat Window */}
+              <div className="chat-stage-panel relative flex-1 min-w-0 flex flex-col overflow-hidden rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(9,17,27,0.4)_0%,rgba(9,17,27,0.7)_100%)] shadow-2xl">
+                <div className="chat-stage-content relative min-h-0 flex-1">
+                  <Chat
+                    steps={steps}
+                    loading={loading}
+                    currentModel={currentModel}
+                    onProceed={handleProceed}
+                    onRevert={handleRevert}
+                    isActive={isActive}
+                  />
+                </div>
+                {activeId ? (
+                  <div className="shrink-0 border-t border-white/6 px-4 pb-4 pt-3 bg-black/20">
+                    <ChatInput
+                      activeId={activeId}
+                      onSend={handleSend}
+                      onCancel={handleCancel}
+                      disabled={loading}
+                      isRunning={isRunning}
+                      connected={connected}
+                      models={models}
+                      currentModel={currentModel}
+                      onModelChange={setCurrentModel}
+                      skills={skills}
+                      workflows={workflows}
+                      agenticMode={agenticMode}
+                      onAgenticModeChange={setAgenticMode}
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Right Configuration Panel */}
+              <div className="w-full h-1/2 md:h-full md:w-[520px] lg:w-[580px] shrink-0 border border-white/10 bg-[linear-gradient(180deg,rgba(18,24,36,0.6)_0%,rgba(9,17,27,0.8)_100%)] rounded-[32px] overflow-hidden flex flex-col shadow-2xl">
+                 <CeoOfficeSettings
+                   workspaces={agentWorkspaces}
+                   projects={projects}
+                   departments={departmentsMap}
+                   templates={templates}
+                   onDepartmentSaved={(uri, config) => {
+                     setDepartmentsMap(prev => new Map(prev).set(uri, config));
+                     api.updateDepartment(uri, config).catch(() => { });
+                   }}
+                   onNavigateToProject={(id) => {
+                     setSidebarSection('projects');
+                     setSelectedProjectId(id);
+                   }}
+                   onOpenScheduler={() => {
+                     setSidebarSection('operations');
+                     setSidebarOpen(true);
+                   }}
+                   onRefresh={() => loadAgentState(selectedAgentRunId)}
+                 />
+              </div>
+            </div>
           </div>
         ) : (
           <div className="app-shell-stage relative flex-1 overflow-hidden">
@@ -816,6 +835,7 @@ export default function Home() {
                 ) : null}
               </div>
             </div>
+
           </div>
         )}
       </AppShell>

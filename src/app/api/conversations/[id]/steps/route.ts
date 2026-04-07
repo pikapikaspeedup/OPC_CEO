@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getAllConnections, grpc } from '@/lib/bridge/gateway';
 import { createLogger } from '@/lib/logger';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
 
 const log = createLogger('StepsAPI');
 
@@ -9,6 +12,22 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: cascadeId } = await params;
   try {
+    // ---------------------------------------------------------------------------
+    // Check if this is a Codex direct session (offline/no-IDE provider)
+    // ---------------------------------------------------------------------------
+    if (cascadeId.startsWith('codex-')) {
+      const convDir = path.join(os.homedir(), '.gemini/antigravity/conversations');
+      const codexFile = path.join(convDir, `${cascadeId}.codex.json`);
+      if (fs.existsSync(codexFile)) {
+        try {
+          const steps = JSON.parse(fs.readFileSync(codexFile, 'utf-8'));
+          return NextResponse.json({ cascadeId, steps });
+        } catch(e) {}
+      }
+      return NextResponse.json({ cascadeId, steps: [] });
+    }
+    // ---------------------------------------------------------------------------
+
     const conns = getAllConnections();
     log.info({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length }, 'Steps request');
     let checkpointData: any = null;

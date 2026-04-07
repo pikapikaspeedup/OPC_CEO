@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isScheduledJobDue } from './scheduler';
+import { createScheduledJob, deleteScheduledJob, isScheduledJobDue, normalizeScheduledJobDefinition, updateScheduledJob } from './scheduler';
 import type { ScheduledJob } from './scheduler-types';
 
 function makeJob(overrides: Partial<ScheduledJob>): ScheduledJob {
@@ -35,5 +35,72 @@ describe('isScheduledJobDue', () => {
 
     expect(isScheduledJobDue(job, new Date('2026-03-27T08:01:00.000Z'))).toBe(true);
     expect(isScheduledJobDue({ ...job, lastRunAt: '2026-03-27T08:02:00.000Z' }, new Date('2026-03-27T08:03:00.000Z'))).toBe(false);
+  });
+
+  it('normalizes create-project jobs to file URIs', () => {
+    const normalized = normalizeScheduledJobDefinition(makeJob({
+      type: 'cron',
+      cronExpression: '0 9 * * 1-5',
+      action: { kind: 'create-project' },
+      departmentWorkspaceUri: '/Users/darrel/Documents/backend',
+      opcAction: {
+        type: 'create_project',
+        projectType: 'adhoc',
+        goal: '生成日报',
+      },
+    }));
+
+    expect(normalized.departmentWorkspaceUri).toBe('file:///Users/darrel/Documents/backend');
+    expect(normalized.action.kind).toBe('create-project');
+  });
+
+  it('clears create-project metadata when updated to health-check', () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: { kind: 'create-project' },
+        departmentWorkspaceUri: 'file:///Users/darrel/Documents/backend',
+        opcAction: {
+          type: 'create_project',
+          projectType: 'adhoc',
+          goal: '生成日报',
+        },
+      }),
+    });
+
+    const updated = updateScheduledJob(created.jobId, {
+      action: { kind: 'health-check', projectId: 'project-2' },
+    });
+
+    expect(updated?.action.kind).toBe('health-check');
+    expect(updated?.departmentWorkspaceUri).toBeUndefined();
+    expect(updated?.opcAction).toBeUndefined();
+
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('resets once execution state when rescheduled and re-enabled', () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'once',
+        intervalMs: undefined,
+        scheduledAt: '2026-03-27T08:00:00.000Z',
+        lastRunAt: '2026-03-27T08:01:00.000Z',
+        lastRunResult: 'success',
+        enabled: false,
+      }),
+    });
+
+    const updated = updateScheduledJob(created.jobId, {
+      scheduledAt: '2026-03-28T08:00:00.000Z',
+      enabled: true,
+    });
+
+    expect(updated?.lastRunAt).toBeUndefined();
+    expect(updated?.lastRunResult).toBeUndefined();
+    expect(updated?.enabled).toBe(true);
+
+    deleteScheduledJob(created.jobId);
   });
 });

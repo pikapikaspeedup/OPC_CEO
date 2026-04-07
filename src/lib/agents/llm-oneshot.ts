@@ -16,6 +16,7 @@ import type { AILayer, AIScene } from '../providers/types';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { getCEOWorkspacePath } from './ceo-environment';
 
 const log = createLogger('LLM-Oneshot');
 
@@ -23,16 +24,7 @@ const DEFAULT_MODEL = 'MODEL_PLACEHOLDER_M47'; // Gemini 3 Flash
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 120_000; // 2 minutes
 
-/**
- * Get or create the global CEO workspace path.
- */
-export function getCEOWorkspacePath(): string {
-  const wsPath = path.join(os.homedir(), '.gemini/antigravity/ceo-workspace');
-  if (!fs.existsSync(wsPath)) {
-    fs.mkdirSync(wsPath, { recursive: true });
-  }
-  return wsPath;
-}
+
 
 /**
  * Send a prompt to the LLM and return the text response.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { generateCEOEvents } from './ceo-events';
+import { generateCEOEvents, generateCEOEventsWithAudit } from './ceo-events';
+import type { AuditEvent } from './api';
 import type { Project, PipelineStageProgressFE } from './types';
 
 describe('generateCEOEvents', () => {
@@ -38,5 +39,17 @@ describe('generateCEOEvents', () => {
     }] as Project[];
     const events = generateCEOEvents(projects, []);
     expect(events.some(e => e.type === 'warning' && e.title.includes('超时'))).toBe(true);
+  });
+
+  it('includes scheduler failure events from audit log', () => {
+    const auditEvents = [{
+      timestamp: new Date().toISOString(),
+      kind: 'scheduler:failed',
+      jobId: 'job-1',
+      message: "Job 'daily digest' failed: timeout",
+    }] as AuditEvent[];
+
+    const events = generateCEOEventsWithAudit([], [], auditEvents);
+    expect(events.some(e => e.title === '定时任务失败')).toBe(true);
   });
 });

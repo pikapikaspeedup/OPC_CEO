@@ -26,15 +26,13 @@ import {
   Loader2,
   ArrowLeft,
   Repeat,
-  Layers,
+
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ProjectWorkbench from '@/components/project-workbench';
 import PipelineGenerateDialog from '@/components/pipeline-generate-dialog';
 import SkillBrowser from '@/components/skill-browser';
-import TemplateBrowser from '@/components/template-browser';
-import QuickTaskInput, { generateTaskName } from '@/components/quick-task-input';
-import CEODashboard from '@/components/ceo-dashboard';
+
 import { generateCEOEvents } from '@/lib/ceo-events';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -130,7 +128,7 @@ export default function ProjectsPanel({
   const [isGenerateDialogOpen, setIsGenerateDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [dispatchingProject, setDispatchingProject] = useState<Project | null>(null);
-  const [browseView, setBrowseView] = useState<'projects' | 'templates'>('projects');
+
 
   const [formData, setFormData] = useState({
     name: '',
@@ -159,70 +157,7 @@ export default function ProjectsPanel({
     return () => clearTimeout(timer);
   }, [ceoToast]);
 
-  /**
-   * Shared handler for CEO command responses from QuickTaskInput.
-   * 
-   * Design principle: after CEO creates a task, ALWAYS navigate to the project
-   * detail page so the CEO can see the decision process and run status.
-   * - create_project → project detail shows running pipeline
-   * - needs_decision → project detail shows decision panel with suggestions
-   * - report_to_human → toast with guidance (no project created)
-   */
-  const handleQuickTaskSubmit = useCallback(async ({ goal, workspace, model }: { goal: string; workspace: string; model?: string }) => {
-    setCeoSuggestions(null);
-    setCeoToast(null);
-    try {
-      const dept = departments?.get(workspace);
-      const routedGoal = dept ? `让${dept.name}${goal}` : goal;
-      const result = await api.ceoCommand(routedGoal, model ? { model } : undefined);
 
-      switch (result.action) {
-        case 'create_project':
-        case 'multi_create':
-          // Success — project created and run dispatched → navigate to detail
-          setCeoToast({ success: true, message: result.message });
-          onRefresh?.();
-          if (result.projectId) {
-            onSelectProject?.(result.projectId);
-          } else if (result.projectIds?.[0]) {
-            onSelectProject?.(result.projectIds[0]);
-          }
-          break;
-
-        case 'needs_decision':
-          // Project created but needs CEO decision → navigate to detail with suggestions
-          setCeoToast({ success: false, message: result.message });
-          // Store suggestions so project detail page can render them
-          if (result.projectId && result.suggestions?.length) {
-            setPendingSuggestions(prev => ({ ...prev, [result.projectId!]: result.suggestions! }));
-          }
-          onRefresh?.();
-          if (result.projectId) {
-            onSelectProject?.(result.projectId);
-          }
-          break;
-
-        case 'report_to_human':
-          // Could not match department — show guidance toast
-          setCeoToast({ success: false, message: `${result.message}\n💡 试试指定部门名称，例如："让研发部做..." 或先在上方部门网格中配置一个部门。` });
-          break;
-
-        case 'info':
-          setCeoToast({ success: true, message: result.message });
-          break;
-
-        default:
-          setCeoToast({ success: result.success, message: result.message });
-          if (result.projectId) {
-            onRefresh?.();
-          }
-          break;
-      }
-    } catch (err) {
-      console.error('CEO command failed:', err);
-      setCeoToast({ success: false, message: '指令执行失败，请稍后重试' });
-    }
-  }, [departments, onRefresh, onSelectProject]);
 
   // User-visible error/success flash
   const [actionError, setActionError] = useState<string | null>(null);
@@ -456,15 +391,6 @@ export default function ProjectsPanel({
     <>
       {sortedProjects.length === 0 ? (
         <div className="space-y-6">
-          {/* Quick task + CEO Dashboard even when no projects */}
-          {workspaces.length > 0 && (
-            <QuickTaskInput
-              workspaces={workspaces}
-              departments={departments}
-              models={models}
-              onSubmit={handleQuickTaskSubmit}
-            />
-          )}
 
           {/* CEO response toast */}
           {ceoToast && (
@@ -477,16 +403,6 @@ export default function ProjectsPanel({
               {ceoToast.message}
             </div>
           )}
-
-          <CEODashboard
-            workspaces={workspaces}
-            projects={projects}
-            departments={departments || new Map()}
-            onSelectDepartment={() => { }}
-            onDepartmentSaved={onDepartmentSaved}
-            onNavigateToProject={(id) => onSelectProject?.(id)}
-            onOpenScheduler={onOpenOperations}
-          />
 
           <div className="flex flex-col items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] py-12 text-center">
             <FolderKanban className="mb-4 h-12 w-12 text-white/20" />
@@ -1076,29 +992,6 @@ export default function ProjectsPanel({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h2 className="text-2xl font-bold text-white">{t('projects.title')}</h2>
-              {/* View toggle: Projects vs Templates */}
-              <div className="flex items-center rounded-full border border-white/8 bg-white/[0.02] p-0.5 ml-3">
-                <button
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                    browseView === 'projects' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60',
-                  )}
-                  onClick={() => setBrowseView('projects')}
-                >
-                  <FolderKanban className="h-3 w-3" />
-                  项目
-                </button>
-                <button
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                    browseView === 'templates' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60',
-                  )}
-                  onClick={() => setBrowseView('templates')}
-                >
-                  <Layers className="h-3 w-3" />
-                  模板工坊
-                </button>
-              </div>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="ghost" onClick={() => setIsGenerateDialogOpen(true)} className="gap-2 rounded-full">
@@ -1112,56 +1005,16 @@ export default function ProjectsPanel({
             </div>
           </div>
 
-          {/* Template Browser view */}
-          {browseView === 'templates' ? (
-            <TemplateBrowser
-              templates={templates || []}
-              onGenerate={() => setIsGenerateDialogOpen(true)}
-              onRefresh={onRefresh}
-              onSelectForDispatch={(templateId) => {
-                // Switch to projects view and open create dialog pre-filled with this template
-                setBrowseView('projects');
-                setFormData(prev => ({ ...prev, templateId }));
-                setIsCreateDialogOpen(true);
-              }}
-            />
-          ) : (
-            <>
-
-              {/* Quick task input (V8) */}
-              {workspaces.length > 0 && (
-                <QuickTaskInput
-                  workspaces={workspaces}
-                  departments={departments}
-                  models={models}
-                  onSubmit={handleQuickTaskSubmit}
-                />
-              )}
-
-              {/* CEO response toast */}
-              {ceoToast && (
-                <div className={cn(
-                  'rounded-xl border px-4 py-3 text-sm whitespace-pre-line',
-                  ceoToast.success
-                    ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
-                    : 'border-amber-500/20 bg-amber-500/5 text-amber-300',
-                )}>
-                  {ceoToast.message}
-                </div>
-              )}
-
-              {/* CEO Dashboard (V9) — pinned at top */}
-              <CEODashboard
-                workspaces={workspaces}
-                projects={projects}
-                departments={departments || new Map()}
-                onSelectDepartment={() => { }}
-                onDepartmentSaved={onDepartmentSaved}
-                onNavigateToProject={(id) => onSelectProject?.(id)}
-                onOpenScheduler={onOpenOperations}
-              />
-
-            </>
+          {/* CEO response toast */}
+          {ceoToast && (
+            <div className={cn(
+              'rounded-xl border px-4 py-3 text-sm whitespace-pre-line',
+              ceoToast.success
+                ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
+                : 'border-amber-500/20 bg-amber-500/5 text-amber-300',
+            )}>
+              {ceoToast.message}
+            </div>
           )}
         </div>
       )}

@@ -113,6 +113,8 @@ export interface SchedulerJobResponse {
   lastRunAt?: string;
   lastRunResult?: string;
   lastRunError?: string;
+  createdBy?: 'ceo-command' | 'ceo-workflow' | 'mcp' | 'web' | 'api';
+  intentSummary?: string;
   /** OPC: associated department workspace URI */
   departmentWorkspaceUri?: string;
   /** OPC: action to create Ad-hoc project */
@@ -155,7 +157,16 @@ export interface ConvertResponse {
 }
 
 export interface CEOSuggestion {
-  type: 'use_template' | 'create_template' | 'reassign_department' | 'auto_generate_and_dispatch' | 'suggest_add_template';
+  type:
+    | 'use_template'
+    | 'create_template'
+    | 'reassign_department'
+    | 'auto_generate_and_dispatch'
+    | 'suggest_add_template'
+    | 'schedule_template'
+    | 'clarify_department'
+    | 'clarify_project'
+    | 'clarify_template';
   label: string;
   description: string;
   payload?: Record<string, string>;
@@ -163,12 +174,25 @@ export interface CEOSuggestion {
 
 export interface CEOCommandResult {
   success: boolean;
-  action: 'create_project' | 'report_to_human' | 'info' | 'cancel' | 'pause' | 'resume' | 'retry' | 'skip' | 'multi_create' | 'needs_decision';
+  action:
+    | 'create_project'
+    | 'create_scheduler_job'
+    | 'report_to_human'
+    | 'info'
+    | 'cancel'
+    | 'pause'
+    | 'resume'
+    | 'retry'
+    | 'skip'
+    | 'multi_create'
+    | 'needs_decision';
   message: string;
   projectId?: string;
   projectIds?: string[];
   runId?: string;
   runIds?: string[];
+  jobId?: string;
+  nextRunAt?: string | null;
   suggestions?: CEOSuggestion[];
 }
 
@@ -176,7 +200,24 @@ const API = typeof window !== 'undefined' ? window.location.origin : '';
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${url}`, init);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    const contentType = res.headers.get('content-type') || '';
+    try {
+      if (contentType.includes('application/json')) {
+        const payload = await res.json() as { error?: string; message?: string };
+        message = payload.error || payload.message || message;
+      } else {
+        const text = await res.text();
+        if (text.trim()) {
+          message = text.trim();
+        }
+      }
+    } catch {
+      // fall back to status text
+    }
+    throw new Error(message);
+  }
   return res.json();
 }
 

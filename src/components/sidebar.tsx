@@ -41,6 +41,7 @@ import {
   Zap,
   Settings,
   GitBranch,
+  Briefcase
 } from 'lucide-react';
 import SchedulerPanel from '@/components/scheduler-panel';
 import SubgraphPanel from '@/components/subgraph-panel';
@@ -56,11 +57,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ModeTabs } from '@/components/ui/app-shell';
 
-type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations';
+type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
 
 interface SidebarProps {
   activeId: string | null;
-  onSelect: (id: string, title: string) => void;
+  onSelect: (id: string, title: string, targetSection?: SidebarSection) => void;
   onNew: (workspace: string) => void;
   open: boolean;
   onClose: () => void;
@@ -415,6 +416,7 @@ export default function Sidebar({
             fill
             className="w-full"
             tabs={[
+              { value: 'ceo', label: 'CEO Office', icon: <Briefcase className="h-4 w-4" /> },
               { value: 'projects', label: 'OPC', icon: <FolderKanban className="h-4 w-4" /> },
               { value: 'conversations', label: t('shell.chats'), icon: <MessageSquare className="h-4 w-4" /> },
               { value: 'knowledge', label: t('shell.knowledge'), icon: <BookOpen className="h-4 w-4" /> },
@@ -459,6 +461,57 @@ export default function Sidebar({
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="space-y-5 p-4">
+              {section === 'ceo' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <SectionLabel>History</SectionLabel>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 rounded-full hover:bg-white/10"
+                      onClick={() => {
+                        api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace').then(res => {
+                          if (res.cascadeId) {
+                            onSelect(res.cascadeId, 'CEO Office', 'ceo');
+                            onClose();
+                          }
+                        });
+                      }}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </div>
+                  <div className="space-y-1">
+                    {conversations
+                      .filter(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace')
+                      .sort((a, b) => b.mtime - a.mtime)
+                      .map(conversation => (
+                        <RailItem
+                          key={conversation.id}
+                          icon={<MessageSquare className="h-4 w-4" />}
+                          title={conversation.title || t('sidebar.untitled')}
+                          meta={(
+                            <>
+                              {conversation.steps > 0 && <span>{conversation.steps} steps</span>}
+                              <span>{formatRelativeTime(new Date(conversation.mtime).toISOString(), locale)}</span>
+                            </>
+                          )}
+                          active={activeId === conversation.id}
+                          onClick={() => {
+                            onSelect(conversation.id, conversation.title || '', 'ceo');
+                            onClose();
+                          }}
+                        />
+                      ))}
+                    {conversations.filter(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace').length === 0 && (
+                      <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
+                        No history
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
               {section === 'conversations' ? (
                 sortedGroupNames.length > 0 ? (
                   <div className="space-y-4">

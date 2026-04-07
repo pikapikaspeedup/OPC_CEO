@@ -1,8 +1,14 @@
+import type { AuditEvent } from './api';
 import type { Project, PipelineStageProgressFE, CEOEvent } from './types';
 
 function isToday(isoDate?: string): boolean {
   if (!isoDate) return false;
   return new Date(isoDate).toDateString() === new Date().toDateString();
+}
+
+function isRecent(isoDate?: string, hours: number = 12): boolean {
+  if (!isoDate) return false;
+  return Date.now() - new Date(isoDate).getTime() <= hours * 60 * 60 * 1000;
 }
 
 function isOverdue(project: Project): boolean {
@@ -46,6 +52,14 @@ function buildProjectActions(project: Project, options?: { includeScheduler?: bo
 }
 
 export function generateCEOEvents(projects: Project[], stages: PipelineStageProgressFE[]): CEOEvent[] {
+  return generateCEOEventsWithAudit(projects, stages, []);
+}
+
+export function generateCEOEventsWithAudit(
+  projects: Project[],
+  stages: PipelineStageProgressFE[],
+  auditEvents: AuditEvent[],
+): CEOEvent[] {
   const events: CEOEvent[] = [];
   const coveredStageIds = new Set<string>();
 
@@ -128,6 +142,62 @@ export function generateCEOEvents(projects: Project[], stages: PipelineStageProg
         workspaceUri: project.workspace,
         timestamp: project.updatedAt || new Date().toISOString(),
         actions: buildProjectActions(project, { includeScheduler: true }),
+      });
+    }
+  }
+
+  const recentSchedulerEvents = auditEvents
+    .filter((event) => event.kind.startsWith('scheduler:') && isRecent(event.timestamp))
+    .slice(0, 5);
+
+  for (const auditEvent of recentSchedulerEvents) {
+    if (auditEvent.kind === 'scheduler:failed') {
+      events.push({
+        id: nextId(),
+        type: 'warning',
+        title: '定时任务失败',
+        description: auditEvent.message,
+        projectId: auditEvent.projectId,
+        timestamp: auditEvent.timestamp,
+        actions: [
+          { label: '打开调度', action: 'navigate', payload: { target: 'scheduler', jobId: auditEvent.jobId } },
+          ...(auditEvent.projectId
+            ? [{ label: '打开项目', action: 'view' as const, payload: { projectId: auditEvent.projectId } }]
+            : []),
+        ],
+      });
+      continue;
+    }
+
+    if (auditEvent.kind === 'scheduler:triggered') {
+      events.push({
+        id: nextId(),
+        type: 'info',
+        title: '定时任务已触发',
+        description: auditEvent.message,
+        projectId: auditEvent.projectId,
+        timestamp: auditEvent.timestamp,
+        actions: [
+          { label: '打开调度', action: 'navigate', payload: { target: 'scheduler', jobId: auditEvent.jobId } },
+          ...(auditEvent.projectId
+            ? [{ label: '打开项目', action: 'view' as const, payload: { projectId: auditEvent.projectId } }]
+            : []),
+        ],
+      });
+      continue;
+    }
+
+    if (auditEvent.kind === 'scheduler:created' && isToday(auditEvent.timestamp)) {
+      events.push({
+        id: nextId(),
+        type: 'info',
+        title: '新定时任务已创建',
+        description: auditEvent.message,
+        projectId: auditEvent.projectId,
+        timestamp: auditEvent.timestamp,
+        actions: [
+          { label: '打开调度', action: 'navigate', payload: { target: 'scheduler', jobId: auditEvent.jobId } },
+        ],
       });
     }
   }

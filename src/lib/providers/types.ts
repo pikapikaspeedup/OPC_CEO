@@ -56,6 +56,8 @@ export interface AppendMessageOptions {
   prompt: string
   /** Model override. */
   model?: string
+  /** The workspace to execute within (optional, useful for stateless reconnections). */
+  workspace?: string
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ export interface ScheduledJob {
   lastRunResult?: 'success' | 'failed' | 'skipped';
   lastRunError?: string;
   createdAt: string;
+  createdBy?: 'ceo-command' | 'ceo-workflow' | 'mcp' | 'web' | 'api';
+  intentSummary?: string;
   /** OPC: associated department workspace URI */
   departmentWorkspaceUri?: string;
   /** OPC: action to create an Ad-hoc project on trigger */
@@ -36,6 +38,9 @@ export type ScheduledAction =
   | {
       kind: 'health-check';
       projectId: string;
+    }
+  | {
+      kind: 'create-project';
     };
 
 export interface SchedulerTriggerResult {

@@ -121,7 +121,7 @@ export class CodexExecutor implements TaskExecutor {
   }
 
   async appendMessage(handle: string, opts: AppendMessageOptions): Promise<TaskExecutionResult> {
-    const workspace = threadWorkspaces.get(handle);
+    const workspace = opts.workspace || threadWorkspaces.get(handle);
     if (!workspace) {
       throw new Error(`No workspace found for Codex thread ${handle}`);
     }

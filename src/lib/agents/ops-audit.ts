@@ -12,6 +12,9 @@ const AUDIT_DIR = path.join(GATEWAY_HOME, 'ops_audit');
 // ---------------------------------------------------------------------------
 
 export type AuditEventKind =
+  | 'scheduler:created'
+  | 'scheduler:updated'
+  | 'scheduler:deleted'
   | 'scheduler:triggered'
   | 'scheduler:failed'
   | 'project:reconciled'

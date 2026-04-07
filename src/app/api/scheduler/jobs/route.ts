@@ -10,6 +10,9 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+    if (typeof body.createdBy !== 'string') {
+      body.createdBy = 'api';
+    }
     const job = createScheduledJob(body);
     return NextResponse.json(job, { status: 201 });
   } catch (err: any) {

@@ -47,11 +47,15 @@ function decodeWorkspaceId(wsId: string): string | undefined {
 
       if (len === 1) {
         candidates.push(subparts[0]);
+        candidates.push('.' + subparts[0]);
       } else {
         // Most directory/file names use one consistent separator.
         // Try hyphen-joined first (common in project names), then underscore-joined.
         candidates.push(subparts.join('-'));
         candidates.push(subparts.join('_'));
+        // Also try handling hidden folders with leading dots
+        candidates.push('.' + subparts.join('-'));
+        candidates.push('.' + subparts.join('_'));
       }
 
       for (const candidate of candidates) {

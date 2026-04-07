@@ -357,9 +357,9 @@ export default function TemplateBrowser({
   const isGraphFormat = !!tmpl?.graphPipeline;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 max-w-full overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <button
           className="flex items-center gap-2 text-sm text-white/50 hover:text-white transition-colors"
           onClick={() => { setSelectedId(null); setDetail(null); setLocalDetail(null); setEditingNodeId(null); setDagNodeOffsets({}); }}
@@ -367,7 +367,7 @@ export default function TemplateBrowser({
           <ArrowLeft className="h-4 w-4" />
           返回模板列表
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {onSelectForDispatch && (
             <Button variant="outline" size="sm" className="gap-1.5 text-sky-400" onClick={() => onSelectForDispatch(selectedId)}>
               <Play className="h-3.5 w-3.5" /> 使用此模板

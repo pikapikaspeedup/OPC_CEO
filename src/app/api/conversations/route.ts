@@ -11,6 +11,8 @@ import {
 } from '@/lib/bridge/gateway';
 import { mkdirSync } from 'fs';
 import { getChildConversationIds } from '@/lib/agents/run-registry';
+import { resolveProvider } from '@/lib/providers';
+import { randomUUID } from 'crypto';
 
 export const dynamic = 'force-dynamic';
 
@@ -182,9 +184,21 @@ export async function POST(req: Request) {
   log.info({ workspace, wsUri }, 'New conversation started');
   log.debug({ rawWorkspace: workspace, resolvedUri: wsUri }, 'Request details');
 
-  // Find a matching server for this workspace
-  const srv = getLanguageServer(wsUri);
-  const isMatch = !!srv && (srv.workspace === wsUri || srv.workspace?.includes(wsUri) || wsUri.includes(srv.workspace || '\0'));
+  const workspacePath = wsUri.replace(/^file:\/\//, '');
+  let providerInfo = resolveProvider('execution', workspacePath);
+  
+  // If provider is Codex, bypass IDE checks and create a local codex conversation
+  if (providerInfo.provider === 'codex') {
+    const cascadeId = `codex-${randomUUID()}`;
+    const wsName = wsUri.split('/').pop() || 'conversation';
+    addLocalConversation(cascadeId, wsUri, `Codex: ${wsName}`);
+    log.info({ cascadeId, provider: 'codex', workspacePath }, 'Created codex conversation without IDE');
+    return NextResponse.json({ cascadeId, state: 'idle' });
+  }
+
+  // Find a matching server for this workspace (Antigravity mode)
+  let srv = getLanguageServer(wsUri);
+  let isMatch = !!srv && (srv.workspace === wsUri || srv.workspace?.includes(wsUri) || wsUri.includes(srv.workspace || '\0'));
 
   if (!srv || !isMatch) {
     log.warn({ wsUri }, 'No matching server — workspace needs to be opened first');

@@ -109,6 +109,7 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
   const [form, setForm] = useState<JobFormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [cronError, setCronError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -163,20 +164,22 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
     setEditingJobId(null);
     setForm(emptyForm);
     setCronError(null);
+    setSaveError(null);
     setDialogOpen(true);
   };
 
   const openEditDialog = (job: SchedulerJobResponse) => {
     setEditingJobId(job.jobId);
     setCronError(null);
+    setSaveError(null);
     const action = job.action || {} as Record<string, unknown>;
     setForm({
       name: job.name || '',
       type: (job.type as 'cron' | 'interval' | 'once') || 'cron',
-      cronExpression: '',
-      intervalMs: '',
-      scheduledAt: '',
-      actionKind: (action.kind as string) || 'dispatch-pipeline',
+      cronExpression: (job as SchedulerJobResponse & { cronExpression?: string }).cronExpression || '',
+      intervalMs: (job as SchedulerJobResponse & { intervalMs?: number }).intervalMs ? String((job as SchedulerJobResponse & { intervalMs?: number }).intervalMs) : '',
+      scheduledAt: (job as SchedulerJobResponse & { scheduledAt?: string }).scheduledAt || '',
+      actionKind: job.opcAction ? 'create-project' : (action.kind as string) || 'dispatch-pipeline',
       actionWorkspace: (action.workspace as string) || '',
       actionPrompt: (action.prompt as string) || '',
       actionTemplateId: (action.templateId as string) || '',
@@ -197,20 +200,23 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
       if (err) { setCronError(err); return; }
     }
     setCronError(null);
+    setSaveError(null);
     setSaving(true);
     try {
-      const action: Record<string, unknown> = { kind: form.actionKind };
-      if (form.actionWorkspace) action.workspace = form.actionWorkspace;
-      if (form.actionPrompt) action.prompt = form.actionPrompt;
-      if (form.actionKind === 'dispatch-pipeline' && form.actionTemplateId) action.templateId = form.actionTemplateId;
-      if (form.actionKind === 'dispatch-pipeline' && form.actionStageId) action.stageId = form.actionStageId;
-      if (form.actionProjectId) action.projectId = form.actionProjectId;
+      const effectiveActionKind = form.actionKind;
+      const action: Record<string, unknown> = { kind: effectiveActionKind };
+      if (effectiveActionKind === 'dispatch-pipeline' && form.actionWorkspace) action.workspace = form.actionWorkspace;
+      if (effectiveActionKind === 'dispatch-pipeline' && form.actionPrompt) action.prompt = form.actionPrompt;
+      if (effectiveActionKind === 'dispatch-pipeline' && form.actionTemplateId) action.templateId = form.actionTemplateId;
+      if (effectiveActionKind === 'dispatch-pipeline' && form.actionStageId) action.stageId = form.actionStageId;
+      if ((effectiveActionKind === 'dispatch-pipeline' || effectiveActionKind === 'health-check') && form.actionProjectId) action.projectId = form.actionProjectId;
 
       const payload: Record<string, unknown> = {
         name: form.name,
         type: form.type,
         action,
         enabled: form.enabled,
+        createdBy: 'web',
       };
 
       if (form.type === 'cron' && form.cronExpression) payload.cronExpression = form.cronExpression;
@@ -218,8 +224,8 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
       if (form.type === 'once' && form.scheduledAt) payload.scheduledAt = form.scheduledAt;
 
       // OPC fields
-      if (form.departmentWorkspaceUri) payload.departmentWorkspaceUri = form.departmentWorkspaceUri;
-      if (form.opcGoal) {
+      if (effectiveActionKind === 'create-project' && form.departmentWorkspaceUri) payload.departmentWorkspaceUri = form.departmentWorkspaceUri;
+      if (effectiveActionKind === 'create-project' && form.opcGoal) {
         payload.opcAction = {
           type: 'create_project',
           projectType: 'adhoc',
@@ -235,8 +241,8 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
       }
       setDialogOpen(false);
       await fetchJobs();
-    } catch {
-      // handled
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : '保存失败');
     } finally {
       setSaving(false);
     }
@@ -451,7 +457,23 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
 
             <div>
               <label className="text-xs text-white/60 mb-1 block">Action Kind</label>
-              <NativeSelect value={form.actionKind} onChange={(e) => setForm(f => ({ ...f, actionKind: e.target.value ?? 'dispatch-pipeline' }))}>
+              <NativeSelect
+                value={form.actionKind}
+                onChange={(e) => {
+                  const nextActionKind = e.target.value ?? 'dispatch-pipeline';
+                  setForm((current) => ({
+                    ...current,
+                    actionKind: nextActionKind,
+                    ...(nextActionKind !== 'create-project'
+                      ? {
+                          departmentWorkspaceUri: '',
+                          opcGoal: '',
+                          opcSkillHint: '',
+                        }
+                      : {}),
+                  }));
+                }}
+              >
                 <option value="dispatch-pipeline">Dispatch Pipeline</option>
                 <option value="health-check">Health Check</option>
                 <option value="create-project">Create Ad-hoc Project</option>
@@ -536,6 +558,12 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
                 </div>
               </>
             )}
+
+            {saveError ? (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                {saveError}
+              </div>
+            ) : null}
           </div>
 
           <DialogFooter>
