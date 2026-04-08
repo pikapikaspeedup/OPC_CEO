@@ -119,8 +119,9 @@ export function buildWriteScopeAudit(
 
 export function scanArtifactManifest(
   runId: string,
-  templateId: string,
+  templateId: string | undefined,
   artifactAbsDir: string,
+  executionTarget?: ArtifactManifest['executionTarget'],
 ): ArtifactManifest {
   const items: ArtifactRef[] = [];
   const allowedExtensions = new Set(['.md', '.json', '.txt']);
@@ -166,8 +167,12 @@ export function scanArtifactManifest(
   for (const { dir, kindPrefix } of scanDirs) {
     scanRecursive(path.join(artifactAbsDir, dir), kindPrefix);
   }
-
-  return { runId, templateId, items };
+  return {
+    runId,
+    ...(templateId ? { templateId } : {}),
+    ...(executionTarget ? { executionTarget } : {}),
+    items,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +232,7 @@ export function buildResultEnvelope(
 ): ResultEnvelope {
   return {
     templateId: run.templateId || manifest.templateId,
+    executionTarget: run.executionTarget || manifest.executionTarget,
     runId: run.runId,
     status: run.status,
     decision,

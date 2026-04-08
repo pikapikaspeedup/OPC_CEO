@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
+import { getRun } from '@/lib/agents/run-registry';
 import { interveneRun, cancelRun, InterventionConflictError } from '@/lib/agents/group-runtime';
+import { cancelPromptRun } from '@/lib/agents/prompt-executor';
 import { createLogger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
@@ -16,10 +18,18 @@ export async function POST(
     const body = await req.json();
 
     const { action, prompt, roleId } = body;
+    const run = getRun(runId);
 
     if (!action || !['nudge', 'retry', 'restart_role', 'cancel', 'evaluate'].includes(action)) {
       return NextResponse.json(
         { error: 'Missing or invalid action. Must be "nudge", "retry", "restart_role", "cancel", or "evaluate".' },
+        { status: 400 },
+      );
+    }
+
+    if (run?.executorKind === 'prompt' && action !== 'cancel') {
+      return NextResponse.json(
+        { error: 'Prompt-mode runs do not support interventions yet. Use cancel only.' },
         { status: 400 },
       );
     }
@@ -32,7 +42,9 @@ export async function POST(
     try {
       let resultPromise;
       if (action === 'cancel') {
-        resultPromise = cancelRun(runId);
+        resultPromise = run?.executorKind === 'prompt'
+          ? cancelPromptRun(runId)
+          : cancelRun(runId);
       } else {
         resultPromise = interveneRun(runId, action, prompt, roleId);
       }

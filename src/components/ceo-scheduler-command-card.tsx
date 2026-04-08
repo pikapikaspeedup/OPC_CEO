@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ArrowUpRight, CalendarClock, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { ArrowUpRight, CalendarClock, CheckCircle2, Loader2, Sparkles, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { api, type CEOCommandResult } from '@/lib/api';
@@ -13,6 +13,7 @@ interface CEOSchedulerCommandCardProps {
   departments: Map<string, DepartmentConfig>;
   onScheduled?: () => void;
   onOpenScheduler?: () => void;
+  onRunDispatched?: (runId: string) => void;
 }
 
 function formatNextRun(nextRunAt?: string | null): string {
@@ -26,6 +27,7 @@ export default function CEOSchedulerCommandCard({
   departments,
   onScheduled,
   onOpenScheduler,
+  onRunDispatched,
 }: CEOSchedulerCommandCardProps) {
   const [command, setCommand] = useState('');
   const [loading, setLoading] = useState(false);
@@ -48,9 +50,9 @@ export default function CEOSchedulerCommandCard({
     const departmentName = primaryDepartment?.department?.name || '市场部';
     const healthProjectName = primaryProject?.name || '核心项目';
     return [
-      `每天工作日上午 9 点让${departmentName}生成日报，目标是汇总当前进行中的项目与风险`,
+      `让${departmentName}分析最近一周的关键信号`,
+      `每天工作日上午 9 点让${departmentName}创建一个日报任务项目，目标是汇总当前进行中的项目与风险`,
       `每周一上午 10 点巡检项目${healthProjectName}的健康度`,
-      `明天上午 9 点让${departmentName}创建一个 ad-hoc 项目，目标是整理本周 backlog 并给出优先级建议`,
     ];
   }, [primaryDepartment, primaryProject]);
 
@@ -63,6 +65,9 @@ export default function CEOSchedulerCommandCard({
       setResult(response);
       if (response.success && response.action === 'create_scheduler_job') {
         onScheduled?.();
+      }
+      if (response.success && response.action === 'dispatch_prompt' && response.runId) {
+        onRunDispatched?.(response.runId);
       }
     } catch (err: unknown) {
       setResult(null);
@@ -94,10 +99,10 @@ export default function CEOSchedulerCommandCard({
         <div>
           <h3 className="flex items-center gap-2 text-sm font-semibold text-white/90">
             <Sparkles className="h-4 w-4 text-emerald-300" />
-            用一句话创建定时任务
+            CEO 指令中心
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-white/50">
-            直接说业务意图，例如“每天工作日上午 9 点让市场部生成日报”。系统会自动翻译成 Scheduler Job。
+            直接说业务意图——即时执行或创建定时任务。例如"让市场部分析竞品动态"或"每天 9 点让市场部生成日报"。
           </p>
         </div>
         <Button variant="outline" size="sm" className="h-8 shrink-0 text-xs" onClick={onOpenScheduler}>
@@ -129,11 +134,11 @@ export default function CEOSchedulerCommandCard({
 
         <div className="flex items-center justify-between gap-3">
           <div className="text-[11px] text-white/35">
-            支持：每日 / 工作日 / 每周 / 明天 / 每隔 N 小时
+            即时执行 / 每日 / 工作日 / 每周 / 明天 / 每隔 N 小时
           </div>
           <Button onClick={handleSubmit} disabled={loading || !command.trim()} className="h-9 bg-emerald-500 hover:bg-emerald-600 text-white">
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarClock className="mr-2 h-4 w-4" />}
-            由 CEO 创建
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+            CEO 下令
           </Button>
         </div>
       </div>
@@ -148,10 +153,17 @@ export default function CEOSchedulerCommandCard({
         <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3">
           <div className="flex items-center gap-2 text-sm font-medium text-white/90">
             <CheckCircle2 className={`h-4 w-4 ${result.success ? 'text-emerald-300' : 'text-amber-300'}`} />
-            {result.success ? 'CEO 已处理该调度请求' : 'CEO 需要进一步确认'}
+            {result.success
+              ? result.action === 'dispatch_prompt' ? 'CEO 已发起即时执行' : 'CEO 已处理该调度请求'
+              : 'CEO 需要进一步确认'}
           </div>
           <p className="mt-1 text-xs leading-relaxed text-white/55">{result.message}</p>
-          {result.jobId ? (
+          {result.action === 'dispatch_prompt' && result.runId ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/45">
+              <span className="rounded-full bg-orange-500/15 text-orange-300 px-2 py-1">⚡ Prompt Run</span>
+              <span className="rounded-full bg-white/[0.05] px-2 py-1">Run: {result.runId.slice(0, 8)}</span>
+            </div>
+          ) : result.jobId ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/45">
               <span className="rounded-full bg-white/[0.05] px-2 py-1">Job: {result.jobId.slice(0, 8)}</span>
               <span className="rounded-full bg-white/[0.05] px-2 py-1">Next: {formatNextRun(result.nextRunAt)}</span>

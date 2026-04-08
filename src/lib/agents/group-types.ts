@@ -186,8 +186,38 @@ export interface ArtifactRef {
   metadata?: Record<string, unknown>;
 }
 
-export interface TaskEnvelope {
+export interface TemplateExecutionTarget {
+  kind: 'template';
   templateId: string;
+  stageId?: string;
+}
+
+export interface PromptExecutionTarget {
+  kind: 'prompt';
+  promptAssetRefs?: string[];
+  skillHints?: string[];
+}
+
+export interface ProjectOnlyExecutionTarget {
+  kind: 'project-only';
+}
+
+export type ExecutionTarget =
+  | TemplateExecutionTarget
+  | PromptExecutionTarget
+  | ProjectOnlyExecutionTarget;
+
+export type ExecutorKind = 'template' | 'prompt';
+
+export interface TriggerContext {
+  source?: 'ceo-command' | 'ceo-workflow' | 'scheduler' | 'mcp' | 'web' | 'api';
+  schedulerJobId?: string;
+  intentSummary?: string;
+}
+
+export interface TaskEnvelope {
+  templateId?: string;
+  executionTarget?: ExecutionTarget;
   runId?: string;                    // runtime-assigned, caller should not provide
   taskId?: string;                   // V2.5: active for delivery work packages
   goal: string;
@@ -203,7 +233,8 @@ export interface TaskEnvelope {
 }
 
 export interface ResultEnvelope {
-  templateId: string;
+  templateId?: string;
+  executionTarget?: ExecutionTarget;
   runId: string;
   taskId?: string;
   status: RunStatus;
@@ -217,7 +248,8 @@ export interface ResultEnvelope {
 
 export interface ArtifactManifest {
   runId: string;
-  templateId: string;
+  templateId?: string;
+  executionTarget?: ExecutionTarget;
   items: ArtifactRef[];
 }
 
@@ -270,6 +302,9 @@ export interface AgentRunState {
   resultEnvelope?: ResultEnvelope;
   artifactManifestPath?: string;
   sourceRunIds?: string[];
+  executorKind?: ExecutorKind;
+  executionTarget?: ExecutionTarget;
+  triggerContext?: TriggerContext;
   // V2.5.1: live cascade monitoring
   liveState?: RunLiveState;
   // V3.5: AI Supervisor monitoring

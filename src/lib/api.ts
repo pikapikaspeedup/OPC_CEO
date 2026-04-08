@@ -123,6 +123,7 @@ export interface SchedulerJobResponse {
     projectType: 'adhoc';
     goal: string;
     skillHint?: string;
+    templateId?: string;
   };
 }
 
@@ -177,6 +178,7 @@ export interface CEOCommandResult {
   action:
     | 'create_project'
     | 'create_scheduler_job'
+    | 'dispatch_prompt'
     | 'report_to_human'
     | 'info'
     | 'cancel'
@@ -415,11 +417,42 @@ export const api = {
     taskEnvelope?: import('./types').TaskEnvelopeFE;
     sourceRunIds?: string[];
     conversationMode?: 'shared' | 'isolated';
+    executionTarget?: import('./types').ExecutionTargetFE;
+    triggerContext?: import('./types').TriggerContextFE;
   }) =>
     fetchJson<{ runId: string; status: string }>('/api/agent-runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
+    }),
+  createPromptRun: (input: {
+    workspace: string;
+    prompt: string;
+    projectId?: string;
+    model?: string;
+    parentConversationId?: string;
+    conversationMode?: 'shared' | 'isolated';
+    promptAssetRefs?: string[];
+    skillHints?: string[];
+    triggerContext?: import('./types').TriggerContextFE;
+  }) =>
+    fetchJson<{ runId: string; status: string }>('/api/agent-runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace: input.workspace,
+        prompt: input.prompt,
+        projectId: input.projectId,
+        model: input.model,
+        parentConversationId: input.parentConversationId,
+        conversationMode: input.conversationMode,
+        triggerContext: input.triggerContext,
+        executionTarget: {
+          kind: 'prompt',
+          ...(input.promptAssetRefs?.length ? { promptAssetRefs: input.promptAssetRefs } : {}),
+          ...(input.skillHints?.length ? { skillHints: input.skillHints } : {}),
+        },
+      }),
     }),
   cancelRun: (id: string) =>
     fetchJson<{ status: string }>(`/api/agent-runs/${id}`, { method: 'DELETE' }),
@@ -553,7 +586,7 @@ export const api = {
     action: { kind: string; [key: string]: unknown };
     enabled?: boolean;
     departmentWorkspaceUri?: string;
-    opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string };
+    opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string; templateId?: string };
   }) =>
     fetchJson<SchedulerJobResponse>('/api/scheduler/jobs', {
       method: 'POST',
@@ -570,7 +603,7 @@ export const api = {
     action: { kind: string; [key: string]: unknown };
     enabled: boolean;
     departmentWorkspaceUri?: string;
-    opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string };
+    opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string; templateId?: string };
   }>) =>
     fetchJson<SchedulerJobResponse>(`/api/scheduler/jobs/${id}`, {
       method: 'PATCH',

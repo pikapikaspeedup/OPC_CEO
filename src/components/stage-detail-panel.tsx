@@ -83,8 +83,9 @@ export default function StageDetailPanel({
 }: StageDetailPanelProps) {
   const config = stageStatusConfig[stage.status] || stageStatusConfig.pending;
   const elapsed = formatElapsedTime(stage.startedAt, stage.completedAt);
+  const isPromptRun = run?.executorKind === 'prompt';
   const isStaleActive = stage.status === 'running' && !!run?.liveState?.staleSince;
-  const canRestartRole = isStaleActive || stage.status === 'failed' || stage.status === 'blocked' || stage.status === 'cancelled';
+  const canRestartRole = !isPromptRun && (isStaleActive || stage.status === 'failed' || stage.status === 'blocked' || stage.status === 'cancelled');
   const canCancel = run?.status === 'starting' || run?.status === 'running' || stage.status === 'blocked';
   const canSkip = ['pending', 'failed', 'blocked', 'cancelled'].includes(stage.status);
   const canForceComplete = ['running', 'failed', 'blocked', 'cancelled', 'pending'].includes(stage.status);
@@ -167,6 +168,7 @@ export default function StageDetailPanel({
         meta={(
           <>
             <StatusChip tone={config.tone}>{config.label}</StatusChip>
+            {isPromptRun && <StatusChip tone="info">Prompt</StatusChip>}
             {run?.reviewOutcome && <ReviewOutcomeBadge outcome={run.reviewOutcome} />}
             {stage.attempts > 1 && (
               <StatusChip tone="warning">×{stage.attempts} attempts</StatusChip>

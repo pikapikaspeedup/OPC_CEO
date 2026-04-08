@@ -139,6 +139,13 @@ function RunItem({
             )}>
               {getAgentRunWorkspaceName(run.workspace)}
             </Badge>
+            {run.executorKind === 'prompt' && (
+              <Badge variant="outline" className={cn(
+                compact ? 'text-[9px] h-4 px-1.5 border-orange-500/30 text-orange-500/80 bg-orange-500/10' : 'h-6 rounded-full border-orange-400/20 bg-orange-400/10 px-2.5 text-[10px] text-orange-400'
+              )}>
+                Prompt
+              </Badge>
+            )}
             {run.roles && run.roles.length > 1 && run.currentRound !== undefined && run.maxRounds !== undefined && (
               <Badge variant="outline" className={cn(
                 compact ? 'text-[9px] h-4 px-1.5 border-sky-500/30 text-sky-500/80 bg-sky-500/10' : 'h-6 rounded-full border-sky-400/20 bg-sky-400/10 px-2.5 text-[10px] text-sky-400'

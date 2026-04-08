@@ -716,36 +716,39 @@ done
 
 ### `POST /api/ceo/command` — CEO 自然语言命令
 
-**功能**: 接收 CEO 的自然语言命令，自动进行意图识别、部门匹配和任务派发。
+**功能**: 接收 CEO 的自然语言命令。支持状态查询、即时 Prompt Mode 执行和自然语言定时任务创建。
 
 **Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `command` | `string` | ✅ | CEO 的自然语言命令 |
+| `model` | `string` | ❌ | 可选模型 ID |
 
 ```json
-{ "command": "给后端团队安排一个登录模块的开发任务" }
+{ "command": "每天工作日上午 9 点让后端团队创建一个日报任务项目，目标是汇总当前进行中的项目与风险" }
 ```
 
 **Response** `200 OK`:
 ```json
 {
   "success": true,
-  "action": "create_project",
-  "message": "已在「后端研发」部门创建项目",
-  "projectId": "abc123"
+  "action": "create_scheduler_job",
+  "message": "已创建定时任务“后端团队 定时任务 · 工作日 09:00”。触发时会自动创建一个 Ad-hoc 项目，并派发模板「Universal Batch Research (Fan-out)」。下一次执行时间：2026-04-09T01:00:00.000Z。当前系统共有 3 个定时任务。",
+  "jobId": "abc123",
+  "nextRunAt": "2026-04-09T01:00:00.000Z"
 }
 ```
 
+说明：当 `/api/ceo/command` 解析到 `create-project` 且能唯一确定模板时，会把模板写入 scheduler job，后续触发时自动执行 `createProject + executeDispatch`；若不能唯一确定模板，则只创建项目，不直接启动 run。
+
 | Action 值 | 说明 |
 |:----------|:-----|
-| `create_project` | 在最匹配的部门创建了项目 |
-| `multi_create` | 批量创建了多个项目 |
-| `report_to_human` | 生成了各部门状态汇报 |
-| `cancel` / `pause` / `resume` / `retry` / `skip` | 控制了运行中的任务 |
+| `create_scheduler_job` | 创建了一个定时任务 |
+| `dispatch_prompt` | 即时发起了 Prompt Mode 执行（返回 `runId`） |
 | `info` | 查询了特定信息 |
 | `needs_decision` | 需要 CEO 在多个方案间选择（返回 `suggestions` 数组） |
+| `report_to_human` | 当前兼容层无法直接处理，请转到 CEO Office 会话或手动派发 |
 
 ---
 
@@ -914,7 +917,9 @@ done
 | kind | 说明 | 必填字段 |
 |------|------|---------|
 | `dispatch-pipeline` | 派发 Pipeline / Stage | `templateId`, `workspace`, `prompt`，可选 `stageId` |
+| `dispatch-prompt` | Prompt Mode 执行（无需模板） | `workspace`, `prompt`，可选 `promptAssetRefs`, `skillHints`, `projectId` |
 | `health-check` | 项目健康检查 | `projectId` |
+| `create-project` | 定时创建 Ad-hoc Project | `departmentWorkspaceUri`, `opcAction.goal`，可选 `opcAction.skillHint`, `opcAction.templateId` |
 
 ### `GET /api/scheduler/jobs/:id` — 任务详情
 

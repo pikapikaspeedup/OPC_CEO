@@ -19,6 +19,7 @@ import RoleDetailPanel from '@/components/role-detail-panel';
 import ProjectOpsPanel from '@/components/project-ops-panel';
 import ProjectDagView from '@/components/project-dag-view';
 import DeliverablesPanel from '@/components/deliverables-panel';
+import PromptRunsSection from '@/components/prompt-runs-section';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Layers, ArrowRight, Activity, List, Network, ShieldCheck, Package } from 'lucide-react';
 
@@ -197,6 +198,13 @@ export default function ProjectWorkbench({
     ).length;
     return { total: allRoles.length, working, completed, pending, awaitingReview };
   }, [stages, agentRuns]);
+
+  // Standalone prompt runs: prompt runs in this project that don't belong to any pipeline stage
+  const stageRunIds = useMemo(() => new Set(stages.map(s => s.runId).filter(Boolean)), [stages]);
+  const standalonePromptRuns = useMemo(
+    () => agentRuns.filter(r => r.executorKind === 'prompt' && !stageRunIds.has(r.runId)),
+    [agentRuns, stageRunIds],
+  );
 
   return (
     <Tabs defaultValue="pipeline">
@@ -379,6 +387,14 @@ export default function ProjectWorkbench({
                   );
                 })}
               </div>
+
+              {/* Standalone Prompt Runs */}
+              {standalonePromptRuns.length > 0 && (
+                <PromptRunsSection
+                  runs={standalonePromptRuns}
+                  onCancel={onCancelRun}
+                />
+              )}
             </div>
 
             {/* Right panel — stage detail / gate review */}

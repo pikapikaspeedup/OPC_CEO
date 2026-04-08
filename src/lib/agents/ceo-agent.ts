@@ -1,4 +1,5 @@
 import { AssetLoader } from './asset-loader';
+import { executePrompt } from './prompt-executor';
 import { createScheduledJob, getNextRunAt, listScheduledJobs } from './scheduler';
 import { listProjects } from './project-registry';
 import type { DepartmentConfig } from '../types';
@@ -14,11 +15,13 @@ interface CEOCommandResult {
   success: boolean;
   action:
     | 'create_scheduler_job'
+    | 'dispatch_prompt'
     | 'report_to_human'
     | 'info'
     | 'needs_decision';
   message: string;
   jobId?: string;
+  runId?: string;
   nextRunAt?: string | null;
   suggestions?: CEOSuggestion[];
 }
@@ -53,6 +56,8 @@ type SchedulerActionDraft =
       departmentWorkspaceUri: string;
       goal: string;
       skillHint?: string;
+      templateId?: string;
+      suggestions?: CEOSuggestion[];
     }
   | {
       kind: 'health-check';
@@ -67,6 +72,14 @@ type SchedulerActionDraft =
       templateId: string;
       stageId?: string;
       projectId?: string;
+    }
+  | {
+      kind: 'dispatch-prompt';
+      label: string;
+      workspace: string;
+      prompt: string;
+      promptAssetRefs?: string[];
+      skillHints?: string[];
     };
 
 const STATUS_KEYWORDS = ['状态', '进度', '汇报', '怎么样', '情况'];
@@ -83,6 +96,23 @@ const WEEKDAY_MAP: Record<string, number> = {
   日: 0,
   天: 0,
 };
+
+const CREATE_PROJECT_OPT_OUT_KEYWORDS = ['只创建项目', '先创建项目', '只建项目', '不要执行', '不要派发', '不自动运行', '不要run'];
+
+const CREATE_PROJECT_TEMPLATE_HINTS: Record<string, string[]> = {
+  'coding-basic-template': ['开发', '实现', '修复', 'bug', '代码', '编码', '接口', '脚本', '登录'],
+  'development-template-1': ['产品', '需求', '架构', '模块', '系统', '完整产研', '开发'],
+  'ux-driven-dev-template': ['交互', 'ux', '体验', '设计', '界面'],
+  'design-review-template': ['评审', 'review', '体验评审', '设计评审'],
+  'template-factory': ['模板', 'workflow', 'pipeline'],
+  'universal-batch-template': ['调研', '研究', '报告', '简报', '汇总', '日报', '周报', '月报', 'seo', '竞品', '分析'],
+  'morning-brief-template': ['盘前', '简报', '宏观', '策略', 'a股', '股票'],
+  'financial-analysis-template': ['财务', '金融', '资金面', '市场', '股票', 'a股'],
+  'large-project-template': ['大型', '分解', '并行', '工作包', '复杂', '重构', '多模块'],
+  'research-branch-template': ['调研', '研究'],
+};
+
+const DISPATCH_TEMPLATE_KEYWORDS = /(pipeline|流水线|派发|dispatch|执行模板|运行模板)/i;
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, '').trim();
@@ -237,6 +267,161 @@ function matchTemplate(command: string) {
   return null;
 }
 
+function getTemplateLabel(templateId: string): string {
+  const template = AssetLoader.getTemplate(templateId);
+  return template?.title || templateId;
+}
+
+function getTemplateSearchText(template: any): string {
+  const pipelineTitles = Array.isArray(template.pipeline)
+    ? template.pipeline.map((stage: any) => stage.title || stage.stageId || '').join(' ')
+    : '';
+  const graphTitles = Array.isArray(template.graphPipeline?.nodes)
+    ? template.graphPipeline.nodes.map((node: any) => node.title || node.id || '').join(' ')
+    : '';
+  return normalizeText([
+    template.id,
+    template.title || '',
+    template.description || '',
+    pipelineTitles,
+    graphTitles,
+  ].join(' '));
+}
+
+function scoreTemplateCandidate(template: any, command: string, goal: string, skillHint: string | undefined, departmentType: string): number {
+  const normalizedCommand = normalizeText(`${command} ${goal}`);
+  const searchText = getTemplateSearchText(template);
+  let score = 0;
+
+  if (normalizedCommand.includes(normalizeText(template.id)) || (template.title && normalizedCommand.includes(normalizeText(template.title)))) {
+    score += 100;
+  }
+
+  for (const keyword of CREATE_PROJECT_TEMPLATE_HINTS[template.id] || []) {
+    if (normalizedCommand.includes(normalizeText(keyword))) {
+      score += 12;
+    }
+  }
+
+  if (skillHint === 'reporting') {
+    if (template.id === 'universal-batch-template') score += 24;
+    if (template.id === 'morning-brief-template' || template.id === 'financial-analysis-template') score += 16;
+  }
+
+  if (skillHint === 'seo-analysis' && template.id === 'universal-batch-template') {
+    score += 28;
+  }
+
+  if (departmentType === 'research' && /research|brief|analysis/.test(`${template.id} ${template.title || ''}`.toLowerCase())) {
+    score += 8;
+  }
+
+  if (departmentType === 'build' && ['coding-basic-template', 'development-template-1', 'ux-driven-dev-template', 'design-review-template', 'large-project-template'].includes(template.id)) {
+    score += 4;
+  }
+
+  if ((/日报|周报|月报|报告|简报|调研|研究|分析|seo/i.test(command) || skillHint === 'reporting' || skillHint === 'seo-analysis')
+    && (searchText.includes('research') || searchText.includes('analysis') || searchText.includes('brief'))) {
+    score += 6;
+  }
+
+  return score;
+}
+
+function getCreateProjectFallbackTemplateIds(goal: string, skillHint: string | undefined, departmentType: string): string[] {
+  if (skillHint === 'reporting' || skillHint === 'seo-analysis' || /日报|周报|月报|报告|简报|调研|研究|分析|seo/i.test(goal)) {
+    return ['universal-batch-template', 'morning-brief-template', 'financial-analysis-template', 'research-branch-template'];
+  }
+  if (/交互|体验|ux|设计|评审/i.test(goal)) {
+    return ['ux-driven-dev-template', 'design-review-template', 'development-template-1'];
+  }
+  if (/大型|分解|并行|工作包|复杂|多模块|重构/i.test(goal)) {
+    return ['large-project-template', 'development-template-1'];
+  }
+  if (/开发|实现|修复|代码|编码|接口|脚本|bug|登录|前端|后端|feature|功能/i.test(goal)) {
+    return ['coding-basic-template', 'development-template-1'];
+  }
+  if (/模板|workflow|pipeline/i.test(goal)) {
+    return ['template-factory', 'development-template-1'];
+  }
+  if (departmentType === 'research') {
+    return ['universal-batch-template', 'research-branch-template', 'morning-brief-template'];
+  }
+  return [];
+}
+
+function resolveCreateProjectTemplate(command: string, goal: string, department: DepartmentEntry, skillHint?: string): {
+  templateId?: string;
+  suggestions?: CEOSuggestion[];
+} {
+  if (CREATE_PROJECT_OPT_OUT_KEYWORDS.some((keyword) => command.includes(keyword))) {
+    return {};
+  }
+
+  const allTemplates = AssetLoader.loadAllTemplates();
+  const explicitTemplate = matchTemplate(command);
+  if (explicitTemplate) {
+    return { templateId: explicitTemplate.id };
+  }
+
+  const preferredTemplateIds = department.config.templateIds;
+  const preferredTemplates = preferredTemplateIds?.length
+    ? allTemplates.filter((template) => preferredTemplateIds.includes(template.id))
+    : [];
+  const candidateTemplates = preferredTemplates.length > 0 ? preferredTemplates : allTemplates;
+
+  if (allTemplates.length === 0) {
+    return {};
+  }
+
+  if (candidateTemplates.length === 1) {
+    return { templateId: candidateTemplates[0].id };
+  }
+
+  const pickScoredTemplate = (templates: any[]): string | undefined => {
+    const scoredTemplates = templates
+      .map((template) => ({
+        template,
+        score: scoreTemplateCandidate(template, command, goal, skillHint, department.config.type),
+      }))
+      .sort((left, right) => right.score - left.score);
+
+    const best = scoredTemplates[0];
+    const second = scoredTemplates[1];
+    if (best && best.score > 0 && (!second || best.score >= second.score + 5)) {
+      return best.template.id;
+    }
+    return undefined;
+  };
+
+  const preferredScoredTemplateId = pickScoredTemplate(candidateTemplates);
+  if (preferredScoredTemplateId) {
+    return { templateId: preferredScoredTemplateId };
+  }
+
+  if (candidateTemplates !== allTemplates) {
+    const globalScoredTemplateId = pickScoredTemplate(allTemplates);
+    if (globalScoredTemplateId) {
+      return { templateId: globalScoredTemplateId };
+    }
+  }
+
+  const fallbackTemplateId = getCreateProjectFallbackTemplateIds(goal, skillHint, department.config.type)
+    .find((templateId) => allTemplates.some((template) => template.id === templateId));
+  if (fallbackTemplateId) {
+    return { templateId: fallbackTemplateId };
+  }
+
+  return {
+    suggestions: candidateTemplates.slice(0, 5).map((candidate) => ({
+      type: 'clarify_template',
+      label: candidate.title || candidate.id,
+      description: candidate.id,
+      payload: { templateId: candidate.id },
+    })),
+  };
+}
+
 function cleanupGoal(command: string): string {
   return command
     .replace(DATE_REGEX, '')
@@ -284,6 +469,7 @@ export function buildSchedulerIntentPreview(
     schedule,
     actionDraft,
     jobName: `${actionDraft.label} · ${schedule.label}`,
+    ...(actionDraft.kind === 'create-project' && actionDraft.suggestions?.length ? { suggestions: actionDraft.suggestions } : {}),
   };
 }
 
@@ -311,7 +497,7 @@ function deriveActionDraft(command: string, departments: DepartmentEntry[]): Sch
     };
   }
 
-  if (/(模板|pipeline|流水线|派发|dispatch)/i.test(command)) {
+  if (DISPATCH_TEMPLATE_KEYWORDS.test(command)) {
     const department = matchDepartment(command, departments);
     if (!department) {
       return {
@@ -362,6 +548,27 @@ function deriveActionDraft(command: string, departments: DepartmentEntry[]): Sch
 
   const goal = cleanupGoal(command) || `${department.config.name} 定时任务`;
   const skillHint = /seo/i.test(command) ? 'seo-analysis' : /日报|周报|月报/.test(command) ? 'reporting' : undefined;
+  const templateResolution = resolveCreateProjectTemplate(command, goal, department, skillHint);
+
+  // If no unique template and the command has clear execution intent (not project-only),
+  // route to Prompt Mode instead of degrading to project-only
+  const hasExecutionIntent = !CREATE_PROJECT_OPT_OUT_KEYWORDS.some(kw => command.includes(kw))
+    && /执行|运行|完成|处理|分析|整理|汇总|研究|调研|生成|报告|检查|审查|review|do|run|execute/i.test(command);
+
+  if (!templateResolution.templateId && hasExecutionIntent) {
+    const playbookRefs: string[] = [];
+    const skills: string[] = [];
+    if (skillHint) skills.push(skillHint);
+
+    return {
+      kind: 'dispatch-prompt',
+      label: `${department.config.name} Prompt 任务`,
+      workspace: department.workspaceUri,
+      prompt: goal,
+      ...(playbookRefs.length ? { promptAssetRefs: playbookRefs } : {}),
+      ...(skills.length ? { skillHints: skills } : {}),
+    };
+  }
 
   return {
     kind: 'create-project',
@@ -369,6 +576,8 @@ function deriveActionDraft(command: string, departments: DepartmentEntry[]): Sch
     departmentWorkspaceUri: department.workspaceUri,
     goal,
     skillHint,
+    ...(templateResolution.templateId ? { templateId: templateResolution.templateId } : {}),
+    ...(templateResolution.suggestions?.length ? { suggestions: templateResolution.suggestions } : {}),
   };
 }
 
@@ -399,6 +608,47 @@ function summarizeProjects(): string {
   return `当前项目共 ${projects.length} 个：进行中 ${counts.active || 0}，已完成 ${counts.completed || 0}，失败 ${counts.failed || 0}，暂停 ${counts.paused || 0}。最近项目：${latest}`;
 }
 
+const IMMEDIATE_EXECUTION_INTENT = /执行|运行|完成|处理|分析|整理|汇总|研究|调研|生成|报告|检查|审查|review|do|run|execute/i;
+
+async function tryImmediatePromptDispatch(
+  command: string,
+  departments: Map<string, DepartmentConfig>,
+): Promise<CEOCommandResult | null> {
+  if (!IMMEDIATE_EXECUTION_INTENT.test(command)) return null;
+
+  const departmentEntries = deriveDepartmentEntries(departments);
+  const department = matchDepartment(command, departmentEntries);
+  if (!department) return null;
+
+  const goal = cleanupGoal(command) || command.trim();
+  const skillHint = /seo/i.test(command) ? 'seo-analysis' : /日报|周报|月报/.test(command) ? 'reporting' : undefined;
+  const skills: string[] = skillHint ? [skillHint] : [];
+
+  try {
+    const result = await executePrompt({
+      workspace: department.workspaceUri,
+      prompt: goal,
+      executionTarget: {
+        kind: 'prompt',
+        ...(skills.length ? { skillHints: skills } : {}),
+      },
+    });
+
+    return {
+      success: true,
+      action: 'dispatch_prompt',
+      runId: result.runId,
+      message: `已发起即时 Prompt Mode 执行，目标部门「${department.config.name}」，任务：${goal}。运行 ID：${result.runId}`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      action: 'report_to_human',
+      message: `即时 Prompt Mode 执行失败：${err.message}`,
+    };
+  }
+}
+
 export async function processCEOCommand(
   command: string,
   departments: Map<string, DepartmentConfig>,
@@ -422,10 +672,14 @@ export async function processCEOCommand(
   }
 
   if (!isScheduleIntent(trimmed)) {
+    // Check for immediate execution intent — route to Prompt Mode
+    const immediateResult = await tryImmediatePromptDispatch(trimmed, departments);
+    if (immediateResult) return immediateResult;
+
     return {
       success: false,
       action: 'report_to_human',
-      message: '当前 CEO 命令兼容层优先支持状态查询和自然语言定时任务创建。更复杂的调度请在 CEO Office 会话里继续。',
+      message: '当前 CEO 命令兼容层优先支持状态查询、即时任务执行和自然语言定时任务创建。更复杂的调度请在 CEO Office 会话里继续。',
     };
   }
 
@@ -482,6 +736,14 @@ export async function processCEOCommand(
           ...(actionDraft.stageId ? { stageId: actionDraft.stageId } : {}),
           ...(actionDraft.projectId ? { projectId: actionDraft.projectId } : {}),
         }
+      : actionDraft.kind === 'dispatch-prompt'
+      ? {
+          kind: 'dispatch-prompt',
+          workspace: actionDraft.workspace,
+          prompt: actionDraft.prompt,
+          ...(actionDraft.promptAssetRefs?.length ? { promptAssetRefs: actionDraft.promptAssetRefs } : {}),
+          ...(actionDraft.skillHints?.length ? { skillHints: actionDraft.skillHints } : {}),
+        }
       : {
           kind: 'create-project',
         },
@@ -493,16 +755,29 @@ export async function processCEOCommand(
             projectType: 'adhoc' as const,
             goal: actionDraft.goal,
             ...(actionDraft.skillHint ? { skillHint: actionDraft.skillHint } : {}),
+            ...(actionDraft.templateId ? { templateId: actionDraft.templateId } : {}),
           },
         }
       : {}),
   });
 
+  const nextRunAt = getNextRunAt(job);
+  const kindMessage = actionDraft.kind === 'create-project'
+    ? actionDraft.templateId
+      ? `触发时会自动创建一个 Ad-hoc 项目，并派发模板「${getTemplateLabel(actionDraft.templateId)}」。`
+      : '触发时会自动创建一个 Ad-hoc 项目。当前没有唯一确定 auto-run 模板，因此这条定时任务不会直接启动 run。'
+    : actionDraft.kind === 'dispatch-prompt'
+      ? '触发时会以 Prompt Mode 执行任务，由 AI 按业务 prompt 主导完成。'
+      : actionDraft.kind === 'health-check'
+        ? '触发时会执行一次项目健康巡检。'
+        : '触发时会派发指定模板。';
+
   return {
     success: true,
     action: 'create_scheduler_job',
     jobId: job.jobId,
-    nextRunAt: getNextRunAt(job),
-    message: `已创建定时任务“${job.name}”。下一次执行时间：${getNextRunAt(job) || '待计算'}。当前系统共有 ${listScheduledJobs().length} 个定时任务。`,
+    nextRunAt,
+    message: `已创建定时任务"${job.name}"。${kindMessage}下一次执行时间：${nextRunAt || '待计算'}。当前系统共有 ${listScheduledJobs().length} 个定时任务。`,
+    ...(preview.suggestions?.length ? { suggestions: preview.suggestions } : {}),
   };
 }

@@ -21,6 +21,7 @@ export interface ScheduledJob {
     projectType: 'adhoc';
     goal: string;
     skillHint?: string;
+    templateId?: string;
   };
 }
 
@@ -34,6 +35,15 @@ export type ScheduledAction =
       projectId?: string;
       model?: string;
       sourceRunIds?: string[];
+    }
+  | {
+      kind: 'dispatch-prompt';
+      workspace: string;
+      prompt: string;
+      promptAssetRefs?: string[];
+      skillHints?: string[];
+      projectId?: string;
+      model?: string;
     }
   | {
       kind: 'health-check';

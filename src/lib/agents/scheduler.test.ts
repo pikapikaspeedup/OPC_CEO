@@ -1,6 +1,22 @@
-import { describe, expect, it } from 'vitest';
-import { createScheduledJob, deleteScheduledJob, isScheduledJobDue, normalizeScheduledJobDefinition, updateScheduledJob } from './scheduler';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('./dispatch-service', () => ({
+  executeDispatch: vi.fn(async () => ({ runId: 'run-1' })),
+}));
+vi.mock('./prompt-executor', () => ({
+  executePrompt: vi.fn(async () => ({ runId: 'prompt-run-1' })),
+}));
+import { executeDispatch } from './dispatch-service';
+import { executePrompt } from './prompt-executor';
+import { deleteProject } from './project-registry';
+import { createScheduledJob, deleteScheduledJob, isScheduledJobDue, normalizeScheduledJobDefinition, triggerScheduledJob, updateScheduledJob } from './scheduler';
 import type { ScheduledJob } from './scheduler-types';
+
+beforeEach(() => {
+  vi.mocked(executeDispatch).mockClear();
+  vi.mocked(executeDispatch).mockResolvedValue({ runId: 'run-1' });
+  vi.mocked(executePrompt).mockClear();
+  vi.mocked(executePrompt).mockResolvedValue({ runId: 'prompt-run-1' });
+});
 
 function makeJob(overrides: Partial<ScheduledJob>): ScheduledJob {
   return {
@@ -100,6 +116,96 @@ describe('isScheduledJobDue', () => {
     expect(updated?.lastRunAt).toBeUndefined();
     expect(updated?.lastRunResult).toBeUndefined();
     expect(updated?.enabled).toBe(true);
+
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('auto-dispatches create-project jobs when opcAction.templateId exists', async () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: { kind: 'create-project' },
+        departmentWorkspaceUri: 'file:///Users/darrel/Documents/backend',
+        opcAction: {
+          type: 'create_project',
+          projectType: 'adhoc',
+          goal: '修复登录接口',
+          templateId: 'coding-basic-template',
+        },
+      }),
+    });
+
+    const result = await triggerScheduledJob(created.jobId);
+    const projectId = result.message?.match(/projectId=([^,]+)/)?.[1];
+
+    expect(result.status).toBe('success');
+    expect(result.message).toContain('runId=run-1');
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      templateId: 'coding-basic-template',
+      prompt: '修复登录接口',
+    }));
+
+    if (projectId) deleteProject(projectId);
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('keeps create-project jobs as project-only when no templateId exists', async () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: { kind: 'create-project' },
+        departmentWorkspaceUri: 'file:///Users/darrel/Documents/backend',
+        opcAction: {
+          type: 'create_project',
+          projectType: 'adhoc',
+          goal: '整理 backlog',
+        },
+      }),
+    });
+
+    const result = await triggerScheduledJob(created.jobId);
+    const projectId = result.message?.match(/projectId=([^,]+)/)?.[1];
+
+    expect(result.status).toBe('success');
+    expect(result.message).toContain('projectId=');
+    expect(result.message).not.toContain('runId=');
+    expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+
+    if (projectId) deleteProject(projectId);
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('triggers dispatch-prompt jobs via PromptExecutor', async () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: {
+          kind: 'dispatch-prompt',
+          workspace: 'file:///Users/darrel/Documents/ai-news',
+          prompt: '整理今天 AI 资讯重点信号',
+          promptAssetRefs: ['daily-digest-playbook'],
+          skillHints: ['research'],
+        },
+      }),
+    });
+
+    const result = await triggerScheduledJob(created.jobId);
+
+    expect(result.status).toBe('success');
+    expect(result.message).toContain('runId=prompt-run-1');
+    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: 'file:///Users/darrel/Documents/ai-news',
+      prompt: '整理今天 AI 资讯重点信号',
+      executionTarget: expect.objectContaining({
+        kind: 'prompt',
+        promptAssetRefs: ['daily-digest-playbook'],
+        skillHints: ['research'],
+      }),
+    }));
+    expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
 
     deleteScheduledJob(created.jobId);
   });

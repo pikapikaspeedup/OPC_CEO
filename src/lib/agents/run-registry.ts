@@ -9,7 +9,14 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import path from 'path';
-import type { AgentRunState, RunStatus, TaskEnvelope } from './group-types';
+import type {
+  AgentRunState,
+  ExecutionTarget,
+  ExecutorKind,
+  RunStatus,
+  TaskEnvelope,
+  TriggerContext,
+} from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
 import { createLogger } from '../logger';
 import { GATEWAY_HOME, RUNS_FILE } from './gateway-home';
@@ -183,6 +190,9 @@ export function createRun(input: {
   pipelineId?: string;
   pipelineStageId?: string;
   pipelineStageIndex?: number;
+  executorKind?: ExecutorKind;
+  executionTarget?: ExecutionTarget;
+  triggerContext?: TriggerContext;
 }): AgentRunState {
   const run: AgentRunState = {
     runId: randomUUID(),
@@ -198,9 +208,12 @@ export function createRun(input: {
     templateId: input.templateId,
     taskEnvelope: input.taskEnvelope,
     sourceRunIds: input.sourceRunIds,
+    executorKind: input.executorKind,
+    executionTarget: input.executionTarget,
+    triggerContext: input.triggerContext,
     // V3.5: Pipeline tracking
     pipelineId: input.pipelineId,
-    pipelineStageId: input.pipelineStageId || input.stageId,
+    pipelineStageId: input.pipelineStageId ?? (input.templateId ? input.stageId : undefined),
     pipelineStageIndex: input.pipelineStageIndex,
   };
   // Runtime will backfill runId into taskEnvelope after creation
@@ -209,7 +222,12 @@ export function createRun(input: {
   }
   runs.set(run.runId, run);
   saveToDisk();
-  log.info({ runId: run.runId.slice(0, 8), stageId: run.stageId, templateId: run.templateId }, 'Run created');
+  log.info({
+    runId: run.runId.slice(0, 8),
+    stageId: run.stageId,
+    templateId: run.templateId,
+    executorKind: run.executorKind || 'template',
+  }, 'Run created');
   return run;
 }
 
@@ -334,7 +352,7 @@ export function getRun(runId: string): AgentRunState | null {
   return runs.get(runId) ?? null;
 }
 
-export function listRuns(filter?: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string }): AgentRunState[] {
+export function listRuns(filter?: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string; executorKind?: string }): AgentRunState[] {
   let all = Array.from(runs.values());
   if (filter?.status) {
     all = all.filter(r => r.status === filter.status);
@@ -347,6 +365,9 @@ export function listRuns(filter?: { status?: RunStatus; stageId?: string; review
   }
   if (filter?.projectId) {
     all = all.filter(r => r.projectId === filter.projectId);
+  }
+  if (filter?.executorKind) {
+    all = all.filter(r => r.executorKind === filter.executorKind);
   }
   // Return newest first
   return all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

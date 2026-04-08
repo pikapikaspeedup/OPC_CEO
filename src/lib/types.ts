@@ -117,6 +117,35 @@ export interface TokenQuota {
   canRequestMore: boolean;
 }
 
+export interface TemplateExecutionTargetFE {
+  kind: 'template';
+  templateId: string;
+  stageId?: string;
+}
+
+export interface PromptExecutionTargetFE {
+  kind: 'prompt';
+  promptAssetRefs?: string[];
+  skillHints?: string[];
+}
+
+export interface ProjectOnlyExecutionTargetFE {
+  kind: 'project-only';
+}
+
+export type ExecutionTargetFE =
+  | TemplateExecutionTargetFE
+  | PromptExecutionTargetFE
+  | ProjectOnlyExecutionTargetFE;
+
+export type ExecutorKindFE = 'template' | 'prompt';
+
+export interface TriggerContextFE {
+  source?: 'ceo-command' | 'ceo-workflow' | 'scheduler' | 'mcp' | 'web' | 'api';
+  schedulerJobId?: string;
+  intentSummary?: string;
+}
+
 export type AgentRunStatus =
   | 'queued'
   | 'starting'
@@ -476,6 +505,9 @@ export interface AgentRun {
   resultEnvelope?: ResultEnvelopeFE;
   artifactManifestPath?: string;
   sourceRunIds?: string[];
+  executorKind?: ExecutorKindFE;
+  executionTarget?: ExecutionTargetFE;
+  triggerContext?: TriggerContextFE;
   liveState?: {
     cascadeStatus: string;
     stepCount: number;
@@ -517,7 +549,8 @@ export interface ArtifactRefFE {
 }
 
 export interface TaskEnvelopeFE {
-  templateId: string;
+  templateId?: string;
+  executionTarget?: ExecutionTargetFE;
   runId?: string;
   taskId?: string;
   goal: string;
@@ -533,7 +566,8 @@ export interface TaskEnvelopeFE {
 }
 
 export interface ResultEnvelopeFE {
-  templateId: string;
+  templateId?: string;
+  executionTarget?: ExecutionTargetFE;
   runId: string;
   taskId?: string;
   status: string;
@@ -547,7 +581,8 @@ export interface ResultEnvelopeFE {
 
 export interface ArtifactManifestFE {
   runId: string;
-  templateId: string;
+  templateId?: string;
+  executionTarget?: ExecutionTargetFE;
   items: ArtifactRefFE[];
 }
 

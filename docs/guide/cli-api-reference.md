@@ -265,16 +265,18 @@ The API runs on port 3000 by default.
 
 #### Send CEO Command
 - **URL:** `POST /api/ceo/command`
-- **Description:** CEO 自然语言命令入口。自动进行意图识别、部门匹配和任务派发。
+- **Description:** CEO 自然语言命令入口。当前兼容层主要支持状态查询与自然语言定时任务创建。
 - **Request Body (JSON):**
   - `command` (String, required): CEO 的自然语言命令
+  - `model` (String, optional): 可选模型 ID
 - **Response:** `200 OK`
   ```json
   {
     "success": true,
-    "action": "create_project",
-    "message": "已在「后端研发」部门创建项目",
-    "projectId": "abc123"
+    "action": "create_scheduler_job",
+    "message": "已创建定时任务“后端团队 定时任务 · 工作日 09:00”。触发时会自动创建一个 Ad-hoc 项目，并派发模板「Universal Batch Research (Fan-out)」。下一次执行时间：2026-04-09T01:00:00.000Z。当前系统共有 3 个定时任务。",
+    "jobId": "abc123",
+    "nextRunAt": "2026-04-09T01:00:00.000Z"
   }
   ```
 
@@ -345,10 +347,11 @@ The API runs on port 3000 by default.
   - `name` (String, required): 任务名称
   - `type` (String, required): `cron` / `interval` / `once`
   - `cronExpression` (String, conditional): cron 表达式
-  - `action` (Object, required): `{ kind: 'dispatch-pipeline' | 'health-check', ... }`
+  - `action` (Object, required): `{ kind: 'dispatch-pipeline' | 'health-check' | 'create-project', ... }`
   - `enabled` (Boolean, optional): 默认 `true`
   - `departmentWorkspaceUri` (String, optional): 关联部门 workspace
   - `action.kind = "dispatch-pipeline"` 时使用 `templateId`，可选 `stageId` 指定非入口阶段
+  - `action.kind = "create-project"` 时使用 `departmentWorkspaceUri` + `opcAction.goal`；如需触发后自动启动 run，写入 `opcAction.templateId`
 
 #### Get Scheduled Job
 - **URL:** `GET /api/scheduler/jobs/:id`

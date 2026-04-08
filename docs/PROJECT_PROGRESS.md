@@ -1,3 +1,97 @@
+## 任务：CEO Dashboard 即时 Prompt Mode 指令卡片
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+升级 CEO Dashboard 的"用一句话创建定时任务"卡片为"CEO 指令中心"，支持即时 Prompt Mode 执行 + 定时任务创建双路径。
+
+### 本次完成的关键改动
+1. **`ceo-scheduler-command-card.tsx`**：
+   - 标题从"用一句话创建定时任务"改为"CEO 指令中心"
+   - 描述文案更新，说明支持即时执行和定时任务
+   - Preset 新增即时 Prompt Mode 示例（"让XX部门分析最近一周的关键信号"）
+   - 提交按钮从"由 CEO 创建"改为"CEO 下令"，图标从 CalendarClock 改为 Zap
+   - 结果展示：`dispatch_prompt` 返回时显示橙色"⚡ Prompt Run"徽章 + runId
+   - 新增 `onRunDispatched` 回调 prop
+   - 支持提示栏更新为"即时执行 / 每日 / 工作日 / 每周 / 明天 / 每隔 N 小时"
+2. **`api.ts`**：`CEOCommandResult` action 联合类型新增 `'dispatch_prompt'`
+
+### 新增 / 更新的核心文件
+- `src/components/ceo-scheduler-command-card.tsx`
+- `src/lib/api.ts`
+
+### 验证证据
+1. 26 个测试全绿 + 生产构建通过
+2. 静态类型检查零错误
+
+## 任务：补 Prompt Run 前端展示入口 + 项目详情集成 + 接口文档
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+在 PromptExecutor 运行时和 CEO/Scheduler 触发链路已落地的基础上，完成三方面收口：
+1. 前端展示：Run 列表、Run 详情、项目详情三入口正确识别和展示 Prompt Run
+2. API 文档：gateway-api、mcp-server、ceo-scheduler-guide 全部更新
+3. CEO Workflow playbook：新增即时 Prompt Mode 和定时 dispatch-prompt 两个工作流模板
+
+### 本次完成的关键改动
+1. **`agent-runs-panel.tsx`**：RunItem 组件新增橙色 "Prompt" badge
+2. **`agent-run-detail.tsx`**：Run 详情页新增 "Prompt" StatusChip，禁用 nudge/retry/restart_role 干预按钮
+3. **`stage-detail-panel.tsx`**：Pipeline stage 详情新增 "Prompt" StatusChip，禁用 restart_role
+4. **`project-workbench.tsx`**：Pipeline 视图下方新增"Standalone Prompt Runs"区域，展示不属于任何 stage 的 prompt run
+5. **`prompt-runs-section.tsx`**（新增）：独立 Prompt Runs 展示组件，橙色主题，显示状态/时间/摘要，支持取消
+6. **`agent-runs/route.ts` GET**：新增 `executorKind` query param 过滤
+7. **`run-registry.ts`**：`listRuns` 支持 `executorKind` 过滤
+
+### 新增 / 更新的核心文件
+- `src/components/agent-runs-panel.tsx`
+- `src/components/agent-run-detail.tsx`
+- `src/components/stage-detail-panel.tsx`
+- `src/components/project-workbench.tsx`
+- `src/components/prompt-runs-section.tsx` (新增)
+- `src/app/api/agent-runs/route.ts`
+- `src/lib/agents/run-registry.ts`
+
+### 验证证据
+1. 26 个测试全绿 + 生产构建通过
+2. 静态类型检查零错误
+
+## 任务：Scheduler dispatch-prompt + CEO 自然语言→Prompt Mode（定时+即时）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+在 PromptExecutor 运行时已落地的基础上，补齐三条上游触发链路：
+1. Scheduler 新增 `dispatch-prompt` action kind，定时任务可以直接触发 Prompt Mode 执行
+2. CEO 自然语言指令在无法唯一匹配 template 但检测到执行意图时，定时任务自动产出 `dispatch-prompt` 而非降级为只创建项目
+3. CEO 即时指令（非定时场景）检测到执行意图并匹配到部门时，直接发起 Prompt Mode 执行
+
+### 本次完成的关键改动
+1. **`scheduler-types.ts`**：`ScheduledAction` 联合类型新增 `dispatch-prompt` 分支
+2. **`scheduler.ts`**：`normalizeScheduledJobDefinition` 新增 `dispatch-prompt` 校验；`triggerAction` 新增 `dispatch-prompt` 分支调用 `executePrompt()`
+3. **`ceo-agent.ts`**：
+   - `CEOCommandResult` 新增 `dispatch_prompt` action 和 `runId` 字段
+   - `SchedulerActionDraft` 新增 `dispatch-prompt` 分支
+   - 定时任务：`deriveActionDraft` 在无唯一 template 但有执行意图时产出 `dispatch-prompt`
+   - 即时指令：新增 `tryImmediatePromptDispatch()` 函数，在非定时意图分支检测执行意图+匹配部门后直接调 `executePrompt()`
+   - `processCEOCommand` 组装和返回消息支持 `dispatch-prompt`
+4. **`mcp/server.ts`**：create/update scheduler job 的 MCP 工具 schema 扩展 `dispatch-prompt`
+
+### 新增 / 更新的核心文件
+- `src/lib/agents/scheduler-types.ts`
+- `src/lib/agents/scheduler.ts`
+- `src/lib/agents/ceo-agent.ts`
+- `src/mcp/server.ts`
+- `src/lib/agents/scheduler.test.ts`
+- `src/lib/agents/ceo-agent.test.ts`
+
+### 验证证据
+1. **单元测试通过**：4 个文件 26 个测试全绿，覆盖：dispatch-prompt 定时触发、CEO 定时无唯一 template 走 prompt、CEO 即时执行匹配部门走 prompt、即时执行无部门匹配回退、executePrompt 失败处理
+2. **生产构建通过**
+
 ## 任务：CEO 原生定时调度能力闭环落地
 
 **状态**: ✅ 已完成
@@ -17,6 +111,8 @@
 8. **补齐 MCP 写能力**：`src/mcp/server.ts` 新增 `antigravity_create_scheduler_job`、`antigravity_update_scheduler_job`、`antigravity_trigger_scheduler_job`、`antigravity_delete_scheduler_job`。
 9. **优化 CEO Workflow**：更新 `src/lib/agents/ceo-environment.ts` 与真实 CEO 工作区 `~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-playbook.md`，加入 scheduler 分支，并修正旧的 `groupId` 口径为 `templateId + stageId`；新增 `ceo-scheduler-playbook.md`。
 10. **补齐接口与使用文档**：新增 `docs/guide/ceo-scheduler-guide.md`，并更新 `docs/guide/mcp-server.md`、`docs/guide/agent-user-guide.md`。
+11. **收口对外语义**：把 Web UI、API 返回消息、CEO Workflow 和外部文档中的 create-project 示例统一改成“定时创建任务项目 / Ad-hoc Project”，不再让用户误以为 scheduler 触发时会直接产出日报正文；同时把 `docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md` 与当前 `/api/ceo/command` 真实行为对齐，并在 `docs/design/ceo-cron-capability-gap-analysis.md` 顶部补上“实现前快照”说明。
+12. **补齐 create-project auto-run 主链路**：`create-project` job 现在可以持久化 `templateId`，scheduler 触发时统一复用 `executeDispatch()`；CEO 自然语言创建会在建 job 时优先解析显式模板、部门模板和任务语义，必要时回退到全局合适模板，并把最终选中的 template 写入 `opcAction.templateId`。若无法唯一确定模板，则明确降级为“只创建项目、不直接启动 run”。
 
 ### 新增 / 更新的核心文件
 - `src/lib/agents/ceo-agent.ts`
@@ -48,6 +144,14 @@
 4. **Scheduler 契约回归 smoke test 通过**
   - 验证 1：通过 `POST /api/scheduler/jobs` 创建 `create-project` job，再 `PATCH` 更新成 `health-check`，返回结果中 `opcAction` 与 `departmentWorkspaceUri` 已被正确清空。
   - 验证 2：对 `PATCH /api/scheduler/jobs/:id` 发送非法 JSON，请求返回 `400` 与 `{"error":"Invalid JSON body"}`，不再把坏请求吞成空更新。
+5. **Auto-run 单测通过**
+  - 执行：`npm test -- src/lib/agents/scheduler.test.ts src/lib/agents/ceo-agent.test.ts`
+  - 结果：`2` 个测试文件全部通过，`12` 个测试全部通过，覆盖了 create-project 自动派发、仅创建项目降级路径，以及 CEO 创建时的模板选择回退。
+6. **真实 API smoke test 通过（安全路径，不触发真实 run）**
+  - 调用：`POST /api/ceo/command`
+  - 指令：`明天上午 9 点让超级 IT 研发部创建一个日报任务项目，目标是汇总当前进行中的项目与风险 smoke-<timestamp>`
+  - 返回：成功创建 `jobId = b0cd76f4-023f-4f22-9a2f-8e938f388cab`，响应消息已明确写出将派发模板 `Universal Batch Research (Fan-out)`。
+  - 进一步验证：`GET /api/scheduler/jobs` 查得该 job 的 `opcAction.templateId = universal-batch-template`，随后已通过 `DELETE /api/scheduler/jobs/:id` 清理。
 
 ### 结果判断
 本轮已把此前文档中定义的核心缺口真正打通：
@@ -56,6 +160,189 @@
 2. Scheduler 不再只是“系统能跑”的 infra，而是有了 **CEO 可用的自然语言入口**。
 3. 调度结果已经能回流到 **CEO Dashboard / Header Event Flow / 审计链路**。
 4. MCP 与 Workflow 现在都具备了与 Web UI 一致的调度能力和接口文档。
+
+## 任务：梳理 Template / Workflow / Project-only 执行机制与目标架构
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+围绕“不是所有部门都应该依赖复杂 template，部分部门可能以 workflow 为主”的问题，对当前 Antigravity 的执行机制重新做了一次结构化梳理，并把结论写入本地设计文档，避免后续继续把 Template、Workflow、Project、Ad-hoc 混成同一个概念讨论。
+
+### 关键结论
+1. **Template 仍是当前唯一真正进入 Gateway 执行面的执行蓝图**：run 的真实主链仍然是 `templateId -> stageId -> run`，统一入口仍是 `executeDispatch()`。
+2. **Workflow 当前是资产层，不是执行层**：它现在要么作为 template role 引用的 markdown prompt 资产存在，要么作为 IDE/workspace/global workflow 资产被列出和编辑，还没有 workflow executor。
+3. **Project / adhoc 不是执行器**：`createProject()` 只创建容器；`adhoc` 只是项目类型，不代表单角色直接执行模式。
+4. **对没有 template 但有 workflow 的部门，当前最准确的系统描述是 project-only**：可以创建项目，但不会因为“存在 workflow 文件”就自动产出 run。
+5. **后续最稳的方向不是继续讨论 templateId 是否必填，而是引入 ExecutionTarget / ExecutionIntent**：明确拆分 `project-only`、`template`、`workflow` 三种后续执行目标。
+
+### 产出
+- 新增设计文档：`docs/design/execution-target-architecture.md`
+
+### 说明
+- 本次为机制梳理与架构思考入库，没有修改运行时代码。
+- 文档中已明确写出当前不存在但容易被误以为存在的能力，包括 `workflow-only dispatch`、`DepartmentSkill.workflowRef` 驱动执行、以及 `adhoc = 单角色执行器`。
+- 当前建议也已写入文档：在 workflow executor 真正落地前，产品层应明确承认 `project-only` 是合法目标，而不是继续依赖更多 template fallback。
+
+## 任务：补充 WorkflowExecutor 如何复用 Run 框架的设计思考
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+继续围绕“如果独立做 WorkflowExecutor，如何跟踪、上报以及查看工作结果”这个关键问题，对现有 RunRegistry、artifact、audit、CEO 事件与项目详情链路做了一次结构化对齐，并把结论补回执行目标设计文档，避免后续把 WorkflowExecutor 误做成又一套孤立运行时。
+
+### 关键结论
+1. **最稳的方案不是另起 workflow-run，而是继续复用 Run 作为统一运行态对象**：Project 继续做容器，WorkflowExecutor 只作为新的 executorKind 存在。
+2. **真正值得复用的是 run 外壳，不是 template/stage 专属调度层**：RunRegistry、artifactDir、ResultEnvelope 思路、Ops Audit、项目与 run 的关联都可直接复用；`executeDispatch()`、pipelineState、source contract 这些 template 强绑定层必须解耦。
+3. **查看结果的主路径应该继续围绕 run，而不是 workflow 文档或 Deliverables 面板**：项目详情应新增 run-linked workflow 视图，artifact 目录仍是结果真相源。
+4. **如果未来落地 WorkflowExecutor，最小字段补充应集中在 executionTarget / executorKind，而不是伪造 templateId**。
+
+### 产出
+- 更新设计文档：`docs/design/execution-target-architecture.md`
+
+### 说明
+- 本次仍为架构思考入库，没有修改运行时代码。
+- 文档中已新增关于 WorkflowExecutor 的状态真相、审计上报、项目详情展示和结果落点的章节，方便后续继续讨论是否正式引入 workflow 执行层。
+
+## 任务：澄清 workflow 术语与 prompt 资产边界
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+继续围绕“当前所谓 workflow 是否其实只是 prompt 资产”这个关键命名问题，对执行目标设计文档补充了一层术语澄清，避免后续把 markdown playbook、可执行 template 和未来可能存在的独立 workflow 编排继续混叫成一个词。
+
+### 关键结论
+1. **如果当前 markdown workflow 的本质只是 prompt / playbook，继续直接叫 workflow 会持续制造误解**。
+2. **当前仓库最稳的术语边界应该是：Template/Pipeline = 可执行编排；Workflow markdown = Playbook / Prompt Asset；Skill = 能力单元**。
+3. **如果未来真要引入独立的 workflow executor，最好用新的词，例如 Execution Flow / Automation Flow，而不是直接继承今天已经被 prompt 资产污染的 workflow 概念**。
+
+### 产出
+- 更新设计文档：`docs/design/execution-target-architecture.md`
+
+### 说明
+- 本次仍为设计讨论入库，没有修改运行时代码。
+- 文档里已补充“术语本身也在制造误解”的章节，方便后续继续决定是否要在文档/API/字段名层面逐步去 workflow 化。
+
+## 任务：澄清 Template Mode / Prompt Mode / 同对话执行的层级关系
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+继续围绕“非固定模板任务更应该理解成 Prompt Mode，而不是 Workflow Mode”这个问题，对执行目标设计文档做了进一步收口，明确补上了 Template Mode、Prompt Mode 与 shared conversation 的层级关系，避免后续把“同一个对话执行”误判成 Template 之上的新模式。
+
+### 关键结论
+1. **当前所谓同对话执行，不是新的上层执行模式，而是 Template 运行时里的 conversation reuse 策略**。
+2. **如果任务不是固定 Template，而是 prompt 主导、再辅以 playbook / skill 提示，那么更稳的名字就是 Prompt Mode**。
+3. **未来若真要引入独立可执行编排，应单独命名为 Execution Flow / Automation Flow，而不应继续复用今天已被 prompt 资产污染的 workflow 概念**。
+
+### 产出
+- 更新设计文档：`docs/design/execution-target-architecture.md`
+
+### 说明
+- 本次仍为概念梳理入库，没有修改运行时代码。
+- 文档中 ExecutionTarget 的建议已同步从 `workflow` 收口为 `prompt`，并新增了“同对话执行是 Template runtime 子模式”的说明。
+
+## 任务：整理 Prompt Mode / Template Mode 执行术语表
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+把这一轮讨论中已经反复出现的术语边界进一步独立成一页 glossary，专门用来澄清 Template、Prompt Mode、Playbook、Skill、Shared Conversation 和未来 Execution Flow 的关系，避免主设计文档既要讲机制又要兼做词典。
+
+### 关键结论
+1. **Template / Pipeline 应只保留给固定可执行编排**。
+2. **非固定模板任务应优先叫 Prompt Mode，而不是 Workflow Mode**。
+3. **当前 markdown workflow 文件在产品语义上更接近 Playbook / Prompt Asset**。
+4. **Shared Conversation 只是运行时策略，不是新的产品模式**。
+5. **如果未来真有独立自动化编排，应使用 Execution Flow / Automation Flow 之类的新术语，而不是继续复用 workflow。**
+
+### 产出
+- 新增设计文档：`docs/design/execution-terminology-glossary.md`
+
+### 说明
+- 本次仍为术语收口入库，没有修改运行时代码。
+- 后续如果要逐步去 workflow 化，这份 glossary 可以直接作为文档、API 和字段命名迁移的参照基线。
+
+## 任务：编写 PromptExecutor 最小接口草案
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+把 Prompt Mode 从概念讨论进一步推进到接口层，整理出一份最小 PromptExecutor 合同草案，重点说明它如何复用现有 `POST /api/agent-runs`、Run、Artifact 与 Project 体系，而不是再起一套平行运行时。
+
+### 关键结论
+1. **最稳的接口方向是让 `agent-runs` 成为真正的统一执行入口，再通过 `executionTarget.kind` 分流到 TemplateExecutor 或 PromptExecutor**。
+2. **Prompt Mode 的最小字段应集中在 `executionTarget`、`executorKind`、`triggerContext` 上，而不是继续扩散 template-first 字段。**
+3. **Scheduler 若未来支持 Prompt Mode，最清晰的 action 语义应是新增 `dispatch-prompt`，而不是复用 `dispatch-pipeline`。**
+4. **Prompt Mode 不应为了兼容展示链路伪造 templateId；应让 envelope / manifest 逐步承认 executionTarget 才是一等来源。**
+
+### 产出
+- 新增设计文档：`docs/design/prompt-executor-minimal-contract.md`
+
+### 说明
+- 本次仍为接口草案入库，没有修改运行时代码。
+- 文档已包含最小请求体、route 分流策略、Run 字段补充建议，以及对 scheduler / CEO / 前端 API 的最小接入建议。
+
+## 任务：实现 PromptExecutor 最小可运行版本
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+把此前 PromptExecutor 接口草案推进到真实可运行代码。新增 `prompt-executor.ts` 实现最小 Prompt Mode 执行链路，让 `POST /api/agent-runs` 成为统一执行入口，通过 `executionTarget.kind` 分流到 TemplateExecutor 或 PromptExecutor，同时保持完整的 template-first 向后兼容。
+
+### 本次完成的关键改动
+
+1. **新增 `src/lib/agents/prompt-executor.ts`**：PromptExecutor 运行时核心，支持两种 provider 路径：
+   - **Antigravity（gRPC watcher）路径**：通过 `executeTask` 获得 cascadeId 后，启动 `watchConversation` 进行实时追踪，idle/error 后自动 finalize
+   - **同步 provider（codex 等）路径**：后台异步 `executeTask`，完成后自动 finalize，取消后忽略晚到结果
+2. **扩展 `src/lib/agents/group-types.ts`**：新增 `ExecutionTarget`（template / prompt / project-only 联合类型）、`ExecutorKind`、`TriggerContext`；`TaskEnvelope`、`ResultEnvelope`、`ArtifactManifest` 的 `templateId` 改为可选，新增 `executionTarget` 字段
+3. **扩展 `src/lib/agents/run-registry.ts`**：`createRun` 接受 `executorKind`、`executionTarget`、`triggerContext`；`pipelineStageId` 只在有 `templateId` 时回填，避免 prompt run 污染项目 pipeline 状态
+4. **扩展 `src/lib/agents/run-artifacts.ts`**：`scanArtifactManifest` 和 `buildResultEnvelope` 支持可选 `executionTarget`
+5. **修改 `src/app/api/agent-runs/route.ts`**：route 分流逻辑——先检查 `executionTarget.kind`，`prompt` 走 PromptExecutor，`template` 或 legacy 顶层 `templateId` 走 `executeDispatch()`，其他 kind 返回 400
+6. **修改 `src/app/api/agent-runs/[id]/route.ts` 和 `[id]/intervene/route.ts`**：DELETE 和 cancel 操作按 `executorKind` 分流到 `cancelPromptRun()` 或 `cancelRun()`；prompt run 只允许 cancel，不支持 nudge/retry 等干预
+7. **扩展 `src/lib/api.ts`**：新增 `createPromptRun()` 前端包装方法
+8. **扩展 `src/lib/types.ts`**：新增前端侧的 `ExecutionTargetFE`、`ExecutorKindFE`、`TriggerContextFE` 类型，`AgentRun` / `TaskEnvelopeFE` / `ResultEnvelopeFE` / `ArtifactManifestFE` 同步扩展
+
+### 新增 / 更新的核心文件
+- `src/lib/agents/prompt-executor.ts` (新增)
+- `src/lib/agents/group-types.ts`
+- `src/lib/agents/run-registry.ts`
+- `src/lib/agents/run-artifacts.ts`
+- `src/app/api/agent-runs/route.ts`
+- `src/app/api/agent-runs/[id]/route.ts`
+- `src/app/api/agent-runs/[id]/intervene/route.ts`
+- `src/lib/api.ts`
+- `src/lib/types.ts`
+- `src/app/api/agent-runs/route.test.ts` (新增)
+- `src/lib/agents/prompt-executor.test.ts` (新增)
+
+### 验证证据
+1. **单元测试通过**
+   - 执行：`npm test -- src/app/api/agent-runs/route.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/run-artifacts.test.ts src/lib/agents/scheduler.test.ts`
+   - 结果：4 个测试文件全部通过，41 个测试全部通过，0 失败
+   - 覆盖点：legacy template 兼容、prompt 分流、显式 template executionTarget、unsupported kind 拒绝、同步 provider 完整生命周期、watcher 路径完整生命周期、取消后晚到结果保护、Antigravity dispatch 失败收口
+2. **生产构建通过**
+   - 执行：`npm run build`
+   - 结果：Next.js 生产构建完成，所有 API 路由编译成功
+3. **独立代码审查**
+   - 第一轮审查发现 3 个 MAJOR 问题：watcher 未透传 apiKey（heartbeat 失效）、Antigravity 分支失败/取消收口缺失、template executionTarget 未真正打通
+   - 三个问题均已修复并通过回归测试和重新构建验证
+
+### 审查修复明细
+1. **watcher apiKey 透传**：`startPromptWatch` 的连接类型从 `{ port, csrf }` 扩展为 `{ port, csrf, apiKey? }`，并把 apiKey 传给 `watchConversation` 的第五参数，恢复 heartbeat 兜底轮询
+2. **Antigravity 失败收口**：executeTask 的 await 用 try/catch 包裹，抛错时回写 `status: 'failed'` 并清理 activePromptRuns；await 返回后在写回 running 之前重新检查 run 是否已进入终态
+3. **template executionTarget 打通**：route 在调用 `executeDispatch` 时，`templateId` 和 `stageId` 优先从 `executionTarget` 取值，保证 `{ executionTarget: { kind: 'template', templateId, stageId } }` 格式的请求能正确分流
+
+### 剩余风险
+- PromptExecutor 当前没有 UI 展示入口，prompt run 结果只能通过 API 或项目详情查看
+- Scheduler 尚未支持 `dispatch-prompt` action kind，prompt run 只能通过 API / CEO 手动触发
+- prompt run 的 intervene（nudge/retry）当前直接返回 400，未来可能需要按需放开
 
 ## 任务：制定 Antigravity 长期演进大节点路线图
 

@@ -296,7 +296,7 @@ description: CEO 专属定时任务 / Cron / 自动执行工作流
 ## 1. 先判断属于哪种业务模板
 
 ### 模板 A：定时创建 Ad-hoc Project
-适用场景：日报、周报、SEO 报告、周期性研究、定期整理 backlog。
+适用场景：日报任务项目、周报任务项目、SEO 报告、周期性研究、定期整理 backlog。
 
 MCP 优先：
 - 先用 \`antigravity_list_projects\` 和 \`/api/workspaces\` / \`/api/departments\` 确认部门
@@ -305,14 +305,15 @@ MCP 优先：
 MCP 创建参数示例：
 \`\`\`json
 {
-  "name": "市场部日报 · 工作日 09:00",
+  "name": "市场部日报任务 · 工作日 09:00",
   "type": "cron",
   "cronExpression": "0 9 * * 1-5",
   "actionKind": "create-project",
   "departmentWorkspaceUri": "file:///Users/.../marketing",
-  "goal": "生成日报，汇总当前进行中的项目与风险",
+  "goal": "创建一个日报任务项目，目标是汇总当前进行中的项目与风险",
   "skillHint": "reporting",
-  "intentSummary": "每天工作日上午 9 点让市场部生成日报"
+  "createProjectTemplateId": "universal-batch-template",
+  "intentSummary": "每天工作日上午 9 点让市场部创建一个日报任务项目，目标是汇总当前进行中的项目与风险"
 }
 \`\`\`
 
@@ -321,21 +322,24 @@ MCP 创建参数示例：
 curl -X POST http://localhost:3000/api/scheduler/jobs \\
   -H "Content-Type: application/json" \\
   -d '{
-    "name": "市场部日报 · 工作日 09:00",
+    "name": "市场部日报任务 · 工作日 09:00",
     "type": "cron",
     "cronExpression": "0 9 * * 1-5",
     "createdBy": "ceo-workflow",
-    "intentSummary": "每天工作日上午 9 点让市场部生成日报",
+    "intentSummary": "每天工作日上午 9 点让市场部创建一个日报任务项目，目标是汇总当前进行中的项目与风险",
     "action": { "kind": "create-project" },
     "departmentWorkspaceUri": "file:///Users/.../marketing",
     "opcAction": {
       "type": "create_project",
       "projectType": "adhoc",
-      "goal": "生成日报，汇总当前进行中的项目与风险",
-      "skillHint": "reporting"
+      "goal": "创建一个日报任务项目，目标是汇总当前进行中的项目与风险",
+      "skillHint": "reporting",
+      "templateId": "universal-batch-template"
     }
   }'
 \`\`\`
+
+注意：这类 \`create-project\` 任务在触发时会先创建一个 Ad-hoc Project；如果创建时已经带上 templateId / createProjectTemplateId，触发后还会自动派发第一条 run。未提供模板时，则只创建项目，不直接启动 run。
 
 ### 模板 B：项目健康巡检
 适用场景：每周检查某个项目是否 stale / blocked / failed。

@@ -253,12 +253,14 @@ const {
 } = await import("../lib/agents/scheduler.js");
 
 function buildSchedulerAction(input: {
-  actionKind: 'dispatch-pipeline' | 'health-check' | 'create-project';
+  actionKind: 'dispatch-pipeline' | 'dispatch-prompt' | 'health-check' | 'create-project';
   workspace?: string;
   prompt?: string;
   templateId?: string;
   stageId?: string;
   projectId?: string;
+  promptAssetRefs?: string[];
+  skillHints?: string[];
 }) {
   if (input.actionKind === 'health-check') {
     if (!input.projectId) {
@@ -269,6 +271,20 @@ function buildSchedulerAction(input: {
 
   if (input.actionKind === 'create-project') {
     return { kind: 'create-project' as const };
+  }
+
+  if (input.actionKind === 'dispatch-prompt') {
+    if (!input.workspace || !input.prompt) {
+      throw new Error('dispatch-prompt requires workspace and prompt');
+    }
+    return {
+      kind: 'dispatch-prompt' as const,
+      workspace: input.workspace,
+      prompt: input.prompt,
+      ...(input.promptAssetRefs?.length ? { promptAssetRefs: input.promptAssetRefs } : {}),
+      ...(input.skillHints?.length ? { skillHints: input.skillHints } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+    };
   }
 
   if (!input.workspace || !input.prompt || !input.templateId) {
@@ -291,7 +307,7 @@ function buildSchedulerJobPayload(input: {
   cronExpression?: string;
   intervalMs?: number;
   scheduledAt?: string;
-  actionKind: 'dispatch-pipeline' | 'health-check' | 'create-project';
+  actionKind: 'dispatch-pipeline' | 'dispatch-prompt' | 'health-check' | 'create-project';
   workspace?: string;
   prompt?: string;
   templateId?: string;
@@ -301,6 +317,9 @@ function buildSchedulerJobPayload(input: {
   departmentWorkspaceUri?: string;
   goal?: string;
   skillHint?: string;
+  createProjectTemplateId?: string;
+  promptAssetRefs?: string[];
+  skillHints?: string[];
   createdBy?: 'ceo-command' | 'ceo-workflow' | 'mcp' | 'web' | 'api';
   intentSummary?: string;
 }) {
@@ -345,6 +364,7 @@ function buildSchedulerJobPayload(input: {
       projectType: 'adhoc',
       goal: input.goal,
       ...(input.skillHint ? { skillHint: input.skillHint } : {}),
+      ...(input.createProjectTemplateId ? { templateId: input.createProjectTemplateId } : {}),
     };
   }
 
@@ -413,16 +433,16 @@ server.registerTool(
   "antigravity_create_scheduler_job",
   {
     title: "Create Scheduler Job",
-    description: "Create a scheduled job for recurring pipeline dispatch, project health checks, or CEO ad-hoc project creation.",
+    description: "Create a scheduled job for recurring pipeline dispatch, prompt-mode execution, project health checks, or CEO ad-hoc project creation.",
     inputSchema: z.object({
       name: z.string().describe("Job display name"),
       type: z.enum(["cron", "interval", "once"]).describe("Schedule type"),
       cronExpression: z.string().optional().describe("Five-field cron expression for cron jobs"),
       intervalMs: z.number().int().positive().optional().describe("Interval in milliseconds for interval jobs"),
       scheduledAt: z.string().optional().describe("ISO timestamp for once jobs"),
-      actionKind: z.enum(["dispatch-pipeline", "health-check", "create-project"]).describe("What the job should do"),
-      workspace: z.string().optional().describe("Workspace URI for dispatch-pipeline"),
-      prompt: z.string().optional().describe("Prompt for dispatch-pipeline"),
+      actionKind: z.enum(["dispatch-pipeline", "dispatch-prompt", "health-check", "create-project"]).describe("What the job should do"),
+      workspace: z.string().optional().describe("Workspace URI for dispatch-pipeline or dispatch-prompt"),
+      prompt: z.string().optional().describe("Prompt for dispatch-pipeline or dispatch-prompt"),
       templateId: z.string().optional().describe("Template ID for dispatch-pipeline"),
       stageId: z.string().optional().describe("Optional stage ID for dispatch-pipeline"),
       projectId: z.string().optional().describe("Project ID for health-check or pipeline attachment"),
@@ -430,6 +450,9 @@ server.registerTool(
       departmentWorkspaceUri: z.string().optional().describe("Department workspace URI for create-project jobs"),
       goal: z.string().optional().describe("Ad-hoc project goal for create-project jobs"),
       skillHint: z.string().optional().describe("Optional skill hint for create-project jobs"),
+      createProjectTemplateId: z.string().optional().describe("Optional template ID to auto-dispatch after create-project jobs fire"),
+      promptAssetRefs: z.array(z.string()).optional().describe("Playbook/prompt asset refs for dispatch-prompt jobs"),
+      skillHints: z.array(z.string()).optional().describe("Skill hints for dispatch-prompt jobs"),
       intentSummary: z.string().optional().describe("Original natural-language intent"),
     }),
     annotations: {
@@ -466,15 +489,18 @@ server.registerTool(
       intervalMs: z.number().int().positive().optional().describe("Updated interval in milliseconds"),
       scheduledAt: z.string().optional().describe("Updated ISO timestamp for once jobs"),
       enabled: z.boolean().optional().describe("Pause or resume the job"),
-      actionKind: z.enum(["dispatch-pipeline", "health-check", "create-project"]).optional().describe("Updated action kind"),
-      workspace: z.string().optional().describe("Workspace URI for dispatch-pipeline"),
-      prompt: z.string().optional().describe("Prompt for dispatch-pipeline"),
+      actionKind: z.enum(["dispatch-pipeline", "dispatch-prompt", "health-check", "create-project"]).optional().describe("Updated action kind"),
+      workspace: z.string().optional().describe("Workspace URI for dispatch-pipeline or dispatch-prompt"),
+      prompt: z.string().optional().describe("Prompt for dispatch-pipeline or dispatch-prompt"),
       templateId: z.string().optional().describe("Template ID for dispatch-pipeline"),
       stageId: z.string().optional().describe("Optional stage ID for dispatch-pipeline"),
       projectId: z.string().optional().describe("Project ID for health-check or pipeline attachment"),
       departmentWorkspaceUri: z.string().optional().describe("Department workspace URI for create-project jobs"),
       goal: z.string().optional().describe("Ad-hoc project goal for create-project jobs"),
       skillHint: z.string().optional().describe("Optional skill hint for create-project jobs"),
+      createProjectTemplateId: z.string().optional().describe("Optional template ID to auto-dispatch after create-project jobs fire"),
+      promptAssetRefs: z.array(z.string()).optional().describe("Playbook/prompt asset refs for dispatch-prompt jobs"),
+      skillHints: z.array(z.string()).optional().describe("Skill hints for dispatch-prompt jobs"),
       intentSummary: z.string().optional().describe("Updated natural-language intent"),
     }),
     annotations: {
@@ -501,7 +527,8 @@ server.registerTool(
         || input.projectId !== undefined
         || input.departmentWorkspaceUri !== undefined
         || input.goal !== undefined
-        || input.skillHint !== undefined,
+        || input.skillHint !== undefined
+        || input.createProjectTemplateId !== undefined
       );
 
       if (hasActionOverrides) {
@@ -533,6 +560,9 @@ server.registerTool(
             projectType: 'adhoc',
             goal,
             ...((input.skillHint ?? existing.opcAction?.skillHint) ? { skillHint: input.skillHint ?? existing.opcAction?.skillHint } : {}),
+            ...((input.createProjectTemplateId ?? existing.opcAction?.templateId)
+              ? { templateId: input.createProjectTemplateId ?? existing.opcAction?.templateId }
+              : {}),
           };
         }
       }

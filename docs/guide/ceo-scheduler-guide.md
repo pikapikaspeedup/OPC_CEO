@@ -2,13 +2,14 @@
 
 ## 概述
 
-CEO 现在有三条创建定时任务的路径：
+CEO 现在有四条触发任务执行的路径：
 
-1. CEO Office 仪表盘中的“用一句话创建定时任务”
-2. CEO Workspace Workflow：`ceo-playbook.md` + `ceo-scheduler-playbook.md`
-3. MCP / REST 直接调用现有 Scheduler 接口
+1. **即时 Prompt Mode**：CEO 直接说"让 XX 部门执行/分析/整理..."，无需定时，立即发起 Prompt Mode 执行
+2. CEO Office 仪表盘中的"用一句话创建定时任务"
+3. CEO Workspace Workflow：`ceo-playbook.md` + `ceo-scheduler-playbook.md`
+4. MCP / REST 直接调用现有 Scheduler 接口
 
-目标不是让用户手填底层 cron / workspace / prompt，而是把业务意图翻译成标准 Scheduler Job。
+目标不是让用户手填底层 cron / workspace / prompt，而是把业务意图翻译成标准 Scheduler Job 或即时执行。
 
 ---
 
@@ -18,9 +19,10 @@ CEO 现在有三条创建定时任务的路径：
 
 推荐输入：
 
-1. `每天工作日上午 9 点让市场部生成日报`
-2. `每周一上午 10 点巡检项目 Alpha 的健康度`
-3. `明天上午 9 点让设计部创建一个 ad-hoc 项目，目标是整理 backlog`
+1. `每天工作日上午 9 点让市场部创建一个日报任务项目，目标是汇总当前进行中的项目与风险`（定时 create-project）
+2. `每周一上午 10 点巡检项目 Alpha 的健康度`（定时 health-check）
+3. `让 AI 情报工作室分析最近 AI 行业重大信号`（即时 Prompt Mode，不需要定时关键词）
+4. `每天上午 9 点让 AI 资讯部执行一次信号梳理`（定时 dispatch-prompt，无法唯一匹配模板时自动走 Prompt Mode）
 
 Dashboard 会把这句自然语言发送到：
 
@@ -28,15 +30,20 @@ Dashboard 会把这句自然语言发送到：
 
 后端会自动识别：
 
-1. 调度类型：`cron / interval / once`
-2. 动作模板：`create-project / health-check / dispatch-pipeline`
-3. 部门 / 项目 / 模板
+1. **即时 vs 定时**：有无定时关键词（"每天""每周""cron""明天"等）
+2. **即时路径**：有执行意图 + 匹配到部门 → 直接发起 Prompt Mode 执行（返回 `runId`）
+3. **定时路径**：调度类型 `cron / interval / once`，动作模板 `create-project / health-check / dispatch-pipeline / dispatch-prompt`
+4. 部门 / 项目 / 模板
+5. 对于定时 `create-project`，若能唯一确定模板，会在创建 job 时写入 auto-dispatch template
+6. 对于定时场景，若无法唯一确定模板但有执行意图，自动创建 `dispatch-prompt` 类型定时任务
 
 返回结果里会包含：
 
-1. `jobId`
-2. `message`
-3. `nextRunAt`
+- 定时任务：`jobId`, `message`, `nextRunAt`
+- 即时执行：`runId`, `message`（`action: "dispatch_prompt"`）
+
+其中 `create-project` 类型的 job 在触发时会先创建一个 Ad-hoc Project；如果需要继续自动执行实际任务，应由后续派发链路或部门流程接手。
+如果创建时已经写入 `templateId` / `createProjectTemplateId`，那么这条“后续派发链路”会在同一次触发里自动执行。
 
 ---
 
@@ -54,14 +61,15 @@ Dashboard 会把这句自然语言发送到：
 
 ```json
 {
-  "name": "市场部日报 · 工作日 09:00",
+  "name": "市场部日报任务 · 工作日 09:00",
   "type": "cron",
   "cronExpression": "0 9 * * 1-5",
   "actionKind": "create-project",
   "departmentWorkspaceUri": "file:///Users/.../marketing",
-  "goal": "生成日报，汇总当前进行中的项目与风险",
+  "goal": "创建一个日报任务项目，目标是汇总当前进行中的项目与风险",
   "skillHint": "reporting",
-  "intentSummary": "每天工作日上午 9 点让市场部生成日报"
+  "createProjectTemplateId": "universal-batch-template",
+  "intentSummary": "每天工作日上午 9 点让市场部创建一个日报任务项目，目标是汇总当前进行中的项目与风险"
 }
 ```
 
@@ -93,7 +101,25 @@ Dashboard 会把这句自然语言发送到：
 }
 ```
 
-### 4. 暂停 / 恢复 / 立即执行
+### 4. 创建定时 Prompt Mode 执行
+
+适合无法唯一确定模板但有明确执行意图的场景。触发时走 Prompt Mode，由 AI 按 prompt 主导完成任务。
+
+```json
+{
+  "name": "AI 资讯部信号梳理 · 工作日 09:00",
+  "type": "cron",
+  "cronExpression": "0 9 * * 1-5",
+  "actionKind": "dispatch-prompt",
+  "workspace": "file:///Users/.../ai-news",
+  "prompt": "整理今天 AI 行业的关键信号，输出重点摘要",
+  "promptAssetRefs": ["daily-digest-playbook"],
+  "skillHints": ["research"],
+  "intentSummary": "每天工作日上午 9 点让 AI 资讯部执行信号梳理"
+}
+```
+
+### 5. 暂停 / 恢复 / 立即执行
 
 暂停：
 
@@ -124,6 +150,8 @@ Dashboard 会把这句自然语言发送到：
 ---
 
 ## 三、REST 路径
+
+对 REST 而言，`create-project` 的 auto-run 模板写在 `opcAction.templateId`。如果该字段存在，立即执行时会返回 `projectId=... , runId=...`；否则只会返回新建的 `projectId`。
 
 ### 创建任务
 

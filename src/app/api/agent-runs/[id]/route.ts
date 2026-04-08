@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getRun } from '@/lib/agents/run-registry';
 import { cancelRun } from '@/lib/agents/group-runtime';
+import { cancelPromptRun } from '@/lib/agents/prompt-executor';
 import { createLogger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    await cancelRun(id);
+    const run = getRun(id);
+    if (!run) {
+      return NextResponse.json({ error: `Run not found: ${id}` }, { status: 404 });
+    }
+
+    if (run.executorKind === 'prompt') {
+      await cancelPromptRun(id);
+    } else {
+      await cancelRun(id);
+    }
+
     log.info({ runId: id.slice(0, 8) }, 'Run cancelled');
     return NextResponse.json({ status: 'cancelled' });
   } catch (err: any) {

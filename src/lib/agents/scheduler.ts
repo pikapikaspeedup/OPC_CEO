@@ -6,7 +6,8 @@ import { createLogger } from '../logger';
 import { validateCron } from '../cron-utils';
 import { GATEWAY_HOME, SCHEDULED_JOBS_FILE } from './gateway-home';
 import { AssetLoader } from './asset-loader';
-import { resolveStageId } from './pipeline/pipeline-graph';
+import { executeDispatch } from './dispatch-service';
+import { executePrompt } from './prompt-executor';
 import type { ScheduledAction, ScheduledJob, SchedulerTriggerResult } from './scheduler-types';
 
 const log = createLogger('Scheduler');
@@ -166,16 +167,29 @@ export function normalizeScheduledJobDefinition(job: ScheduledJob): ScheduledJob
     delete normalized.opcAction;
   }
 
+  if (normalized.action.kind === 'dispatch-prompt') {
+    if (!normalized.action.workspace || !normalized.action.prompt) {
+      throw new Error('dispatch-prompt jobs require workspace and prompt');
+    }
+    delete normalized.departmentWorkspaceUri;
+    delete normalized.opcAction;
+  }
+
   if (normalized.action.kind === 'create-project') {
     normalized.departmentWorkspaceUri = normalizeWorkspaceUri(normalized.departmentWorkspaceUri);
     if (!normalized.departmentWorkspaceUri || !normalized.opcAction?.goal) {
       throw new Error('create-project jobs require departmentWorkspaceUri and opcAction.goal');
+    }
+    const templateId = normalized.opcAction.templateId?.trim();
+    if (templateId && !AssetLoader.getTemplate(templateId)) {
+      throw new Error(`Template not found: ${templateId}`);
     }
     normalized.opcAction = {
       type: 'create_project',
       projectType: 'adhoc',
       goal: normalized.opcAction.goal.trim(),
       ...(normalized.opcAction.skillHint ? { skillHint: normalized.opcAction.skillHint } : {}),
+      ...(templateId ? { templateId } : {}),
     };
   }
 
@@ -255,34 +269,29 @@ async function triggerAction(action: ScheduledAction): Promise<string | undefine
     throw new Error('Create-project jobs must include opcAction and departmentWorkspaceUri');
   }
 
-  const { dispatchRun } = await import('./group-runtime');
-
-  if (action.kind === 'dispatch-pipeline') {
-    const template = AssetLoader.getTemplate(action.templateId);
-    if (!template || ((!template.pipeline || template.pipeline.length === 0) && !template.graphPipeline?.nodes.length)) {
-      throw new Error(`Template not found or empty: ${action.templateId}`);
-    }
-    const initialStage = action.stageId
-      ? (template.pipeline?.find((stage: any) => resolveStageId(stage) === action.stageId)
-        || template.graphPipeline?.nodes.find((node: any) => node.id === action.stageId))
-      : (template.pipeline?.[0] || template.graphPipeline?.nodes[0]);
-    const initialStageId = initialStage ? ('stageId' in initialStage ? resolveStageId(initialStage as any) : initialStage.id) : undefined;
-    const initialStageIndex = template.pipeline && initialStageId
-      ? template.pipeline.findIndex((stage: any) => resolveStageId(stage) === initialStageId)
-      : undefined;
-    if (!initialStage || !initialStageId) {
-      throw new Error(`Stage not found: ${action.templateId}/${action.stageId}`);
-    }
-    const result = await dispatchRun({
-      stageId: initialStageId,
+  if (action.kind === 'dispatch-prompt') {
+    const result = await executePrompt({
       workspace: action.workspace,
       prompt: action.prompt,
       model: action.model,
       projectId: action.projectId,
-      pipelineId: action.templateId,
+      executionTarget: {
+        kind: 'prompt',
+        ...(action.promptAssetRefs?.length ? { promptAssetRefs: action.promptAssetRefs } : {}),
+        ...(action.skillHints?.length ? { skillHints: action.skillHints } : {}),
+      },
+    });
+    return `runId=${result.runId}`;
+  }
+
+  if (action.kind === 'dispatch-pipeline') {
+    const result = await executeDispatch({
+      workspace: action.workspace,
+      prompt: action.prompt,
+      model: action.model,
+      projectId: action.projectId,
       templateId: action.templateId,
-      pipelineStageId: initialStageId,
-      pipelineStageIndex: initialStageIndex,
+      stageId: action.stageId,
       sourceRunIds: action.sourceRunIds,
     });
     return `runId=${result.runId}`;
@@ -308,12 +317,22 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
         name: job.name,
         goal: job.opcAction.goal,
         workspace: job.departmentWorkspaceUri,
-        templateId: '',
+        ...(job.opcAction.templateId ? { templateId: job.opcAction.templateId } : {}),
         projectType: 'adhoc',
         skillHint: job.opcAction.skillHint,
       });
       linkedProjectId = project.projectId;
-      message = `projectId=${project.projectId}`;
+      if (job.opcAction.templateId) {
+        const dispatchResult = await executeDispatch({
+          workspace: project.workspace || job.departmentWorkspaceUri,
+          projectId: project.projectId,
+          templateId: job.opcAction.templateId,
+          prompt: job.opcAction.goal,
+        });
+        message = `projectId=${project.projectId}, runId=${dispatchResult.runId}`;
+      } else {
+        message = `projectId=${project.projectId}`;
+      }
     } else {
       message = await triggerAction(job.action);
     }

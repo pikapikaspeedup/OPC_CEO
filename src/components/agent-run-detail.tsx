@@ -158,9 +158,10 @@ export default function AgentRunDetail({
   const needsReview = run.result?.needsReview || [];
   const active = isAgentRunActive(run.status);
   
+  const isPromptRun = run.executorKind === 'prompt';
   const isStaleActive = run.status === 'running' && !!run?.liveState?.staleSince;
-  const canRestartRole = isStaleActive || run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled';
-  const canRetry = run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled';
+  const canRestartRole = !isPromptRun && (isStaleActive || run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled');
+  const canRetry = !isPromptRun && (run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled');
   const canCancel = active || run.status === 'blocked';
 
   const handleInterveneClick = async (action: 'nudge' | 'retry' | 'restart_role' | 'cancel' | 'evaluate') => {
@@ -186,6 +187,7 @@ export default function AgentRunDetail({
               meta={(
                 <>
                   <StatusChip tone={status.tone}>{statusLabel}</StatusChip>
+                  {run.executorKind === 'prompt' && <StatusChip tone="info">Prompt</StatusChip>}
                   {run.reviewOutcome && <ReviewOutcomeBadge outcome={run.reviewOutcome} />}
                   <StatusChip>{workspaceName}</StatusChip>
                   <StatusChip>{modelLabel}</StatusChip>

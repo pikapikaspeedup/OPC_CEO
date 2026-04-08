@@ -73,6 +73,7 @@ interface JobFormState {
   departmentWorkspaceUri: string;
   opcGoal: string;
   opcSkillHint: string;
+  opcTemplateId: string;
 }
 
 const emptyForm: JobFormState = {
@@ -91,6 +92,7 @@ const emptyForm: JobFormState = {
   departmentWorkspaceUri: '',
   opcGoal: '',
   opcSkillHint: '',
+  opcTemplateId: '',
 };
 
 // ---------------------------------------------------------------------------
@@ -189,6 +191,7 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
       departmentWorkspaceUri: job.departmentWorkspaceUri || '',
       opcGoal: job.opcAction?.goal || '',
       opcSkillHint: job.opcAction?.skillHint || '',
+      opcTemplateId: job.opcAction?.templateId || '',
     });
     setDialogOpen(true);
   };
@@ -231,6 +234,7 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
           projectType: 'adhoc',
           goal: form.opcGoal,
           ...(form.opcSkillHint ? { skillHint: form.opcSkillHint } : {}),
+          ...(form.opcTemplateId ? { templateId: form.opcTemplateId } : {}),
         };
       }
 
@@ -469,6 +473,7 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
                           departmentWorkspaceUri: '',
                           opcGoal: '',
                           opcSkillHint: '',
+                          opcTemplateId: '',
                         }
                       : {}),
                   }));
@@ -554,6 +559,14 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
                     value={form.opcSkillHint}
                     onChange={(e) => setForm(f => ({ ...f, opcSkillHint: e.target.value }))}
                     placeholder="seo-analysis"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-white/60 mb-1 block">Auto-dispatch Template ID (optional)</label>
+                  <Input
+                    value={form.opcTemplateId}
+                    onChange={(e) => setForm(f => ({ ...f, opcTemplateId: e.target.value }))}
+                    placeholder="coding-basic-template"
                   />
                 </div>
               </>
