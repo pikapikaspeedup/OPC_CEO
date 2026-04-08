@@ -4,7 +4,13 @@ vi.mock('./prompt-executor', () => ({
   executePrompt: vi.fn(async () => ({ runId: 'prompt-run-ceo-1' })),
 }));
 
+// Mock LLM to return null by default (forces regex fallback), override in specific tests
+vi.mock('./llm-oneshot', () => ({
+  callLLMOneshot: vi.fn(async () => { throw new Error('LLM not available in test'); }),
+}));
+
 import { executePrompt } from './prompt-executor';
+import { callLLMOneshot } from './llm-oneshot';
 import { buildSchedulerIntentPreview, processCEOCommand } from './ceo-agent';
 import type { DepartmentConfig } from '../types';
 
@@ -153,5 +159,71 @@ describe('processCEOCommand — immediate Prompt Mode', () => {
     expect(result.success).toBe(false);
     expect(result.action).toBe('report_to_human');
     expect(result.message).toContain('no provider');
+  });
+});
+
+describe('processCEOCommand — LLM-based parsing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses LLM result when available for scheduling', async () => {
+    vi.mocked(callLLMOneshot).mockResolvedValueOnce(JSON.stringify({
+      isSchedule: true,
+      isImmediate: false,
+      isStatusQuery: false,
+      scheduleType: 'cron',
+      cronExpression: '0 15 * * 1,5',
+      intervalMs: null,
+      scheduledAt: null,
+      scheduleLabel: '每周一和周五 15:00',
+      actionKind: 'dispatch-prompt',
+      departmentName: '市场部',
+      projectName: null,
+      templateId: null,
+      goal: '分析竞品动态',
+      skillHint: null,
+    }));
+
+    const result = await processCEOCommand('每周一和周五下午3点让市场部分析竞品动态', makeDepartments());
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('create_scheduler_job');
+    expect(result.message).toContain('15:00');
+    expect(result.message).toContain('Prompt Mode');
+  });
+
+  it('uses LLM result for immediate execution', async () => {
+    vi.mocked(callLLMOneshot).mockResolvedValueOnce(JSON.stringify({
+      isSchedule: false,
+      isImmediate: true,
+      isStatusQuery: false,
+      scheduleType: null,
+      cronExpression: null,
+      intervalMs: null,
+      scheduledAt: null,
+      scheduleLabel: null,
+      actionKind: 'dispatch-prompt',
+      departmentName: '市场部',
+      projectName: null,
+      templateId: null,
+      goal: '分析竞品动态',
+      skillHint: null,
+    }));
+
+    const result = await processCEOCommand('让市场部分析竞品动态', makeDepartments());
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('dispatch_prompt');
+    expect(result.runId).toBe('prompt-run-ceo-1');
+  });
+
+  it('falls back to regex when LLM fails', async () => {
+    vi.mocked(callLLMOneshot).mockRejectedValueOnce(new Error('timeout'));
+
+    const result = await processCEOCommand('状态', makeDepartments());
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('info');
   });
 });

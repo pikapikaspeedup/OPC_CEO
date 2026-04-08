@@ -1,0 +1,12 @@
+{
+  "projectId": "498f055d-0d46-4f04-9c50-fa14416308de",
+  "name": "超级 IT 研发部 定时任务 · 每周一 03:00",
+  "goal": "和周五下午超级IT研发部分析技术趋势",
+  "templateId": "universal-batch-template",
+  "workspace": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "status": "active",
+  "createdAt": "2026-04-08T15:15:29.504Z",
+  "updatedAt": "2026-04-08T15:15:29.504Z",
+  "runIds": [],
+  "projectType": "adhoc"
+}

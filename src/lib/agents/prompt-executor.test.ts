@@ -160,6 +160,8 @@ describe('prompt-executor', () => {
       },
       triggerContext: { source: 'ceo-command' },
     }));
+    expect(mockCreateRun.mock.calls[0]?.[0]?.templateId).toBeUndefined();
+    expect(mockCreateRun.mock.calls[0]?.[0]?.pipelineStageId).toBeUndefined();
     expect(executor.executeTask).toHaveBeenCalledWith(expect.objectContaining({
       workspace: tempWorkspace,
       model: 'MODEL_PLACEHOLDER_M47',

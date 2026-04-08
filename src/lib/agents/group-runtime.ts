@@ -20,6 +20,8 @@ import {
 import { extractAndPersistMemory } from './department-memory';
 import { createRun, updateRun, getRun } from './run-registry';
 import { watchConversation, type ConversationWatchState } from './watch-conversation';
+import { checkTokenQuota, shouldAutoRequestQuota } from '../approval/token-quota';
+import { submitApprovalRequest } from '../approval/handler';
 import type {
   AgentRunState, TaskResult, GroupDefinition, GroupRoleDefinition,
   RoleProgress, ReviewDecision, ReviewOutcome,
@@ -77,6 +79,13 @@ import { checkWriteScopeConflicts } from "./scope-governor";
 import { getExecutor, resolveProvider } from '../providers';
 import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline/pipeline-registry';
 import { getStageDefinition } from './stage-resolver';
+import {
+  addRunToProject,
+  getProject,
+  trackStageDispatch,
+  updatePipelineStage,
+  updatePipelineStageByStageId,
+} from './project-registry';
 
 const log = createLogger('Runtime');
 
@@ -337,12 +346,10 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
   }
 
   // 4. Check token quota before dispatching
-  const { checkTokenQuota, shouldAutoRequestQuota } = require('../approval/token-quota');
   const quotaCheck = checkTokenQuota(workspacePath);
   if (!quotaCheck.allowed) {
     // Auto-generate approval request for quota increase
     try {
-      const { submitApprovalRequest } = require('../approval/handler');
       await submitApprovalRequest({
         type: 'token_increase' as const,
         workspace: workspacePath,
@@ -355,7 +362,6 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
   }
   if (shouldAutoRequestQuota(workspacePath)) {
     try {
-      const { submitApprovalRequest } = require('../approval/handler');
       await submitApprovalRequest({
         type: 'token_increase' as const,
         workspace: workspacePath,
@@ -1998,10 +2004,10 @@ async function tryAutoTriggerNextStage(
     return;
   }
 
-  const { getProject, addRunToProject, trackStageDispatch } = require('./project-registry');
   const project = getProject(run.projectId);
   const template = AssetLoader.getTemplate(templateId);
   if (!project?.pipelineState || !template) return;
+  const pipelineState = project.pipelineState;
 
   for (const stage of downstreams) {
     const stageId = stage.stageId || '';
@@ -2009,7 +2015,7 @@ async function tryAutoTriggerNextStage(
       log.warn({ runId: shortRunId, templateId }, 'Skipping downstream stage with missing stageId');
       continue;
     }
-    const nextStage = project.pipelineState.stages.find((item: any) => item.stageId === stageId);
+    const nextStage = pipelineState.stages.find((item: any) => item.stageId === stageId);
     if (nextStage?.runId && nextStage.status !== 'pending') {
       log.info({
         runId: shortRunId,
@@ -2028,7 +2034,7 @@ async function tryAutoTriggerNextStage(
       continue;
     }
 
-    const { ready, missingUpstreams } = canActivateStage(template, stage, project.pipelineState);
+    const { ready, missingUpstreams } = canActivateStage(template, stage, pipelineState);
     if (!ready) {
       log.info({ runId: shortRunId, stageId, missingUpstreams }, 'Downstream stage not ready');
       continue;
@@ -2036,7 +2042,7 @@ async function tryAutoTriggerNextStage(
 
     const upstreamStageIds = stage.upstreamStageIds?.length ? stage.upstreamStageIds : [currentStageId];
     const allSourceRunIds = upstreamStageIds
-      .map(upstreamStageId => project.pipelineState.stages.find((item: any) => item.stageId === upstreamStageId)?.runId)
+      .map(upstreamStageId => pipelineState.stages.find((item: any) => item.stageId === upstreamStageId)?.runId)
       .filter(Boolean) as string[];
     const filteredSourceRunIds = filterSourcesByContract(templateId, stageId, allSourceRunIds);
 
@@ -2155,7 +2161,6 @@ function handleCompletion(runId: string, steps: any[]): void {
 
   // Sync pipeline state for legacy-single runs (same as envelope path)
   if (run?.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
-    const { updatePipelineStage, updatePipelineStageByStageId } = require('./project-registry');
     const stageStatus = result.status === 'completed' ? 'completed'
       : result.status === 'blocked' ? 'blocked' : 'failed';
     if (run.pipelineStageId) {
@@ -2191,7 +2196,6 @@ export async function cancelRun(runId: string): Promise<void> {
   }
 
   if (run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
-    const { updatePipelineStage, updatePipelineStageByStageId } = require('./project-registry');
     if (run.pipelineStageId) {
       updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
     } else {
@@ -2223,7 +2227,6 @@ async function cancelRunInternal(
 
   const run = getRun(runId);
   if (status === 'cancelled' && run?.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
-    const { updatePipelineStage, updatePipelineStageByStageId } = require('./project-registry');
     if (run.pipelineStageId) {
       updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
     } else {

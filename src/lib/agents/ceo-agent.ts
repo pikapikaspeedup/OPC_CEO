@@ -1,8 +1,12 @@
 import { AssetLoader } from './asset-loader';
 import { executePrompt } from './prompt-executor';
+import { callLLMOneshot } from './llm-oneshot';
 import { createScheduledJob, getNextRunAt, listScheduledJobs } from './scheduler';
 import { listProjects } from './project-registry';
 import type { DepartmentConfig } from '../types';
+import { createLogger } from '../logger';
+
+const log = createLogger('CEO-Agent');
 
 interface CEOSuggestion {
   type: 'schedule_template' | 'clarify_department' | 'clarify_project' | 'clarify_template';
@@ -434,6 +438,182 @@ function cleanupGoal(command: string): string {
     .trim();
 }
 
+// ---------------------------------------------------------------------------
+// LLM-based CEO Command Parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured output from LLM parsing of a CEO command.
+ */
+interface LLMParsedCommand {
+  /** Whether the command has clear scheduling intent */
+  isSchedule: boolean;
+  /** Whether the command is an immediate execution request */
+  isImmediate: boolean;
+  /** Whether the command is a status query */
+  isStatusQuery: boolean;
+
+  // --- Schedule fields (if isSchedule) ---
+  scheduleType?: 'cron' | 'interval' | 'once';
+  cronExpression?: string;
+  intervalMs?: number;
+  scheduledAt?: string;
+  scheduleLabel?: string;
+
+  // --- Action fields ---
+  actionKind: 'create-project' | 'health-check' | 'dispatch-pipeline' | 'dispatch-prompt';
+  departmentName?: string;
+  projectName?: string;
+  templateId?: string;
+  goal: string;
+  skillHint?: string;
+}
+
+/**
+ * Build the LLM prompt for parsing a CEO command into structured JSON.
+ */
+function buildLLMParserPrompt(
+  command: string,
+  departments: DepartmentEntry[],
+): string {
+  const deptList = departments.map(d =>
+    `- "${d.config.name}" (type: ${d.config.type}, uri: ${d.workspaceUri}${d.config.templateIds?.length ? `, templates: [${d.config.templateIds.join(', ')}]` : ''})`
+  ).join('\n');
+
+  const projects = listProjects();
+  const projList = projects.slice(0, 20).map(p =>
+    `- "${p.name}" (id: ${p.projectId}, status: ${p.status})`
+  ).join('\n') || '（暂无项目）';
+
+  const templates = AssetLoader.loadAllTemplates();
+  const tmplList = templates.map(t =>
+    `- id: "${t.id}", title: "${t.title || t.id}"`
+  ).join('\n') || '（暂无模板）';
+
+  return `你是 CEO 指令解析器。将以下自然语言指令解析为严格 JSON。
+
+## 可用部门
+${deptList}
+
+## 可用项目
+${projList}
+
+## 可用模板
+${tmplList}
+
+## 规则
+1. **时间理解**：
+   - "下午3点" → 15:00，"晚上8点" → 20:00，"早上9点" → 09:00
+   - "每月1号" → cron \`0 9 1 * *\`（默认9点）
+   - "每周一和周五" → cron \`0 9 * * 1,5\`
+   - "每两周" → interval 1209600000 (14天)
+   - 没有说具体时间则默认 09:00
+2. **意图识别**：
+   - 有"每天/每周/每月/工作日/每隔/明天/cron/定时"等词 → isSchedule=true
+   - 有"执行/分析/整理/运行/处理/研究/生成/报告"等词且无定时词 → isImmediate=true
+   - 有"状态/进度/汇报/怎么样"等词 → isStatusQuery=true
+3. **动作类型**：
+   - 提到"健康/巡检/health/check" → health-check（需匹配项目）
+   - 提到"pipeline/流水线/派发/dispatch" → dispatch-pipeline（需匹配模板）
+   - 能唯一匹配到模板 → create-project（带 templateId）
+   - 无法匹配模板但有执行意图 → dispatch-prompt
+   - 明确说"只创建项目/不要执行" → create-project（不带 templateId）
+4. **部门匹配**：尽量匹配最接近的部门名称。部分匹配也可以。
+5. **goal**：提取出业务目标，去掉时间/调度相关的词语。
+
+## 指令
+"${command}"
+
+## 输出
+仅返回一个 JSON 对象，不要包含 markdown 代码块，不要有注释。结构如下：
+{
+  "isSchedule": boolean,
+  "isImmediate": boolean,
+  "isStatusQuery": boolean,
+  "scheduleType": "cron" | "interval" | "once" | null,
+  "cronExpression": string | null,
+  "intervalMs": number | null,
+  "scheduledAt": string | null,
+  "scheduleLabel": string | null,
+  "actionKind": "create-project" | "health-check" | "dispatch-pipeline" | "dispatch-prompt",
+  "departmentName": string | null,
+  "projectName": string | null,
+  "templateId": string | null,
+  "goal": string,
+  "skillHint": string | null
+}`;
+}
+
+/**
+ * Parse a CEO command using LLM, with fallback to regex.
+ * Returns null if LLM is not available or parsing fails.
+ */
+async function parseCEOCommandWithLLM(
+  command: string,
+  departments: DepartmentEntry[],
+): Promise<LLMParsedCommand | null> {
+  try {
+    const prompt = buildLLMParserPrompt(command, departments);
+
+    // Race LLM call against a 15s timeout — CEO commands should feel instant
+    const LLM_PARSE_TIMEOUT_MS = 15_000;
+    const response = await Promise.race([
+      callLLMOneshot(prompt, undefined, 'executive'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('LLM parse timeout (15s)')), LLM_PARSE_TIMEOUT_MS),
+      ),
+    ]);
+
+    // Extract JSON from response (handle possible markdown wrapping)
+    let jsonStr = response.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) jsonStr = jsonMatch[1].trim();
+
+    // Try to find JSON object boundaries
+    const startIdx = jsonStr.indexOf('{');
+    const endIdx = jsonStr.lastIndexOf('}');
+    if (startIdx !== -1 && endIdx !== -1) {
+      jsonStr = jsonStr.slice(startIdx, endIdx + 1);
+    }
+
+    const parsed = JSON.parse(jsonStr) as LLMParsedCommand;
+
+    // Validate essential fields
+    if (typeof parsed.isSchedule !== 'boolean' || typeof parsed.goal !== 'string') {
+      log.warn({ parsed }, 'LLM response missing essential fields, falling back to regex');
+      return null;
+    }
+
+    // Validate cron expression if provided
+    if (parsed.cronExpression) {
+      const { validateCron } = await import('../cron-utils');
+      const cronErr = validateCron(parsed.cronExpression);
+      if (cronErr) {
+        log.warn({ cron: parsed.cronExpression, err: cronErr }, 'LLM generated invalid cron, falling back to regex');
+        return null;
+      }
+    }
+
+    log.info({ actionKind: parsed.actionKind, isSchedule: parsed.isSchedule, isImmediate: parsed.isImmediate }, 'LLM parsed CEO command');
+    return parsed;
+  } catch (err: any) {
+    log.warn({ err: err.message }, 'LLM parsing failed, falling back to regex');
+    return null;
+  }
+}
+
+/**
+ * Resolve a department from the LLM-parsed department name.
+ */
+function resolveDepartmentFromLLM(
+  departmentName: string | undefined,
+  departments: DepartmentEntry[],
+): DepartmentEntry | null {
+  if (!departmentName) return departments.length === 1 ? departments[0] : null;
+  const normalized = normalizeText(departmentName);
+  return departments.find(d => d.aliases.some(a => a && (a.includes(normalized) || normalized.includes(a)))) || null;
+}
+
 export function buildSchedulerIntentPreview(
   command: string,
   departments: Map<string, DepartmentConfig>,
@@ -649,33 +829,60 @@ async function tryImmediatePromptDispatch(
   }
 }
 
-export async function processCEOCommand(
-  command: string,
+/**
+ * Execute a command parsed by the LLM into structured fields.
+ */
+async function executeLLMParsedCommand(
+  parsed: LLMParsedCommand,
+  originalCommand: string,
   departments: Map<string, DepartmentConfig>,
-  _options?: { model?: string },
+  departmentEntries: DepartmentEntry[],
 ): Promise<CEOCommandResult> {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return {
-      success: false,
-      action: 'info',
-      message: '请输入 CEO 指令。',
-    };
+  // Status query
+  if (parsed.isStatusQuery && !parsed.isSchedule) {
+    return { success: true, action: 'info', message: summarizeProjects() };
   }
 
-  if (isStatusIntent(trimmed) && !isScheduleIntent(trimmed)) {
-    return {
-      success: true,
-      action: 'info',
-      message: summarizeProjects(),
-    };
+  // Immediate execution (non-scheduled)
+  if (parsed.isImmediate && !parsed.isSchedule) {
+    const department = resolveDepartmentFromLLM(parsed.departmentName, departmentEntries);
+    if (!department) {
+      return {
+        success: false,
+        action: 'needs_decision',
+        message: `无法确定执行部门「${parsed.departmentName || '未指定'}」。请明确部门名称。`,
+        suggestions: departmentEntries.slice(0, 5).map(e => ({
+          type: 'clarify_department' as const,
+          label: e.config.name,
+          description: e.workspaceUri,
+          payload: { workspaceUri: e.workspaceUri },
+        })),
+      };
+    }
+
+    try {
+      const skills: string[] = parsed.skillHint ? [parsed.skillHint] : [];
+      const result = await executePrompt({
+        workspace: department.workspaceUri,
+        prompt: parsed.goal,
+        executionTarget: {
+          kind: 'prompt',
+          ...(skills.length ? { skillHints: skills } : {}),
+        },
+      });
+      return {
+        success: true,
+        action: 'dispatch_prompt',
+        runId: result.runId,
+        message: `已发起即时 Prompt Mode 执行，目标部门「${department.config.name}」，任务：${parsed.goal}。运行 ID：${result.runId}`,
+      };
+    } catch (err: any) {
+      return { success: false, action: 'report_to_human', message: `即时执行失败：${err.message}` };
+    }
   }
 
-  if (!isScheduleIntent(trimmed)) {
-    // Check for immediate execution intent — route to Prompt Mode
-    const immediateResult = await tryImmediatePromptDispatch(trimmed, departments);
-    if (immediateResult) return immediateResult;
-
+  // Scheduled task — build schedule spec from LLM output
+  if (!parsed.isSchedule || !parsed.scheduleType) {
     return {
       success: false,
       action: 'report_to_human',
@@ -683,76 +890,128 @@ export async function processCEOCommand(
     };
   }
 
-  const schedule = parseSchedule(trimmed);
-  if (!schedule) {
+  const schedule: ScheduleSpec = parsed.scheduleType === 'cron'
+    ? { type: 'cron', cronExpression: parsed.cronExpression!, label: parsed.scheduleLabel || parsed.cronExpression! }
+    : parsed.scheduleType === 'interval'
+      ? { type: 'interval', intervalMs: parsed.intervalMs!, label: parsed.scheduleLabel || `每隔${Math.round(parsed.intervalMs! / 60000)}分钟` }
+      : { type: 'once', scheduledAt: parsed.scheduledAt!, label: parsed.scheduleLabel || parsed.scheduledAt! };
+
+  // Resolve action target
+  const department = resolveDepartmentFromLLM(parsed.departmentName, departmentEntries);
+  const actionDraft = buildActionDraftFromLLM(parsed, department, departmentEntries);
+  if ('error' in actionDraft) {
+    return { success: false, action: 'needs_decision', message: actionDraft.error, suggestions: actionDraft.suggestions };
+  }
+
+  return createScheduledJobFromDraft(originalCommand, schedule, actionDraft);
+}
+
+/**
+ * Build action draft from LLM parsed result.
+ */
+function buildActionDraftFromLLM(
+  parsed: LLMParsedCommand,
+  department: DepartmentEntry | null,
+  departmentEntries: DepartmentEntry[],
+): SchedulerActionDraft | { error: string; suggestions?: CEOSuggestion[] } {
+  if (parsed.actionKind === 'health-check') {
+    const project = parsed.projectName ? (() => {
+      const projects = listProjects();
+      return projects.find(p => normalizeText(p.name).includes(normalizeText(parsed.projectName!)));
+    })() : matchProject(parsed.goal);
+    if (!project) {
+      return {
+        error: '缺少匹配的项目。请在指令里带上项目名。',
+        suggestions: listProjects().slice(0, 5).map(p => ({
+          type: 'clarify_project' as const, label: p.name, description: `项目 ${p.projectId}`, payload: { projectId: p.projectId },
+        })),
+      };
+    }
+    return { kind: 'health-check', label: `${project.name} 健康巡检`, projectId: project.projectId };
+  }
+
+  if (!department) {
     return {
-      success: false,
-      action: 'needs_decision',
-      message: '我识别到你想创建定时任务，但还缺少明确的触发周期。请补充例如“每天 9 点”“每周一 10 点”或“明天上午 9 点”。',
+      error: `无法确定目标部门「${parsed.departmentName || '未指定'}」。请明确部门名称。`,
+      suggestions: departmentEntries.slice(0, 5).map(e => ({
+        type: 'clarify_department' as const, label: e.config.name, description: e.workspaceUri, payload: { workspaceUri: e.workspaceUri },
+      })),
     };
   }
 
-  const preview = buildSchedulerIntentPreview(trimmed, departments);
-  if (!preview.schedule) {
+  if (parsed.actionKind === 'dispatch-pipeline') {
+    const templateId = parsed.templateId || matchTemplate(parsed.goal)?.id;
+    if (!templateId) {
+      return {
+        error: '需要指定模板。',
+        suggestions: AssetLoader.loadAllTemplates().slice(0, 5).map(t => ({
+          type: 'clarify_template' as const, label: t.title || t.id, description: t.id, payload: { templateId: t.id },
+        })),
+      };
+    }
     return {
-      success: false,
-      action: 'needs_decision',
-      message: '我识别到你想创建定时任务，但还缺少明确的触发周期。请补充例如“每天 9 点”“每周一 10 点”或“明天上午 9 点”。',
+      kind: 'dispatch-pipeline', label: `${department.config.name} 定时派发`,
+      workspace: department.workspaceUri, prompt: parsed.goal, templateId,
     };
   }
 
-  if (!preview.actionDraft) {
+  if (parsed.actionKind === 'dispatch-prompt') {
     return {
-      success: false,
-      action: 'needs_decision',
-      message: preview.error || '当前无法确定定时任务的目标对象。',
-      suggestions: preview.suggestions,
+      kind: 'dispatch-prompt', label: `${department.config.name} Prompt 任务`,
+      workspace: department.workspaceUri, prompt: parsed.goal,
+      ...(parsed.skillHint ? { skillHints: [parsed.skillHint] } : {}),
     };
   }
 
-  const scheduleSpec = preview.schedule;
-  const actionDraft = preview.actionDraft;
-  const name = preview.jobName || `${actionDraft.label} · ${scheduleSpec.label}`;
+  // create-project
+  return {
+    kind: 'create-project',
+    label: `${department.config.name} 定时任务`,
+    departmentWorkspaceUri: department.workspaceUri,
+    goal: parsed.goal,
+    skillHint: parsed.skillHint || undefined,
+    templateId: parsed.templateId || undefined,
+  };
+}
+
+/**
+ * Create a scheduler job from schedule spec + action draft.
+ * Shared by both LLM and regex paths.
+ */
+function createScheduledJobFromDraft(
+  originalCommand: string,
+  schedule: ScheduleSpec,
+  actionDraft: SchedulerActionDraft,
+): CEOCommandResult {
+  const name = `${actionDraft.label} · ${schedule.label}`;
   const job = createScheduledJob({
     name,
-    type: scheduleSpec.type,
-    ...(scheduleSpec.type === 'cron' ? { cronExpression: scheduleSpec.cronExpression } : {}),
-    ...(scheduleSpec.type === 'interval' ? { intervalMs: scheduleSpec.intervalMs } : {}),
-    ...(scheduleSpec.type === 'once' ? { scheduledAt: scheduleSpec.scheduledAt } : {}),
+    type: schedule.type,
+    ...(schedule.type === 'cron' ? { cronExpression: (schedule as any).cronExpression } : {}),
+    ...(schedule.type === 'interval' ? { intervalMs: (schedule as any).intervalMs } : {}),
+    ...(schedule.type === 'once' ? { scheduledAt: (schedule as any).scheduledAt } : {}),
     enabled: true,
     createdBy: 'ceo-command',
-    intentSummary: trimmed,
+    intentSummary: originalCommand,
     action: actionDraft.kind === 'health-check'
-      ? {
-          kind: 'health-check',
-          projectId: actionDraft.projectId,
-        }
+      ? { kind: 'health-check', projectId: actionDraft.projectId }
       : actionDraft.kind === 'dispatch-pipeline'
       ? {
-          kind: 'dispatch-pipeline',
-          workspace: actionDraft.workspace,
-          prompt: actionDraft.prompt,
-          templateId: actionDraft.templateId,
-          ...(actionDraft.stageId ? { stageId: actionDraft.stageId } : {}),
-          ...(actionDraft.projectId ? { projectId: actionDraft.projectId } : {}),
+          kind: 'dispatch-pipeline', workspace: actionDraft.workspace,
+          prompt: actionDraft.prompt, templateId: actionDraft.templateId,
         }
       : actionDraft.kind === 'dispatch-prompt'
       ? {
-          kind: 'dispatch-prompt',
-          workspace: actionDraft.workspace,
-          prompt: actionDraft.prompt,
+          kind: 'dispatch-prompt', workspace: actionDraft.workspace, prompt: actionDraft.prompt,
           ...(actionDraft.promptAssetRefs?.length ? { promptAssetRefs: actionDraft.promptAssetRefs } : {}),
           ...(actionDraft.skillHints?.length ? { skillHints: actionDraft.skillHints } : {}),
         }
-      : {
-          kind: 'create-project',
-        },
+      : { kind: 'create-project' },
     ...(actionDraft.kind === 'create-project'
       ? {
           departmentWorkspaceUri: actionDraft.departmentWorkspaceUri,
           opcAction: {
-            type: 'create_project' as const,
-            projectType: 'adhoc' as const,
+            type: 'create_project' as const, projectType: 'adhoc' as const,
             goal: actionDraft.goal,
             ...(actionDraft.skillHint ? { skillHint: actionDraft.skillHint } : {}),
             ...(actionDraft.templateId ? { templateId: actionDraft.templateId } : {}),
@@ -778,6 +1037,72 @@ export async function processCEOCommand(
     jobId: job.jobId,
     nextRunAt,
     message: `已创建定时任务"${job.name}"。${kindMessage}下一次执行时间：${nextRunAt || '待计算'}。当前系统共有 ${listScheduledJobs().length} 个定时任务。`,
-    ...(preview.suggestions?.length ? { suggestions: preview.suggestions } : {}),
   };
+}
+
+/**
+ * Regex-based fallback for processing CEO commands.
+ * Used when LLM is not available.
+ */
+async function processWithRegex(
+  trimmed: string,
+  departments: Map<string, DepartmentConfig>,
+): Promise<CEOCommandResult> {
+  if (isStatusIntent(trimmed) && !isScheduleIntent(trimmed)) {
+    return { success: true, action: 'info', message: summarizeProjects() };
+  }
+
+  if (!isScheduleIntent(trimmed)) {
+    const immediateResult = await tryImmediatePromptDispatch(trimmed, departments);
+    if (immediateResult) return immediateResult;
+    return {
+      success: false, action: 'report_to_human',
+      message: '当前 CEO 命令兼容层优先支持状态查询、即时任务执行和自然语言定时任务创建。更复杂的调度请在 CEO Office 会话里继续。',
+    };
+  }
+
+  const preview = buildSchedulerIntentPreview(trimmed, departments);
+  if (!preview.schedule) {
+    return {
+      success: false, action: 'needs_decision',
+      message: '我识别到你想创建定时任务，但还缺少明确的触发周期。请补充例如"每天 9 点""每周一 10 点"或"明天上午 9 点"。',
+    };
+  }
+
+  if (!preview.actionDraft) {
+    return {
+      success: false, action: 'needs_decision',
+      message: preview.error || '当前无法确定定时任务的目标对象。',
+      suggestions: preview.suggestions,
+    };
+  }
+
+  return createScheduledJobFromDraft(trimmed, preview.schedule, preview.actionDraft);
+}
+
+export async function processCEOCommand(
+  command: string,
+  departments: Map<string, DepartmentConfig>,
+  _options?: { model?: string },
+): Promise<CEOCommandResult> {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return { success: false, action: 'info', message: '请输入 CEO 指令。' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 1: Try LLM-based parsing (AI understands natural language)
+  // ---------------------------------------------------------------------------
+  const departmentEntries = deriveDepartmentEntries(departments);
+  const llmResult = await parseCEOCommandWithLLM(trimmed, departmentEntries);
+
+  if (llmResult) {
+    return executeLLMParsedCommand(llmResult, trimmed, departments, departmentEntries);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: Fallback to regex-based parsing (when LLM is unavailable)
+  // ---------------------------------------------------------------------------
+  log.info('Falling back to regex-based CEO command parsing');
+  return processWithRegex(trimmed, departments);
 }

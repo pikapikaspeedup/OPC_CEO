@@ -1,3 +1,120 @@
+## 任务：补 Phase 0 第二批 group-runtime characterization tests
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+在第一批 PromptExecutor / RunRegistry / watcher 基线测试落地后，继续补齐 `group-runtime` 的关键行为基线，覆盖 template legacy-single 的派发路径和两条 cancel 路径。为让这批测试在当前 Vitest 环境下可执行，同时把 `group-runtime.ts` 里阻碍测试的 `token-quota` / `approval handler` / `project-registry` 动态 `require()` 收敛为静态 import。
+
+### 本次完成的关键改动
+1. **新增 `group-runtime.test.ts`**：覆盖 3 个关键行为
+   - `dispatchRun()` 在 `legacy-single` 模式下会创建 child conversation、发送 workflow prompt、启动 watcher
+   - `cancelRun()` 在无 active cascade 时会本地把 project stage 标成 `cancelled`
+   - `cancelRun()` 在存在 owner connection 时会调用 `grpc.cancelCascade()` 并同步 project stage
+2. **`group-runtime.ts`**：将以下依赖从动态 `require()` 调整为静态 import，降低运行时分叉并使测试可控
+   - `../approval/token-quota`
+   - `../approval/handler`
+   - `./project-registry`
+3. **`group-runtime.ts`**：在下游自动触发逻辑中补 `pipelineState` 局部变量，修复静态 import 后暴露出的 TypeScript 收窄问题，确保生产构建继续通过。
+
+### 验证证据
+1. **Phase 0 基线测试通过**
+  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts`
+  - 结果：`4` 个测试文件全部通过，`13` 个测试全部通过，`0` 失败。
+2. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成，相关 API 和运行时代码编译通过。
+
+## 任务：补 Phase 0 第一批 characterization tests
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+开始执行 AgentBackend 迁移前的 Phase 0 测试基线工作，先把最稳定、最关键的底层运行时不变量锁成测试：PromptExecutor 的 prompt-only 启动语义、RunRegistry 的 pipelineStageId 推导规则，以及 watcher 的 stream/heartbeat 生命周期行为。
+
+### 本次完成的关键改动
+1. **`prompt-executor.test.ts`**：新增显式断言，锁定 Prompt Run 不会传入 `templateId` / `pipelineStageId`，避免后续重构时把 Prompt Mode 重新污染成 template-first 运行态。
+2. **新增 `run-registry.test.ts`**：覆盖 `createRun()` 的两条关键分支
+  - 无 `templateId` 的 Prompt Run 不推导 `pipelineStageId`
+  - 有 `templateId` 的 Template Run 自动把 `stageId` 记为 `pipelineStageId`
+  - `updateRun()` 在 terminal / non-terminal 间切换时正确设置和清除 `finishedAt`
+3. **新增 `watch-conversation.test.ts`**：覆盖 watcher 的 3 个关键行为
+  - stream update 正常推动 stepCount / idle 状态切换
+  - 错误步骤会把 run 视为 inactive
+  - 当 stream 静默且提供 `apiKey` 时，heartbeat poll 会继续推进状态
+
+### 说明
+- 原计划一度尝试直接给 `group-runtime.ts` 补纯单元 characterization tests，但其内部仍大量使用运行时 `require()` 加载 `project-registry` / `token-quota` 等模块，这条路径在当前 Vitest ESM 环境下不适合作为第一批稳定基线。
+- 因此本轮先锁更底层、对后续 AgentBackend 抽象更关键的行为边界；`group-runtime` 的基线建议放到下一批，用更接近集成层的测试方式处理。
+
+### 验证证据
+1. **第一批基线测试通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts`
+  - 结果：`3` 个测试文件全部通过，`10` 个测试全部通过，`0` 失败。
+
+## 任务：完成 AgentBackend 统一抽象详细技术设计文档
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+在此前 RFC 级别方案的基础上，继续把 AgentBackend 统一抽象推进到可落地的详细技术设计层，补齐精确接口签名、事件模型、状态机、错误分类、迁移阶段、测试矩阵以及与当前 `TaskExecutor` / `group-runtime` / `prompt-executor` 的真实对接边界。
+
+### 关键结论
+1. **当前 `TaskExecutor` 不是最终 runtime 合同，而只是 provider leaf adapter**：`CodexExecutor` 返回最终结果，`AntigravityExecutor` 只返回已派发 handle，这种语义分裂决定了上层必须再引入统一 session lifecycle 抽象。
+2. **详细设计正式把 RFC 中的 `run(config): AsyncIterable<AgentEvent>` 细化为 `start(config): Promise<AgentSession>`**：这是为了显式支持“先拿 handle、再监听事件、同时允许 cancel/append”。
+3. **`AgentBackend` 必须只负责单次 backend session 生命周期，不负责 template orchestration**：`group-runtime` 继续掌管 source contract、review-loop、pipeline 推进，避免过早抽象把厚编排层抽坏。
+4. **最稳的迁移顺序是：先补 characterization tests → 先迁 Prompt Mode → 再抽公共 session consumer/finalization → 最后迁 Template runtime → 再接 MemoryHooks。**
+5. **`RunRegistry` 继续是真相源，新增 session registry 只做进程内活跃会话索引。**
+
+### 产出
+- 新增设计文档：`docs/design/agent-backend-abstraction-detailed-design.md`
+
+### 说明
+- 本次为详细技术设计入库，没有修改运行时代码。
+- 文档中已经明确写死第一阶段应统一哪些能力、哪些能力不能提前抽，以及 Antigravity/Codex 两条路径各自的 session 生命周期差异。
+
+## 任务：CEO 指令 LLM 自然语言解析
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+用 `callLLMOneshot()` 替代正则硬编码来解析 CEO 自然语言指令，支持"下午3点""每月1号""周一和周五"等正则无法处理的表述。
+
+### 架构变更
+- `processCEOCommand()` 重构为 **LLM-first + 正则 fallback** 双路径
+- 新增 `parseCEOCommandWithLLM()` — 构建结构化 prompt 发送给 LLM，返回严格 JSON
+- 新增 `executeLLMParsedCommand()` — 处理 LLM 返回的结构化结果
+- 新增 `buildActionDraftFromLLM()` — 从 LLM 结果构建 action draft
+- 新增 `createScheduledJobFromDraft()` — LLM/正则共享的 job 创建函数
+- 新增 `processWithRegex()` — 原正则逻辑提取为独立函数
+- LLM 调用15秒超时保护，超时自动 fallback 到正则
+
+### LLM Prompt 设计
+- 包含可用部门列表（名称/类型/URI/模板）
+- 包含可用项目列表（名称/ID/状态）
+- 包含可用模板列表（ID/标题）
+- 明确的时间解析规则（中文时段 → 24小时制）
+- 明确的 cron 表达式生成规则
+- 内置 cron 校验（`validateCron`），LLM 生成无效 cron 时自动 fallback
+
+### 正则解析的已知限制（对比 LLM 优势）
+| 场景 | 正则结果 | LLM 期望 |
+|------|---------|----------|
+| "下午3点" | 03:00 ❌ | 15:00 ✅ |
+| "每月1号" | 失败 ❌ | `0 9 1 * *` ✅ |
+| "周一和周五" | 只取周一 ❌ | `0 9 * * 1,5` ✅ |
+| "每两周" | 失败 ❌ | interval 14天 ✅ |
+
+### 测试证据
+- 25 个测试全绿（含 LLM 解析专项测试 3 个）
+- 生产构建通过
+- Smoke test 确认 fallback 路径正常（LLM 不可用时正则兜底）
+
+---
+
 ## 任务：CEO Dashboard 即时 Prompt Mode 指令卡片
 
 **状态**: ✅ 已完成

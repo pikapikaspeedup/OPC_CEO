@@ -1,7 +1,9 @@
-# CEO Cron 能力差距分析
+# CEO Cron 能力差距分析（实现前快照）
 
 **日期**: 2026-04-08
 **范围**: CEO Office / Scheduler / CEO Command / MCP / Event Flow
+
+> 更新说明：本文记录的是实现前的能力差距快照。截止 2026-04-08 晚间，仓库已经补齐 CEO Dashboard 自然语言创建定时任务、`/api/ceo/command` 的 schedule intent 解析、MCP 的 scheduler 写能力，以及 scheduler 审计事件回流 CEO 视图。本文剩余价值主要在于解释当时为什么会出现这个缺口，以及哪些深层产品问题仍值得继续优化。
 
 ## 一页结论
 
