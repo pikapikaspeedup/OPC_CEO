@@ -265,21 +265,9 @@ export function extractReviewDecision(
   const pathsToTry = [roundResultPath];
   if (round === 1) pathsToTry.push(legacyResultPath);
 
-  for (const resultJsonPath of pathsToTry) {
-    try {
-      if (fs.existsSync(resultJsonPath)) {
-        const data = JSON.parse(fs.readFileSync(resultJsonPath, 'utf-8'));
-        if (data.decision && typeof data.decision === 'string') {
-          const decisionLower = data.decision.toLowerCase();
-          if (['approved', 'revise', 'rejected'].includes(decisionLower)) {
-            return decisionLower as ReviewDecision;
-          }
-        }
-      }
-    } catch {
-      // Silent fail, fallback to other methods
-    }
-  }
+  // Try file-based decision with retry (files may still be flushing from Cascade)
+  const fileDecision = tryReadDecisionFiles(pathsToTry);
+  if (fileDecision) return fileDecision;
 
   // 2. Secondary: If result object has decision directly
   if ((result as any)?.decision && typeof (result as any).decision === 'string') {
@@ -317,6 +305,25 @@ export function extractReviewDecision(
     if (decision) return decision;
   }
 
+  // Fallback: fuzzy match on review files and steps for natural language decisions
+  const fuzzyTexts: string[] = [];
+  for (const reviewPath of reviewPatterns) {
+    try {
+      if (fs.existsSync(reviewPath)) {
+        fuzzyTexts.push(fs.readFileSync(reviewPath, 'utf-8'));
+      }
+    } catch { /* skip */ }
+  }
+  for (let i = steps.length - 1; i >= 0 && fuzzyTexts.length < 10; i--) {
+    const step = steps[i];
+    if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') continue;
+    const planner = step.plannerResponse || step.response || {};
+    const text = planner.modifiedResponse || planner.response || '';
+    if (text) fuzzyTexts.push(text);
+  }
+  const fuzzyDecision = fuzzyMatchDecision(fuzzyTexts.join('\n'));
+  if (fuzzyDecision) return fuzzyDecision;
+
   throw new Error('Missing explicit review decision (no DECISION: marker found in review file or conversation steps)');
 }
 
@@ -327,5 +334,110 @@ export function parseDecisionMarker(text: string): ReviewDecision | null {
   if (decision === 'APPROVED') return 'approved';
   if (decision === 'REVISE') return 'revise';
   if (decision === 'REJECTED') return 'rejected';
+  return null;
+}
+
+/**
+ * Try reading decision JSON files with a brief retry to handle Cascade file-flush lag.
+ * When agents write files through the IDE, there can be a small delay between the session
+ * being marked as completed and the file being visible on disk.
+ *
+ * Retry logic: only retries when the review directory does not exist at all (indicating
+ * files may be in flight). If the directory exists but JSON is missing, the agent likely
+ * wrote review markdown but no JSON — fall through to downstream fallback immediately.
+ */
+function tryReadDecisionFiles(paths: string[], maxRetries = 5, retryDelayMs = 1000): ReviewDecision | null {
+  // Infer review directory from first path
+  const reviewDir = paths.length > 0 ? path.dirname(paths[0]) : '';
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (const resultJsonPath of paths) {
+      try {
+        if (fs.existsSync(resultJsonPath)) {
+          const data = JSON.parse(fs.readFileSync(resultJsonPath, 'utf-8'));
+          if (data.decision && typeof data.decision === 'string') {
+            const decisionLower = data.decision.toLowerCase();
+            if (['approved', 'revise', 'rejected'].includes(decisionLower)) {
+              return decisionLower as ReviewDecision;
+            }
+          }
+          // File exists but has no valid decision — no point retrying
+          return null;
+        }
+      } catch {
+        // Parse error — file exists but invalid, no point retrying
+        return null;
+      }
+    }
+
+    // If the review directory itself exists (with other files), the agent wrote
+    // review markdown but skipped JSON. Fall through to downstream fallback.
+    if (reviewDir && fs.existsSync(reviewDir)) {
+      break;
+    }
+
+    if (attempt < maxRetries) {
+      // Synchronous sleep — acceptable here since this only runs post role-session completion
+      const start = Date.now();
+      while (Date.now() - start < retryDelayMs) { /* busy wait */ }
+    }
+  }
+  return null;
+}
+
+export function fuzzyMatchDecision(text: string): ReviewDecision | null {
+  const lower = text.toLowerCase();
+
+  // Look for JSON-like decision fields (e.g. "decision": "approved")
+  const jsonMatch = lower.match(/"decision"\s*:\s*"(approved|revise|rejected)"/);
+  if (jsonMatch) return jsonMatch[1] as ReviewDecision;
+
+  // Strong positive indicators
+  const approvePatterns = [
+    /\bapproved?\b/,
+    /\bapproval\b.*\bgranted\b/,
+    /\bwork\s+is\s+approved\b/,
+    /\bfully\s+approved\b/,
+    /\bno\s+(?:further\s+)?revisions?\s+(?:needed|required|necessary)\b/,
+    /\bready\s+(?:for|to)\s+(?:production|delivery|ship|merge)\b/,
+    /结论[：:]\s*通过/,
+    /批准|审批通过/,
+  ];
+
+  const revisePatterns = [
+    /\brevise\b/,
+    /\brevision\s+(?:needed|required|necessary)\b/,
+    /\bneeds?\s+(?:further\s+)?revision/,
+    /\bsend\s+back\s+for\s+revision/,
+    /\brequires?\s+(?:changes?|modifications?|updates?)\b/,
+    /需要修改|需要修订|需要调整/,
+  ];
+
+  const rejectPatterns = [
+    /\brejected?\b/,
+    /\bfundamentally\s+flawed\b/,
+    /\bcannot\s+be\s+(?:approved|accepted)\b/,
+    /拒绝|驳回/,
+  ];
+
+  // Count matches (last occurrence wins for ambiguous text)
+  let approveScore = 0;
+  let reviseScore = 0;
+  let rejectScore = 0;
+
+  for (const p of approvePatterns) { if (p.test(lower)) approveScore++; }
+  for (const p of revisePatterns) { if (p.test(lower)) reviseScore++; }
+  for (const p of rejectPatterns) { if (p.test(lower)) rejectScore++; }
+
+  // Need at least 1 match and clear winner to avoid false positives
+  const maxScore = Math.max(approveScore, reviseScore, rejectScore);
+  if (maxScore === 0) return null;
+
+  // Ambiguous: revise/reject both present → prefer revise (safer)
+  if (reviseScore > 0 && rejectScore > 0 && reviseScore >= rejectScore) return 'revise';
+  if (rejectScore > reviseScore && rejectScore > approveScore) return 'rejected';
+  if (reviseScore > approveScore) return 'revise';
+  if (approveScore > 0) return 'approved';
+
   return null;
 }

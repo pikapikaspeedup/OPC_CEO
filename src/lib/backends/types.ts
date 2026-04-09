@@ -1,0 +1,152 @@
+import type { ProviderId } from '../providers';
+import type {
+  ExecutionTarget,
+  ExecutorKind,
+  RunLiveState,
+  TaskResult,
+  TriggerContext,
+} from '../agents/group-types';
+
+export type MemoryEntryType = 'user' | 'feedback' | 'project' | 'reference';
+
+export interface MemoryEntry {
+  type: MemoryEntryType;
+  name: string;
+  content: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemoryContext {
+  projectMemories: MemoryEntry[];
+  departmentMemories: MemoryEntry[];
+  userPreferences: MemoryEntry[];
+}
+
+export interface BackendRunMetadata {
+  projectId?: string;
+  stageId?: string;
+  roleId?: string;
+  executorKind?: ExecutorKind;
+  autoApprove?: boolean;
+}
+
+export interface BackendRunConfig {
+  runId: string;
+  workspacePath: string;
+  prompt: string;
+  model?: string;
+  artifactDir?: string;
+  parentConversationId?: string;
+  executionTarget?: ExecutionTarget;
+  triggerContext?: TriggerContext;
+  metadata?: BackendRunMetadata;
+  memoryContext?: MemoryContext;
+  timeoutMs?: number;
+}
+
+export interface AgentBackendCapabilities {
+  supportsAppend: boolean;
+  supportsCancel: boolean;
+  emitsLiveState: boolean;
+  emitsRawSteps: boolean;
+  emitsStreamingText: boolean;
+}
+
+export interface AppendRunRequest {
+  prompt: string;
+  model?: string;
+  workspacePath?: string;
+}
+
+export type BackendErrorSource = 'backend' | 'provider' | 'watcher' | 'orchestrator';
+
+export type BackendRunErrorCode =
+  | 'invalid_input'
+  | 'no_language_server'
+  | 'api_key_missing'
+  | 'dispatch_failed'
+  | 'watch_failed'
+  | 'provider_failed'
+  | 'cancel_not_supported'
+  | 'append_not_supported'
+  | 'invalid_response'
+  | 'stale_timeout';
+
+export interface BackendRunError {
+  code: BackendRunErrorCode;
+  message: string;
+  retryable: boolean;
+  source: BackendErrorSource;
+}
+
+export interface StartedAgentEvent {
+  kind: 'started';
+  runId: string;
+  providerId: ProviderId;
+  handle: string;
+  startedAt: string;
+}
+
+export interface LiveStateAgentEvent {
+  kind: 'live_state';
+  runId: string;
+  providerId: ProviderId;
+  handle: string;
+  liveState: RunLiveState;
+}
+
+export interface CompletedAgentEvent {
+  kind: 'completed';
+  runId: string;
+  providerId: ProviderId;
+  handle: string;
+  finishedAt: string;
+  result: TaskResult;
+  rawSteps?: unknown[];
+  finalText?: string;
+}
+
+export interface FailedAgentEvent {
+  kind: 'failed';
+  runId: string;
+  providerId: ProviderId;
+  handle?: string;
+  finishedAt: string;
+  error: BackendRunError;
+  rawSteps?: unknown[];
+  liveState?: RunLiveState;
+}
+
+export interface CancelledAgentEvent {
+  kind: 'cancelled';
+  runId: string;
+  providerId: ProviderId;
+  handle?: string;
+  finishedAt: string;
+  reason?: string;
+}
+
+export type AgentEvent =
+  | StartedAgentEvent
+  | LiveStateAgentEvent
+  | CompletedAgentEvent
+  | FailedAgentEvent
+  | CancelledAgentEvent;
+
+export interface AgentSession {
+  readonly runId: string;
+  readonly providerId: ProviderId;
+  readonly handle: string;
+  readonly capabilities: AgentBackendCapabilities;
+  events(): AsyncIterable<AgentEvent>;
+  append(request: AppendRunRequest): Promise<void>;
+  cancel(reason?: string): Promise<void>;
+}
+
+export interface AgentBackend {
+  readonly providerId: ProviderId;
+  capabilities(): AgentBackendCapabilities;
+  start(config: BackendRunConfig): Promise<AgentSession>;
+  attach?(config: BackendRunConfig, handle: string): Promise<AgentSession>;
+}

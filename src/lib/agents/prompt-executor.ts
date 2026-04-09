@@ -1,8 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { getOwnerConnection } from '../bridge/gateway';
 import { createLogger } from '../logger';
-import { getExecutor, resolveProvider, type TaskExecutionResult } from '../providers';
+import { resolveProvider } from '../providers';
 import { AssetLoader } from './asset-loader';
 import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import type {
@@ -14,25 +13,23 @@ import type {
   TriggerContext,
 } from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
-import { compactCodingResult } from './result-parser';
 import { createRun, getRun, updateRun } from './run-registry';
 import { scanArtifactManifest, writeEnvelopeFile } from './run-artifacts';
-import { watchConversation, type ConversationWatchState } from './watch-conversation';
+import {
+  applyBeforeRunMemoryHooks,
+  consumeAgentSession,
+  createRunSessionHooks,
+  ensureBuiltInAgentBackends,
+  getAgentBackend,
+  getAgentSession,
+  markAgentSessionCancelRequested,
+  registerAgentSession,
+} from '../backends';
 
 const log = createLogger('PromptExecutor');
 
 const PROMPT_STAGE_ID = 'prompt-mode';
 const PROMPT_ROLE_ID = 'prompt-executor';
-
-interface ActivePromptRun {
-  executor: ReturnType<typeof getExecutor>;
-  supportsCancel: boolean;
-  handle?: string;
-  abortWatch?: () => void;
-  cancelRequested?: boolean;
-}
-
-const activePromptRuns = new Map<string, ActivePromptRun>();
 
 export interface ExecutePromptInput {
   workspace: string;
@@ -134,29 +131,6 @@ function buildPromptExecutionPrompt(
   return sections.join('\n');
 }
 
-function toTaskResult(result: TaskExecutionResult): TaskResult {
-  const content = result.content?.trim();
-  return {
-    status: result.status,
-    summary: content || (result.status === 'completed'
-      ? 'Prompt run completed'
-      : result.status === 'blocked'
-        ? 'Prompt run blocked'
-        : 'Prompt run failed'),
-    changedFiles: result.changedFiles || [],
-    blockers: result.status === 'blocked' && content ? [content] : [],
-    needsReview: [],
-  };
-}
-
-function cleanupPromptRun(runId: string): void {
-  const active = activePromptRuns.get(runId);
-  if (active?.abortWatch) {
-    active.abortWatch();
-  }
-  activePromptRuns.delete(runId);
-}
-
 function getArtifactAbsDir(run: AgentRunState): string | undefined {
   if (!run.artifactDir) return undefined;
   return path.join(run.workspace.replace(/^file:\/\//, ''), run.artifactDir);
@@ -174,7 +148,6 @@ function writePromptFinalization(
       result,
       lastError: result.status === 'completed' ? undefined : result.blockers[0] || result.summary,
     });
-    cleanupPromptRun(run.runId);
     return;
   }
 
@@ -217,101 +190,14 @@ function writePromptFinalization(
     artifactManifestPath: `${run.artifactDir}artifacts.manifest.json`,
     lastError: result.status === 'completed' ? undefined : result.blockers[0] || result.summary,
   });
-  cleanupPromptRun(run.runId);
 }
 
 function finalizePromptRun(runId: string, result: TaskResult): void {
   const run = getRun(runId);
   if (!run || TERMINAL_STATUSES.has(run.status)) {
-    cleanupPromptRun(runId);
     return;
   }
   writePromptFinalization(run, result);
-}
-
-function startPromptWatch(
-  runId: string,
-  cascadeId: string,
-  conn: { port: number; csrf: string; apiKey?: string },
-): void {
-  let lastWasActive = true;
-  let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const stopWatching = () => {
-    if (idleDebounceTimer) {
-      clearTimeout(idleDebounceTimer);
-      idleDebounceTimer = null;
-    }
-    cleanupPromptRun(runId);
-  };
-
-  const abortWatch = watchConversation(
-    conn,
-    cascadeId,
-    (state: ConversationWatchState) => {
-      const currentRun = getRun(runId);
-      if (!currentRun || TERMINAL_STATUSES.has(currentRun.status)) {
-        stopWatching();
-        return;
-      }
-
-      updateRun(runId, {
-        liveState: {
-          cascadeStatus: state.cascadeStatus,
-          stepCount: state.stepCount,
-          lastStepAt: state.lastStepAt,
-          lastStepType: state.lastStepType,
-          staleSince: state.staleSince,
-        },
-      });
-
-      if (state.hasErrorSteps && lastWasActive) {
-        if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-        idleDebounceTimer = setTimeout(() => {
-          const latestRun = getRun(runId);
-          if (!latestRun || TERMINAL_STATUSES.has(latestRun.status)) {
-            stopWatching();
-            return;
-          }
-          finalizePromptRun(runId, compactCodingResult(state.steps, getArtifactAbsDir(latestRun)));
-        }, 1500);
-        lastWasActive = false;
-        return;
-      }
-
-      if (!state.isActive && lastWasActive) {
-        if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-        idleDebounceTimer = setTimeout(() => {
-          const latestRun = getRun(runId);
-          if (!latestRun || TERMINAL_STATUSES.has(latestRun.status)) {
-            stopWatching();
-            return;
-          }
-          finalizePromptRun(runId, compactCodingResult(state.steps, getArtifactAbsDir(latestRun)));
-        }, 1500);
-      } else if (state.isActive && idleDebounceTimer) {
-        clearTimeout(idleDebounceTimer);
-        idleDebounceTimer = null;
-      }
-
-      lastWasActive = state.isActive;
-    },
-    (err: Error) => {
-      const run = getRun(runId);
-      if (!run || TERMINAL_STATUSES.has(run.status)) {
-        stopWatching();
-        return;
-      }
-      updateRun(runId, { status: 'failed', lastError: err.message });
-      stopWatching();
-    },
-    conn.apiKey,
-  );
-
-  const active = activePromptRuns.get(runId);
-  if (active) {
-    active.abortWatch = abortWatch;
-  }
 }
 
 export async function executePrompt(
@@ -330,7 +216,6 @@ export async function executePrompt(
   const workspacePath = input.workspace.replace(/^file:\/\//, '');
   const resolvedProvider = resolveProvider('execution', workspacePath);
   const model = input.model || resolvedProvider.model || 'MODEL_PLACEHOLDER_M26';
-  const executor = getExecutor(resolvedProvider.provider);
 
   const run = createRun({
     stageId: PROMPT_STAGE_ID,
@@ -362,92 +247,48 @@ export async function executePrompt(
   writeEnvelopeFile(artifactAbsDir, 'task-envelope.json', taskEnvelope);
 
   const composedPrompt = buildPromptExecutionPrompt(prompt, executionTarget, artifactDir, artifactAbsDir);
-  activePromptRuns.set(run.runId, {
-    executor,
-    supportsCancel: executor.capabilities().supportsCancel,
-  });
+  ensureBuiltInAgentBackends();
 
-  if (resolvedProvider.provider === 'antigravity') {
-    try {
-      const dispatchResult = await executor.executeTask({
-        workspace: workspacePath,
-        prompt: composedPrompt,
-        model,
-        artifactDir,
-        runId: run.runId,
+  try {
+    const backend = getAgentBackend(resolvedProvider.provider);
+    const backendConfig = await applyBeforeRunMemoryHooks(resolvedProvider.provider, {
+      runId: run.runId,
+      workspacePath,
+      prompt: composedPrompt,
+      model,
+      artifactDir,
+      parentConversationId: input.parentConversationId,
+      executionTarget,
+      triggerContext: input.triggerContext,
+      metadata: {
+        projectId: input.projectId,
         stageId: PROMPT_STAGE_ID,
         roleId: PROMPT_ROLE_ID,
-        parentConversationId: input.parentConversationId,
-      });
+        executorKind: 'prompt',
+      },
+    });
+    const session = await backend.start(backendConfig);
 
-      const active = activePromptRuns.get(run.runId);
-      const currentRun = getRun(run.runId);
-      if (!currentRun || TERMINAL_STATUSES.has(currentRun.status) || active?.cancelRequested) {
-        cleanupPromptRun(run.runId);
-        return { runId: run.runId };
-      }
+    registerAgentSession(session);
+    void consumeAgentSession(run.runId, session, createRunSessionHooks({
+      runId: run.runId,
+      activeRoleId: PROMPT_ROLE_ID,
+      backendConfig,
+      bindConversationHandleForProviders: ['antigravity'],
+      onCompleted: (event) => {
+        finalizePromptRun(run.runId, event.result);
+      },
+    }));
 
-      if (active) {
-        active.handle = dispatchResult.handle;
-      }
-
-      updateRun(run.runId, {
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        childConversationId: dispatchResult.handle,
-        activeConversationId: dispatchResult.handle,
-        activeRoleId: PROMPT_ROLE_ID,
-      });
-
-      const conn = getOwnerConnection(dispatchResult.handle);
-      if (!conn) {
-        throw new PromptExecutionError('Unable to resolve prompt conversation owner', 500);
-      }
-      startPromptWatch(run.runId, dispatchResult.handle, conn);
-      return { runId: run.runId };
-    } catch (err: any) {
-      const currentRun = getRun(run.runId);
-      if (currentRun && !TERMINAL_STATUSES.has(currentRun.status)) {
-        updateRun(run.runId, { status: 'failed', lastError: err.message });
-      }
-      cleanupPromptRun(run.runId);
-      throw err;
-    }
-  }
-
-  updateRun(run.runId, {
-    status: 'running',
-    startedAt: new Date().toISOString(),
-    activeRoleId: PROMPT_ROLE_ID,
-  });
-
-  void executor.executeTask({
-    workspace: workspacePath,
-    prompt: composedPrompt,
-    model,
-    artifactDir,
-    runId: run.runId,
-    stageId: PROMPT_STAGE_ID,
-    roleId: PROMPT_ROLE_ID,
-    parentConversationId: input.parentConversationId,
-  }).then((result: TaskExecutionResult) => {
-    const active = activePromptRuns.get(run.runId);
-    if (active?.cancelRequested) {
-      cleanupPromptRun(run.runId);
-      return;
-    }
-    finalizePromptRun(run.runId, toTaskResult(result));
-  }).catch((err: any) => {
+    return { runId: run.runId };
+  } catch (err: any) {
     const currentRun = getRun(run.runId);
     if (!currentRun || TERMINAL_STATUSES.has(currentRun.status)) {
-      cleanupPromptRun(run.runId);
-      return;
+      throw err;
     }
     updateRun(run.runId, { status: 'failed', lastError: err.message });
-    cleanupPromptRun(run.runId);
-  });
-
-  return { runId: run.runId };
+    throw err;
+  }
 }
 
 export async function cancelPromptRun(runId: string): Promise<void> {
@@ -457,16 +298,10 @@ export async function cancelPromptRun(runId: string): Promise<void> {
     throw new Error(`Run ${runId} is already ${run.status}`);
   }
 
-  const active = activePromptRuns.get(runId);
+  const active = getAgentSession(runId);
   if (active) {
-    active.cancelRequested = true;
-    if (active.handle && active.supportsCancel) {
-      await active.executor.cancel(active.handle);
-    }
-    if (active.abortWatch) {
-      active.abortWatch();
-    }
-    activePromptRuns.delete(runId);
+    markAgentSessionCancelRequested(runId);
+    await active.session.cancel('cancelled_by_user');
   }
 
   updateRun(runId, { status: 'cancelled' });

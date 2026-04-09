@@ -1,0 +1,7 @@
+{
+  "goal": "在工作区根目录创建一个 hello.md 文件，内容就写一行：Hello World from Prompt Mode。创建完成后立即停止，不要做其他任何事情。",
+  "executionTarget": {
+    "kind": "prompt"
+  },
+  "runId": "04ae8eb7-76e1-45f5-a769-ffbf99727e53"
+}

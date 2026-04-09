@@ -1,3 +1,748 @@
+## 任务：把 Plan B 收成代码级实施计划
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-10
+
+### 概要
+在用户明确“先考虑 Plan B 的落地”之后，继续从设计文档回到真实代码接缝，把 Task B 不再停留在概念边界，而是直接拆成代码级实施计划。重点梳理了 `group-runtime.ts` evaluate 分支中残留的 Native transport 泄漏点，以及这些能力应如何落到 backend / transport adapter 扩展层。
+
+### 本次结论
+1. **Task B 当前最重的真实泄漏点集中在 evaluate 分支**
+  - `grpc.getTrajectorySteps`
+  - `grpc.updateConversationAnnotations`
+  - `discoverLanguageServers`
+  - `getApiKey`
+  - `getOwnerConnection`
+2. **最稳的落点不是继续污染通用 `AgentBackend` 主接口，而是新增 optional backend extension**
+  - diagnostics extension
+  - session metadata writer extension
+3. **最稳的实施顺序是 4 个阶段**
+  - Phase 1: 抽 recent steps 读取
+  - Phase 2: 抽 annotation 写回
+  - Phase 3: 收 resolver 下沉
+  - Phase 4: 补异常矩阵
+4. **Task B 当前不应该顺手扩到执行器接入、MemoryHooks 真注入、Codex append/streaming 等后续能力**
+
+### 本次新增文档
+1. `docs/design/task-b-implementation-plan-2026-04-10.md`
+
+### 说明
+1. 本次为实施计划与本地文档沉淀，没有修改运行时代码。
+2. 文档已经把 Task B 从“结构级下沉”进一步拆成可直接开工的文件级改造顺序和验收标准。
+
+## 任务：澄清“代码合入 Claude Code 后是否还会形成绑定”
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-10
+
+### 概要
+在补齐代码级集成复用矩阵后，用户继续追问：如果最终选择 Claude Code，而且代码都直接合进 Antigravity 仓库里，是否还会被它绑定。针对这个问题，又补了一轮更精确的架构澄清，核心是把“外部依赖解除”和“运行时合同 ownership”拆开。
+
+### 本次结论
+1. **代码合入只解决外部依赖问题，不自动解决架构绑定问题**
+2. **如果 Antigravity 开始围着 Claude Code 的 session、tool permission、workspace、event shape 去组织自身 runtime，仍然会形成源码级绑定**
+3. **只有在 Claude Code 只是内部执行内核，而 execution contract 仍由 Antigravity 自己持有时，才算真正解除绑定**
+4. **判断标准很简单**
+  - 如果未来替掉 Claude Code，`Project / Run / Stage`、artifact、intervention、scheduler 这些平台语义不需要重写，那就没有被它绑死
+
+### 同步更新的文档
+1. `docs/design/embedded-executor-code-integration-matrix.md`
+
+## 任务：补齐 Claude Code 与 craft 的代码级集成复用矩阵
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-10
+
+### 概要
+围绕用户最新澄清的真实目标，继续把讨论从“产品对产品对接”切到“直接把 Claude Code 或 craft 的代码集成到 Antigravity 项目里”。本轮补了一份并排复用矩阵，明确回答：各层大概能复用多少、多少必须自己开发、哪些模块值得搬、哪些层不建议直接吃进来。
+
+### 本次结论
+1. **Claude Code 更像高复用执行内核**
+  - provider adapters、query loop、tool orchestration 复用价值更高
+  - 更适合先做默认强执行底座
+2. **craft 更像高复用 execution substrate 参考实现**
+  - backend / event 归一化、permissions、pre-tool middleware、session-tools 更值得借
+  - 不适合直接把 session/control shell 与产品壳整体搬进来
+3. **不管选谁，平台层核心都必须自研并持有**
+  - Project / Run / Stage 真相源
+  - artifact / result contract
+  - intervention semantics
+  - scheduler / CEO / approval / governance 接线
+4. **如果先选一个默认底座，短期优先 Claude Code；如果看长期 runtime 标准化，方向更接近 craft-style substrate**
+
+### 本次新增文档
+1. `docs/design/embedded-executor-code-integration-matrix.md`
+
+### 说明
+1. 本次为研究结论与本地文档沉淀，没有修改运行时代码。
+2. 文档已明确区分“代码复用比例”和“平台必须自己开发的部分”，便于后续直接进入默认底座选型与 PoC 设计。
+
+## 任务：澄清“选一个外部执行器”和“把合同交给外部执行器”的区别
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+用户进一步追问：既然 Claude Code 或 craft 本身就是开源、成熟、且支持很多 API，为什么不能直接选其中一个作为新的执行底座。针对这个问题，继续补了一轮更直接的架构澄清，核心是把“默认执行底座”和“execution contract 所有者”这两个概念拆开。
+
+### 本次结论
+1. **完全可以选一个外部系统作为默认执行底座**
+  - 比如优先选择 Claude Code，或者未来优先选择 craft-style runtime
+2. **真正不该交出去的是 execution contract 的定义权**
+  - session 模型
+  - append / attach / cancel / terminal semantics
+  - artifact / result / changedFiles 回传合同
+  - routing policy
+3. **开源、大厂、支持很多 API，不等于不会形成新的绑定**
+  - 绑定的根因不是源码闭不闭，而是平台是否被迫去适配外部产品的运行时合同
+4. **因此更稳的路线是“选一个默认 substrate，但合同仍由 Antigravity Platform 自己拥有”**
+
+### 同步更新的文档
+1. `docs/design/native-executor-replacement-feasibility.md`
+
+## 任务：按“完全平替 Native Executor”口径重判外部执行器路线
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+在上一轮“开放式 API 与通用执行器策略”研究之后，用户进一步把标准收紧为：不是只要多一个可选 executor，而是要判断“是否存在可以真正平替当前 Antigravity Native Executor 的方案”，而且 Template、定时任务、Prompt、干预链路这些现有产品能力都要继续成立。基于这个更严格的口径，补了一份专门的判定文档。
+
+### 本次结论
+1. **当前没有现成的 raw drop-in replacement**
+  - 无论是 Claude Code 还是 craft，都不是今天就能无痛直接平替 Native Executor 的现成成品
+2. **Template 和 Scheduler 不是核心 blocker**
+  - 它们本质属于 control plane 语义
+  - 外部执行器不需要自己原生理解模板或定时任务，只需要承接被平台逐 stage 派发后的 execution contract
+3. **真正的 blocker 在 execution contract**
+  - session lifecycle
+  - append / attach / cancel / evaluate 这类 intervention contract
+  - artifact / result / changedFiles / terminal semantics
+4. **真正能解除绑定的方案不是“换一个产品壳”，而是“平台自有 Standard Execution Runtime Contract”**
+  - Native Executor、Claude Code、Direct Open API backend、未来 craft-style runtime 都应该只是这个合同后面的 adapter
+5. **Claude Code 更适合第一代可落地 adapter，craft 更适合长期 execution shell 方向参考**
+
+### 本次新增文档
+1. `docs/design/native-executor-replacement-feasibility.md`
+
+### 说明
+1. 本次为研究结论与本地文档沉淀，没有修改运行时代码。
+2. 这份新文档专门回答“能否完全平替 Native Executor”这个更严格的问题，避免继续把“可选 executor”与“解除平台绑定”混成一件事。
+
+## 任务：明确开放式 API 下的通用执行器路线
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+围绕“未来如果要使用开放式 API，Craft 或 Claude Code 能否成为受 Antigravity Platform 完整调度的通用执行器，以及写代码任务是否应该默认派给 Claude Code”这个问题，补了一份新的策略文档，把执行器选择、任务路由、Task B 关系与阶段性建议收成一个统一判断。
+
+### 本次结论
+1. **Craft 和 Claude Code 都可以被调度系统控制**
+  - 前提是它们被放在 execution plane
+  - 不替代 `Project / Run / Stage` 这层 control plane 真相源
+2. **Claude Code 更适合短期先接成强 coding executor**
+  - 更适合单 stage、prompt-first、真实 workspace 内写代码的任务
+  - 不适合直接当长期通用 execution substrate
+3. **craft 更适合作为长期 execution shell 方向**
+  - 更值得借 backend / session / event / capability 的分层思路
+  - 不适合直接作为平台基座
+4. **写代码任务不应无差别全部派给 Claude Code**
+  - 更稳的路线是 Native Executor / Claude Code / Direct Open API backend 三路并存，由 Platform 按任务类型做路由
+
+### 本次新增文档
+1. `docs/design/open-api-universal-executor-strategy.md`
+
+### 说明
+1. 本次为研究结论与本地文档沉淀，没有修改运行时代码。
+2. 文档已把“什么叫完整调度”“Claude Code 与 craft 分别应该放在哪一层”“写代码任务的合理路由策略”三个问题收口到一页，便于后续直接决定 PoC 顺序。
+
+## 任务：按控制层 / 执行层新概念重写 craft 可行性研究文档
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+根据最新概念对齐，重写了 `antigravity-vs-craft-feasibility-study.md`，去掉了旧版里大量“整个平台对整个平台”的泛比较与冗长计划，改为聚焦一个更准确的问题：craft 在控制层 / 执行层新框架下，是否适合作为 Antigravity 的下层 execution shell。
+
+### 本次重写后的核心结论
+1. **不建议把 Antigravity 平台直接建立在 craft 之上**
+2. **建议保留 Antigravity 作为控制层 / 平台主系统**
+3. **craft 可以作为下层 execution shell 的参考对象，甚至未来可作为一个可选执行器接入**
+4. **真正值得复用的是 backend / session / event / capability 抽象，不是整个产品壳**
+
+### 本次更新的文档
+1. `docs/internals/antigravity-vs-craft-feasibility-study.md`
+  - 已按新的控制层 / 执行层框架重写并精简
+
+## 任务：对齐 Antigravity 的控制层与执行层概念
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对“Antigravity 到底是决策层还是执行层”这个概念混乱点，补了一份专门的对齐文档，不再继续把平台、原生执行器、以及历史上的 CLI/IDE 能力混用成一个词。
+
+### 本次对齐出的关键结论
+1. **Antigravity 应被定义成整个平台，而不是单独某一层**
+2. **控制层负责**
+  - Project / Run / Stage
+  - review-loop / governance / scheduler / CEO / approval / artifact 真相源
+3. **执行层负责**
+  - 在 workspace 内实际执行任务
+  - provider / backend / session / transport / 权限控制
+4. **Google Antigravity language server 只是当前默认原生执行器**
+  - 它属于执行层成员
+  - 不应再等同成整个平台
+5. **Claude Code / craft / 第三方 API backend 都应被理解成执行层候选，而不是控制层替代品**
+
+### 本次新增文档
+1. `docs/design/control-plane-vs-execution-plane-alignment.md`
+
+### 说明
+1. 本次为概念对齐与本地文档沉淀，没有修改运行时代码。
+2. 这份文档的目的，是给后续第三方执行器接入、Task B、Workspace 语义和 OPC 路线一个统一术语底座。
+
+## 任务：研究顶层调用 Craft / Claude Code 作为第三方执行器的可行性
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+围绕“如果要支持第三方 API，能否不重做顶层，而是让 Antigravity 顶层去调用 Craft 或 Claude Code 这种 workspace-based agent shell”这个问题，补充了一轮更贴近工程落地的研究。重点不再是“谁替代谁”，而是“谁更适合做下层受控执行器”。
+
+### 本次研究的关键结论
+1. **这比‘整体迁基座’更合理**
+  - Antigravity 顶层保留 `Project / Run / Stage / governance`
+  - Craft 或 Claude Code 只承担下层 workspace executor
+2. **Claude Code 当前这份逆向仓库确实支持第三方 provider**
+  - 已明确支持 OpenAI、Gemini、Grok 等兼容层
+  - 但更现实的调用面是 CLI / server，而不是成熟 SDK
+3. **craft 更像长期通用 execution shell**
+  - backend / session / event 壳更干净
+  - 更适合作为多 provider runtime 参考或未来下层执行壳
+4. **最稳路线不是二选一，而是分阶段**
+  - 短期：先接 Claude Code 形成可用 executor
+  - 长期：再朝 craft-style execution shell 收口
+
+### 同步更新的文档
+1. `docs/internals/antigravity-vs-craft-feasibility-study.md`
+  - 新增了“顶层调用下层执行器支持第三方 API”的专门章节
+
+## 任务：重新 review AgentBackend 事件架构完成态
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+根据用户要求，对当前 AgentBackend / AgentSession / session-consumer 事件架构迁移重新做了一轮 review，不再只问“有没有迁到新主链”，而是进一步审视：当前边界到底是否已经稳定、哪些借鉴 craft 的地方是对的、以及什么才算真正的高质量完成态。
+
+### 产出
+1. 新增 review 文档：`docs/design/agent-backend-event-rereview-2026-04-09.md`
+
+### 本次 review 的关键结论
+1. **主链迁移方向正确，且不是文档先行**
+  - Prompt、legacy-single、multi-role isolated 确实已经进入 event session 主链
+2. **当前仍是 NEEDS_REVISION，不是因为功能没迁完，而是因为合同和边界还没完全收口**
+3. **3 个主要问题需要优先修**
+  - attach / cancel 恢复态仍依赖瞬时 provider 解析，而不是持久化 provenance
+  - cancel 合同在类型、consumer、文档之间没有完全写死
+  - review-loop author 完成判定存在文件落盘时序竞争
+4. **对 craft 的借鉴总体方向是对的**
+  - 借的是 backend / session / event 分层
+  - 不应该继续借过头，把 Antigravity 扭成 session-first 产品壳
+5. **真正好的完成态仍差 6 条硬条件**
+  - 包括 transport 泄漏清理、provider provenance 持久化、cancel 合同写死、异常矩阵齐全、完成判定稳定化、以及至少一个新 backend 的 seam 验证
+
+### 说明
+1. 本轮为 review 与本地文档沉淀，没有修改运行时代码。
+2. 本轮结论明确建议：下一步优先修合同与异常矩阵，而不是继续扩大抽象面。
+
+## 任务：补充 Claude Code 作为被调度执行器的定位说明
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+根据用户澄清，继续完善 Provider / Task B 独立文档，明确区分了两个容易混淆的问题：
+
+1. Claude Code 能不能替代 Antigravity 的 `Project / Run`
+2. Claude Code 能不能作为一个被当前调度系统控制的底层执行器
+
+### 本次补充的关键结论
+1. **Claude Code 可以被当前调度系统控制**
+  - 前提是把它包装成新的 `AgentBackend` 或 provider leaf executor
+  - 调度系统继续负责 `Project / Run / Stage / scheduler / approval`
+2. **Claude Code 不会天然继承 Google Antigravity language server 的 transport 能力**
+  - 它可以共享逻辑 Workspace
+  - 但不天然具备 trajectory、owner routing、annotation 等 IDE transport 能力
+3. **第三方兼容取决于接入的 Claude Code 内核版本**
+  - 若内核只支持 Claude / Anthropic 规格 API，则只能提供 Claude-family executor
+  - 若使用当前逆向仓库里的多 provider 版本，则有机会同时承担第三方兼容执行器角色
+
+### 同步更新的文档
+1. `docs/design/provider-integration-and-task-b-plan.md`
+  - 新增了“Claude Code 来实际编辑代码，能否被调度系统控制”的专门章节
+
+## 任务：补充“文件夹边界”与 Project/Run 真相源的差异说明
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+继续完善 Provider / Task B 独立文档，专门补上一个高频误区：为什么即使 Claude Code / Corecode 这类执行器同样是“按文件夹工作”，也不能直接替代 Antigravity 的 `Project / Run`。
+
+### 本次补充的关键结论
+1. **文件夹 / workspace 只定义空间边界**
+  - 回答的是代码在哪、cwd 在哪、工具能改哪棵目录树
+2. **Project / Run 定义的是时间和治理边界**
+  - 回答的是任务容器、阶段推进、上游输入、reviewOutcome、恢复、审批、调度回流这些系统语义
+3. **Claude Code / Corecode 可替代的是执行器层**
+  - 也就是 provider leaf executor 或 AgentBackend session
+  - 不能天然替代 `project-registry`、`run-registry`、`pipelineState` 这些真相源对象
+
+### 同步更新的文档
+1. `docs/design/provider-integration-and-task-b-plan.md`
+  - 新增了“为什么文件夹单位不能替代 Project / Run”的专门章节
+
+## 任务：补充 Workspace 分层与 Claude Code 执行器定位说明
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+继续完善刚新增的 Provider / Task B 独立文档，补上两个此前容易反复混淆的问题：
+
+1. 当不再依赖 Antigravity IDE 能力，而改用 OpenAI / Claude API / 第三方 Key 时，Workspace 理念应如何继续成立
+2. Claude Code 逆向源码是否可以直接当作通用执行器使用
+
+### 本次补充的关键结论
+1. **Workspace 需要拆成两层理解**
+  - 逻辑 Workspace：仓库根、cwd、artifact、Project / Run / Stage、rules / memory / policy
+  - 执行能力 Workspace：language server、trajectory、owner routing、annotation、IDE file edit 等 Antigravity 专有能力
+2. **第三方 Key 依然可以支撑 Workspace 理念**
+  - 只是它们支撑的是“逻辑 Workspace”
+  - 不一定具备 Antigravity Provider 那种 IDE-enhanced 能力包
+3. **Claude Code 可以当叶子执行器，但不该当系统基座**
+  - 适合接在 Provider / AgentBackend 层
+  - 不适合替代 Project / Run / Stage / governance / scheduler 这些上层系统语义
+
+### 同步更新的文档
+1. `docs/design/provider-integration-and-task-b-plan.md`
+  - 新增了 Workspace 双层语义
+  - 新增了 Claude Code 作为执行器的定位和接入顺序
+
+## 任务：补独立文档说明 Provider 接入预期与 Task B 完成态
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+基于用户反馈，单独新增了一份文档，用来说明“事件框架迁移到底意味着什么”、“未来 OpenAI 等独立后端应该接在哪一层”，以及“Task B 做完以后系统应该处于什么状态”。不再把这些总览问题继续塞在 event gap checklist 里。
+
+### 本次新增文档
+1. `docs/design/provider-integration-and-task-b-plan.md`
+
+### 文档包含的核心结论
+1. 任务 A 已经解决“功能入口统一到 Event session 主链”
+2. Task B 的本体是“把残留在 orchestration 层里的 RPC / gRPC / owner / language-server 解析继续压到底层”
+3. 未来 OpenAI / Claude API / 自定义后端应该接在 Provider / AgentBackend 层，而不是直接接 `group-runtime.ts`
+4. Task B 做完后的预期不是新增功能，而是让 `group-runtime` 只保留业务编排语义，不再理解 Antigravity transport 细节
+
+## 任务：整理 Plan B / Task B 的实际实施边界
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+重新整理了 AgentBackend 迁移后的 Plan B，明确这一步不再是“继续迁功能入口”，而是 `任务 B：transport 下沉与 group-runtime 净化`。已把现有设计文档中的概念表述收成更可执行的实施分组，便于后续直接按组推进。
+
+### 本次整理出的结论
+1. **任务 A 已完成**
+  - shared / nudge / restart-role / evaluate / cancel fallback 这些功能级旧入口已经全部迁完
+2. **Plan B 就是 Task B**
+  - 本质是把残留在 `group-runtime.ts` 里的 RPC / gRPC / owner / language-server 解析继续压到底层 backend 或 transport adapter
+3. **Task B 应拆成 4 组**
+  - 会话诊断读取下沉：`grpc.getTrajectorySteps`
+  - 会话元数据写回下沉：`grpc.updateConversationAnnotations`
+  - owner / apiKey / language server 解析下沉：`getOwnerConnection()` / `getApiKey()` / `discoverLanguageServers()`
+  - attached-session 异常矩阵补齐
+4. **Task B 当前不该扩张到其它方向**
+  - 不继续做新功能入口
+  - 不先扩 Codex append / streaming text
+  - 不把 MemoryHooks 真正接到 prompt 拼装
+
+### 同步更新的文档
+1. `docs/design/agent-backend-event-architecture-gap-checklist.md`
+  - 新增了 Task B 的实际实施边界、实施分组、以及不应顺手扩张的范围
+
+## 任务：重跑此前未成功的关键回归测试
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对此前一度不稳定、且直接关联 `prompt-builder` 决策提取与 AgentBackend 运行时迁移的关键测试组，重新执行了一次集中回归，确认当前代码在本地已经稳定通过，不再存在可复现的自动化失败。
+
+### 本次验证范围
+1. `src/lib/agents/prompt-builder.test.ts`
+2. `src/lib/agents/group-runtime.test.ts`
+3. `src/lib/agents/group-runtime.multi-role.test.ts`
+4. `src/lib/backends/builtin-backends.test.ts`
+
+### 验证证据
+1. **关键回归测试重跑通过**
+  - 执行：`npm test -- src/lib/agents/prompt-builder.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/backends/builtin-backends.test.ts`
+  - 结果：`4` 个测试文件通过，`54` 个测试全部通过，`0` 失败。
+
+### 结论
+1. `prompt-builder` 中的 review decision 提取逻辑当前测试通过。
+2. `group-runtime` 的 intervention / cancel / attached session 路径当前测试通过。
+3. multi-role 迁移路径与 backend attach/parity 路径当前测试通过。
+
+## 任务：对前端仪表盘 UX 审计进行对立性评审 (Run: 609294b3 - Critic Round 1)
+
+**状态**: 🟡 等待修订 (REVISE)
+**日期**: 2026-04-09
+
+### 概要
+作为首席 UX 评论员，对 Run 609294b3 的审计报告进行了对抗性审查。独立验证了原生 `prompt()` 拦截、冗余 API 调用以及中英混杂的交互缺陷。指出了审计中遗漏的 `AuditLogWidget` 数据过时 Bug (Missing Poll Dependency) 以及路径输入路径摩擦问题。已要求 Review Author 针对 580px 侧边栏环境细化 Bento 布局方案。
+
+### 本次完成的关键改动
+1. **源码深度验证**: 走访 `src/components/ceo-dashboard.tsx` 和 `src/components/audit-log-widget.tsx`，证实了审计结论并发现组件间数据同步缺陷。
+2. **对抗性评审**: 对 Bento 布局和 Activity Hook 提案提出了针对性质疑，要求解决侧边栏适配与响应式细节问题。
+3. **输出评审决策**: 在 `/demolong/runs/609294b3-969e-499a-8a8b-e6a349f65e58/review/` 下生成了 `review-round-1.md` 和 `result-round-1.json`。
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Run: 609294b3 - Review Author)
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对 Antigravity 仪表盘（CEO Dashboard）完成了简短的启发式评估（控制在300字以内）。识别了包括原生 `prompt()` 阻塞、冗余/静态审计流以及 "Zombie Localization"（中英混杂）在内的 3 个核心可用性问题。产出了针对性的改进建议（Contextual Popover、Bento 布局、共享 Activity Hook）。
+
+### 本次完成的关键改动
+1. **完成简短 UX 审计**: 深度分析了 `src/components/ceo-dashboard.tsx` 与 `src/components/audit-log-widget.tsx` 的交互性能与冗余度。
+2. **生成评审报告**: 在 `/demolong/runs/609294b3-969e-499a-8a8b-e6a349f65e58/specs/` 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md`。
+3. **交付结果**: 完成了强制性的 `result.json`，标记任务圆满结束。
+
+---
+
+## 任务：对前端仪表盘 UX 审计进行对立性评审 (Run: 0980b7e4 - Critic Round 1)
+
+**状态**: 🟡 等待修订 (REVISE)
+**日期**: 2026-04-09
+
+### 概要
+作为首席 UX 评论员，对 Run 0980b7e4 的审计报告进行了对抗性审查。独立验证了原生 `prompt()` 拦截、审计日志数据静态化以及中英混杂的交互缺陷。额外指出了审计中遗漏的组件间冗余 API 调用问题，并要求 Review Author 针对 580px 窄侧边栏环境重新设计 Bento 布局提案。
+
+### 本次完成的关键改动
+1. **源码深度验证**: 走访 `src/components/ceo-dashboard.tsx` 和 `src/components/audit-log-widget.tsx`，证实了审计结论并发现数据同步架构缺陷。
+2. **对抗性评审**: 对 Bento 布局和轮询提案提出了针对性质疑，要求解决侧边栏适配与冗余请求问题。
+3. **输出评审决策**: 在 `/demolong/runs/0980b7e4-a906-4b8a-a393-f33b9652524e/review/` 下生成了 `review-round-1.md` 和 `result-round-1.json`。
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Run: 0980b7e4)
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对 Antigravity 仪表盘（CEO Dashboard）完成了简短的启发式评估（控制在300字以内）。识别了包括原生 `prompt()` 阻塞、审计日志数据滞后以及垂直堆叠疲劳在内的 3 个核心可用性问题。产出了针对性的改进建议（组件化弹窗、审计流轮询、便当盒布局设计）。
+
+### 本次完成的关键改动
+1. **完成简短 UX 审计**: 深度分析了 `src/components/ceo-dashboard.tsx` 与 `src/components/audit-log-widget.tsx` 的交互性能。
+2. **生成评审报告**: 在 `/demolong/runs/0980b7e4-a906-4b8a-a393-f33b9652524e/specs/` 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md`。
+3. **交付结果**: 完成了强制性的 `result.json`，标记任务圆满结束。
+
+---
+
+## 任务：对前端仪表盘 UX 审计进行对立性评审 (Run: 6c86f4f1 - Critic Round 1)
+
+
+**状态**: 🟡 等待修订 (REVISE)
+**日期**: 2026-04-09
+
+### 概要
+作为首席 UX 评论员，对 Run 6c86f4f1 的审计报告进行了对抗性审查. 独立验证了原生 `prompt()` 拦截和垂直堆叠疲劳问题，并指出了审计严重遗漏的 `AuditLogWidget` 数据过时 Bug（Missing Poll Dependency）以及 "Zombie Localization"（混合语言）问题.
+
+### 本次完成的关键改动
+1. **源码深度验证**: 走访 `src/components/ceo-dashboard.tsx` 和 `src/components/audit-log-widget.tsx`，发现了审计漏掉的组件内部数据同步缺陷.
+2. **对抗性评审**: 对 Bento 布局提案提出了针对性质疑，由于组件高度差异巨大，要求细化布局策略以防视觉空洞.
+3. **输出评审决策**: 在 `/demolong/runs/6c86f4f1-1496-4c68-b66c-edf0bdd2f879/review/` 下生成了 `review-round-1.md` 和 `result-round-1.json`.
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Run: 6c86f4f1 - Review Author)
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对 Antigravity 仪表盘（CEO Dashboard）完成了简短的启发式评估（控制在300字以内）。识别了包括原生 `prompt()` 阻塞、垂直堆叠疲劳以及数据刷新跳变在内的 3 个核心可用性问题。产出了针对性的改进建议（自定义 Dialog、便当盒布局、Framer Motion 平滑过渡）。
+
+### 本次完成的关键改动
+1. **完成简短 UX 审计**: 深度分析了 `src/components/ceo-dashboard.tsx` 的交互性能。
+2. **生成评审报告**: 在 `/demolong/runs/6c86f4f1-1496-4c68-b66c-edf0bdd2f879/specs/` 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md`。
+3. **交付结果**: 完成了强制性的 `result.json`，标记任务圆满结束。
+
+---
+
+## 任务：对前端仪表盘 UX 审计进行对立性评审 (Run: 246eb35a - Critic Round 1)
+
+
+**状态**: 🟡 等待修订 (REVISE)
+**日期**: 2026-04-09
+
+### 概要
+作为首席 UX 评论员，对 Run 246eb35a 的审计报告进行了对抗性审查。独立验证了原生 `prompt()` 拦截、垂直堆叠疲劳以及静默刷新等核心缺陷。指出了审计中遗漏的审计日志组件不更新（Stale Data）以及混合语言本地化（Zombie Localization）问题。已要求 Review Author 针对 580px 侧边栏宽度优化布局提案并细化变更反馈机制。
+
+### 本次完成的关键改动
+1. **源码深度验证**: 走访 `src/components/ceo-dashboard.tsx` 和 `src/components/audit-log-widget.tsx`，发现了审计漏掉的数据同步 Bug。
+2. **对抗性评审**: 对 Bento 布局和 Framer Motion 提案提出了针对性质疑，要求适配高长宽比侧边栏场景。
+3. **输出评审决策**: 在 `/demolong/runs/246eb35a-d07e-4f93-b6a4-e1234c4006fe/review/` 下生成了 `review-round-1.md` 和 `result-round-1.json`。
+
+---
+
+## 任务：对前端仪表盘 UX 审计进行对立性评审 (Run: 345bb0d5 - Critic Round 1)
+
+**状态**: 🟡 等待修订 (REVISE)
+**日期**: 2026-04-09
+
+### 概要
+作为首席 UX 评论员，对 Run 345bb0d5 的审计报告进行了对抗性审查。验证了 `window.prompt()` 和垂直堆叠布局的真实性，但指出审计提案在处理错误反馈、战略信号优先级（HUD 化）以及列表刷新动效方面深度不足。已要求 Review Author 进行修订。
+
+### 本次完成的关键改动
+1. **源码验证**: 实地走访 `src/components/ceo-dashboard.tsx`，证实了原生对话框和堆叠容器问题。
+2. **深度评审**: 指出了对 CEO 视觉下钻与全局掌控平衡点的遗漏。
+3. **输出评审报告**: 在 `/demolong/runs/345bb0d5-f819-41e0-a17c-5e633d65af55/review/` 下生成了 `review-round-1.md` 和 `result-round-1.json`。
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Run: 345bb0d5 - Review Author)
+
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对 Antigravity 仪表盘（CEO Dashboard）完成了简短的启发式评估（控制在300字以内）。识别了侵入式对话、纵向堆叠疲劳及刷新跳变 3 个核心可用性问题。产出了针对性的改进方案（UI Modal, Bento 布局, 状态平滑过渡）。
+
+### 本次完成的关键改动
+1. **完成简短 UX 审计**: 深度分析了 `src/components/ceo-dashboard.tsx` 的交互性能。
+2. **生成评审报告**: 在 `/demolong/runs/345bb0d5-f819-41e0-a17c-5e633d65af55/specs/` 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md`。
+3. **交付结果**: 完成了强制性的 `result.json`，标记任务圆满结束。
+
+---
+
+## 任务：对前端仪表盘 UX 审计进行对立性评审 (Run: c32b6b4a - Critic Round 1)
+
+
+**状态**: 🟡 等待修订 (REVISE)
+**日期**: 2026-04-09
+
+### 概要
+作为首席 UX 评论员，对仪表盘审计报告进行了对抗性审查。验证了原生 `prompt()` 和布局堆叠问题，但指出审计提案在处理内容溢出、数据一致性以及反馈链路方面存在严重不足。已要求 Review Author 进行修订。
+
+### 本次完成的关键改动
+1. **源码验证**: 通过 `src/components/ceo-dashboard.tsx` 证实了审计中的关键发现。
+2. **深度评审**: 识别了审计未覆盖的状态管理碎片化和路径输入摩擦问题。
+3. **输出评审报告**: 生成了 `review-round-1.md` 和决策文件，决策为 `REVISE`。
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Run: c32b6b4a)
+
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对 Antigravity 仪表盘（CEO Dashboard）完成了简短的启发式评估。识别了包括信息滚动疲劳、原生 `prompt()` 越权交互以及状态刷新生硬在内的 3 个核心可用性问题。产出了针对性的改进建议（Bento 布局、模态框替换、动效增强）。
+
+### 本次完成的关键改动
+1. **完成 UX 审计**: 分析了 `src/app/page.tsx` 与 `src/components/ceo-dashboard.tsx`。
+2. **提交评审报告**: 在 `/demolong/runs/c32b6b4a-a817-46f6-abf6-fbb42f7213e9/specs/` 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md` 和 `result.json`。
+3. **改进建议**: 提出了便当盒布局 (Bento Grid)、行内快速添加弹窗以及基于 Framer Motion 的轮询平滑过渡。
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Brief UX Review)
+
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对 Antigravity 前端仪表盘完成了简短的启发式评估（控制在300字以内），生成了3项核心优化建议（过渡加载、移动端适配、微动效状态反馈）。
+
+### 本次完成的关键改动
+1. **完成简短 UX 审计**: 在不修改代码的情况下分析了仪表盘 `page.tsx`。
+2. **提交评审报告**: 在指定 run artifact 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md` 和 `result.json`，产出符合流水线要求。
+
+---
+
+## 任务：评审前端仪表盘交互体验 (UX Review)
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+对 Antigravity 前端仪表盘（CEO Dashboard）进行了启发式评估，识别了可用性问题并提出了改进建议。
+
+### 本次完成的关键改动
+1. **完成 UX 审计**: 识别了包括原生 `prompt()` 拦截流、信息过载和视觉噪音在内的核心问题。
+2. **提交评审报告**: 在 `/demolong/runs/a61b8557-b222-4ff7-842f-bfd18b79768d/` 下生成了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md` 和 `result.json`。
+3. **改进建议**: 提出了替换原生输入框、引入标签页导航以及优化状态指示器动画的方案。
+
+---
+
+## 任务：测试基础编码模板 (Basic Coding Template)
+
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+在工作区根目录创建 `coding-test.md` 文件，验证基础编码模板的自动化执行能力。
+
+### 本次完成的关键改动
+1. **创建 `coding-test.md`**: 内容为 "Hello from coding-basic-template"。
+
+---
+
+## 任务：测试 Prompt Mode 执行
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+在工作区根目录创建 `hello.md` 文件，验证 Prompt Mode 执行能力。
+
+### 本次完成的关键改动
+1. **创建 `hello.md`**: 内容为 "Hello World from Prompt Mode"。
+
+---
+
+## 任务：把 PromptExecutor 接到 AgentBackend
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+开始执行第一条真实接入链路：让 Prompt Mode 不再直接依赖 `TaskExecutor + watcher + activePromptRuns`，而是改走新的 `AgentBackend -> AgentSession -> session-consumer -> run-registry` 链路。当前这条链已经落地并通过回归测试与生产构建验证。
+
+### 本次完成的关键改动
+1. **新增 `src/lib/backends/builtin-backends.ts`**：补齐第一批可运行的内建 backend 实现
+  - `AntigravityAgentBackend`
+  - `CodexAgentBackend`
+  - `ensureBuiltInAgentBackends()`
+2. **`prompt-executor.ts` 重构为 backend 驱动**
+  - 保留 run 创建、artifact 目录、Prompt 组装、finalization 语义
+  - 删除本地 `activePromptRuns` Map
+  - 删除直接调用 `watchConversation()` 的逻辑
+  - 改为：`getAgentBackend()` → `start()` → `registerAgentSession()` → `consumeAgentSession()`
+3. **`cancelPromptRun()` 改走 session-registry**
+  - 改为查询 `getAgentSession(runId)`
+  - 通过 `markAgentSessionCancelRequested()` + `session.cancel()` 处理取消
+  - 保留 Prompt Run 立即标记为 `cancelled` 的外部行为
+4. **`backends/index.ts`**：新增内建 backend 导出，供 PromptExecutor 接入使用
+5. **更新 `prompt-executor.test.ts`**
+  - 兼容新的异步事件消费链路
+  - 保留原有 4 条关键行为覆盖：codex 完成、antigravity watcher 完成、dispatch 失败、cancel 后忽略晚到 completion
+
+### 当前效果
+Prompt Mode 现在已经具备完整的新链路：
+1. PromptExecutor 只负责 Prompt 语义和 artifact/finalization
+2. Provider-specific 生命周期下沉到 AgentBackend / AgentSession
+3. 事件消费统一走 session-consumer
+4. 取消路径统一走 session-registry
+
+### 验证证据
+1. **相关护栏测试通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：`7` 个测试文件全部通过，`23` 个测试全部通过，`0` 失败。
+2. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成，PromptExecutor 接入后的整体项目编译通过。
+
+## 任务：继续补 Phase 1 Session Consumer 骨架
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+在 `AgentBackend` 类型、backend 注册表和 session 注册表落地后，继续把统一事件消费层的第一版骨架补出来，先解决“如何按序消费 `AgentEvent`、如何在 local cancel 后忽略晚到 completion、如何在 terminal 后停止继续处理”这三件最核心的事。
+
+### 本次完成的关键改动
+1. **新增 `src/lib/backends/session-consumer.ts`**：提供 `consumeAgentSession()`
+   - 支持 `started / live_state / completed / failed / cancelled` 五类事件回调
+   - 在 terminal 事件到达后自动标记 `terminalSeen`
+   - 默认 terminal 后自动从 session registry 释放
+   - 若 session 已经 `cancelRequested`，会忽略晚到的 `completed` 事件
+2. **`src/lib/backends/index.ts`**：新增 `session-consumer` 类型与函数导出
+3. **新增 `src/lib/backends/session-consumer.test.ts`**：覆盖 3 个关键行为
+   - 按顺序消费 started/live_state/completed 并在 terminal 后释放 session
+   - local cancel 后抑制晚到 completion
+   - `terminalSeen` 已置位时忽略后续全部事件
+
+### 验证证据
+1. **backends 骨架测试通过**
+  - 执行：`npm test -- src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：`3` 个测试文件全部通过，`10` 个测试全部通过，`0` 失败。
+2. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成，新增 `session-consumer` 骨架与导出均编译通过。
+
+## 任务：开始 Phase 1 AgentBackend 最小骨架实现
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-08
+
+### 概要
+在详细技术设计和 Phase 0 characterization tests 完成后，开始落第一批真正的 AgentBackend 代码骨架。这一轮刻意不把新抽象接进现有运行时，只先建立独立可编译、可测试的 `backends/` 基础层：类型合同、backend 注册表、活跃 session 注册表，以及对应的单元测试。
+
+### 本次完成的关键改动
+1. **新增 `src/lib/backends/types.ts`**：定义 Phase 1 的基础合同
+  - `BackendRunConfig`
+  - `AgentBackendCapabilities`
+  - `BackendRunError`
+  - `AgentEvent` 联合类型
+  - `AgentSession`
+  - `AgentBackend`
+2. **新增 `src/lib/backends/registry.ts`**：提供 HMR 安全的 backend 注册表
+  - `registerAgentBackend()`
+  - `getAgentBackend()`
+  - `hasAgentBackend()`
+  - `listAgentBackends()`
+  - `clearAgentBackends()`
+3. **新增 `src/lib/backends/session-registry.ts`**：提供进程内活跃 session 索引
+  - `registerAgentSession()`
+  - `getAgentSession()`
+  - `markAgentSessionCancelRequested()`
+  - `markAgentSessionTerminalSeen()`
+  - `removeAgentSession()`
+  - `clearAgentSessions()`
+4. **新增 `src/lib/backends/index.ts`**：统一导出骨架层接口与注册表 API
+5. **新增两组单测**
+  - `src/lib/backends/registry.test.ts`
+  - `src/lib/backends/session-registry.test.ts`
+
+### 设计边界
+- 本轮没有把 `AgentBackend` 接到 `prompt-executor.ts` 或 `group-runtime.ts`。
+- 目标是先把合同和注册表立起来，为后续 Prompt Mode 接入做准备，避免在抽象尚未稳定时半接入现有运行时。
+
+### 验证证据
+1. **骨架单测通过**
+  - 执行：`npm test -- src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts`
+  - 结果：`2` 个测试文件全部通过，`7` 个测试全部通过，`0` 失败。
+2. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成，新增 `backends/` 目录与此前 runtime 调整均编译通过。
+
 ## 任务：补 Phase 0 第二批 group-runtime characterization tests
 
 **状态**: ✅ 已完成
@@ -705,6 +1450,243 @@
 
 ---
 
+## 任务：完成 legacy-single AgentBackend 迁移与 watcher parity 收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+在 PromptExecutor 已经接入 `AgentBackend -> AgentSession -> session-consumer` 之后，继续把 template runtime 中最关键的单会话残留路径也收口到同一抽象，并补回 reviewer 指出的关键 watcher parity：`autoApprove`、文件轮询兜底完成、断线重连、owner 路由 cancel/append。同步落了默认 run hooks 与 MemoryHooks 骨架，并把相关行为全部锁成专项测试。
+
+### 本次完成的关键改动
+1. **新增默认 run hooks 与 MemoryHooks 骨架**
+  - 新增 `src/lib/backends/run-session-hooks.ts`
+  - 新增 `src/lib/backends/memory-hooks.ts`
+  - `src/lib/backends/index.ts` 补充统一导出
+2. **`prompt-executor.ts` 复用统一 hooks**
+  - 接入 `applyBeforeRunMemoryHooks()`
+  - 改用 `createRunSessionHooks()` 统一 started/live_state/failed/cancelled 的默认写回
+  - 保留 Prompt finalization 的专属收口
+3. **`group-runtime.ts` 的 `legacy-single` 正式接入 AgentBackend**
+  - `legacy-single` 不再直接调用 `createAndDispatchChild() + startWatching()`
+  - 改为 `getAgentBackend() -> start() -> registerAgentSession() -> consumeAgentSession()`
+  - template run 创建时补齐 `executorKind: 'template'` 与 `executionTarget`
+  - `cancelRun()` 优先走 session-registry
+  - `nudge` 在命中活跃 session 时优先走 `session.append()`
+4. **`builtin-backends.ts` 恢复并强化 Antigravity watcher parity**
+  - `append/cancel` 改为按 owner connection 路由，不再退回“首个 server”
+  - 恢复 `autoApprove` 逻辑（基于 `metadata.autoApprove`）
+  - 恢复 artifact 文件轮询兜底完成
+  - 恢复 watch stream 断线后的 owner map 刷新与重连
+  - Codex backend 不再错误暴露 session append 能力
+5. **测试补齐并更新**
+  - `src/lib/agents/group-runtime.test.ts` 重写为 session 化 characterization tests
+  - `src/lib/backends/builtin-backends.test.ts` 扩展到 9 条，覆盖 owner 路由、autoApprove、文件轮询兜底、断线重连
+  - 新增 `src/lib/backends/memory-hooks.test.ts`
+  - `src/lib/agents/prompt-executor.test.ts` 同步清理全局 MemoryHooks 注册表
+
+### 当前效果
+1. PromptExecutor 与 template `legacy-single` 已统一进入同一条 session runtime 主链。
+2. 单会话 run 的 started/live_state/terminal 写回已经有可复用的默认 hooks。
+3. Antigravity 单会话路径保留了旧 watcher 的关键运行语义，没有因为抽象迁移而行为缩水。
+4. Codex 的 session 能力边界被重新锁清：可本地取消，但不暴露 session append。
+
+### 验证证据
+1. **builtin-backends parity 专项测试通过**
+  - 执行：`npm test -- src/lib/backends/builtin-backends.test.ts`
+  - 结果：`1` 个测试文件通过，`9` 个测试全部通过，`0` 失败。
+2. **核心迁移测试通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：`7` 个测试文件通过，`30` 个测试全部通过，`0` 失败。
+3. **扩展护栏测试通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：`9` 个测试文件通过，`36` 个测试全部通过，`0` 失败。
+4. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成。
+5. **独立代码审查通过**
+  - `Code-Review-subagent` 最终结论：`APPROVED`
+  - 结论：本轮 5 条验收标准全部通过，无阻塞问题。
+
+### 当前剩余的非阻塞项
+1. Codex session handle 仍是合成值，若后续要开放真实多轮 reply，需要再与真实 thread handle 对齐。
+2. MemoryHooks 目前已具备生命周期骨架，但尚未把 memoryContext 真正注入到底层执行提示中。
+
+## 任务：完成 multi-role AgentBackend 迁移与 shared fallback 护栏收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+继续把 template runtime 中剩余的 multi-role 执行路径迁到统一的 `AgentBackend -> AgentSession -> session-consumer` 主链。本轮完成了 `delivery-single-pass` 与 `review-loop` isolated 路径迁移，同时明确保留 shared conversation 的旧 gRPC fallback，并补齐 runtime 级 characterization tests 来锁住 shared fallback、delivery/review 的非完成态传播，以及 codex nudge 边界。
+
+### 本次完成的关键改动
+1. **`group-runtime.ts` 新增统一的角色级 session 执行 helper**
+  - 新增 `executeRoleViaAgentSession()`
+  - 新增 `RoleSessionExecutionOptions` / `RoleSessionExecutionResult`
+  - 新增 `updateRoleProgressByConversation()` 与角色级结果归一化逻辑
+2. **`delivery-single-pass` 正式迁到 AgentBackend 主链**
+  - `executeDeliverySinglePass()` 不再直接 `createAndDispatchChild() + watchUntilComplete()`
+  - 改为通过角色级 session helper 执行单角色 delivery
+  - 保留 supervisor 启动、artifact/finalization、pipeline auto-trigger 语义
+3. **`review-loop` isolated 路径正式迁到 AgentBackend 主链**
+  - isolated author / reviewer 角色改走 `executeRoleViaAgentSession()`
+  - 保留 round/role progress、decision extraction、policy override、revise loop 语义
+  - shared conversation 复用作者对话的分支显式保留旧 `grpc.sendMessage + watchUntilComplete()` fallback，不强行混进 session 主链
+4. **multi-role 非完成态传播收口**
+  - `terminalKind !== completed` 时显式走 `propagateTermination()`
+  - `completed` 但 `result.status !== completed` 时也显式终止，不再误继续提取 decision 或 finalize success
+5. **测试补齐并加固**
+  - 新增 `src/lib/agents/group-runtime.multi-role.test.ts`
+  - 覆盖 delivery happy path
+  - 覆盖 review-loop isolated 的 revise -> approved 双轮路径
+  - 覆盖 shared conversation 旧 fallback 的 runtime 路径
+  - 覆盖 delivery failed / blocked 终态传播
+  - 覆盖 review-loop failed / blocked 终态传播
+  - 覆盖 codex session 不支持 nudge append 的边界
+
+### 当前效果
+1. Prompt、legacy-single、delivery-single-pass、review-loop isolated 四条执行主链已经统一进入 AgentBackend/session 模型。
+2. shared conversation 仍保留为显式旧 fallback，而不是被新抽象误吞掉。
+3. multi-role runtime 在 failed / blocked 等非完成终态下已经会及时停止链路并传播终态，不会继续错误 finalize。
+4. multi-role 迁移后的关键行为现在有 runtime 级测试证据，而不只是静态代码判断。
+
+### 验证证据
+1. **multi-role 专项测试通过**
+  - 执行：`npm test -- src/lib/agents/group-runtime.multi-role.test.ts`
+  - 结果：`1` 个测试文件通过，`8` 个测试全部通过，`0` 失败。
+2. **完整迁移测试集通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：`10` 个测试文件通过，`45` 个测试全部通过，`0` 失败。
+3. **生产构建通过**
+  - 执行：`npm run build`
+  - 结果：Next.js 生产构建完成。
+4. **独立代码审查通过**
+  - `Code-Review-subagent` 最终结论：`APPROVED`
+  - 结论：delivery-single-pass、review-loop isolated、shared fallback、non-completed terminal propagation 均已满足验收标准，无阻塞问题。
+
+### 当前剩余的非阻塞项
+1. multi-role runtime 目前显式锁住了 failed / blocked 终态；cancelled / timeout 仍主要依赖共享传播分支，后续可继续补两条 runtime 级 characterization tests。
+2. multi-role 路径还没有像 prompt / legacy-single 一样完全复用 `run-session-hooks.ts` 的 afterRun MemoryHooks 桥，后续若要让 MemoryHooks 真正统一生效，需要继续收口这一层。
+
+## 任务：整理 AgentBackend 事件架构剩余缺口清单
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+围绕“整个运行时换成新的 event 架构后，还剩哪些没有完成”这个问题，对当前 Prompt、legacy-single、multi-role、shared conversation、intervention、MemoryHooks 和 session 基础设施做了一次结构化收口，并把结果写成仓库内本地文档，避免后续继续用口头状态判断“到底是不是已经全部迁完”。
+
+### 产出
+1. 新增文档：`docs/design/agent-backend-event-architecture-gap-checklist.md`
+
+### 关键结论
+1. **主 dispatch path 已基本迁完**：Prompt、legacy-single、delivery-single-pass、review-loop isolated 都已经进入 AgentBackend / AgentSession / session-consumer 主链。
+2. **真正未完成的是边缘路径和生命周期收口**：shared conversation 仍是旧 fallback；nudge / restart_role / evaluate 仍有旧 transport；multi-role 还未完全复用 run-session-hooks；MemoryHooks 仍只是骨架。
+3. **下一步最稳的顺序不是继续扩主链，而是先收 intervention 和 hooks**：先迁 nudge / restart_role / evaluate，再统一 multi-role hooks，再决定 shared conversation 是否继续 session 化。
+
+### 说明
+1. 本次为结构化本地文档沉淀，没有新增运行时代码。
+2. 文档中已经把“已完成主链”“明确未迁移路径”“半接通能力”“测试矩阵缺口”“推荐迁移顺序”五部分分开，便于后续直接按阶段推进。
+
+## 任务：澄清事件架构迁移收尾与 transport 下沉的任务边界
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+针对“把剩余旧路径也迁完”和“把 grpc 等 transport 从 group-runtime 抽到底层”这两件事是否属于同一任务，继续对事件架构缺口清单做了一次边界澄清，避免后续把功能迁移收尾和结构净化混成一个阶段，导致优先级和验收口径反复摇摆。
+
+### 关键结论
+1. **把剩余旧路径迁完** 属于当前 AgentBackend / AgentSession 迁移任务的收尾，不应再被视为“可选尾巴”。
+2. **把 grpc / owner / trajectory 等 transport 细节从 group-runtime 下沉到底层** 是相关但独立的第二任务，更准确的目标层应是 backend / transport adapter，而不是笼统说成 Provider。
+3. **正确顺序是先功能收尾，再结构净化**：先让 shared fallback、nudge fallback、restart_role、evaluate 不再作为旧入口残留；再继续把 transport 细节从 orchestration 层抽走。
+
+### 产出
+1. 更新文档：`docs/design/agent-backend-event-architecture-gap-checklist.md`
+
+### 说明
+1. 本次为任务边界澄清与本地文档更新，没有新增运行时代码。
+2. 文档中已新增“任务边界澄清”章节，明确区分 `任务 A：现有功能全部迁完` 与 `任务 B：transport 下沉与 group-runtime 净化`。
+
+## 任务：完成剩余功能级旧入口迁移并收掉 cancel fallback 残留
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+继续完成此前定义的 `任务 A：现有功能全部迁完，不留旧入口`。本轮把 shared conversation、nudge、restart-role、evaluate 和 unattached cancel 的最后功能级残留全部换到统一的 AgentBackend / AgentSession 主链，并清掉 `group-runtime.ts` 中最后一条直接 `grpc.cancelCascade()` 执行入口。
+
+### 本次完成的关键改动
+1. **shared conversation 不再保留旧执行入口**
+  - 复用作者对话改为 `executeAttachedRoleViaAgentSession()`
+  - 底层通过 attach 既有 handle 的 AgentSession + append 完成
+2. **`interveneRun('nudge')` 完成彻底 session 化**
+  - 除活跃 session 直接 append 外，旧的 grpc nudge fallback 已改为 attached session 路径
+3. **`interveneRun('restart_role')` 完成彻底 session 化**
+  - 不再重新走 `createAndDispatchChild` / watcher 旧链路
+  - 改为正常新建 AgentSession，并在 session ready 后清理旧 handle
+4. **`interveneRun('evaluate')` 完成执行链路 session 化**
+  - evaluate 不再手工 `startCascade + sendMessage + polling completion`
+  - 改为一次性 supervisor AgentSession
+  - 当前只保留 recent steps 的读取和 annotation 写回，作为 Task B 的结构残留
+5. **`cancelRun()` 收掉最后一个功能级 transport fallback**
+  - 在无活跃 session 但已有 handle 的场景下，改为 backend attach + session.cancel
+  - `group-runtime.ts` 不再直接调用 `grpc.cancelCascade()` 作为功能入口
+6. **补 attach 合同与测试护栏**
+  - `CodexAgentBackend` 增加轻量 attach 支持，满足 cancel 场景
+  - `group-runtime.test.ts` 扩展 intervention / cancel characterization tests
+  - `builtin-backends.test.ts` 扩展 attach 测试到 Antigravity + Codex
+
+### 当前效果
+1. `group-runtime.ts` 中已经没有 `createAndDispatchChild`、`watchUntilComplete`、`grpc.startCascade`、`grpc.sendMessage`、`grpc.cancelCascade` 这些旧执行入口。
+2. 当前“现有功能是否还在走旧入口”这个问题，答案已经是否。
+3. 剩余未做的是 `任务 B：transport 下沉与 group-runtime 净化`，不再是功能迁移未完成。
+
+### 验证证据
+1. **关键 attach / cancel 护栏测试通过**
+  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/backends/builtin-backends.test.ts`
+  - 结果：`2` 个测试文件通过，`20` 个测试全部通过，`0` 失败。
+2. **完整迁移测试集通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：`10` 个测试文件通过，`50` 个测试全部通过，`0` 失败。
+3. **生产构建通过**
+  - 执行：`rm -rf .next && npm run build`
+  - 结果：Next.js 生产构建完成。
+
+### 当前剩余的非阻塞项
+1. `group-runtime.ts` 仍直接读取 `grpc.getTrajectorySteps()` 和 `grpc.updateConversationAnnotations()`，这属于 Task B 的 transport 下沉，不再属于功能级旧入口残留。
+
+## 任务：统一 multi-role afterRun MemoryHooks 生命周期
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+此前 prompt / legacy-single 路径通过 `createRunSessionHooks` 自动在 terminal event 后调用 `applyAfterRunMemoryHooks()`，但 multi-role 的 `consumeTrackedRoleAgentSession()` 是手写 sessionHooks，不调用 afterRun memory hooks。这导致 MemoryHooks 的 `afterRun` 生命周期在 multi-role 路径上断开，后续若要让记忆系统真实生效，multi-role 的执行结果不会进 memory 链。
+
+### 本次完成的关键改动
+1. **`consumeTrackedRoleAgentSession` 补齐 afterRun 调用**
+  - 在 completed / failed / cancelled 三个 terminal event 分支中，统一调用 `applyAfterRunMemoryHooks()`
+  - 通过 `buildRoleBackendConfig` 构建与 beforeRun 对称的 backendConfig，传入 afterRun hooks
+  - 新增 `applyAfterRunMemoryHooks` import
+2. **测试护栏**
+  - 在 `group-runtime.multi-role.test.ts` 中新增 `calls afterRun memory hooks for each completed role session in review-loop` 用例
+  - 注册一个 spy memory hook，验证 review-loop 中 author + reviewer 两个角色各触发一次 afterRun
+  - 9/9 multi-role 测试通过
+
+### 验证证据
+1. **multi-role 专项测试通过**
+  - 执行：`npm test -- src/lib/agents/group-runtime.multi-role.test.ts`
+  - 结果：9 个测试全部通过，0 失败
+2. **完整迁移测试集通过**
+  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
+  - 结果：10 个测试文件通过，51 个测试全部通过，0 失败
+
+### 当前效果
+- prompt / legacy-single / multi-role 三条路径的 afterRun MemoryHooks 生命周期已经统一
+- MemoryHooks 本身仍是骨架（memoryContext 还没有真正进入执行提示），但生命周期管道已经打通
+
 ## 任务：分析 CEO 原生创建 cron 能力的现状与差距
 
 **状态**: ✅ 已完成
@@ -1324,3 +2306,20 @@
 |:-----|:-----|
 | `src/lib/agents/llm-oneshot.ts` | 引入 `resolveProvider` 和 `getExecutor`。增加 `getCEOWorkspacePath` 管理独立空间，支持并根据 Provider 的能力走分发逻辑 |
 | `task.md` | 创建与标记 CEO 独立工作区的执行计划清单 |
+
+---
+
+## 任务：简短评审前端仪表盘交互体验 (Run: 246eb35a)
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-09
+
+### 概要
+作为 Review Author 角色，完成了对 Antigravity CEO 仪表盘的简短启发式评估。识别了包括纵向堆叠疲劳、原生对话框干扰以及轮询数据跳变在内的 3 个核心可用性问题。产出了 Bento 布局、自定义 Dialog 和 Framer Motion 平滑刷新等改进建议。
+
+### 本次完成的关键改动
+1. **源码走访**: 深入分析了 `src/components/ceo-dashboard.tsx` 的布局逻辑与 `window.prompt` 交互。
+2. **生成评审报告**: 在 `/demolong/runs/246eb35a-d07e-4f93-b6a4-e1234c4006fe/specs/` 下输出了 `audit-report.md`, `interaction-proposals.md`, `priority-matrix.md`。
+3. **交付结果**: 提交了符合自动化流水线要求的 `result.json`。
+
+---

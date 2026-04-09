@@ -12,14 +12,10 @@
 import {
   discoverLanguageServers,
   getApiKey,
-  refreshOwnerMap,
-  preRegisterOwner,
   getOwnerConnection,
   grpc,
 } from '../bridge/gateway';
-import { extractAndPersistMemory } from './department-memory';
 import { createRun, updateRun, getRun } from './run-registry';
-import { watchConversation, type ConversationWatchState } from './watch-conversation';
 import { checkTokenQuota, shouldAutoRequestQuota } from '../approval/token-quota';
 import { submitApprovalRequest } from '../approval/handler';
 import type {
@@ -32,7 +28,6 @@ import type {
 } from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
 import type { DevelopmentWorkPackage, DevelopmentDeliveryPacket, WriteScopeAudit } from './development-template-types';
-import type { DepartmentConfig } from '../types';
 import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { createLogger } from '../logger';
 import * as fs from 'fs';
@@ -51,11 +46,7 @@ import {
 } from './prompt-builder';
 import { startSupervisorLoop, summarizeStepForSupervisor, SUPERVISOR_MODEL } from './supervisor';
 import {
-  readDeliveryPacket,
-  buildWriteScopeAudit,
-  scanArtifactManifest,
   copyUpstreamArtifacts,
-  buildResultEnvelope,
   writeEnvelopeFile,
 } from './run-artifacts';
 import {
@@ -75,10 +66,30 @@ import {
 } from './runtime-helpers';
 import { compactCodingResult } from './result-parser';
 import { finalizeAdvisoryRun, finalizeDeliveryRun } from './finalization';
-import { checkWriteScopeConflicts } from "./scope-governor";
-import { getExecutor, resolveProvider } from '../providers';
+import { checkWriteScopeConflicts } from './scope-governor';
+import { resolveProvider, type ProviderId } from '../providers';
 import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline/pipeline-registry';
 import { getStageDefinition } from './stage-resolver';
+import {
+  applyAfterRunMemoryHooks,
+  applyBeforeRunMemoryHooks,
+  consumeAgentSession,
+  createRunSessionHooks,
+  ensureBuiltInAgentBackends,
+  getAgentBackend,
+  getAgentSession,
+  markAgentSessionCancelRequested,
+  registerAgentSession,
+  removeAgentSession,
+} from '../backends';
+import type {
+  AgentSession,
+  BackendRunConfig,
+  BackendSessionConsumerHooks,
+  CancelledAgentEvent,
+  CompletedAgentEvent,
+  FailedAgentEvent,
+} from '../backends';
 import {
   addRunToProject,
   getProject,
@@ -107,6 +118,456 @@ interface ActiveRun {
 }
 
 const activeRuns = new Map<string, ActiveRun>();
+
+interface RoleSessionExecutionOptions {
+  runId: string;
+  provider: ProviderId;
+  group: GroupDefinition;
+  role: GroupRoleDefinition;
+  round: number;
+  stageId: string;
+  workspacePath: string;
+  prompt: string;
+  model: string;
+  artifactDir: string;
+  timeoutMs: number;
+  parentConversationId?: string;
+  projectId?: string;
+  onSessionReady?(session: AgentSession): void | Promise<void>;
+}
+
+interface AttachedRoleSessionExecutionOptions extends RoleSessionExecutionOptions {
+  existingHandle: string;
+  promptSnapshot?: string;
+  registerRoleProgress?: boolean;
+}
+
+interface ConsumedRoleSessionExecutionOptions extends RoleSessionExecutionOptions {
+  promptSnapshot?: string;
+  registerRoleProgress?: boolean;
+  initialSessionAction?(session: AgentSession): Promise<void>;
+}
+
+interface RoleSessionExecutionResult {
+  handle: string;
+  providerId: ProviderId;
+  steps: any[];
+  result: TaskResult;
+  terminalKind: 'completed' | 'failed' | 'cancelled' | 'timeout';
+  liveState?: RunLiveState;
+}
+
+function findRoleProgressIndexByConversation(roles: RoleProgress[], conversationId: string): number {
+  for (let index = roles.length - 1; index >= 0; index--) {
+    if (roles[index]?.childConversationId === conversationId) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function updateRoleProgressByConversation(
+  runId: string,
+  conversationId: string,
+  updates: Partial<RoleProgress>,
+): void {
+  const run = getRun(runId);
+  const roles = [...(run?.roles || [])];
+  const roleIndex = findRoleProgressIndexByConversation(roles, conversationId);
+  if (roleIndex < 0) {
+    return;
+  }
+
+  roles[roleIndex] = {
+    ...roles[roleIndex],
+    ...updates,
+  };
+  updateRun(runId, { roles });
+}
+
+function hasTerminalErrorSteps(steps: any[]): boolean {
+  return steps.some((step) => {
+    const stepType = step?.type;
+    return typeof stepType === 'string'
+      && (stepType.includes('ERROR') || stepType.includes('CANCELED'));
+  });
+}
+
+function extractErrorDetailsFromSteps(steps: any[]): string | undefined {
+  const errorMessages: string[] = [];
+  for (let i = steps.length - 1; i >= 0 && errorMessages.length < 3; i--) {
+    const step = steps[i];
+    if (!step) continue;
+    const stepType = step.type as string | undefined;
+    if (!stepType) continue;
+    if (stepType.includes('ERROR_MESSAGE') || stepType.includes('ERROR')) {
+      const text = step.errorMessage?.message
+        || step.content?.text
+        || step.plannerResponse?.modifiedResponse
+        || step.plannerResponse?.response;
+      if (text && typeof text === 'string') {
+        errorMessages.push(text.slice(0, 500));
+      } else if (step.status && typeof step.status === 'string' && step.status.includes('ERROR')) {
+        errorMessages.push(`Tool error at step ${i}: ${stepType} (${step.status})`);
+      }
+    }
+  }
+  return errorMessages.length > 0 ? errorMessages.join(' | ') : undefined;
+}
+
+function normalizeRoleSessionResult(
+  providerId: ProviderId,
+  event: CompletedAgentEvent,
+  artifactAbsDir: string,
+  role: GroupRoleDefinition,
+): TaskResult {
+  if (providerId !== 'antigravity') {
+    return event.result;
+  }
+
+  const steps = (event.rawSteps || []) as any[];
+  const result = compactCodingResult(steps, artifactAbsDir, role);
+  if (hasTerminalErrorSteps(steps) && result.status !== 'completed') {
+    result.status = 'failed';
+    const errorDetail = extractErrorDetailsFromSteps(steps);
+    if (errorDetail) {
+      if (!result.summary || result.summary === 'Task completed (no summary extracted)') {
+        result.summary = errorDetail;
+      }
+      if (result.blockers.length === 0) {
+        result.blockers.push(errorDetail);
+      }
+    } else if (!result.summary || result.summary === 'Task completed (no summary extracted)') {
+      result.summary = 'Child conversation ended with tool errors';
+    }
+  }
+
+  return result;
+}
+
+async function buildRoleBackendConfig(options: RoleSessionExecutionOptions): Promise<BackendRunConfig> {
+  return applyBeforeRunMemoryHooks(options.provider, {
+    runId: options.runId,
+    workspacePath: options.workspacePath,
+    prompt: options.prompt,
+    model: options.model,
+    artifactDir: options.artifactDir,
+    parentConversationId: options.parentConversationId,
+    executionTarget: {
+      kind: 'template',
+      templateId: options.group.templateId,
+      stageId: options.stageId,
+    },
+    metadata: {
+      projectId: options.projectId,
+      stageId: options.stageId,
+      roleId: options.role.id,
+      executorKind: 'template',
+      autoApprove: options.role.autoApprove,
+    },
+    timeoutMs: options.timeoutMs,
+  });
+}
+
+async function consumeTrackedRoleAgentSession(
+  options: ConsumedRoleSessionExecutionOptions,
+  session: AgentSession,
+): Promise<RoleSessionExecutionResult> {
+  registerAgentSession(session);
+
+  if (options.registerRoleProgress !== false) {
+    const promptRecordedAt = new Date().toISOString();
+    const currentRun = getRun(options.runId);
+    const roles = [...(currentRun?.roles || [])];
+    roles.push({
+      roleId: options.role.id,
+      round: options.round,
+      childConversationId: session.handle,
+      status: 'running',
+      startedAt: promptRecordedAt,
+      promptSnapshot: options.promptSnapshot || options.prompt,
+      promptRecordedAt,
+    });
+    updateRun(options.runId, {
+      roles,
+      activeRoleId: options.role.id,
+      ...(options.provider === 'antigravity'
+        ? {
+            childConversationId: session.handle,
+            activeConversationId: session.handle,
+          }
+        : {}),
+    });
+  }
+
+  await options.onSessionReady?.(session);
+
+  if (options.initialSessionAction) {
+    try {
+      await options.initialSessionAction(session);
+    } catch (error) {
+      removeAgentSession(options.runId);
+      throw error;
+    }
+  }
+
+  let completedEvent: CompletedAgentEvent | null = null;
+  let failedEvent: FailedAgentEvent | null = null;
+  let cancelledEvent: CancelledAgentEvent | null = null;
+  let timedOut = false;
+
+  const sessionHooks: BackendSessionConsumerHooks = {
+    onStarted: (event) => {
+      const run = getRun(options.runId);
+      if (!run || TERMINAL_STATUSES.has(run.status)) {
+        return;
+      }
+
+      updateRun(options.runId, {
+        status: 'running',
+        activeRoleId: options.role.id,
+        ...(options.provider === 'antigravity'
+          ? {
+              childConversationId: event.handle,
+              activeConversationId: event.handle,
+            }
+          : {}),
+      });
+
+      if (options.registerRoleProgress !== false) {
+        updateRoleProgressByConversation(options.runId, session.handle, {
+          startedAt: event.startedAt,
+          status: 'running',
+        });
+      }
+    },
+    onLiveState: (event) => {
+      const run = getRun(options.runId);
+      if (!run || TERMINAL_STATUSES.has(run.status)) {
+        return;
+      }
+      updateRun(options.runId, { liveState: event.liveState });
+    },
+    onCompleted: (event) => {
+      completedEvent = event;
+    },
+    onFailed: (event) => {
+      failedEvent = event;
+      if (event.liveState) {
+        const run = getRun(options.runId);
+        if (run && !TERMINAL_STATUSES.has(run.status)) {
+          updateRun(options.runId, { liveState: event.liveState });
+        }
+      }
+    },
+    onCancelled: (event) => {
+      cancelledEvent = event;
+    },
+  };
+
+  const timeoutTimer = options.timeoutMs > 0
+    ? setTimeout(() => {
+        const run = getRun(options.runId);
+        if (!run || TERMINAL_STATUSES.has(run.status)) {
+          return;
+        }
+        timedOut = true;
+        markAgentSessionCancelRequested(options.runId);
+        void session.cancel('timeout');
+      }, options.timeoutMs)
+    : undefined;
+
+  await consumeAgentSession(options.runId, session, sessionHooks);
+
+  if (timeoutTimer) {
+    clearTimeout(timeoutTimer);
+  }
+
+  if (timedOut) {
+    return {
+      handle: session.handle,
+      providerId: session.providerId,
+      steps: [],
+      result: {
+        status: 'timeout',
+        summary: 'Run exceeded timeout limit',
+        changedFiles: [],
+        blockers: ['Run exceeded timeout limit'],
+        needsReview: [],
+      },
+      terminalKind: 'timeout',
+    };
+  }
+
+  // Build backendConfig for afterRun memory hooks (uses the same config as beforeRun)
+  const backendConfig = await buildRoleBackendConfig(options);
+
+  if (completedEvent) {
+    const terminalEvent: CompletedAgentEvent = completedEvent;
+    await applyAfterRunMemoryHooks(session.providerId, backendConfig, terminalEvent);
+    return {
+      handle: session.handle,
+      providerId: session.providerId,
+      steps: (terminalEvent.rawSteps || []) as any[],
+      result: normalizeRoleSessionResult(
+        session.providerId,
+        terminalEvent,
+        path.join(options.workspacePath, options.artifactDir),
+        options.role,
+      ),
+      terminalKind: 'completed',
+    };
+  }
+
+  if (failedEvent) {
+    const terminalEvent: FailedAgentEvent = failedEvent;
+    await applyAfterRunMemoryHooks(session.providerId, backendConfig, terminalEvent);
+    return {
+      handle: session.handle,
+      providerId: session.providerId,
+      steps: (terminalEvent.rawSteps || []) as any[],
+      result: {
+        status: 'failed',
+        summary: terminalEvent.error.message,
+        changedFiles: [],
+        blockers: [terminalEvent.error.message],
+        needsReview: [],
+      },
+      terminalKind: 'failed',
+      liveState: terminalEvent.liveState,
+    };
+  }
+
+  if (cancelledEvent) {
+    const terminalEvent: CancelledAgentEvent = cancelledEvent;
+    await applyAfterRunMemoryHooks(session.providerId, backendConfig, terminalEvent);
+    return {
+      handle: session.handle,
+      providerId: session.providerId,
+      steps: [],
+      result: {
+        status: 'cancelled',
+        summary: terminalEvent.reason || 'Run cancelled',
+        changedFiles: [],
+        blockers: terminalEvent.reason ? [terminalEvent.reason] : [],
+        needsReview: [],
+      },
+      terminalKind: 'cancelled',
+    };
+  }
+
+  throw new Error('Agent session ended without a terminal event');
+}
+
+async function executeRoleViaAgentSession(options: RoleSessionExecutionOptions): Promise<RoleSessionExecutionResult> {
+  ensureBuiltInAgentBackends();
+
+  const backend = getAgentBackend(options.provider);
+  const backendConfig = await buildRoleBackendConfig(options);
+  const session = await backend.start(backendConfig);
+  return consumeTrackedRoleAgentSession({
+    ...options,
+    promptSnapshot: options.prompt,
+    registerRoleProgress: true,
+  }, session);
+}
+
+async function executeAttachedRoleViaAgentSession(
+  options: AttachedRoleSessionExecutionOptions,
+): Promise<RoleSessionExecutionResult> {
+  ensureBuiltInAgentBackends();
+
+  const backend = getAgentBackend(options.provider);
+  if (!backend.attach) {
+    throw new Error(`Provider '${options.provider}' does not support attaching to an existing session`);
+  }
+
+  const backendConfig = await buildRoleBackendConfig(options);
+  const session = await backend.attach(backendConfig, options.existingHandle);
+  return consumeTrackedRoleAgentSession({
+    ...options,
+    promptSnapshot: options.promptSnapshot || options.prompt,
+    registerRoleProgress: options.registerRoleProgress ?? true,
+    initialSessionAction: async (activeSession) => {
+      await activeSession.append({
+        prompt: options.prompt,
+        model: options.model,
+        workspacePath: options.workspacePath,
+      });
+    },
+  }, session);
+}
+
+function extractLatestPlannerResponseText(steps: any[], minIndex = 0): string {
+  for (let index = steps.length - 1; index >= minIndex; index--) {
+    const step = steps[index];
+    if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
+      continue;
+    }
+
+    const planner = step.plannerResponse || step.response || {};
+    const text = planner.modifiedResponse || planner.response || '';
+    if (text) {
+      return text;
+    }
+  }
+
+  return '';
+}
+
+function registerSessionTimeout(
+  runId: string,
+  timeoutMs: number | undefined,
+  onTimeout: () => void,
+): void {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return;
+  }
+
+  const active = activeRuns.get(runId);
+  if (active?.timeoutTimer) {
+    clearTimeout(active.timeoutTimer);
+  }
+
+  const timeoutTimer = setTimeout(onTimeout, timeoutMs);
+  activeRuns.set(runId, {
+    abortWatch: active?.abortWatch || (() => undefined),
+    timeoutTimer,
+  });
+}
+
+async function attachExistingRunSession(
+  runId: string,
+  run: AgentRunState,
+  handle: string,
+): Promise<AgentSession | null> {
+  const workspacePath = run.workspace.replace(/^file:\/\//, '');
+  const provider = resolveProvider('execution', workspacePath).provider;
+
+  ensureBuiltInAgentBackends();
+  const backend = getAgentBackend(provider);
+  if (!backend.attach) {
+    return null;
+  }
+
+  const backendConfig = await applyBeforeRunMemoryHooks(provider, {
+    runId,
+    workspacePath,
+    prompt: run.prompt || run.taskEnvelope?.goal || 'Continue existing run',
+    model: run.model,
+    artifactDir: run.artifactDir,
+    parentConversationId: run.parentConversationId,
+    metadata: {
+      projectId: run.projectId,
+      stageId: run.pipelineStageId || run.stageId,
+      roleId: run.activeRoleId || run.roles?.[run.roles.length - 1]?.roleId,
+      executorKind: run.executorKind,
+    },
+  });
+
+  return backend.attach(backendConfig, handle);
+}
 
 // isAuthoritativeConversation, cancelCascadeBestEffort — moved to runtime-helpers.ts
 
@@ -436,6 +897,12 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     pipelineId: input.pipelineId,
     pipelineStageId: input.pipelineStageId,
     pipelineStageIndex: input.pipelineStageIndex,
+    executorKind: 'template',
+    executionTarget: {
+      kind: 'template',
+      templateId: group.templateId,
+      stageId: resolvedStageId,
+    },
   });
 
   const runId = run.runId;
@@ -454,20 +921,95 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
       if (!fs.existsSync(artifactAbsDir)) {
         fs.mkdirSync(artifactAbsDir, { recursive: true });
       }
-      updateRun(runId, { artifactDir });
+      updateRun(runId, {
+        artifactDir,
+        status: 'starting',
+        activeRoleId: group.roles[0].id,
+      });
 
-      // ── Single-role path (V1 backward-compat) ──────────────────────────
       const workflowContent = AssetLoader.resolveWorkflowContent(group.roles[0].workflow);
-      const cascadeId = await createAndDispatchChild(
-        server, apiKey, wsUri, runId, resolvedStageId, group.roles[0].id,
-        `${workflowContent}\n\n${goal}`,
-        finalModel, input.parentConversationId,
-      );
+      const composedPrompt = `${workflowContent}\n\n${goal}`;
+      ensureBuiltInAgentBackends();
 
-      updateRun(runId, { status: 'running' });
-      startWatching(runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, group.roles[0]);
+      const backend = getAgentBackend(provider);
+      const backendConfig = await applyBeforeRunMemoryHooks(provider, {
+        runId,
+        workspacePath,
+        prompt: composedPrompt,
+        model: finalModel,
+        artifactDir,
+        parentConversationId: input.parentConversationId,
+        executionTarget: {
+          kind: 'template',
+          templateId: group.templateId,
+          stageId: resolvedStageId,
+        },
+        metadata: {
+          projectId: input.projectId,
+          stageId: resolvedStageId,
+          roleId: group.roles[0].id,
+          executorKind: 'template',
+          autoApprove: group.roles[0].autoApprove,
+        },
+        timeoutMs: group.roles[0].timeoutMs,
+      });
+      const session = await backend.start(backendConfig);
 
-      log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Single-role run dispatched');
+      registerAgentSession(session);
+      registerSessionTimeout(runId, group.roles[0].timeoutMs, () => {
+        const currentRun = getRun(runId);
+        if (!currentRun || TERMINAL_STATUSES.has(currentRun.status)) {
+          cleanup(runId);
+          return;
+        }
+
+        updateRun(runId, {
+          status: 'timeout',
+          lastError: 'Run exceeded timeout limit',
+        });
+
+        const activeSession = getAgentSession(runId);
+        if (activeSession) {
+          markAgentSessionCancelRequested(runId);
+          void activeSession.session.cancel('timeout').finally(() => {
+            cleanup(runId);
+          });
+          return;
+        }
+
+        cleanup(runId);
+      });
+
+      void consumeAgentSession(runId, session, createRunSessionHooks({
+        runId,
+        activeRoleId: group.roles[0].id,
+        backendConfig,
+        bindConversationHandleForProviders: ['antigravity'],
+        onCompleted: (event) => {
+          finalizeLegacySingleRun(runId, event.result);
+          cleanup(runId);
+        },
+        onFailed: (event) => {
+          const currentRun = getRun(runId);
+          if (currentRun && !TERMINAL_STATUSES.has(currentRun.status)) {
+            updateRun(runId, {
+              status: 'failed',
+              lastError: event.error.message,
+              ...(event.liveState ? { liveState: event.liveState } : {}),
+            });
+          }
+          cleanup(runId);
+        },
+        onCancelled: () => {
+          const currentRun = getRun(runId);
+          if (currentRun && !TERMINAL_STATUSES.has(currentRun.status)) {
+            updateRun(runId, { status: 'cancelled' });
+          }
+          cleanup(runId);
+        },
+      }));
+
+      log.info({ runId: shortRunId, provider }, 'Single-role run dispatched through AgentBackend');
     } else {
       // ── Envelope path: review-loop or delivery-single-pass (V1.5+/V2.5) ──
       log.info({ runId: shortRunId, mode: group.executionMode, roleCount: group.roles.length }, 'Starting envelope run');
@@ -483,250 +1025,6 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     updateRun(runId, { status: 'failed', lastError: err.message });
     throw err;
   }
-}
-
-// ---------------------------------------------------------------------------
-// createAndDispatchChild — reusable child conversation creation
-// ---------------------------------------------------------------------------
-
-async function createAndDispatchChild(
-  server: { port: number; csrf: string },
-  apiKey: string,
-  wsUri: string,
-  runId: string,
-  stageId: string,
-  roleId: string,
-  prompt: string,
-  model: string,
-  parentConversationId?: string,
-): Promise<string> {
-  const shortRunId = runId.slice(0, 8);
-
-  // PITFALL #12: Must addTrackedWorkspace before startCascade so the language server
-  // knows about this workspace's filesystem. Without this, tool calls like
-  // LIST_DIRECTORY get CANCELED because the server can't access the files.
-  const workspacePath = wsUri.replace(/^file:\/\//, '');
-  log.info({ runId: shortRunId, roleId, port: server.port }, 'Starting child conversation');
-  try {
-    await grpc.addTrackedWorkspace(server.port, server.csrf, workspacePath);
-    log.debug({ runId: shortRunId, roleId, workspacePath: workspacePath.slice(-40) }, 'Workspace tracked');
-  } catch (e: any) {
-    log.warn({ runId: shortRunId, roleId, err: e.message }, 'AddTrackedWorkspace failed (may already be tracked)');
-  }
-
-  const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, wsUri);
-  const cascadeId = startResult?.cascadeId;
-
-  if (!cascadeId) {
-    throw new Error('StartCascade returned no cascadeId');
-  }
-
-  updateRun(runId, {
-    status: 'starting',
-    childConversationId: cascadeId,
-    activeConversationId: cascadeId,
-    activeRoleId: roleId,
-    startedAt: new Date().toISOString(),
-  });
-
-  preRegisterOwner(cascadeId, {
-    port: server.port,
-    csrf: server.csrf,
-    apiKey,
-    stepCount: 0,
-  });
-
-  log.debug({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), roleId }, 'Setting hidden annotations');
-  await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, cascadeId, {
-    'antigravity.task.hidden': 'true',
-    'antigravity.task.parentId': parentConversationId || '',
-    'antigravity.task.stageId': stageId,
-    'antigravity.task.runId': runId,
-    'antigravity.task.roleId': roleId,
-    lastUserViewTime: new Date().toISOString(),
-  });
-
-  log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), roleId, promptLength: prompt.length }, 'Sending workflow prompt');
-  await grpc.sendMessage(server.port, server.csrf, apiKey, cascadeId, prompt, model, false /* Fast mode */, undefined, 'ARTIFACT_REVIEW_MODE_TURBO');
-
-  return cascadeId;
-}
-
-// ---------------------------------------------------------------------------
-// V6: Department Provider Resolution
-// ---------------------------------------------------------------------------
-
-
-// ---------------------------------------------------------------------------
-// startWatching — fire-and-forget watcher for single-role runs
-// ---------------------------------------------------------------------------
-
-function startWatching(
-  runId: string,
-  cascadeId: string,
-  conn: { port: number; csrf: string },
-  apiKey: string,
-  roleConfig: { timeoutMs: number; autoApprove: boolean },
-): void {
-  const shortRunId = runId.slice(0, 8);
-  let lastWasActive = true;
-  let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let filePollTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-    const currentRun = getRun(runId);
-    if (!currentRun || currentRun.status === 'cancelled' || currentRun.status === 'failed') return;
-    const absDir = currentRun.artifactDir ? path.join((currentRun.workspace || '').replace(/^file:\/\//, ''), currentRun.artifactDir) : undefined;
-    if (!absDir) return;
-    try {
-      let isDone = false;
-      try {
-        const dp = JSON.parse(fs.readFileSync(path.join(absDir, 'delivery', 'delivery-packet.json'), 'utf-8'));
-        if (dp?.status === 'completed') isDone = true;
-      } catch { }
-      if (!isDone) {
-        try {
-          const rj = JSON.parse(fs.readFileSync(path.join(absDir, 'result.json'), 'utf-8'));
-          if (rj?.status === 'completed') isDone = true;
-        } catch { }
-      }
-      if (isDone) {
-        log.info({ runId: shortRunId }, 'File-based watcher detected completion via artifact JSON');
-        handleCompletion(runId, []);
-        stopLocalWatch();
-      }
-    } catch { }
-  }, 3000);
-  let stopped = false;
-  let reconnectAttempts = 0;
-  const MAX_RECONNECT_ATTEMPTS = 30; // ~90 seconds of retries
-
-  const stopLocalWatch = () => {
-    if (stopped) return;
-    stopped = true;
-    if (filePollTimer) { clearInterval(filePollTimer); filePollTimer = null; }
-    if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-    abortWatch();
-    const active = activeRuns.get(runId);
-    if (active?.abortWatch === abortWatch) {
-      if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
-      activeRuns.delete(runId);
-    }
-  };
-
-  const abortWatch = watchConversation(
-    conn,
-    cascadeId,
-    async (state: ConversationWatchState) => {
-      // Reset reconnect counter on successful data
-      reconnectAttempts = 0;
-      const currentRun = getRun(runId);
-      if (!isAuthoritativeConversation(currentRun, cascadeId)) {
-        log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Ignoring stale watcher for superseded branch');
-        stopLocalWatch();
-        return;
-      }
-      if (!currentRun || currentRun.status === 'cancelled' || currentRun.status === 'failed') {
-        log.debug({ runId: shortRunId, status: currentRun?.status }, 'Run already terminal, cleaning up watcher');
-        stopLocalWatch();
-        return;
-      }
-
-      if (roleConfig.autoApprove) {
-        await handleAutoApprove(state.steps, cascadeId, conn, apiKey, runId);
-      }
-
-      // V2.5.1: Propagate liveState to run
-      updateRun(runId, {
-        liveState: {
-          cascadeStatus: state.cascadeStatus,
-          stepCount: state.stepCount,
-          lastStepAt: state.lastStepAt,
-          lastStepType: state.lastStepType,
-          staleSince: state.staleSince,
-        },
-      });
-
-      // V2.5.1: Detect error steps as fallback completion signal
-      if (state.hasErrorSteps && lastWasActive) {
-        log.warn({ runId: shortRunId, stepCount: state.steps.length }, 'Child conversation ended with ERROR/CANCELED steps — completing with failure');
-        if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-        idleDebounceTimer = setTimeout(() => {
-          const latestRun = getRun(runId);
-          if (!isAuthoritativeConversation(latestRun, cascadeId)) {
-            log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Ignoring stale completion from superseded branch');
-            stopLocalWatch();
-            return;
-          }
-          handleCompletion(runId, state.steps);
-        }, 2000);
-        lastWasActive = false;
-        return;
-      }
-
-      if (!state.isActive && lastWasActive) {
-        log.info({ runId: shortRunId, cascadeStatus: state.cascadeStatus, stepCount: state.steps.length }, 'Child went idle, starting completion debounce');
-        if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-        idleDebounceTimer = setTimeout(() => {
-          const latestRun = getRun(runId);
-          if (!isAuthoritativeConversation(latestRun, cascadeId)) {
-            log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Ignoring stale completion from superseded branch');
-            stopLocalWatch();
-            return;
-          }
-          handleCompletion(runId, state.steps);
-        }, 2000);
-      } else if (state.isActive) {
-        if (idleDebounceTimer) { clearTimeout(idleDebounceTimer); idleDebounceTimer = null; }
-      }
-
-      lastWasActive = state.isActive;
-    },
-    (err: Error) => {
-      reconnectAttempts++;
-      log.warn({ runId: shortRunId, err: err.message, attempt: reconnectAttempts, maxAttempts: MAX_RECONNECT_ATTEMPTS }, 'Watch stream disconnected');
-
-      // Safety: stop infinite reconnect loop
-      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        log.error({ runId: shortRunId, attempts: reconnectAttempts }, 'Watch max reconnect attempts reached — marking run as failed. Use force-complete to manually advance pipeline.');
-        updateRun(runId, { status: 'failed', lastError: `Watch stream lost after ${reconnectAttempts} reconnect attempts` });
-        stopLocalWatch();
-        return;
-      }
-
-      setTimeout(async () => {
-        const currentRun = getRun(runId);
-        if (!isAuthoritativeConversation(currentRun, cascadeId) || currentRun.status !== 'running') return;
-
-        try {
-          await refreshOwnerMap();
-          const newConn = getOwnerConnection(cascadeId);
-          if (newConn) {
-            log.info({ runId: shortRunId, port: newConn.port, attempt: reconnectAttempts }, 'Watch reconnecting');
-            stopLocalWatch();
-            startWatching(runId, cascadeId, newConn, apiKey, roleConfig);
-          } else {
-            log.error({ runId: shortRunId }, 'Watch reconnect failed: no owner');
-            updateRun(runId, { status: 'failed', lastError: 'Watch stream lost and reconnect failed' });
-            stopLocalWatch();
-          }
-        } catch (e: any) {
-          log.error({ runId: shortRunId, err: e.message }, 'Watch reconnect error');
-          updateRun(runId, { status: 'failed', lastError: `Reconnect error: ${e.message}` });
-          stopLocalWatch();
-        }
-      }, 3000);
-    },
-    apiKey,
-  );
-
-  const timeoutTimer = setTimeout(() => {
-    const currentRun = getRun(runId);
-    if (currentRun && currentRun.status === 'running') {
-      log.warn({ runId: shortRunId, timeoutMs: roleConfig.timeoutMs }, 'Run timed out');
-      cancelRunInternal(runId, cascadeId, conn, apiKey, 'timeout');
-    }
-  }, roleConfig.timeoutMs);
-
-  activeRuns.set(runId, { abortWatch, timeoutTimer });
 }
 
 // ---------------------------------------------------------------------------
@@ -826,29 +1124,46 @@ export async function interveneRun(
         ? 'You forgot to output a DECISION marker at the end of your review. Please review your analysis above and output exactly one of: DECISION: APPROVED, DECISION: REVISE, or DECISION: REJECTED. Output it now as the last line of your response.'
         : 'Your previous output was incomplete. Please complete your task and write result.json as specified in your workflow instructions.');
 
-      log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), promptLength: nudgePrompt.length }, 'Sending nudge to existing cascade');
-
-      await grpc.sendMessage(server.port, server.csrf, apiKey, cascadeId, nudgePrompt, run.model);
-
-      // Watch for completion
-      let steps: any[];
-      let result: TaskResult;
-      try {
-        ({ steps, result } = await watchUntilComplete(
-          runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, roleDef, cascadeId,
-        ));
-      } catch (err: any) {
-        if (err?.message === 'superseded') {
-          log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Nudge result ignored because the branch was superseded');
-          return { status: 'superseded', action, cascadeId };
+      const activeSession = getAgentSession(runId);
+      if (activeSession && activeSession.handle === cascadeId) {
+        if (activeSession.session.capabilities.supportsAppend) {
+          log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), promptLength: nudgePrompt.length }, 'Sending nudge via AgentSession.append');
+          await activeSession.session.append({
+            prompt: nudgePrompt,
+            model: run.model,
+            workspacePath,
+          });
+          return { status: 'running', action, cascadeId };
         }
-        throw err;
+
+        if (activeSession.providerId !== 'antigravity') {
+          throw new Error(`Cannot nudge run ${runId}: provider '${activeSession.providerId}' does not support append`);
+        }
       }
 
-      if (!isAuthoritativeConversation(getRun(runId), cascadeId)) {
-        log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Skipping nudge writeback for superseded branch');
-        return { status: 'superseded', action, cascadeId };
-      }
+      log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), promptLength: nudgePrompt.length }, 'Sending nudge via attached AgentSession');
+
+      const provider = resolveProvider('execution', workspacePath).provider;
+      const roleExecution = await executeAttachedRoleViaAgentSession({
+        runId,
+        provider,
+        group,
+        role: roleDef,
+        round: latestRole?.round || run.currentRound || 1,
+        stageId: run.pipelineStageId || run.stageId || group.id,
+        workspacePath,
+        prompt: nudgePrompt,
+        model: run.model || 'MODEL_PLACEHOLDER_M26',
+        artifactDir,
+        timeoutMs: roleDef.timeoutMs,
+        parentConversationId: run.parentConversationId,
+        projectId: run.projectId,
+        existingHandle: cascadeId,
+        registerRoleProgress: false,
+      });
+
+      const steps = roleExecution.steps;
+      const result = roleExecution.result;
 
       // Update role progress — find by cascadeId, not blindly last
       const nudgeTaskEnvelope = getCanonicalTaskEnvelope(runId, run.taskEnvelope);
@@ -912,56 +1227,70 @@ Please analyze this run and provide:
 
 Reply with ONLY a JSON object: {"status": "HEALTHY|STUCK|LOOPING|DONE", "analysis": "detailed diagnosis"}`;
 
-      // Create a one-shot supervisor conversation
-      const evalWsUri = wsUri;
-      const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, evalWsUri);
-      const evalCascadeId = startResult?.cascadeId;
-      if (!evalCascadeId) {
-        throw new Error('Failed to start supervisor evaluation conversation');
-      }
-
-      // Store conversation ID on run immediately so frontend can open it in real-time
-      updateRun(runId, { supervisorConversationId: evalCascadeId });
-
-      // Mark as supervisor task (NOT hidden — user needs to see it)
-      await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, evalCascadeId, {
-        'antigravity.task.type': 'supervisor-evaluate',
-        'antigravity.task.runId': runId,
+      ensureBuiltInAgentBackends();
+      const evalSessionRunId = `eval-${runId}-${randomUUID()}`;
+      const evalBackend = getAgentBackend('antigravity');
+      const evalConfig = await applyBeforeRunMemoryHooks('antigravity', {
+        runId: evalSessionRunId,
+        workspacePath,
+        prompt: evalPrompt,
+        model: SUPERVISOR_MODEL,
+        parentConversationId: cascadeId,
+        executionTarget: { kind: 'prompt' },
+        metadata: {
+          projectId: run.projectId,
+          stageId: run.pipelineStageId || run.stageId || group.id,
+          roleId: 'supervisor-evaluate',
+          executorKind: 'prompt',
+        },
+        timeoutMs: 90_000,
       });
 
-      // Send evaluation prompt
-      await grpc.sendMessage(
-        server.port, server.csrf, apiKey, evalCascadeId,
-        evalPrompt, SUPERVISOR_MODEL,
-        false, undefined, 'ARTIFACT_REVIEW_MODE_TURBO',
-      );
+      const evalSession = await evalBackend.start(evalConfig);
+      registerAgentSession(evalSession);
 
-      // Poll for response
-      const pollStart = Date.now();
-      const EVAL_POLL_INTERVAL = 5_000;
-      const EVAL_POLL_TIMEOUT = 90_000;
-      let responseText = '';
-      const preStepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, evalCascadeId);
-      const preStepCount = (preStepsResp?.steps || []).filter((s: any) => s != null).length;
+      let evalCompleted: CompletedAgentEvent | null = null;
+      let evalFailed: FailedAgentEvent | null = null;
+      let evalCancelled: CancelledAgentEvent | null = null;
 
-      while (Date.now() - pollStart < EVAL_POLL_TIMEOUT) {
-        await new Promise(r => setTimeout(r, EVAL_POLL_INTERVAL));
-        const stepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, evalCascadeId);
-        const evalSteps = (stepsResp?.steps || []).filter((s: any) => s != null);
-        for (let j = evalSteps.length - 1; j >= preStepCount; j--) {
-          const step = evalSteps[j];
-          if (step?.type === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
-            const planner = step.plannerResponse || step.response || {};
-            const text = planner.modifiedResponse || planner.response || '';
-            if (text) { responseText = text; break; }
+      await consumeAgentSession(evalSessionRunId, evalSession, {
+        onStarted: async (event) => {
+          updateRun(runId, { supervisorConversationId: event.handle });
+
+          const conn = getOwnerConnection(event.handle);
+          if (!conn?.apiKey) {
+            return;
           }
-        }
-        if (responseText) break;
-      }
+
+          await grpc.updateConversationAnnotations(conn.port, conn.csrf, conn.apiKey, event.handle, {
+            'antigravity.task.type': 'supervisor-evaluate',
+            'antigravity.task.runId': runId,
+            'antigravity.task.hidden': 'false',
+          });
+        },
+        onCompleted: (event) => {
+          evalCompleted = event;
+        },
+        onFailed: (event) => {
+          evalFailed = event;
+        },
+        onCancelled: (event) => {
+          evalCancelled = event;
+        },
+      });
+
+      const completedEvaluationRawSteps = (evalCompleted as any)?.rawSteps as any[] | undefined;
+      const responseText = extractLatestPlannerResponseText((completedEvaluationRawSteps || []) as any[]);
+      const failedEvaluationEvent = evalFailed as FailedAgentEvent | null;
+      const cancelledEvaluationEvent = evalCancelled as CancelledAgentEvent | null;
 
       // Parse decision
       let decision: SupervisorDecision;
-      if (!responseText) {
+      if (failedEvaluationEvent) {
+        decision = { status: 'STUCK', analysis: failedEvaluationEvent.error.message };
+      } else if (cancelledEvaluationEvent) {
+        decision = { status: 'STUCK', analysis: cancelledEvaluationEvent.reason || 'Supervisor evaluation cancelled.' };
+      } else if (!responseText) {
         decision = { status: 'STUCK', analysis: 'Supervisor evaluation timed out — no response received.' };
       } else {
         try {
@@ -1000,74 +1329,48 @@ Reply with ONLY a JSON object: {"status": "HEALTHY|STUCK|LOOPING|DONE", "analysi
 
       const retryTaskEnvelope = getCanonicalTaskEnvelope(runId, run.taskEnvelope);
       const retryPrompt = prompt || buildRetryPrompt(roleDef, goal, artifactDir, round, isReviewer, retryTaskEnvelope);
-      const cascadeId = await createAndDispatchChild(
-        server, apiKey, wsUri, runId, run.pipelineStageId || run.stageId || group.id, targetRoleId,
-        retryPrompt,
-        run.model || 'MODEL_PLACEHOLDER_M26',
-        run.parentConversationId,
-      );
 
       updateRun(runId, {
         status: 'running',
         lastError: undefined,
-        activeConversationId: cascadeId,
         activeRoleId: targetRoleId,
       });
-      await cancelCascadeBestEffort(previousCascadeId, { port: server.port, csrf: server.csrf }, apiKey, shortRunId);
-
-      // Record new role progress
-      const newRoles = [...(getRun(runId)?.roles || [])];
-      const startedAt = new Date().toISOString();
-      newRoles.push({
-        roleId: targetRoleId,
-        round: round,
-        childConversationId: cascadeId,
-        status: 'running',
-        startedAt,
-        promptSnapshot: retryPrompt,
-        promptRecordedAt: startedAt,
+      const provider = resolveProvider('execution', workspacePath).provider;
+      const roleExecution = await executeRoleViaAgentSession({
+        runId,
+        provider,
+        group,
+        role: roleDef,
+        round,
+        stageId: run.pipelineStageId || run.stageId || group.id,
+        workspacePath,
+        prompt: retryPrompt,
+        model: run.model || 'MODEL_PLACEHOLDER_M26',
+        artifactDir,
+        timeoutMs: roleDef.timeoutMs,
+        parentConversationId: run.parentConversationId,
+        projectId: run.projectId,
+        onSessionReady: async () => {
+          await cancelCascadeBestEffort(previousCascadeId, { port: server.port, csrf: server.csrf }, apiKey, shortRunId);
+        },
       });
-      updateRun(runId, { roles: newRoles, childConversationId: cascadeId, activeConversationId: cascadeId, activeRoleId: targetRoleId });
 
-      log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), roleId: targetRoleId }, 'Restart-role dispatched');
+      const cascadeId = roleExecution.handle;
 
-      // Watch for completion
-      let steps: any[];
-      let result: TaskResult;
-      try {
-        ({ steps, result } = await watchUntilComplete(
-          runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, roleDef, cascadeId,
-        ));
-      } catch (err: any) {
-        if (err?.message === 'superseded') {
-          log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Restart-role result ignored because the branch was superseded');
-          return { status: 'superseded', action, cascadeId };
-        }
-        throw err;
-      }
-
-      if (!isAuthoritativeConversation(getRun(runId), cascadeId)) {
-        log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Skipping restart-role writeback for superseded branch');
-        return { status: 'superseded', action, cascadeId };
-      }
+      log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8), roleId: targetRoleId }, 'Restart-role dispatched through AgentSession');
 
       // Update role progress
-      const restartAudit = buildRoleInputReadAudit(runId, artifactDir, retryTaskEnvelope, steps);
-      const restartResult = enforceCanonicalInputReadProtocol(targetRoleId, result, restartAudit);
-      const rolesAfter = getRun(runId)?.roles || [];
-      if (rolesAfter.length > 0) {
-        rolesAfter[rolesAfter.length - 1] = {
-          ...rolesAfter[rolesAfter.length - 1],
-          status: restartResult.status,
-          finishedAt: new Date().toISOString(),
-          result: restartResult,
-          inputReadAudit: restartAudit,
-        };
-        updateRun(runId, { roles: rolesAfter });
-      }
+      const restartAudit = buildRoleInputReadAudit(runId, artifactDir, retryTaskEnvelope, roleExecution.steps);
+      const restartResult = enforceCanonicalInputReadProtocol(targetRoleId, roleExecution.result, restartAudit);
+      updateRoleProgressByConversation(runId, cascadeId, {
+        status: restartResult.status,
+        finishedAt: new Date().toISOString(),
+        result: restartResult,
+        inputReadAudit: restartAudit,
+      });
 
       // Process result
-      await processInterventionResult(runId, run, group, roleDef, isReviewer, restartResult, steps, artifactAbsDir);
+      await processInterventionResult(runId, run, group, roleDef, isReviewer, restartResult, roleExecution.steps, artifactAbsDir);
 
       return { status: 'completed', action, cascadeId };
     }
@@ -1094,9 +1397,16 @@ export async function processInterventionResult(
   const shortRunId = runId.slice(0, 8);
 
   if (result.status !== 'completed') {
+    const terminalStatus: AgentRunState['status'] = result.status === 'blocked'
+      ? 'blocked'
+      : result.status === 'cancelled'
+        ? 'cancelled'
+        : result.status === 'timeout'
+          ? 'timeout'
+          : 'failed';
     log.warn({ runId: shortRunId, roleId: roleDef.id, status: result.status }, 'Intervention did not complete successfully');
     updateRun(runId, {
-      status: result.status === 'blocked' ? 'blocked' : 'failed',
+      status: terminalStatus,
       result,
       lastError: getFailureReason(result) || `Intervention failed: role ${roleDef.id} status=${result.status}`,
     });
@@ -1321,181 +1631,6 @@ function buildRetryPrompt(
   ].join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// watchUntilComplete — Promise-based watcher for multi-role serial execution
-// ---------------------------------------------------------------------------
-
-function watchUntilComplete(
-  runId: string,
-  cascadeId: string,
-  conn: { port: number; csrf: string },
-  apiKey: string,
-  roleConfig: GroupRoleDefinition,
-  expectedConversationId: string,
-): Promise<{ steps: any[]; result: TaskResult }> {
-  return new Promise((resolve, reject) => {
-    const shortRunId = runId.slice(0, 8);
-    let lastWasActive = true;
-    let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-    let filePollTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-      const currentRun = getRun(runId);
-      if (!currentRun || currentRun.status === 'cancelled' || currentRun.status === 'failed') return;
-      const absDir = currentRun.artifactDir ? path.join((currentRun.workspace || '').replace(/^file:\/\//, ''), currentRun.artifactDir) : undefined;
-      if (!absDir) return;
-      try {
-        let isDone = false;
-        try {
-          const dp = JSON.parse(fs.readFileSync(path.join(absDir, 'delivery', 'delivery-packet.json'), 'utf-8'));
-          if (dp?.status === 'completed') isDone = true;
-        } catch { }
-        if (!isDone) {
-          try {
-            const rj = JSON.parse(fs.readFileSync(path.join(absDir, 'result.json'), 'utf-8'));
-            if (rj?.status === 'completed') isDone = true;
-          } catch { }
-        }
-        if (isDone) {
-          log.info({ runId: shortRunId }, 'File-based watcher detected completion via artifact JSON');
-          const result = compactCodingResult([], absDir, roleConfig);
-          settle(() => resolve({ steps: [], result }));
-        }
-      } catch { }
-    }, 3000);
-    let isSettled = false;
-
-    const settle = (fn: () => void) => {
-      if (isSettled) return;
-      isSettled = true;
-      if (filePollTimer) { clearInterval(filePollTimer); filePollTimer = null; }
-      if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-      clearTimeout(timeoutTimer);
-      abortWatch();
-      const active = activeRuns.get(runId);
-      if (active?.abortWatch === abortWatch) {
-        activeRuns.delete(runId);
-      }
-      fn();
-    };
-
-    const abortWatch = watchConversation(
-      conn,
-      cascadeId,
-      async (state: ConversationWatchState) => {
-        if (isSettled) return;
-
-        const currentRun = getRun(runId);
-        if (!isAuthoritativeConversation(currentRun, expectedConversationId)) {
-          log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Stale watcher for superseded branch');
-          settle(() => reject(new Error('superseded')));
-          return;
-        }
-        if (!currentRun || currentRun.status === 'cancelled' || currentRun.status === 'failed') {
-          log.debug({ runId: shortRunId, status: currentRun?.status }, 'Run already terminal, settling watcher');
-          settle(() => reject(new Error(currentRun?.status || 'cancelled')));
-          return;
-        }
-
-        if (roleConfig.autoApprove) {
-          await handleAutoApprove(state.steps, cascadeId, conn, apiKey, runId);
-        }
-
-        // V2.5.1: Propagate liveState to run
-        updateRun(runId, {
-          liveState: {
-            cascadeStatus: state.cascadeStatus,
-            stepCount: state.stepCount,
-            lastStepAt: state.lastStepAt,
-            lastStepType: state.lastStepType,
-            staleSince: state.staleSince,
-          },
-        });
-
-        // V2.5.1: Detect error steps as fallback completion signal
-        if (state.hasErrorSteps && lastWasActive) {
-          log.warn({ runId: shortRunId, roleId: roleConfig.id, stepCount: state.steps.length }, 'Child ended with ERROR/CANCELED steps — treating as failed completion');
-          if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-          idleDebounceTimer = setTimeout(() => {
-            const latestRun = getRun(runId);
-            if (!isAuthoritativeConversation(latestRun, expectedConversationId)) {
-              log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Ignoring stale completion from superseded branch');
-              settle(() => reject(new Error('superseded')));
-              return;
-            }
-            const run = getRun(runId);
-            const absDir = run?.artifactDir ? path.join((run.workspace || '').replace(/^file:\/\//, ''), run.artifactDir) : undefined;
-            const result = compactCodingResult(state.steps, absDir, roleConfig);
-            // Only force failed if result.json didn't claim success
-            if (!absDir || result.status !== 'completed') {
-              result.status = 'failed';
-              if (!result.summary || result.summary === 'Task completed (no summary extracted)') {
-                result.summary = 'Child conversation ended with tool errors';
-              }
-            } else {
-              log.info({ runId: shortRunId }, 'result.json reports completed despite hasErrorSteps — trusting result.json');
-            }
-            settle(() => resolve({ steps: state.steps, result }));
-          }, 2000);
-          lastWasActive = false;
-          return;
-        }
-
-        if (!state.isActive && lastWasActive) {
-          log.info({ runId: shortRunId, roleId: roleConfig.id, cascadeStatus: state.cascadeStatus, stepCount: state.steps.length }, 'Child went idle in multi-role watcher');
-          if (idleDebounceTimer) clearTimeout(idleDebounceTimer);
-          idleDebounceTimer = setTimeout(() => {
-            const latestRun = getRun(runId);
-            if (!isAuthoritativeConversation(latestRun, expectedConversationId)) {
-              log.warn({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Ignoring stale completion from superseded branch');
-              settle(() => reject(new Error('superseded')));
-              return;
-            }
-            const run = getRun(runId);
-            const absDir = run?.artifactDir ? path.join((run.workspace || '').replace(/^file:\/\//, ''), run.artifactDir) : undefined;
-            const result = compactCodingResult(state.steps, absDir, roleConfig);
-            settle(() => resolve({ steps: state.steps, result }));
-          }, 2000);
-        } else if (state.isActive) {
-          if (idleDebounceTimer) { clearTimeout(idleDebounceTimer); idleDebounceTimer = null; }
-        }
-
-        lastWasActive = state.isActive;
-      },
-      (err: Error) => {
-        log.warn({ runId: shortRunId, err: err.message }, 'Watch stream disconnected in multi-role');
-        setTimeout(async () => {
-          if (isSettled) return;
-          const currentRun = getRun(runId);
-          if (!isAuthoritativeConversation(currentRun, expectedConversationId) || currentRun.status !== 'running') return;
-
-          try {
-            await refreshOwnerMap();
-            const newConn = getOwnerConnection(cascadeId);
-            if (newConn) {
-              log.info({ runId: shortRunId }, 'Watch reconnecting (multi-role)');
-              settle(() => { });
-              watchUntilComplete(runId, cascadeId, newConn, apiKey, roleConfig, expectedConversationId)
-                .then(resolve)
-                .catch(reject);
-            } else {
-              settle(() => reject(new Error('Watch stream lost and reconnect failed')));
-            }
-          } catch (e: any) {
-            settle(() => reject(e));
-          }
-        }, 3000);
-      },
-      apiKey,
-    );
-
-    const timeoutTimer = setTimeout(() => {
-      log.warn({ runId: shortRunId, timeoutMs: roleConfig.timeoutMs }, 'Role timed out');
-      settle(() => reject(new Error('timeout')));
-    }, roleConfig.timeoutMs);
-
-    activeRuns.set(runId, { abortWatch, timeoutTimer });
-  });
-}
-
 // startSupervisorLoop, summarizeStepForSupervisor — moved to supervisor.ts
 
 // ---------------------------------------------------------------------------
@@ -1620,62 +1755,66 @@ async function executeDeliverySinglePass(
   const shortRunId = runId.slice(0, 8);
   const role = group.roles[0];
   const taskEnvelope = getCanonicalTaskEnvelope(runId, input.taskEnvelope);
+  const workspacePath = wsUri.replace(/^file:\/\//, '');
+  const provider = resolveProvider('execution', workspacePath).provider;
 
   // Build delivery-specific prompt
   const prompt = buildDeliveryPrompt(role, goal, artifactDir, artifactAbsDir, taskEnvelope);
 
-  const cascadeId = await createAndDispatchChild(
-    server, apiKey, wsUri, runId, input.pipelineStageId || input.stageId || group.id, role.id,
-    prompt, finalModel, input.parentConversationId,
-  );
-
-  // Record role progress
-  const run = getRun(runId);
-  const roles = [...(run?.roles || [])];
-  const startedAt = new Date().toISOString();
-  roles.push({
-    roleId: role.id,
+  const roleExecution = await executeRoleViaAgentSession({
+    runId,
+    provider,
+    group,
+    role,
     round: 1,
-    childConversationId: cascadeId,
-    status: 'running',
-    startedAt,
-    promptSnapshot: prompt,
-    promptRecordedAt: startedAt,
+    stageId: input.pipelineStageId || input.stageId || group.id,
+    workspacePath,
+    prompt,
+    model: finalModel,
+    artifactDir,
+    timeoutMs: role.timeoutMs,
+    parentConversationId: input.parentConversationId,
+    projectId: input.projectId,
+    onSessionReady: (session) => {
+      if (provider === 'antigravity') {
+        void startSupervisorLoop(runId, session.handle, goal, apiKey, server, wsUri);
+      }
+    },
   });
-  updateRun(runId, { roles, childConversationId: cascadeId });
 
-  // Fire-and-forget supervisor loop
-  void startSupervisorLoop(runId, cascadeId, goal, apiKey, server, wsUri);
+  if (provider === 'antigravity' && !isAuthoritativeConversation(getRun(runId), roleExecution.handle)) {
+    log.info({ runId: shortRunId, cascadeId: roleExecution.handle.slice(0, 8) }, 'Skipping delivery writeback for superseded branch');
+    return;
+  }
 
-  log.info({ runId: shortRunId, roleId: role.id, cascadeId: cascadeId.slice(0, 8) }, 'Watching delivery execution');
-  const { steps, result } = await watchUntilComplete(
-    runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, role, cascadeId,
-  );
-
-  if (!isAuthoritativeConversation(getRun(runId), cascadeId)) {
-    log.info({ runId: shortRunId, cascadeId: cascadeId.slice(0, 8) }, 'Skipping delivery writeback for superseded branch');
+  if (roleExecution.terminalKind !== 'completed') {
+    const terminationStatus: 'failed' | 'blocked' | 'cancelled' | 'timeout' =
+      roleExecution.result.status === 'completed' ? 'failed' : roleExecution.result.status;
+    updateRoleProgressByConversation(runId, roleExecution.handle, {
+      status: roleExecution.result.status,
+      finishedAt: new Date().toISOString(),
+      result: roleExecution.result,
+    });
+    log.warn({ runId: shortRunId, roleId: role.id, terminalKind: roleExecution.terminalKind, status: roleExecution.result.status }, 'Delivery role ended before successful completion');
+    propagateTermination(runId, terminationStatus, getFailureReason(roleExecution.result));
     return;
   }
 
   // Update role progress
-  const audit = buildRoleInputReadAudit(runId, artifactDir, taskEnvelope, steps);
-  const finalizedResult = enforceCanonicalInputReadProtocol(role.id, result, audit);
-  const rolesAfter = getRun(runId)?.roles || [];
-  if (rolesAfter.length > 0) {
-    rolesAfter[rolesAfter.length - 1] = {
-      ...rolesAfter[rolesAfter.length - 1],
-      status: finalizedResult.status,
-      finishedAt: new Date().toISOString(),
-      result: finalizedResult,
-      inputReadAudit: audit,
-    };
-    updateRun(runId, { roles: rolesAfter });
-  }
+  const audit = buildRoleInputReadAudit(runId, artifactDir, taskEnvelope, roleExecution.steps);
+  const finalizedResult = enforceCanonicalInputReadProtocol(role.id, roleExecution.result, audit);
+  updateRoleProgressByConversation(runId, roleExecution.handle, {
+    status: finalizedResult.status,
+    finishedAt: new Date().toISOString(),
+    result: finalizedResult,
+    inputReadAudit: audit,
+  });
 
   // Gate: child must complete successfully before finalization
   if (finalizedResult.status !== 'completed') {
+    const terminationStatus: 'failed' | 'blocked' | 'cancelled' | 'timeout' = finalizedResult.status;
     log.warn({ runId: shortRunId, roleId: role.id, status: finalizedResult.status }, 'Delivery child did not complete, stopping');
-    propagateTermination(runId, finalizedResult.status, getFailureReason(finalizedResult));
+    propagateTermination(runId, terminationStatus, getFailureReason(finalizedResult));
     return;
   }
 
@@ -1786,126 +1925,110 @@ async function executeReviewRound(
     // V5.5: Decide whether to reuse an existing cascade or create a new one
     const canReuse = sharedState?.authorCascadeId && !isReviewer && round > 1 && provider === 'antigravity';
     let cascadeId: string;
-    let codexResult: { codexThreadId: string; content: string; changedFiles?: string[] } | undefined;
+    let steps: any[] = [];
+    let result: TaskResult;
+    let terminalKind: RoleSessionExecutionResult['terminalKind'] = 'completed';
 
-    if (provider === 'codex') {
-      // ── Codex MCP mode: synchronous execution via CodexExecutor ──
-      const codexExecutor = getExecutor('codex');
-      const execResult = await codexExecutor.executeTask({
-        workspace: workspacePath,
-        prompt: rolePrompt,
-        model: finalModel,
-        artifactDir,
-        runId,
-        stageId: input.pipelineStageId || input.stageId || group.id,
-        roleId: role.id,
-      });
-      cascadeId = execResult.handle || `codex-${randomUUID()}`;
-      updateRun(runId, {
-        status: 'running',
-        childConversationId: cascadeId,
-        activeConversationId: cascadeId,
-        activeRoleId: role.id,
-      });
-      codexResult = { codexThreadId: cascadeId, content: execResult.content, changedFiles: execResult.changedFiles };
-    } else if (canReuse) {
+    if (canReuse) {
       // ── Shared mode: send role-switch prompt to existing cascade ──
       cascadeId = sharedState!.authorCascadeId!;
       const switchPrompt = buildRoleSwitchPrompt(role, round, artifactDir, artifactAbsDir, goal, taskEnvelope?.inputArtifacts || []);
 
       log.info({ runId: shortRunId, roleId: role.id, round, cascadeId: cascadeId.slice(0, 8), mode: 'shared' }, 'Reusing existing cascade for role');
 
-      updateRun(runId, {
-        activeConversationId: cascadeId,
-        activeRoleId: role.id,
-      });
-
-      await grpc.sendMessage(server.port, server.csrf, apiKey, cascadeId, switchPrompt, finalModel, false, undefined, 'ARTIFACT_REVIEW_MODE_TURBO');
-
       // Estimate tokens: switch prompt + overhead for model response
       sharedState = { ...sharedState!, estimatedTokens: sharedState!.estimatedTokens + switchPrompt.length / 4 + 2000 };
-    } else {
-      // ── Isolated mode: create new child conversation (existing behavior) ──
-      cascadeId = await createAndDispatchChild(
-        server, apiKey, wsUri, runId, input.pipelineStageId || input.stageId || group.id, role.id,
-        rolePrompt, finalModel, input.parentConversationId,
-      );
 
-      // V5.5: Track the author's cascade for potential reuse in subsequent rounds
-      if (sharedState && !isReviewer) {
-        sharedState = { ...sharedState, authorCascadeId: cascadeId, estimatedTokens: rolePrompt.length / 4 + 5000 };
+      const roleExecution = await executeAttachedRoleViaAgentSession({
+        runId,
+        provider,
+        group,
+        role,
+        round,
+        stageId: input.pipelineStageId || input.stageId || group.id,
+        workspacePath,
+        prompt: switchPrompt,
+        promptSnapshot: `[shared-conversation] ${rolePrompt.slice(0, 200)}...`,
+        model: finalModel,
+        artifactDir,
+        timeoutMs: role.timeoutMs,
+        parentConversationId: input.parentConversationId,
+        projectId: input.projectId,
+        existingHandle: cascadeId,
+      });
+
+      steps = roleExecution.steps;
+      result = roleExecution.result;
+      terminalKind = roleExecution.terminalKind;
+    } else {
+      const roleExecution = await executeRoleViaAgentSession({
+        runId,
+        provider,
+        group,
+        role,
+        round,
+        stageId: input.pipelineStageId || input.stageId || group.id,
+        workspacePath,
+        prompt: rolePrompt,
+        model: finalModel,
+        artifactDir,
+        timeoutMs: role.timeoutMs,
+        parentConversationId: input.parentConversationId,
+        projectId: input.projectId,
+        onSessionReady: (session) => {
+          if (round === 1 && i === 0 && provider === 'antigravity') {
+            void startSupervisorLoop(runId, session.handle, goal, apiKey, server, wsUri);
+          }
+        },
+      });
+
+      cascadeId = roleExecution.handle;
+      terminalKind = roleExecution.terminalKind;
+      steps = roleExecution.steps;
+      result = roleExecution.result;
+
+      if (sharedState && !isReviewer && provider === 'antigravity') {
+        sharedState = {
+          ...sharedState,
+          authorCascadeId: cascadeId,
+          estimatedTokens: rolePrompt.length / 4 + 5000,
+        };
       }
-    }
-
-    const run = getRun(runId);
-    const roles = [...(run?.roles || [])];
-    const startedAt = new Date().toISOString();
-    const roleProgress: RoleProgress = {
-      roleId: role.id,
-      round,
-      childConversationId: cascadeId,
-      status: 'running',
-      startedAt,
-      promptSnapshot: canReuse ? `[shared-conversation] ${rolePrompt.slice(0, 200)}...` : rolePrompt,
-      promptRecordedAt: startedAt,
-    };
-    roles.push(roleProgress);
-    updateRun(runId, { roles, childConversationId: cascadeId });
-
-    // V3.5 Fix: Only start supervisor on the very first role of the first round.
-    // The supervisor dynamically tracks activeConversationId across role switches.
-    if (round === 1 && i === 0 && provider === 'antigravity') {
-      void startSupervisorLoop(runId, cascadeId, goal, apiKey, server, wsUri);
-    }
-
-    let steps: any[] = [];
-    let result: TaskResult;
-
-    if (provider === 'codex' && codexResult) {
-      // ── Codex: result already available from CodexExecutor ──
-      log.info({ runId: shortRunId, roleId: role.id, round, provider: 'codex' }, 'Codex role completed (synchronous)');
-      const changedFiles = codexResult.changedFiles || [];
-      result = {
-        status: 'completed',
-        summary: codexResult.content,
-        changedFiles,
-        blockers: [],
-        needsReview: changedFiles.length > 0 ? ['code-review'] : [],
-      };
-    } else {
-      // ── Antigravity: watch gRPC stream until complete ──
-      log.info({ runId: shortRunId, roleId: role.id, round, cascadeId: cascadeId.slice(0, 8), promptLength: rolePrompt.length }, 'Watching role execution');
-      const watchResult = await watchUntilComplete(
-        runId, cascadeId, { port: server.port, csrf: server.csrf }, apiKey, role, cascadeId,
-      );
-      steps = watchResult.steps;
-      result = watchResult.result;
     }
 
     if (!isAuthoritativeConversation(getRun(runId), cascadeId)) {
       log.info({ runId: shortRunId, roleId: role.id, cascadeId: cascadeId.slice(0, 8) }, 'Skipping review-loop writeback for superseded branch');
       return { decision: 'failed', sharedState };
     }
+
+    if (terminalKind !== 'completed') {
+      const terminationStatus: 'failed' | 'blocked' | 'cancelled' | 'timeout' =
+        result.status === 'completed' ? 'failed' : result.status;
+      updateRoleProgressByConversation(runId, cascadeId, {
+        status: result.status,
+        finishedAt: new Date().toISOString(),
+        result,
+      });
+      log.warn({ runId: shortRunId, roleId: role.id, terminalKind, status: result.status }, 'Role session ended before successful completion');
+      propagateTermination(runId, terminationStatus, getFailureReason(result));
+      return { decision: 'failed', sharedState };
+    }
+
     log.info({ runId: shortRunId, roleId: role.id, round, resultStatus: result.status, summaryLength: result.summary.length, changedFiles: result.changedFiles.length }, 'Role execution completed');
 
     const audit = buildRoleInputReadAudit(runId, artifactDir, taskEnvelope, steps);
     const finalizedResult = enforceCanonicalInputReadProtocol(role.id, result, audit);
-    const rolesAfter = getRun(runId)?.roles || [];
-    const roleIdx = rolesAfter.length - 1;
-    if (roleIdx >= 0) {
-      rolesAfter[roleIdx] = {
-        ...rolesAfter[roleIdx],
-        status: finalizedResult.status,
-        finishedAt: new Date().toISOString(),
-        result: finalizedResult,
-        inputReadAudit: audit,
-      };
-      updateRun(runId, { roles: rolesAfter });
-    }
+    updateRoleProgressByConversation(runId, cascadeId, {
+      status: finalizedResult.status,
+      finishedAt: new Date().toISOString(),
+      result: finalizedResult,
+      inputReadAudit: audit,
+    });
 
     if (finalizedResult.status !== 'completed') {
+      const terminationStatus: 'failed' | 'blocked' | 'cancelled' | 'timeout' = finalizedResult.status;
       log.warn({ runId: shortRunId, roleId: role.id, status: finalizedResult.status }, 'Role did not complete, stopping chain');
-      propagateTermination(runId, finalizedResult.status, getFailureReason(finalizedResult));
+      propagateTermination(runId, terminationStatus, getFailureReason(finalizedResult));
       return { decision: 'failed', sharedState };
     }
 
@@ -1950,12 +2073,7 @@ async function executeReviewRound(
         }
       }
 
-      const rolesDecision = getRun(runId)?.roles || [];
-      const decIdx = rolesDecision.length - 1;
-      if (decIdx >= 0) {
-        rolesDecision[decIdx] = { ...rolesDecision[decIdx], reviewDecision: decision as any };
-        updateRun(runId, { roles: rolesDecision });
-      }
+      updateRoleProgressByConversation(runId, cascadeId, { reviewDecision: decision as any });
 
       log.info({ runId: shortRunId, round, decision }, 'Review decision extracted');
 
@@ -2089,88 +2207,19 @@ async function tryAutoTriggerNextStage(
 // buildRoleInputReadAudit, enforceCanonicalInputReadProtocol,
 // summarizeFailureText, getFailureReason, propagateTermination
 // — moved to runtime-helpers.ts
-// ---------------------------------------------------------------------------
-// handleAutoApprove — approve blocking artifacts automatically
-// ---------------------------------------------------------------------------
-
-async function handleAutoApprove(
-  steps: any[],
-  cascadeId: string,
-  conn: { port: number; csrf: string },
-  apiKey: string,
-  runId: string,
-): Promise<void> {
-  const shortRunId = runId.slice(0, 8);
-
-  for (const step of steps) {
-    if (step?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') continue;
-
-    const planner = step.plannerResponse || step.response || {};
-    const isBlocking = planner.isBlocking === true;
-    if (!isBlocking) continue;
-
-    if (step._autoApproved) continue;
-
-    const reviewUris: string[] = [];
-    if (planner.reviewAbsoluteUris?.length) {
-      reviewUris.push(...planner.reviewAbsoluteUris);
-    } else if (planner.pathsToReview?.length) {
-      reviewUris.push(...planner.pathsToReview.map((p: string) => `file://${p}`));
-    }
-
-    if (reviewUris.length > 0) {
-      log.info({ runId: shortRunId, uriCount: reviewUris.length }, 'Auto-approving artifacts');
-      for (const uri of reviewUris) {
-        try {
-          await grpc.proceedArtifact(conn.port, conn.csrf, apiKey, cascadeId, uri);
-          log.debug({ runId: shortRunId, uri: uri.split('/').pop() }, 'Artifact approved');
-        } catch (err: any) {
-          log.warn({ runId: shortRunId, uri, err: err.message }, 'Artifact approve failed');
-        }
-      }
-      step._autoApproved = true;
-    } else if (isBlocking) {
-      log.info({ runId: shortRunId }, 'Run blocked: isBlocking=true with no artifact URIs');
-      updateRun(runId, { status: 'blocked' });
-      cleanup(runId);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// handleCompletion — extract result when child goes idle (single-role)
-// ---------------------------------------------------------------------------
-
-function handleCompletion(runId: string, steps: any[]): void {
-  const shortRunId = runId.slice(0, 8);
+function finalizeLegacySingleRun(runId: string, result: TaskResult): void {
   const currentRun = getRun(runId);
-  if (!currentRun || currentRun.status !== 'running') return;
-
-  const run = getRun(runId);
-  const absDir = run?.artifactDir ? path.join((run.workspace || '').replace(/^file:\/\//, ''), run.artifactDir) : undefined;
-  const result = compactCodingResult(steps, absDir);
-  log.info({
-    runId: shortRunId,
-    status: result.status,
-    changedFiles: result.changedFiles.length,
-    summaryLength: result.summary.length,
-    source: absDir ? 'result.json or step-parse' : 'step-parse only',
-  }, 'Run completed');
-
-  updateRun(runId, { status: result.status, result });
-
-  // Sync pipeline state for legacy-single runs (same as envelope path)
-  if (run?.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
-    const stageStatus = result.status === 'completed' ? 'completed'
-      : result.status === 'blocked' ? 'blocked' : 'failed';
-    if (run.pipelineStageId) {
-      updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: stageStatus, runId });
-    } else {
-      updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: stageStatus, runId });
-    }
+  if (!currentRun || TERMINAL_STATUSES.has(currentRun.status)) {
+    return;
   }
 
-  cleanup(runId);
+  updateRun(runId, {
+    status: result.status,
+    result,
+    lastError: result.status === 'completed'
+      ? undefined
+      : getFailureReason(result) || result.blockers[0] || result.summary,
+  });
 }
 
 
@@ -2185,12 +2234,36 @@ export async function cancelRun(runId: string): Promise<void> {
     throw new Error(`Run ${runId} is already ${run.status}`);
   }
 
+  const activeSession = getAgentSession(runId);
+  if (activeSession) {
+    markAgentSessionCancelRequested(runId);
+    if (run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
+      if (run.pipelineStageId) {
+        updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
+      } else {
+        updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: 'cancelled', runId });
+      }
+    }
+    updateRun(runId, { status: 'cancelled' });
+    cleanup(runId);
+    await activeSession.session.cancel('cancelled_by_user');
+    return;
+  }
+
   const activeCascadeId = run.activeConversationId || run.childConversationId;
   if (activeCascadeId) {
-    const conn = getOwnerConnection(activeCascadeId);
-    const apiKey = getApiKey();
-    if (conn && apiKey) {
-      await cancelRunInternal(runId, activeCascadeId, conn, apiKey, 'cancelled');
+    const attachedSession = await attachExistingRunSession(runId, run, activeCascadeId);
+    if (attachedSession) {
+      if (run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
+        if (run.pipelineStageId) {
+          updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
+        } else {
+          updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: 'cancelled', runId });
+        }
+      }
+      updateRun(runId, { status: 'cancelled' });
+      cleanup(runId);
+      await attachedSession.cancel('cancelled_by_user');
       return;
     }
   }
@@ -2203,40 +2276,6 @@ export async function cancelRun(runId: string): Promise<void> {
     }
   }
   updateRun(runId, { status: 'cancelled' });
-  cleanup(runId);
-}
-
-// ---------------------------------------------------------------------------
-// cancelRunInternal — shared by cancelRun and timeout
-// ---------------------------------------------------------------------------
-
-async function cancelRunInternal(
-  runId: string,
-  cascadeId: string,
-  conn: { port: number; csrf: string },
-  apiKey: string,
-  status: 'cancelled' | 'timeout',
-): Promise<void> {
-  const shortRunId = runId.slice(0, 8);
-  try {
-    log.info({ runId: shortRunId, status }, 'Cancelling child cascade');
-    await grpc.cancelCascade(conn.port, conn.csrf, apiKey, cascadeId);
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Cancel cascade failed (may already be idle)');
-  }
-
-  const run = getRun(runId);
-  if (status === 'cancelled' && run?.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
-    if (run.pipelineStageId) {
-      updatePipelineStageByStageId(run.projectId, run.pipelineStageId, { status: 'cancelled', runId });
-    } else {
-      updatePipelineStage(run.projectId, run.pipelineStageIndex!, { status: 'cancelled', runId });
-    }
-  }
-  updateRun(runId, {
-    status,
-    lastError: status === 'timeout' ? 'Run exceeded timeout limit' : undefined,
-  });
   cleanup(runId);
 }
 

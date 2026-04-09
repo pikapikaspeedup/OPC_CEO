@@ -1,5 +1,814 @@
 # Antigravity 是否应直接基于 craft-agents 继续开发
 
+日期：2026-04-07  
+状态：已按控制层 / 执行层概念重写  
+范围：静态架构研究，目标仓库为 Antigravity 与 craft-agents
+
+## 一句话结论
+
+按新的概念对齐来看，这个问题不该再问成“Antigravity 要不要基于 craft 重做”，而应该问成：
+
+> craft 适不适合作为 Antigravity 平台下面的下层执行壳。
+
+在这个口径下，结论很清楚：
+
+1. **不建议把 Antigravity 平台直接建立在 craft 之上**
+2. **建议保留 Antigravity 作为控制层 / 平台主系统**
+3. **craft 可以作为下层 execution shell 的参考对象，甚至未来可作为一个可选执行器接入**
+
+所以这不是“谁替代谁”的问题，而是“谁位于哪一层”的问题。
+
+---
+
+## 1. 正确的比较基线
+
+如果不先拆层，关于 craft 的讨论很容易一直失真。
+
+### 1.1 Antigravity 现在已经不是单一执行器产品
+
+按当前系统形态，Antigravity 应被理解成一个平台：
+
+1. 上面有 OPC / CEO / Scheduler / Approval / Department
+2. 中间有 Project / Run / Stage / review-loop / artifact 真相源
+3. 下面才是一个或多个执行器
+
+也就是说，Antigravity 的主系统已经更接近**控制层**。
+
+### 1.2 craft 更接近 execution shell
+
+craft 的重心是：
+
+1. workspace
+2. session
+3. backend
+4. event
+5. permission / source / auth
+
+它更像“下层受控执行 runtime”，而不是 Project / Run / Stage / governance 这种平台级控制层。
+
+### 1.3 所以这两个东西不在同一层
+
+更准确的比较关系应该是：
+
+1. **Antigravity Platform / Control Plane**
+2. 对比 **craft 作为 execution shell**
+
+而不是：
+
+1. 整个平台 Antigravity
+2. 对比 craft 整个产品壳
+
+---
+
+## 2. craft 真正擅长什么
+
+如果只看执行层，craft 的优势很明确。
+
+### 2.1 session / backend / event 抽象更自然
+
+craft 的核心就是：
+
+1. backend 统一
+2. session 统一
+3. event 统一
+4. provider 差异下沉
+
+这比当前很多“先有任务，再去适配 provider”的实现方式更像一个通用 execution shell。
+
+### 2.2 第三方 provider 路线更像 execution substrate
+
+craft 本来就更适合承载“多个不同 provider 的执行壳”：
+
+1. Anthropic 路线
+2. 第三方兼容 provider 路线
+3. 统一 session / event 收口
+
+从 execution plane 的角度看，它比一个完整 coding product 更容易被顶层系统调用。
+
+### 2.3 workspace-based + permission-based 的执行边界更清楚
+
+craft 的价值不在于“它也有文件夹”，而在于：
+
+1. 它把 workspace 当 execution boundary
+2. 它把 session 当 runtime object
+3. 它把 permission / source / tool call 放在下层 runtime 里解决
+
+这正是下层执行器应该擅长的事情。
+
+---
+
+## 3. Antigravity 顶层真正要保留什么
+
+craft 再强，也不该替代 Antigravity 平台已经长出来的上层真相源。
+
+必须保留在 Antigravity 控制层的东西包括：
+
+1. Project
+2. Run
+3. Stage
+4. review-loop
+5. source contract
+6. artifact 真相源
+7. scheduler / CEO / approval / governance
+
+这些东西的共同点是：
+
+1. 它们回答的是“做什么、为什么做、谁批准、如何追踪、何时继续”
+2. 而不是“agent 在 workspace 里具体怎么改代码”
+
+这就是为什么 Antigravity 现在最有价值的部分不在于“会不会调一个模型”，而在于已经长出了平台级控制层。
+
+---
+
+## 4. 在新口径下，结论应该怎么重写
+
+### 4.1 不建议直接以 craft 为基座
+
+现在的不建议，理由不再是“它们都像 workspace 产品，所以冲突”，而是更精确的这句：
+
+> craft 位于 execution shell 层，Antigravity 已经长到 control plane 层，二者层次不同。
+
+如果直接以 craft 为基座，风险不是 provider 接不上，而是：
+
+1. 你会把已经长出来的控制层重新压扁成 session-first 产品壳
+2. Project / Run / Stage / governance 会被迫去适配 craft 的 session 语义
+3. 平台最稀缺的上层资产反而会被稀释
+
+### 4.2 但可以把 craft 当成下层执行壳
+
+这才是更合理的落点。
+
+在这个模式下：
+
+1. Antigravity 控制层继续决定任务生命周期
+2. craft 负责在给定 workspace 中实际执行一次任务
+3. craft 回传 started / completed / failed / cancelled 之类的 execution 信号
+4. Antigravity 把它们映射回 Run / Project / Stage 真相源
+
+这种关系是合理的。
+
+### 4.3 所以答案不是“完全不用”
+
+更准确的答案是：
+
+1. **不用 craft 来承接整个平台**
+2. **可以用 craft 承接执行层的一部分能力**
+3. **更值得借的是它的 execution shell 思路，而不是整个产品壳**
+
+---
+
+## 5. 真正值得复用的层
+
+如果要从 craft 吸收东西，优先级应该是下面这些。
+
+### 5.1 backend / session / event 分层
+
+这是最值得借的地方。
+
+它和当前 Antigravity 正在推进的 AgentBackend / AgentSession / session-consumer 方向是一致的。
+
+### 5.2 capability-driven executor model
+
+以后 execution plane 不应该再隐式假设：
+
+1. 所有 provider 都有 append
+2. 所有 provider 都有 watcher
+3. 所有 provider 都有 IDE 级 live state
+
+craft 的思路提醒我们：
+
+1. 执行器可以能力不等
+2. 但必须合同清楚
+
+### 5.3 第三方 provider 兼容思路
+
+如果目标是支持第三方 API，craft 更值得借的不是 UI，而是：
+
+1. 多 provider execution substrate
+2. 第三方 provider 路由方式
+3. 下层兼容、上层统一的事件模型
+
+---
+
+## 6. 最不该复用的层
+
+下面这些层最不适合直接搬进 Antigravity 主系统。
+
+### 6.1 workspace / session 作为产品真相源
+
+这会直接冲掉 Antigravity 已经存在的：
+
+1. Project
+2. Run
+3. Stage
+4. governance
+
+### 6.2 整个 SessionManager 产品壳
+
+它适合做 execution runtime，不适合直接做平台主心脏。
+
+### 6.3 整套 UI 壳
+
+Antigravity 现在的方向已经不是 IDE shell，而是 OPC / CEO / Project 平台。
+
+---
+
+## 7. 最合理的技术路线
+
+如果你的目标是：
+
+1. 顶层继续做 OPC / CEO / Project 平台
+2. 下层逐步支持第三方 API 与更多执行器
+
+那最合理的路线应该是：
+
+### Step 1
+
+继续把 Antigravity 的控制层 / 执行层边界收口。
+
+也就是继续完成当前 AgentBackend 和 Task B 方向。
+
+### Step 2
+
+把 execution plane 的接入合同写死：
+
+1. session lifecycle
+2. capability matrix
+3. terminal semantics
+4. artifact / result 回传要求
+
+### Step 3
+
+只做一个最小 execution shell 实验。
+
+不是接整个 craft，而是验证：
+
+1. 一个单 stage
+2. 是否能通过外部 execution shell 跑通
+3. 上层仍由 Antigravity 控制层维护真相源
+
+### Step 4
+
+验证通过后，再决定：
+
+1. 只是借设计
+2. 还是把 craft 真接成一个可选 executor
+
+---
+
+## 8. 最终判断
+
+用新的控制层 / 执行层视角重写后，这份研究最准确的结论是：
+
+1. **Antigravity 不该基于 craft 重做**
+2. **craft 很适合作为 Antigravity 下层 execution shell 的参考对象**
+3. **未来甚至可以把 craft 作为一个可选下层执行器接进来**
+4. **但平台的控制层真相源，必须继续掌握在 Antigravity 自己手里**
+
+一句话总结：
+
+> 不把 craft 当地基，可以把 craft 当发动机舱里的一个引擎选项。
+# Antigravity 是否应直接基于 craft-agents 继续开发
+
+日期：2026-04-07  
+状态：已按控制层 / 执行层概念重写  
+范围：静态架构研究，目标仓库为 Antigravity 与 craft-agents
+
+## 一句话结论
+
+按新的概念对齐来看，这个问题不该再问成“Antigravity 要不要基于 craft 重做”，而应该问成：
+
+> craft 适不适合作为 Antigravity 平台下面的下层执行壳。
+
+在这个口径下，结论很清楚：
+
+1. **不建议把 Antigravity 平台直接建立在 craft 之上**
+2. **建议保留 Antigravity 作为控制层 / 平台主系统**
+3. **craft 可以作为下层 execution shell 的参考对象，甚至未来可作为一个可选执行器接入**
+
+所以这不是“谁替代谁”的问题，而是“谁位于哪一层”的问题。
+
+---
+
+## 1. 正确的比较基线
+
+如果不先拆层，关于 craft 的讨论很容易一直失真。
+
+### 1.1 Antigravity 现在已经不是单一执行器产品
+
+按当前系统形态，Antigravity 应被理解成一个平台：
+
+1. 上面有 OPC / CEO / Scheduler / Approval / Department
+2. 中间有 Project / Run / Stage / review-loop / artifact 真相源
+3. 下面才是一个或多个执行器
+
+也就是说，Antigravity 的主系统已经更接近**控制层**。
+
+### 1.2 craft 更接近 execution shell
+
+craft 的重心是：
+
+1. workspace
+2. session
+3. backend
+4. event
+5. permission / source / auth
+
+它更像“下层受控执行 runtime”，而不是 Project / Run / Stage / governance 这种平台级控制层。
+
+### 1.3 所以这两个东西不在同一层
+
+更准确的比较关系应该是：
+
+1. **Antigravity Platform / Control Plane**
+2. 对比 **craft 作为 execution shell**
+
+而不是：
+
+1. 整个平台 Antigravity
+2. 对比 craft 整个产品壳
+
+---
+
+## 2. craft 真正擅长什么
+
+如果只看执行层，craft 的优势很明确。
+
+### 2.1 session / backend / event 抽象更自然
+
+craft 的核心就是：
+
+1. backend 统一
+2. session 统一
+3. event 统一
+4. provider 差异下沉
+
+这比当前很多“先有任务，再去适配 provider”的实现方式更像一个通用 execution shell。
+
+### 2.2 第三方 provider 路线更像 execution substrate
+
+craft 本来就更适合承载“多个不同 provider 的执行壳”：
+
+1. Anthropic 路线
+2. 第三方兼容 provider 路线
+3. 统一 session / event 收口
+
+从 execution plane 的角度看，它比一个完整 coding product 更容易被顶层系统调用。
+
+### 2.3 workspace-based + permission-based 的执行边界更清楚
+
+craft 的价值不在于“它也有文件夹”，而在于：
+
+1. 它把 workspace 当 execution boundary
+2. 它把 session 当 runtime object
+3. 它把 permission / source / tool call 放在下层 runtime 里解决
+
+这正是下层执行器应该擅长的事情。
+
+---
+
+## 3. Antigravity 顶层真正要保留什么
+
+craft 再强，也不该替代 Antigravity 平台已经长出来的上层真相源。
+
+必须保留在 Antigravity 控制层的东西包括：
+
+1. Project
+2. Run
+3. Stage
+4. review-loop
+5. source contract
+6. artifact 真相源
+7. scheduler / CEO / approval / governance
+
+这些东西的共同点是：
+
+1. 它们回答的是“做什么、为什么做、谁批准、如何追踪、何时继续”
+2. 而不是“agent 在 workspace 里具体怎么改代码”
+
+这就是为什么 Antigravity 现在最有价值的部分不在于“会不会调一个模型”，而在于已经长出了平台级控制层。
+
+---
+
+## 4. 在新口径下，结论应该怎么重写
+
+### 4.1 不建议直接以 craft 为基座
+
+现在的不建议，理由不再是“它们都像 workspace 产品，所以冲突”，而是更精确的这句：
+
+> craft 位于 execution shell 层，Antigravity 已经长到 control plane 层，二者层次不同。
+
+如果直接以 craft 为基座，风险不是 provider 接不上，而是：
+
+1. 你会把已经长出来的控制层重新压扁成 session-first 产品壳
+2. Project / Run / Stage / governance 会被迫去适配 craft 的 session 语义
+3. 平台最稀缺的上层资产反而会被稀释
+
+### 4.2 但可以把 craft 当成下层执行壳
+
+这才是更合理的落点。
+
+在这个模式下：
+
+1. Antigravity 控制层继续决定任务生命周期
+2. craft 负责在给定 workspace 中实际执行一次任务
+3. craft 回传 started / completed / failed / cancelled 之类的 execution 信号
+4. Antigravity 把它们映射回 Run / Project / Stage 真相源
+
+这种关系是合理的。
+
+### 4.3 所以答案不是“完全不用”
+
+更准确的答案是：
+
+1. **不用 craft 来承接整个平台**
+2. **可以用 craft 承接执行层的一部分能力**
+3. **更值得借的是它的 execution shell 思路，而不是整个产品壳**
+
+---
+
+## 5. 真正值得复用的层
+
+如果要从 craft 吸收东西，优先级应该是下面这些。
+
+### 5.1 backend / session / event 分层
+
+这是最值得借的地方。
+
+它和当前 Antigravity 正在推进的 AgentBackend / AgentSession / session-consumer 方向是一致的。
+
+### 5.2 capability-driven executor model
+
+以后 execution plane 不应该再隐式假设：
+
+1. 所有 provider 都有 append
+2. 所有 provider 都有 watcher
+3. 所有 provider 都有 IDE 级 live state
+
+craft 的思路提醒我们：
+
+1. 执行器可以能力不等
+2. 但必须合同清楚
+
+### 5.3 第三方 provider 兼容思路
+
+如果目标是支持第三方 API，craft 更值得借的不是 UI，而是：
+
+1. 多 provider execution substrate
+2. 第三方 provider 路由方式
+3. 下层兼容、上层统一的事件模型
+
+---
+
+## 6. 最不该复用的层
+
+下面这些层最不适合直接搬进 Antigravity 主系统。
+
+### 6.1 workspace / session 作为产品真相源
+
+这会直接冲掉 Antigravity 已经存在的：
+
+1. Project
+2. Run
+3. Stage
+4. governance
+
+### 6.2 整个 SessionManager 产品壳
+
+它适合做 execution runtime，不适合直接做平台主心脏。
+
+### 6.3 整套 UI 壳
+
+Antigravity 现在的方向已经不是 IDE shell，而是 OPC / CEO / Project 平台。
+
+---
+
+## 7. 最合理的技术路线
+
+如果你的目标是：
+
+1. 顶层继续做 OPC / CEO / Project 平台
+2. 下层逐步支持第三方 API 与更多执行器
+
+那最合理的路线应该是：
+
+### Step 1
+
+继续把 Antigravity 的控制层 / 执行层边界收口。
+
+也就是继续完成当前 AgentBackend 和 Task B 方向。
+
+### Step 2
+
+把 execution plane 的接入合同写死：
+
+1. session lifecycle
+2. capability matrix
+3. terminal semantics
+4. artifact / result 回传要求
+
+### Step 3
+
+只做一个最小 execution shell 实验。
+
+不是接整个 craft，而是验证：
+
+1. 一个单 stage
+2. 是否能通过外部 execution shell 跑通
+3. 上层仍由 Antigravity 控制层维护真相源
+
+### Step 4
+
+验证通过后，再决定：
+
+1. 只是借设计
+2. 还是把 craft 真接成一个可选 executor
+
+---
+
+## 8. 最终判断
+
+用新的控制层 / 执行层视角重写后，这份研究最准确的结论是：
+
+1. **Antigravity 不该基于 craft 重做**
+2. **craft 很适合作为 Antigravity 下层 execution shell 的参考对象**
+3. **未来甚至可以把 craft 作为一个可选下层执行器接进来**
+4. **但平台的控制层真相源，必须继续掌握在 Antigravity 自己手里**
+
+一句话总结：
+
+> 不把 craft 当地基，可以把 craft 当发动机舱里的一个引擎选项。# Antigravity 是否应直接基于 craft-agents 继续开发
+
+日期：2026-04-07  
+状态：已按控制层 / 执行层概念重写  
+范围：静态架构研究，目标仓库为 Antigravity 与 craft-agents
+
+## 一句话结论
+
+按新的概念对齐来看，这个问题不该再问成“Antigravity 要不要基于 craft 重做”，而应该问成：
+
+> craft 适不适合作为 Antigravity 平台下面的下层执行壳。
+
+在这个口径下，结论很清楚：
+
+1. **不建议把 Antigravity 平台直接建立在 craft 之上**
+2. **建议保留 Antigravity 作为控制层 / 平台主系统**
+3. **craft 可以作为下层 execution shell 的参考对象，甚至未来可作为一个可选执行器接入**
+
+所以这不是“谁替代谁”的问题，而是“谁位于哪一层”的问题。
+
+---
+
+## 1. 正确的比较基线
+
+如果不先拆层，关于 craft 的讨论很容易一直失真。
+
+### 1.1 Antigravity 现在已经不是单一执行器产品
+
+按当前系统形态，Antigravity 应被理解成一个平台：
+
+1. 上面有 OPC / CEO / Scheduler / Approval / Department
+2. 中间有 Project / Run / Stage / review-loop / artifact 真相源
+3. 下面才是一个或多个执行器
+
+也就是说，Antigravity 的主系统已经更接近**控制层**。
+
+### 1.2 craft 更接近 execution shell
+
+craft 的重心是：
+
+1. workspace
+2. session
+3. backend
+4. event
+5. permission / source / auth
+
+它更像“下层受控执行 runtime”，而不是 Project / Run / Stage / governance 这种平台级控制层。
+
+### 1.3 所以这两个东西不在同一层
+
+更准确的比较关系应该是：
+
+1. **Antigravity Platform / Control Plane**
+2. 对比 **craft 作为 execution shell**
+
+而不是：
+
+1. 整个平台 Antigravity
+2. 对比 craft 整个产品壳
+
+---
+
+## 2. craft 真正擅长什么
+
+如果只看执行层，craft 的优势很明确。
+
+### 2.1 session / backend / event 抽象更自然
+
+craft 的核心就是：
+
+1. backend 统一
+2. session 统一
+3. event 统一
+4. provider 差异下沉
+
+这比当前很多“先有任务，再去适配 provider”的实现方式更像一个通用 execution shell。
+
+### 2.2 第三方 provider 路线更像 execution substrate
+
+craft 本来就更适合承载“多个不同 provider 的执行壳”：
+
+1. Anthropic 路线
+2. 第三方兼容 provider 路线
+3. 统一 session / event 收口
+
+从 execution plane 的角度看，它比一个完整 coding product 更容易被顶层系统调用。
+
+### 2.3 workspace-based + permission-based 的执行边界更清楚
+
+craft 的价值不在于“它也有文件夹”，而在于：
+
+1. 它把 workspace 当 execution boundary
+2. 它把 session 当 runtime object
+3. 它把 permission / source / tool call 放在下层 runtime 里解决
+
+这正是下层执行器应该擅长的事情。
+
+---
+
+## 3. Antigravity 顶层真正要保留什么
+
+craft 再强，也不该替代 Antigravity 平台已经长出来的上层真相源。
+
+必须保留在 Antigravity 控制层的东西包括：
+
+1. Project
+2. Run
+3. Stage
+4. review-loop
+5. source contract
+6. artifact 真相源
+7. scheduler / CEO / approval / governance
+
+这些东西的共同点是：
+
+1. 它们回答的是“做什么、为什么做、谁批准、如何追踪、何时继续”
+2. 而不是“agent 在 workspace 里具体怎么改代码”
+
+这就是为什么 Antigravity 现在最有价值的部分不在于“会不会调一个模型”，而在于已经长出了平台级控制层。
+
+---
+
+## 4. 在新口径下，结论应该怎么重写
+
+## 4.1 不建议直接以 craft 为基座
+
+现在的不建议，理由不再是“它们都像 workspace 产品，所以冲突”，而是更精确的这句：
+
+> craft 位于 execution shell 层，Antigravity 已经长到 control plane 层，二者层次不同。
+
+如果直接以 craft 为基座，风险不是 provider 接不上，而是：
+
+1. 你会把已经长出来的控制层重新压扁成 session-first 产品壳
+2. Project / Run / Stage / governance 会被迫去适配 craft 的 session 语义
+3. 平台最稀缺的上层资产反而会被稀释
+
+### 4.2 但可以把 craft 当成下层执行壳
+
+这才是更合理的落点。
+
+在这个模式下：
+
+1. Antigravity 控制层继续决定任务生命周期
+2. craft 负责在给定 workspace 中实际执行一次任务
+3. craft 回传 started / completed / failed / cancelled 之类的 execution 信号
+4. Antigravity 把它们映射回 Run / Project / Stage 真相源
+
+这种关系是合理的。
+
+### 4.3 所以答案不是“完全不用”
+
+更准确的答案是：
+
+1. **不用 craft 来承接整个平台**
+2. **可以用 craft 承接执行层的一部分能力**
+3. **更值得借的是它的 execution shell 思路，而不是整个产品壳**
+
+---
+
+## 5. 真正值得复用的层
+
+如果要从 craft 吸收东西，优先级应该是下面这些。
+
+### 5.1 backend / session / event 分层
+
+这是最值得借的地方。
+
+它和当前 Antigravity 正在推进的 AgentBackend / AgentSession / session-consumer 方向是一致的。
+
+### 5.2 capability-driven executor model
+
+以后 execution plane 不应该再隐式假设：
+
+1. 所有 provider 都有 append
+2. 所有 provider 都有 watcher
+3. 所有 provider 都有 IDE 级 live state
+
+craft 的思路提醒我们：
+
+1. 执行器可以能力不等
+2. 但必须合同清楚
+
+### 5.3 第三方 provider 兼容思路
+
+如果目标是支持第三方 API，craft 更值得借的不是 UI，而是：
+
+1. 多 provider execution substrate
+2. 第三方 provider 路由方式
+3. 下层兼容、上层统一的事件模型
+
+---
+
+## 6. 最不该复用的层
+
+下面这些层最不适合直接搬进 Antigravity 主系统。
+
+### 6.1 workspace / session 作为产品真相源
+
+这会直接冲掉 Antigravity 已经存在的：
+
+1. Project
+2. Run
+3. Stage
+4. governance
+
+### 6.2 整个 SessionManager 产品壳
+
+它适合做 execution runtime，不适合直接做平台主心脏。
+
+### 6.3 整套 UI 壳
+
+Antigravity 现在的方向已经不是 IDE shell，而是 OPC / CEO / Project 平台。
+
+---
+
+## 7. 最合理的技术路线
+
+如果你的目标是：
+
+1. 顶层继续做 OPC / CEO / Project 平台
+2. 下层逐步支持第三方 API 与更多执行器
+
+那最合理的路线应该是：
+
+### Step 1
+
+继续把 Antigravity 的控制层 / 执行层边界收口。
+
+也就是继续完成当前 AgentBackend 和 Task B 方向。
+
+### Step 2
+
+把 execution plane 的接入合同写死：
+
+1. session lifecycle
+2. capability matrix
+3. terminal semantics
+4. artifact / result 回传要求
+
+### Step 3
+
+只做一个最小 execution shell 实验。
+
+不是接整个 craft，而是验证：
+
+1. 一个单 stage
+2. 是否能通过外部 execution shell 跑通
+3. 上层仍由 Antigravity 控制层维护真相源
+
+### Step 4
+
+验证通过后，再决定：
+
+1. 只是借设计
+2. 还是把 craft 真接成一个可选 executor
+
+---
+
+## 8. 最终判断
+
+用新的控制层 / 执行层视角重写后，这份研究最准确的结论是：
+
+1. **Antigravity 不该基于 craft 重做**
+2. **craft 很适合作为 Antigravity 下层 execution shell 的参考对象**
+3. **未来甚至可以把 craft 作为一个可选下层执行器接进来**
+4. **但平台的控制层真相源，必须继续掌握在 Antigravity 自己手里**
+
+一句话总结：
+
+> 不把 craft 当地基，可以把 craft 当发动机舱里的一个引擎选项。
+# Antigravity 是否应直接基于 craft-agents 继续开发
+
 日期：2026-04-07
 范围：静态架构研究，目标仓库为 `/Users/darrel/Documents/Antigravity-Mobility-CLI` 与 `/Users/darrel/Documents/craft-agents-oss`
 
@@ -614,3 +1423,158 @@ Antigravity 已经长出来的主价值是：
 所以最合理的策略不是“迁过去”，而是：
 
 > 先把 Antigravity 自己的 backend 边界做干净，再按需吸收 craft 在 session/backend/event 抽象上的成熟经验。
+
+---
+
+## 11. 如果目标是支持第三方 API，让顶层去调用下层执行器
+
+这一问法比“要不要直接基于 craft 或 Claude Code 重做”更准确。
+
+真正的问题不是：
+
+1. 谁来替代 Antigravity 的 `Project / Run / Stage`
+
+而是：
+
+1. Antigravity 顶层能不能把某个 workspace-based agent shell 当成**下层受控执行器**来调用
+2. 借它来获得第三方 API 支持、严格权限控制和本地工作区执行能力
+
+我的结论是：
+
+> **可以，而且这比“整体迁基座”合理得多。**
+
+但 Claude Code 和 craft 适合承担的角色不完全一样。
+
+### 11.1 Claude Code 能不能承担这个角色
+
+可以，但它更像**强执行器**，不是通用嵌入式 backend 框架。
+
+原因有三点：
+
+1. **它当前这份逆向仓库确实支持第三方 provider**
+   - `claude-code/CLAUDE.md` 已明确列出 OpenAI、Gemini、Grok 等兼容层
+   - `claude-code/src/utils/model/providers.ts` 也明确支持 `openai`、`gemini`、`grok` 等 provider 解析
+2. **它有可被顶层调用的入口，但更像 server / CLI，不像稳定 SDK**
+   - `claude-code/src/main.tsx` 已有 long-running server 入口
+   - 但 `claude-code/src/entrypoints/agentSdkTypes.ts` 里的 session SDK 入口当前仍是未实现状态
+3. **它的优势是本地代码执行能力强**
+   - workspace 工作流成熟
+   - 工具调用、文件修改、终端执行能力强
+   - 适合做一个“被调度的 coding executor”
+
+所以如果你要的是：
+
+1. 顶层创建一个任务
+2. 把 prompt 和 workspace 下发给下层
+3. 让下层真的去改代码、跑命令、产出结果
+
+那 Claude Code 是可以承担这个角色的。
+
+但它当前更现实的接法是：
+
+1. **CLI 子进程适配器**
+2. **本地 server 适配器**
+
+而不是直接把它当成熟 SDK 嵌进来。
+
+### 11.2 craft 能不能承担这个角色
+
+也可以，而且它在“做通用执行壳”这件事上，往往比 Claude Code 更顺手。
+
+原因也有三点：
+
+1. **craft 的中心本来就是 backend / session / event 壳**
+   - 它更适合被当成受控下层 runtime
+   - 不像 Claude Code 那么偏“完整 coding product”
+2. **craft 的第三方 provider 路线更天然**
+   - Anthropic 走 ClaudeAgent
+   - 第三方 provider 主要走 PiAgent / `pi_compat`
+   - 这使它更像多 provider execution shell
+3. **craft 更容易被理解成一个 session backend 容器**
+   - 顶层去调它，比直接把整个产品壳搬进来更顺
+
+但 craft 的问题也很明确：
+
+1. 它天然是 session-first
+2. 它不理解 Antigravity 的 Project / Run / Stage / governance
+3. 如果直接拿它当基座，还是会回到“层次错位”问题
+
+所以 craft 适合当：
+
+1. 下层 execution shell
+2. provider compatibility substrate
+
+而不适合直接做顶层主系统。
+
+### 11.3 如果是“顶层调用下层”，谁更合适
+
+要分两类目标看。
+
+#### 目标 A：先尽快拿到一个能干活的第三方执行器
+
+更偏向 Claude Code。
+
+原因：
+
+1. 它本地 coding executor 能力更强
+2. 工作区内文件修改、命令执行、工具调用已经更完整
+3. 只要顶层愿意通过 CLI 或 server 去调它，就能很快形成可用链路
+
+#### 目标 B：做长期可扩展的多 provider 下层执行壳
+
+更偏向 craft。
+
+原因：
+
+1. 它的 backend / session / event 思路更干净
+2. 本来就更接近“被控制的下层 runtime”
+3. 对第三方 provider 的路线也更自然
+
+#### 目标 C：顶层继续保留 Antigravity，只是补第三方执行能力
+
+最稳的路线不是二选一，而是：
+
+1. 顶层仍然是 Antigravity
+2. 下层可以先接 Claude Code executor
+3. 后续如果要做长期多 provider runtime，再抽象到类似 craft 的 execution shell 形态
+
+这条路线最符合当前工程现实。
+
+### 11.4 最现实的系统分工
+
+如果按“顶层调用下层”来设计，最合理的分工是：
+
+1. **Antigravity 顶层负责**
+   - Project
+   - Run
+   - Stage
+   - review-loop
+   - artifact 真相源
+   - scheduler / CEO / approval / governance
+2. **Claude Code 或 craft 下层负责**
+   - 在给定 workspace 内执行任务
+   - 走自身的权限控制和工具调用
+   - 把 started / completed / failed / cancelled 之类的事件或结果交回顶层
+
+这就意味着：
+
+1. 它们不会替代 Antigravity 的业务真相源
+2. 它们会成为 Antigravity 的叶子执行器
+
+### 11.5 我的建议
+
+如果你的研究课题是：
+
+> “为了支持第三方 API，顶层是否可以直接调用 Craft 或 Claude Code 这类 workspace-based 执行器？”
+
+我的建议是：
+
+1. **答案是可以**
+2. **而且这比整体迁基座更合理**
+3. **短期优先顺序应是：Claude Code executor first，craft-style runtime later**
+
+原因：
+
+1. Claude Code 更容易先形成可运行的被调度执行链
+2. craft 更适合作为长期下层 runtime 设计参考，甚至后续再替换 Claude Code adapter 背后的执行壳
+3. 不管选谁，顶层都不该放弃 Antigravity 自己的 `Project / Run / Stage` 主系统

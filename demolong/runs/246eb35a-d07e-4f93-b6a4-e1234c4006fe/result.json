@@ -1,0 +1,13 @@
+{
+  "status": "completed",
+  "summary": "The Round 1 adversarial review confirmed the primary findings regarding native prompt usage and vertical stacking fatigue. However, significant technical gaps were identified, including stale audit data polling and inconsistent localization. The proposals have been sent back for revision to include more specific layout strategies for the constrained sidebar area and more robust change-tracking mechanisms.",
+  "changedFiles": [
+    "demolong/runs/246eb35a-d07e-4f93-b6a4-e1234c4006fe/review/review-round-1.md",
+    "demolong/runs/246eb35a-d07e-4f93-b6a4-e1234c4006fe/review/result-round-1.json"
+  ],
+  "outputArtifacts": [
+    "review/review-round-1.md",
+    "review/result-round-1.json"
+  ],
+  "risks": []
+}

@@ -67,6 +67,9 @@ describe('prompt-executor', () => {
   beforeEach(() => {
     tempWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prompt-'));
     runState = undefined;
+    (globalThis as any).__AGENT_BACKEND_REGISTRY__?.clear();
+    (globalThis as any).__AGENT_SESSION_REGISTRY__?.clear();
+    (globalThis as any).__AGENT_MEMORY_HOOKS__?.clear();
 
     mockCreateRun.mockReset();
     mockGetRun.mockReset();
@@ -146,8 +149,7 @@ describe('prompt-executor', () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(result).toEqual({ runId: 'run-1' });
     expect(mockCreateRun).toHaveBeenCalledWith(expect.objectContaining({
@@ -222,6 +224,7 @@ describe('prompt-executor', () => {
       executionTarget: { kind: 'prompt' },
     });
 
+    await Promise.resolve();
     expect(result).toEqual({ runId: 'run-1' });
     expect(runState.childConversationId).toBe('cascade-1');
     expect(typeof onUpdate).toBe('function');
@@ -315,6 +318,7 @@ describe('prompt-executor', () => {
 
     expect(result).toEqual({ runId: 'run-1' });
     await cancelPromptRun('run-1');
+    await Promise.resolve();
     expect(runState.status).toBe('cancelled');
 
     resolveTask?.({
