@@ -1,7 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { createLogger } from '../logger';
 
 const log = createLogger('CEO-Env');
@@ -483,7 +483,7 @@ export function ensureCEOWorkspaceOpen(runningWorkspaces: string[]): void {
 
   try {
     log.info({ wsPath }, 'Auto-launching CEO workspace in Antigravity IDE');
-    execSync(`"${ANTIGRAVITY_CLI}" --add "${wsPath}"`, {
+    spawnSync(ANTIGRAVITY_CLI, ['--add', wsPath], {
       timeout: 5000,
       stdio: 'ignore',
     });

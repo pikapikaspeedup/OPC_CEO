@@ -31,6 +31,9 @@ const {
   mockGetCanonicalTaskEnvelope,
   mockBuildRoleInputReadAudit,
   mockEnforceCanonicalInputReadProtocol,
+  mockApplyProviderExecutionContext,
+  mockBuildTemplateProviderExecutionContext,
+  mockResolveCapabilityAwareProvider,
 } = vi.hoisted(() => ({
   mockDiscoverLanguageServers: vi.fn(),
   mockGetApiKey: vi.fn(),
@@ -66,6 +69,29 @@ const {
   mockGetCanonicalTaskEnvelope: vi.fn(),
   mockBuildRoleInputReadAudit: vi.fn(),
   mockEnforceCanonicalInputReadProtocol: vi.fn(),
+  mockApplyProviderExecutionContext: vi.fn((prompt: string, context?: { promptPreamble?: string }) => (
+    context?.promptPreamble ? `${context.promptPreamble}\n\n${prompt}` : prompt
+  )),
+  mockBuildTemplateProviderExecutionContext: vi.fn((workspacePath: string, templateId: string) => ({
+    promptPreamble: '',
+    resolutionReason: `template context for ${templateId}`,
+    runtimeContract: undefined,
+    executionProfile: undefined,
+  })),
+  mockResolveCapabilityAwareProvider: vi.fn((options: {
+    requestedProvider: string;
+    requestedModel?: string;
+    requiredExecutionClass?: string;
+  }) => ({
+    requestedProvider: options.requestedProvider,
+    selectedProvider: options.requestedProvider,
+    requestedModel: options.requestedModel,
+    selectedModel: options.requestedModel,
+    requiredExecutionClass: options.requiredExecutionClass ?? 'light',
+    routingMode: 'preferred',
+    reason: `Capability-aware routing kept provider "${options.requestedProvider}"`,
+    missingCapabilities: [],
+  })),
 }));
 
 vi.mock('../bridge/gateway', () => ({
@@ -92,6 +118,12 @@ vi.mock('./asset-loader', () => ({
     resolveWorkflowContent: (...args: any[]) => mockResolveWorkflowContent(...args),
     getTemplate: vi.fn(),
   },
+}));
+
+vi.mock('./department-execution-resolver', () => ({
+  applyProviderExecutionContext: (...args: any[]) => mockApplyProviderExecutionContext(...args),
+  buildTemplateProviderExecutionContext: (...args: any[]) => mockBuildTemplateProviderExecutionContext(...args),
+  resolveCapabilityAwareProvider: (...args: any[]) => mockResolveCapabilityAwareProvider(...args),
 }));
 
 vi.mock('../providers', () => ({
@@ -208,15 +240,120 @@ vi.mock('../logger', () => ({
 }));
 
 import { cancelRun, dispatchRun, interveneRun } from './group-runtime';
+import { registerAgentBackend } from '../backends';
+import type { AgentBackend, AgentEvent, AgentSession, BackendRunConfig } from '../backends';
+
+const scriptedCapabilities = {
+  supportsAppend: true,
+  supportsCancel: true,
+  emitsLiveState: true,
+  emitsRawSteps: true,
+  emitsStreamingText: false,
+};
+
+function makeScriptedSession(
+  runId: string,
+  providerId: 'antigravity' | 'custom' | 'claude-api',
+  handle: string,
+  events: AgentEvent[],
+): AgentSession {
+  return {
+    runId,
+    providerId,
+    handle,
+    capabilities: scriptedCapabilities,
+    async *events(): AsyncIterable<AgentEvent> {
+      for (const event of events) {
+        yield event;
+      }
+    },
+    append: async () => undefined,
+    cancel: async () => undefined,
+  };
+}
+
+function registerScriptedBackend(options: {
+  providerId?: 'antigravity' | 'custom' | 'claude-api';
+  startEvents?: (config: BackendRunConfig) => AgentEvent[];
+  diagnosticsSteps?: unknown[];
+  attachError?: Error;
+  supportsAttach?: boolean;
+  attachSessionFactory?: (config: BackendRunConfig, handle: string) => AgentSession;
+  onStartConfig?(config: BackendRunConfig): void;
+  onAttachConfig?(config: BackendRunConfig, handle: string): void;
+}): AgentBackend {
+  const providerId = options.providerId || 'antigravity';
+  const backend: AgentBackend & {
+    getRecentSteps?(handle: string): Promise<unknown[]>;
+    annotateSession?(handle: string, annotations: Record<string, unknown>): Promise<void>;
+  } = {
+    providerId,
+    capabilities: () => scriptedCapabilities,
+    start: async (config) => {
+      options.onStartConfig?.(config);
+      return makeScriptedSession(
+        config.runId,
+        providerId,
+        providerId === 'custom'
+          ? 'custom-session'
+          : providerId === 'claude-api'
+            ? 'claude-api-session'
+            : 'cascade-scripted',
+        options.startEvents ? options.startEvents(config) : [{
+          kind: 'started',
+          runId: config.runId,
+          providerId,
+          handle: providerId === 'custom'
+            ? 'custom-session'
+            : providerId === 'claude-api'
+              ? 'claude-api-session'
+              : 'cascade-scripted',
+          startedAt: '2026-04-10T00:00:00.000Z',
+        }],
+      );
+    },
+  };
+
+  if (options.supportsAttach !== false) {
+    backend.attach = async (config, handle) => {
+      options.onAttachConfig?.(config, handle);
+      if (options.attachError) {
+        throw options.attachError;
+      }
+      if (options.attachSessionFactory) {
+        return options.attachSessionFactory({ runId: config.runId }, handle);
+      }
+      return makeScriptedSession(config.runId, providerId, handle, [{
+        kind: 'started',
+        runId: config.runId,
+        providerId,
+        handle,
+        startedAt: '2026-04-10T00:00:00.000Z',
+      }]);
+    };
+  }
+
+  if (providerId === 'antigravity') {
+    backend.getRecentSteps = async () => options.diagnosticsSteps || [];
+    backend.annotateSession = async () => undefined;
+  }
+
+  return registerAgentBackend(backend);
+}
 
 describe('group-runtime characterization', () => {
   let tempWorkspace: string;
+  let tempGatewayHome: string;
+  let previousGatewayHome: string | undefined;
   let runState: any;
   let antigravityExecutor: any;
   let codexExecutor: any;
 
   beforeEach(() => {
     tempWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-group-runtime-'));
+    tempGatewayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-group-runtime-home-'));
+    previousGatewayHome = process.env.AG_GATEWAY_HOME;
+    process.env.AG_GATEWAY_HOME = tempGatewayHome;
     runState = undefined;
     (globalThis as any).__AGENT_BACKEND_REGISTRY__?.clear();
     (globalThis as any).__AGENT_SESSION_REGISTRY__?.clear();
@@ -254,6 +391,9 @@ describe('group-runtime characterization', () => {
     mockGetCanonicalTaskEnvelope.mockReset();
     mockBuildRoleInputReadAudit.mockReset();
     mockEnforceCanonicalInputReadProtocol.mockReset();
+    mockApplyProviderExecutionContext.mockReset();
+    mockBuildTemplateProviderExecutionContext.mockReset();
+    mockResolveCapabilityAwareProvider.mockReset();
 
     antigravityExecutor = {
       capabilities: () => ({
@@ -330,6 +470,30 @@ describe('group-runtime characterization', () => {
 
     mockGetRun.mockImplementation(() => runState);
 
+    mockApplyProviderExecutionContext.mockImplementation((prompt: string, context?: { promptPreamble?: string }) => (
+      context?.promptPreamble ? `${context.promptPreamble}\n\n${prompt}` : prompt
+    ));
+    mockBuildTemplateProviderExecutionContext.mockImplementation((_workspacePath: string, templateId: string) => ({
+      promptPreamble: '',
+      resolutionReason: `template context for ${templateId}`,
+      runtimeContract: undefined,
+      executionProfile: undefined,
+    }));
+    mockResolveCapabilityAwareProvider.mockImplementation((options: {
+      requestedProvider: string;
+      requestedModel?: string;
+      requiredExecutionClass?: string;
+    }) => ({
+      requestedProvider: options.requestedProvider,
+      selectedProvider: options.requestedProvider,
+      requestedModel: options.requestedModel,
+      selectedModel: options.requestedModel,
+      requiredExecutionClass: options.requiredExecutionClass ?? 'light',
+      routingMode: 'preferred',
+      reason: `Capability-aware routing kept provider "${options.requestedProvider}"`,
+      missingCapabilities: [],
+    }));
+
     mockResolveProvider.mockReturnValue({ provider: 'antigravity', model: 'MODEL_PLACEHOLDER_M26', source: 'default' });
     mockGetExecutor.mockImplementation((provider: string) => provider === 'codex' ? codexExecutor : antigravityExecutor);
     mockDiscoverLanguageServers.mockReturnValue([{ port: 1, csrf: 'csrf', workspace: tempWorkspace }]);
@@ -351,6 +515,12 @@ describe('group-runtime characterization', () => {
 
   afterEach(() => {
     fs.rmSync(tempWorkspace, { recursive: true, force: true });
+    fs.rmSync(tempGatewayHome, { recursive: true, force: true });
+    if (previousGatewayHome === undefined) {
+      delete process.env.AG_GATEWAY_HOME;
+    } else {
+      process.env.AG_GATEWAY_HOME = previousGatewayHome;
+    }
   });
 
   it('dispatches legacy-single template runs through the AgentBackend session path', async () => {
@@ -404,6 +574,166 @@ describe('group-runtime characterization', () => {
     expect(runState.status).toBe('running');
     expect(runState.activeConversationId).toBe('cascade-1');
     expect(runState.childConversationId).toBe('cascade-1');
+  });
+
+  it('forwards runtime carrier from taskEnvelope into template backend config', async () => {
+    const seenConfigs: BackendRunConfig[] = [];
+    registerScriptedBackend({
+      providerId: 'custom',
+      onStartConfig: (config) => {
+        seenConfigs.push(config);
+      },
+      startEvents: (config) => [
+        {
+          kind: 'started',
+          runId: config.runId,
+          providerId: 'custom',
+          handle: 'custom-session',
+          startedAt: '2026-04-10T00:00:00.000Z',
+        },
+        {
+          kind: 'completed',
+          runId: config.runId,
+          providerId: 'custom',
+          handle: 'custom-session',
+          finishedAt: '2026-04-10T00:00:01.000Z',
+          result: {
+            status: 'completed',
+            summary: 'done',
+            changedFiles: [],
+            blockers: [],
+            needsReview: [],
+          },
+          finalText: 'done',
+        },
+      ],
+    });
+    mockResolveProvider.mockReturnValue({ provider: 'custom', model: 'MODEL_PLACEHOLDER_M26', source: 'default' });
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 60_000, autoApprove: false }],
+    });
+
+    const executionProfile = {
+      kind: 'dag-orchestration' as const,
+      templateId: 'tpl-1',
+      stageId: 'implement',
+    };
+    const departmentRuntimeContract = {
+      workspaceRoot: tempWorkspace,
+      toolset: 'coding',
+      additionalWorkingDirectories: ['/tmp/shared-code'],
+      artifactRoot: '.artifacts/runs/run-1',
+    };
+
+    await dispatchRun({
+      workspace: `file://${tempWorkspace}`,
+      templateId: 'tpl-1',
+      stageId: 'implement',
+      prompt: '修复登录接口',
+      taskEnvelope: {
+        goal: '修复登录接口',
+        executionProfile,
+        departmentRuntimeContract,
+      } as any,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seenConfigs[0]).toEqual(expect.objectContaining({
+      executionProfile,
+      runtimeContract: expect.objectContaining({
+        toolset: 'coding',
+        additionalWorkingDirectories: ['/tmp/shared-code'],
+        artifactRoot: path.join(tempWorkspace, 'demolong/runs/run-1/'),
+      }),
+    }));
+  });
+
+  it('routes artifact-heavy template runs away from native-codex before backend dispatch', async () => {
+    const seenConfigs: BackendRunConfig[] = [];
+    registerScriptedBackend({
+      providerId: 'claude-api',
+      onStartConfig: (config) => {
+        seenConfigs.push(config);
+      },
+      startEvents: (config) => [
+        {
+          kind: 'started',
+          runId: config.runId,
+          providerId: 'claude-api',
+          handle: 'claude-api-session',
+          startedAt: '2026-04-10T00:00:00.000Z',
+        },
+        {
+          kind: 'completed',
+          runId: config.runId,
+          providerId: 'claude-api',
+          handle: 'claude-api-session',
+          finishedAt: '2026-04-10T00:00:01.000Z',
+          result: {
+            status: 'completed',
+            summary: 'done',
+            changedFiles: [],
+            blockers: [],
+            needsReview: [],
+          },
+          finalText: 'done',
+        },
+      ],
+    });
+    mockResolveProvider.mockReturnValue({ provider: 'native-codex', model: 'gpt-5.4', source: 'department' });
+    mockResolveCapabilityAwareProvider.mockReturnValue({
+      requestedProvider: 'native-codex',
+      selectedProvider: 'claude-api',
+      requestedModel: 'gpt-5.4',
+      selectedModel: 'claude-sonnet-4-20250514',
+      requiredExecutionClass: 'artifact-heavy',
+      routingMode: 'fallback',
+      reason: 'Capability-aware routing moved artifact-heavy work from "native-codex" to "claude-api"',
+      missingCapabilities: ['supportsDepartmentRuntime', 'supportsToolRuntime'],
+    });
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 60_000, autoApprove: false }],
+    });
+
+    await dispatchRun({
+      workspace: `file://${tempWorkspace}`,
+      templateId: 'tpl-1',
+      stageId: 'implement',
+      prompt: '产出完整交付包',
+      taskEnvelope: {
+        goal: '产出完整交付包',
+        departmentRuntimeContract: {
+          workspaceRoot: tempWorkspace,
+          additionalWorkingDirectories: [],
+          readRoots: [tempWorkspace],
+          writeRoots: [tempWorkspace],
+          artifactRoot: path.join(tempWorkspace, '.artifacts'),
+          executionClass: 'artifact-heavy',
+          toolset: 'coding',
+          permissionMode: 'acceptEdits',
+        },
+      } as any,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runState.provider).toBe('claude-api');
+    expect(runState.resolutionReason).toContain('Capability-aware routing moved artifact-heavy work from "native-codex" to "claude-api"');
+    expect(seenConfigs[0]).toEqual(expect.objectContaining({
+      model: 'claude-sonnet-4-20250514',
+      resolution: expect.objectContaining({
+        requestedProvider: 'native-codex',
+        routedProvider: 'claude-api',
+        requiredExecutionClass: 'artifact-heavy',
+      }),
+    }));
   });
 
   it('cancels non-active runs by marking the project stage cancelled locally', async () => {
@@ -796,5 +1126,330 @@ describe('group-runtime characterization', () => {
       status: 'DONE',
       analysis: 'looks good',
     }));
+  });
+
+  it('records STUCK when evaluate session fails', async () => {
+    registerScriptedBackend({
+      startEvents: ({ runId }) => [
+        {
+          kind: 'started',
+          runId,
+          providerId: 'antigravity',
+          handle: 'cascade-eval-failed',
+          startedAt: '2026-04-10T00:00:00.000Z',
+        },
+        {
+          kind: 'failed',
+          runId,
+          providerId: 'antigravity',
+          handle: 'cascade-eval-failed',
+          finishedAt: '2026-04-10T00:00:01.000Z',
+          error: {
+            code: 'watch_failed',
+            message: 'evaluation backend failed',
+            retryable: true,
+            source: 'backend',
+          },
+        },
+      ],
+      diagnosticsSteps: [],
+    });
+
+    runState = {
+      runId: 'run-1',
+      status: 'running',
+      workspace: `file://${tempWorkspace}`,
+      projectId: 'project-1',
+      stageId: 'implement',
+      pipelineStageId: 'implement',
+      templateId: 'tpl-1',
+      activeConversationId: 'cascade-1',
+      childConversationId: 'cascade-1',
+      activeRoleId: 'author',
+      prompt: '修复登录接口',
+      roles: [{ roleId: 'author', round: 1, childConversationId: 'cascade-1', status: 'running' }],
+      taskEnvelope: { goal: '修复登录接口' },
+    };
+    mockGetRun.mockImplementation(() => runState);
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 60_000, autoApprove: false }],
+    });
+
+    const result = await interveneRun('run-1', 'evaluate');
+
+    expect(result).toEqual({ status: 'evaluated', action: 'evaluate' });
+    expect(runState.supervisorReviews?.[0]?.decision).toEqual({
+      status: 'STUCK',
+      analysis: 'evaluation backend failed',
+    });
+  });
+
+  it('records STUCK when evaluate session is cancelled', async () => {
+    registerScriptedBackend({
+      startEvents: ({ runId }) => [
+        {
+          kind: 'started',
+          runId,
+          providerId: 'antigravity',
+          handle: 'cascade-eval-cancelled',
+          startedAt: '2026-04-10T00:00:00.000Z',
+        },
+        {
+          kind: 'cancelled',
+          runId,
+          providerId: 'antigravity',
+          handle: 'cascade-eval-cancelled',
+          finishedAt: '2026-04-10T00:00:01.000Z',
+          reason: 'evaluation cancelled by test',
+        },
+      ],
+      diagnosticsSteps: [],
+    });
+
+    runState = {
+      runId: 'run-1',
+      status: 'running',
+      workspace: `file://${tempWorkspace}`,
+      projectId: 'project-1',
+      stageId: 'implement',
+      pipelineStageId: 'implement',
+      templateId: 'tpl-1',
+      activeConversationId: 'cascade-1',
+      childConversationId: 'cascade-1',
+      activeRoleId: 'author',
+      prompt: '修复登录接口',
+      roles: [{ roleId: 'author', round: 1, childConversationId: 'cascade-1', status: 'running' }],
+      taskEnvelope: { goal: '修复登录接口' },
+    };
+    mockGetRun.mockImplementation(() => runState);
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 60_000, autoApprove: false }],
+    });
+
+    const result = await interveneRun('run-1', 'evaluate');
+
+    expect(result).toEqual({ status: 'evaluated', action: 'evaluate' });
+    expect(runState.supervisorReviews?.[0]?.decision).toEqual({
+      status: 'STUCK',
+      analysis: 'evaluation cancelled by test',
+    });
+  });
+
+  it('records STUCK when evaluate returns malformed JSON', async () => {
+    registerScriptedBackend({
+      startEvents: ({ runId }) => [
+        {
+          kind: 'started',
+          runId,
+          providerId: 'antigravity',
+          handle: 'cascade-eval-malformed',
+          startedAt: '2026-04-10T00:00:00.000Z',
+        },
+        {
+          kind: 'completed',
+          runId,
+          providerId: 'antigravity',
+          handle: 'cascade-eval-malformed',
+          finishedAt: '2026-04-10T00:00:01.000Z',
+          result: {
+            status: 'completed',
+            summary: 'done',
+            changedFiles: [],
+            blockers: [],
+            needsReview: [],
+          },
+          rawSteps: [{
+            type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+            plannerResponse: { modifiedResponse: '{not-json' },
+          }],
+          finalText: '{not-json',
+        },
+      ],
+      diagnosticsSteps: [],
+    });
+
+    runState = {
+      runId: 'run-1',
+      status: 'running',
+      workspace: `file://${tempWorkspace}`,
+      projectId: 'project-1',
+      stageId: 'implement',
+      pipelineStageId: 'implement',
+      templateId: 'tpl-1',
+      activeConversationId: 'cascade-1',
+      childConversationId: 'cascade-1',
+      activeRoleId: 'author',
+      prompt: '修复登录接口',
+      roles: [{ roleId: 'author', round: 1, childConversationId: 'cascade-1', status: 'running' }],
+      taskEnvelope: { goal: '修复登录接口' },
+    };
+    mockGetRun.mockImplementation(() => runState);
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 60_000, autoApprove: false }],
+    });
+
+    const result = await interveneRun('run-1', 'evaluate');
+
+    expect(result).toEqual({ status: 'evaluated', action: 'evaluate' });
+    expect(runState.supervisorReviews?.[0]?.decision.status).toBe('STUCK');
+    expect(runState.supervisorReviews?.[0]?.decision.analysis).toBe('{not-json');
+  });
+
+  it('surfaces unattached cancel attach failures instead of silently cancelling locally', async () => {
+    registerScriptedBackend({
+      attachError: new Error('owner mapping missing'),
+    });
+
+    runState = {
+      runId: 'run-1',
+      status: 'running',
+      workspace: `file://${tempWorkspace}`,
+      projectId: 'project-1',
+      pipelineStageId: 'implement',
+      activeConversationId: 'cascade-1',
+    };
+    mockGetRun.mockImplementation(() => runState);
+
+    await expect(cancelRun('run-1')).rejects.toThrow('owner mapping missing');
+    expect(mockUpdatePipelineStageByStageId).not.toHaveBeenCalled();
+    expect(mockUpdateRun).not.toHaveBeenCalledWith('run-1', { status: 'cancelled' });
+  });
+
+  it('fails unattached nudge when the resolved backend does not support attach', async () => {
+    registerScriptedBackend({
+      providerId: 'custom',
+      supportsAttach: false,
+      startEvents: ({ runId }) => [{
+        kind: 'started',
+        runId,
+        providerId: 'custom',
+        handle: 'custom-session',
+        startedAt: '2026-04-10T00:00:00.000Z',
+      }],
+    });
+    mockResolveProvider.mockReturnValue({ provider: 'custom', model: 'MODEL_PLACEHOLDER_M26', source: 'default' });
+
+    runState = {
+      runId: 'run-1',
+      status: 'running',
+      workspace: `file://${tempWorkspace}`,
+      projectId: 'project-1',
+      stageId: 'implement',
+      pipelineStageId: 'implement',
+      templateId: 'tpl-1',
+      activeConversationId: 'cascade-1',
+      childConversationId: 'cascade-1',
+      prompt: '修复登录接口',
+      model: 'MODEL_PLACEHOLDER_M26',
+      roles: [{ roleId: 'author', round: 1, childConversationId: 'cascade-1', status: 'running' }],
+      liveState: {
+        cascadeStatus: 'running',
+        stepCount: 1,
+        lastStepAt: '2026-04-09T00:00:00.000Z',
+        lastStepType: 'PLANNER_RESPONSE',
+        staleSince: '2026-04-09T00:01:00.000Z',
+      },
+      taskEnvelope: { goal: '修复登录接口' },
+    };
+    mockGetRun.mockImplementation(() => runState);
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 60_000, autoApprove: false }],
+    });
+
+    await expect(interveneRun('run-1', 'nudge', '继续补全实现')).rejects.toThrow(
+      "Provider 'custom' does not support attaching to an existing session",
+    );
+  });
+
+  it('marks attached-session nudge runs as timeout when the attached session exceeds role timeout', async () => {
+    vi.useFakeTimers();
+    const cancelSpy = vi.fn(async () => undefined);
+    let releaseCancelled!: (reason: string) => void;
+    const cancelledReason = new Promise<string>((resolve) => {
+      releaseCancelled = resolve;
+    });
+
+    registerScriptedBackend({
+      attachSessionFactory: ({ runId }, handle) => ({
+        runId,
+        providerId: 'antigravity',
+        handle,
+        capabilities: scriptedCapabilities,
+        async *events(): AsyncIterable<AgentEvent> {
+          yield {
+            kind: 'started',
+            runId,
+            providerId: 'antigravity',
+            handle,
+            startedAt: '2026-04-10T00:00:00.000Z',
+          };
+          const reason = await cancelledReason;
+          yield {
+            kind: 'cancelled',
+            runId,
+            providerId: 'antigravity',
+            handle,
+            finishedAt: '2026-04-10T00:00:01.000Z',
+            reason,
+          };
+        },
+        append: async () => undefined,
+        cancel: async (reason) => {
+          await cancelSpy(reason);
+          releaseCancelled(reason || 'timeout');
+        },
+      }),
+      diagnosticsSteps: [],
+    });
+
+    runState = {
+      runId: 'run-1',
+      status: 'running',
+      workspace: `file://${tempWorkspace}`,
+      projectId: 'project-1',
+      stageId: 'implement',
+      pipelineStageId: 'implement',
+      templateId: 'tpl-1',
+      activeConversationId: 'cascade-1',
+      childConversationId: 'cascade-1',
+      prompt: '修复登录接口',
+      model: 'MODEL_PLACEHOLDER_M26',
+      roles: [{ roleId: 'author', round: 1, childConversationId: 'cascade-1', status: 'running' }],
+      liveState: {
+        cascadeStatus: 'running',
+        stepCount: 1,
+        lastStepAt: '2026-04-09T00:00:00.000Z',
+        lastStepType: 'PLANNER_RESPONSE',
+        staleSince: '2026-04-09T00:01:00.000Z',
+      },
+      taskEnvelope: { goal: '修复登录接口' },
+    };
+    mockGetRun.mockImplementation(() => runState);
+    mockGetStageDefinition.mockReturnValue({
+      id: 'implement',
+      templateId: 'tpl-1',
+      executionMode: 'legacy-single',
+      roles: [{ id: 'author', workflow: '/dev-worker', timeoutMs: 5, autoApprove: false }],
+    });
+
+    const resultPromise = interveneRun('run-1', 'nudge', '继续补全实现');
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await resultPromise;
+
+    expect(result).toEqual({ status: 'completed', action: 'nudge', cascadeId: 'cascade-1' });
+    expect(cancelSpy).toHaveBeenCalledWith('timeout');
+    expect(runState.status).toBe('timeout');
   });
 });

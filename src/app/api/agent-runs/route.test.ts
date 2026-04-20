@@ -24,8 +24,8 @@ vi.mock('@/lib/agents/prompt-executor', () => ({
   },
 }));
 
-vi.mock('@/lib/agents/run-registry', () => ({
-  listRuns: vi.fn(() => []),
+vi.mock('@/lib/storage/gateway-db', () => ({
+  listRunRecordsByFilter: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -39,7 +39,8 @@ vi.mock('@/lib/logger', () => ({
 
 import { executeDispatch } from '@/lib/agents/dispatch-service';
 import { executePrompt } from '@/lib/agents/prompt-executor';
-import { POST } from './route';
+import { listRunRecordsByFilter } from '@/lib/storage/gateway-db';
+import { GET, POST } from './route';
 
 function makeRequest(body: Record<string, unknown>) {
   return new Request('http://localhost/api/agent-runs', {
@@ -53,6 +54,7 @@ describe('POST /api/agent-runs', () => {
   beforeEach(() => {
     vi.mocked(executeDispatch).mockClear();
     vi.mocked(executePrompt).mockClear();
+    vi.mocked(listRunRecordsByFilter).mockClear();
   });
 
   it('keeps legacy template dispatch compatibility', async () => {
@@ -60,6 +62,10 @@ describe('POST /api/agent-runs', () => {
       workspace: 'file:///tmp/backend',
       prompt: '修复登录接口',
       templateId: 'coding-basic-template',
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId: 'job-1',
+      },
     }));
 
     expect(res.status).toBe(201);
@@ -68,6 +74,10 @@ describe('POST /api/agent-runs', () => {
       workspace: 'file:///tmp/backend',
       prompt: '修复登录接口',
       templateId: 'coding-basic-template',
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId: 'job-1',
+      },
     }));
     expect(vi.mocked(executePrompt)).not.toHaveBeenCalled();
   });
@@ -121,6 +131,156 @@ describe('POST /api/agent-runs', () => {
     expect(vi.mocked(executePrompt)).not.toHaveBeenCalled();
   });
 
+  it('supports workflow-run executionProfile requests', async () => {
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/ai-news',
+      prompt: '整理今天 AI 资讯重点',
+      executionProfile: {
+        kind: 'workflow-run',
+        workflowRef: '/ai_digest',
+        skillHints: ['research'],
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ runId: 'prompt-run', status: 'starting' });
+    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
+      executionTarget: {
+        kind: 'prompt',
+        promptAssetRefs: ['/ai_digest'],
+        skillHints: ['research'],
+      },
+    }));
+    expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+  });
+
+  it('embeds runtime carrier into prompt taskEnvelope payloads', async () => {
+    const executionProfile = {
+      kind: 'workflow-run' as const,
+      workflowRef: '/ai_digest',
+      skillHints: ['research'],
+    };
+    const departmentRuntimeContract = {
+      workspaceRoot: '/tmp/ai-news',
+      toolset: 'research',
+      additionalWorkingDirectories: ['/tmp/shared-context'],
+      readRoots: ['/tmp/reference'],
+    };
+
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/ai-news',
+      prompt: '整理今天 AI 资讯重点',
+      executionProfile,
+      departmentRuntimeContract,
+    }));
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
+      executionTarget: {
+        kind: 'prompt',
+        promptAssetRefs: ['/ai_digest'],
+        skillHints: ['research'],
+      },
+      taskEnvelope: expect.objectContaining({
+        executionProfile,
+        departmentRuntimeContract,
+      }),
+    }));
+    expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+  });
+
+  it('supports dag-orchestration executionProfile requests', async () => {
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/backend',
+      prompt: '修复登录接口',
+      executionProfile: {
+        kind: 'dag-orchestration',
+        templateId: 'coding-basic-template',
+        stageId: 'implement',
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ runId: 'template-run', status: 'starting' });
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      templateId: 'coding-basic-template',
+      stageId: 'implement',
+    }));
+  });
+
+  it('supports review-flow executionProfile requests', async () => {
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/backend',
+      prompt: '评审设计方案',
+      executionProfile: {
+        kind: 'review-flow',
+        templateId: 'spec-review-template',
+        stageId: 'author-review',
+        reviewPolicyId: 'default-strict',
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ runId: 'template-run', status: 'starting' });
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      templateId: 'spec-review-template',
+      stageId: 'author-review',
+    }));
+  });
+
+  it('embeds runtime carrier into template taskEnvelope payloads', async () => {
+    const executionProfile = {
+      kind: 'dag-orchestration' as const,
+      templateId: 'coding-basic-template',
+      stageId: 'implement',
+    };
+    const departmentRuntimeContract = {
+      workspaceRoot: '/tmp/backend',
+      artifactRoot: '.artifacts/run-1',
+      toolset: 'coding',
+      additionalWorkingDirectories: ['/tmp/shared-code'],
+      writeRoots: ['/tmp/backend', '/tmp/shared-code'],
+    };
+
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/backend',
+      prompt: '修复登录接口',
+      executionProfile,
+      departmentRuntimeContract,
+    }));
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      templateId: 'coding-basic-template',
+      stageId: 'implement',
+      taskEnvelope: expect.objectContaining({
+        executionProfile,
+        departmentRuntimeContract,
+      }),
+    }));
+    expect(vi.mocked(executePrompt)).not.toHaveBeenCalled();
+  });
+
+  it('forwards scheduler triggerContext to template dispatches', async () => {
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/backend',
+      prompt: '修复登录接口',
+      templateId: 'coding-basic-template',
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId: 'job-1',
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId: 'job-1',
+      },
+    }));
+  });
+
   it('rejects unsupported execution targets', async () => {
     const res = await POST(makeRequest({
       workspace: 'file:///tmp/ops',
@@ -129,5 +289,14 @@ describe('POST /api/agent-runs', () => {
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Unsupported execution target: project-only' });
+  });
+});
+
+describe('GET /api/agent-runs', () => {
+  it('supports filtering by schedulerJobId', async () => {
+    const req = new Request('http://localhost/api/agent-runs?schedulerJobId=job-1');
+    await GET(req);
+
+    expect(vi.mocked(listRunRecordsByFilter)).toHaveBeenCalledWith({ schedulerJobId: 'job-1' });
   });
 });

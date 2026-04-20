@@ -60,7 +60,7 @@ export async function callLLMOneshot(
   }
 
   // Fallback for antigravity (requires manual polling since executeTask returns immediately in Phase 1)
-  const servers = discoverLanguageServers();
+  const servers = await discoverLanguageServers();
   const apiKey = getApiKey();
 
   if (!apiKey || servers.length === 0) {

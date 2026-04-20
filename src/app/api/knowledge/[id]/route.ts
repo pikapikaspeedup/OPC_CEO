@@ -2,6 +2,12 @@ import { NextResponse } from 'next/server';
 import { readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import {
+  deleteKnowledgeAsset,
+  getKnowledgeAsset,
+  updateKnowledgeAssetMetadata,
+  upsertKnowledgeAsset,
+} from '@/lib/knowledge';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,12 +32,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const kiDir = join(KNOWLEDGE_DIR, id);
   const metaPath = join(kiDir, 'metadata.json');
+  const storedAsset = getKnowledgeAsset(id);
 
-  if (!existsSync(metaPath)) {
+  if (!storedAsset && !existsSync(metaPath)) {
     return NextResponse.json({ error: 'Knowledge item not found' }, { status: 404 });
   }
 
   try {
+    if (storedAsset && !existsSync(metaPath)) {
+      upsertKnowledgeAsset(storedAsset);
+    }
     const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
     let timestamps = { created: '', modified: '', accessed: '' };
     try {
@@ -57,9 +67,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       timestamps,
       artifactFiles,
       artifacts,
+      ...(typeof meta.usageCount === 'number' ? { usageCount: meta.usageCount } : {}),
+      ...(typeof meta.lastAccessedAt === 'string' ? { lastAccessedAt: meta.lastAccessedAt } : {}),
     });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
 
@@ -67,20 +79,26 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params;
   const kiDir = join(KNOWLEDGE_DIR, id);
   const metaPath = join(kiDir, 'metadata.json');
+  const storedAsset = getKnowledgeAsset(id);
 
-  if (!existsSync(metaPath)) {
+  if (!storedAsset && !existsSync(metaPath)) {
     return NextResponse.json({ error: 'Knowledge item not found' }, { status: 404 });
   }
 
   try {
     const body = await req.json();
-    const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+    const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, 'utf-8')) : {};
 
     // Update allowed fields
     if (body.title !== undefined) meta.title = body.title;
     if (body.summary !== undefined) meta.summary = body.summary;
 
     writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+    if (storedAsset) {
+      updateKnowledgeAssetMetadata(id, {
+        ...(body.title !== undefined ? { title: body.title } : {}),
+      });
+    }
 
     // Update timestamps
     const tsPath = join(kiDir, 'timestamps.json');
@@ -92,23 +110,27 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     writeFileSync(tsPath, JSON.stringify(timestamps, null, 2), 'utf-8');
 
     return NextResponse.json({ ok: true, title: meta.title, summary: meta.summary });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const kiDir = join(KNOWLEDGE_DIR, id);
+  const storedAsset = getKnowledgeAsset(id);
 
-  if (!existsSync(kiDir)) {
+  if (!storedAsset && !existsSync(kiDir)) {
     return NextResponse.json({ error: 'Knowledge item not found' }, { status: 404 });
   }
 
   try {
+    if (storedAsset) {
+      deleteKnowledgeAsset(id);
+    }
     rmSync(kiDir, { recursive: true, force: true });
     return NextResponse.json({ ok: true, deleted: id });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

@@ -8,7 +8,7 @@ vi.mock('./prompt-executor', () => ({
 import { executeDispatch } from './dispatch-service';
 import { executePrompt } from './prompt-executor';
 import { deleteProject } from './project-registry';
-import { createScheduledJob, deleteScheduledJob, isScheduledJobDue, normalizeScheduledJobDefinition, triggerScheduledJob, updateScheduledJob } from './scheduler';
+import { createScheduledJob, deleteScheduledJob, getSchedulerLoopDelay, isScheduledJobDue, normalizeScheduledJobDefinition, triggerScheduledJob, updateScheduledJob } from './scheduler';
 import type { ScheduledJob } from './scheduler-types';
 
 beforeEach(() => {
@@ -51,6 +51,24 @@ describe('isScheduledJobDue', () => {
 
     expect(isScheduledJobDue(job, new Date('2026-03-27T08:01:00.000Z'))).toBe(true);
     expect(isScheduledJobDue({ ...job, lastRunAt: '2026-03-27T08:02:00.000Z' }, new Date('2026-03-27T08:03:00.000Z'))).toBe(false);
+  });
+
+  it('computes second-level wake delay for short interval jobs', () => {
+    const job = makeJob({
+      intervalMs: 5_000,
+      lastRunAt: '2026-03-27T08:00:00.000Z',
+    });
+
+    expect(getSchedulerLoopDelay(new Date('2026-03-27T08:00:02.000Z'), [job])).toBe(3_000);
+  });
+
+  it('clamps overdue jobs to the minimum one-second wake delay', () => {
+    const job = makeJob({
+      intervalMs: 5_000,
+      lastRunAt: '2026-03-27T08:00:00.000Z',
+    });
+
+    expect(getSchedulerLoopDelay(new Date('2026-03-27T08:00:05.100Z'), [job])).toBe(1_000);
   });
 
   it('normalizes create-project jobs to file URIs', () => {
@@ -144,6 +162,10 @@ describe('isScheduledJobDue', () => {
     expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
       templateId: 'coding-basic-template',
       prompt: '修复登录接口',
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId: created.jobId,
+      },
     }));
 
     if (projectId) deleteProject(projectId);
@@ -199,6 +221,10 @@ describe('isScheduledJobDue', () => {
     expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
       workspace: 'file:///Users/darrel/Documents/ai-news',
       prompt: '整理今天 AI 资讯重点信号',
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId: created.jobId,
+      },
       executionTarget: expect.objectContaining({
         kind: 'prompt',
         promptAssetRefs: ['daily-digest-playbook'],
@@ -206,6 +232,73 @@ describe('isScheduledJobDue', () => {
       }),
     }));
     expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('triggers workflow-run execution profiles via PromptExecutor', async () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: {
+          kind: 'dispatch-execution-profile',
+          workspace: 'file:///Users/darrel/Documents/ai-news',
+          prompt: '整理今天 AI 资讯重点信号',
+          executionProfile: {
+            kind: 'workflow-run',
+            workflowRef: '/ai_digest',
+            skillHints: ['research'],
+          },
+        },
+      }),
+    });
+
+    const result = await triggerScheduledJob(created.jobId);
+
+    expect(result.status).toBe('success');
+    expect(result.message).toContain('runId=prompt-run-1');
+    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: 'file:///Users/darrel/Documents/ai-news',
+      prompt: '整理今天 AI 资讯重点信号',
+      executionTarget: {
+        kind: 'prompt',
+        promptAssetRefs: ['/ai_digest'],
+        skillHints: ['research'],
+      },
+    }));
+
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('triggers dag-orchestration execution profiles via DispatchService', async () => {
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: {
+          kind: 'dispatch-execution-profile',
+          workspace: 'file:///Users/darrel/Documents/backend',
+          prompt: '修复登录接口',
+          executionProfile: {
+            kind: 'dag-orchestration',
+            templateId: 'coding-basic-template',
+            stageId: 'implement',
+          },
+        },
+      }),
+    });
+
+    const result = await triggerScheduledJob(created.jobId);
+
+    expect(result.status).toBe('success');
+    expect(result.message).toContain('runId=run-1');
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: 'file:///Users/darrel/Documents/backend',
+      templateId: 'coding-basic-template',
+      stageId: 'implement',
+      prompt: '修复登录接口',
+    }));
 
     deleteScheduledJob(created.jobId);
   });

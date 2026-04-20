@@ -1,0 +1,51 @@
+{
+  "runId": "246eb35a-d07e-4f93-b6a4-e1234c4006fe",
+  "templateId": "design-review-template",
+  "executionTarget": {
+    "kind": "template",
+    "templateId": "design-review-template",
+    "stageId": "ux-review"
+  },
+  "items": [
+    {
+      "id": "739d4270-84a4-4a46-a719-74933604e9de",
+      "kind": "product.audit-report",
+      "title": "Audit Report",
+      "path": "specs/audit-report.md",
+      "format": "md",
+      "sourceRunId": "246eb35a-d07e-4f93-b6a4-e1234c4006fe"
+    },
+    {
+      "id": "d76db960-8d8a-489d-8d3f-2a018344a05a",
+      "kind": "product.interaction-proposals",
+      "title": "Interaction Proposals",
+      "path": "specs/interaction-proposals.md",
+      "format": "md",
+      "sourceRunId": "246eb35a-d07e-4f93-b6a4-e1234c4006fe"
+    },
+    {
+      "id": "42a73775-a47b-460f-913a-8ebaee6668ee",
+      "kind": "product.priority-matrix",
+      "title": "Priority Matrix",
+      "path": "specs/priority-matrix.md",
+      "format": "md",
+      "sourceRunId": "246eb35a-d07e-4f93-b6a4-e1234c4006fe"
+    },
+    {
+      "id": "19eb442c-7f3f-462f-b7f4-eaa7bfac82e9",
+      "kind": "review.result-round-1",
+      "title": "Result Round 1",
+      "path": "review/result-round-1.json",
+      "format": "json",
+      "sourceRunId": "246eb35a-d07e-4f93-b6a4-e1234c4006fe"
+    },
+    {
+      "id": "9f82358a-6802-4aa3-af4c-d7ced6a53b88",
+      "kind": "review.review-round-1",
+      "title": "Review Round 1",
+      "path": "review/review-round-1.md",
+      "format": "md",
+      "sourceRunId": "246eb35a-d07e-4f93-b6a4-e1234c4006fe"
+    }
+  ]
+}

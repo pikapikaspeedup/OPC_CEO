@@ -13,12 +13,14 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-dvh overflow-hidden bg-[var(--app-ink)] text-[var(--app-text)]">
-      {sidebar}
-      <main className="relative flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
-        {header}
-        {children}
-      </main>
+    <div className="flex h-dvh flex-col overflow-hidden bg-[var(--app-ink)] text-[var(--app-text)]">
+      {header}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {sidebar}
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

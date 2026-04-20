@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing workspace' }, { status: 400 });
   }
 
-  const servers = discoverLanguageServers();
+  const servers = await discoverLanguageServers();
   const target = servers.find(s =>
     s.workspace === workspace ||
     s.workspace?.includes(workspace) ||

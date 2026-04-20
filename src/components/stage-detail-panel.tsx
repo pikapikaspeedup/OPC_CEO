@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Pane, PaneHeader, StatusChip } from '@/components/ui/app-shell';
+import { api } from '@/lib/api';
 import type { PipelineStageProgressFE, ResumeAction, AgentRun } from '@/lib/types';
 import { ReviewOutcomeBadge } from '@/components/role-timeline';
 
@@ -97,6 +98,7 @@ export default function StageDetailPanel({
   const outputArtifacts = resultEnvelope?.outputArtifacts || [];
   const needsReview = run?.result?.needsReview || [];
   const blockers = run?.result?.blockers || [];
+  const hasConversationLink = !!(run?.childConversationId || run?.sessionProvenance?.handle);
 
   // Evaluate-specific state
   const [evalLoading, setEvalLoading] = useState(false);
@@ -158,6 +160,24 @@ export default function StageDetailPanel({
   const handleResume = async (action: ResumeAction, e: React.MouseEvent) => {
     e.stopPropagation();
     await onResume(stage.stageId, action);
+  };
+
+  const handleOpenRunConversation = async () => {
+    if (!run || !onOpenConversation) return;
+    if (run.childConversationId) {
+      onOpenConversation(run.childConversationId, stageTitle);
+      return;
+    }
+
+    const data = await api.agentRunConversation(run.runId);
+    if (data.kind === 'conversation') {
+      onOpenConversation(data.conversationId, stageTitle);
+      return;
+    }
+
+    if (data.kind === 'transcript' && data.viewerConversationId) {
+      onOpenConversation(data.viewerConversationId, stageTitle);
+    }
   };
 
   return (
@@ -426,10 +446,10 @@ export default function StageDetailPanel({
               Force Complete
             </Button>
           )}
-          {run?.childConversationId && onOpenConversation && (
+          {hasConversationLink && onOpenConversation && (
             <Button size="sm" variant="outline"
               className="h-8 rounded-xl border-sky-400/20 bg-sky-400/8 text-xs font-semibold text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
-              onClick={() => onOpenConversation(run.childConversationId!, stageTitle)}>
+              onClick={() => { void handleOpenRunConversation(); }}>
               <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
               Open Conversation
             </Button>

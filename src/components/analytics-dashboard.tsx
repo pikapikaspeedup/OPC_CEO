@@ -107,12 +107,24 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [providerAwareNotice, setProviderAwareNotice] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(false);
     try {
-      const result = await api.analytics();
+      const [result, aiConfig] = await Promise.all([
+        api.analytics(),
+        api.aiConfig().catch(() => null),
+      ]);
+      const layerProviders = Object.values(aiConfig?.layers || {}).map((layer) => layer?.provider).filter(Boolean);
+      const hasCloudApiProvider = (aiConfig?.defaultProvider && aiConfig.defaultProvider !== 'antigravity')
+        || layerProviders.some((provider) => provider !== 'antigravity');
+      setProviderAwareNotice(
+        hasCloudApiProvider
+          ? '当前 Analytics 主要来自 Antigravity IDE runtime，不完整覆盖云端 API provider。'
+          : null,
+      );
       setData(result);
     } catch {
       setError(true);
@@ -150,6 +162,8 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
   const generated = data.completionStatistics?.numCompletionsGenerated ?? 0;
   const acceptRate = generated > 0 ? ((accepted / generated) * 100).toFixed(1) : '—';
   const totalChats = (data.chatsByModel || []).reduce((sum, m) => sum + (m.numChats || 0), 0);
+  const providerUsage = data.providerUsage || [];
+  const providerUsageSummary = data.providerUsageSummary;
 
   // Daily completions for bar chart
   const dailyData = (data.completionsByDay || []).map(d => ({
@@ -182,6 +196,41 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
           <RefreshCw className="h-3 w-3" />
         </Button>
       </div>
+
+      {providerAwareNotice && (
+        <div className="rounded-xl border border-sky-400/15 bg-sky-400/[0.06] px-4 py-3 text-xs leading-6 text-sky-100/85">
+          {providerAwareNotice}
+        </div>
+      )}
+
+      {providerUsageSummary && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            icon={BarChart3}
+            label="Gateway Runs (30d)"
+            value={providerUsageSummary.totalRuns.toLocaleString()}
+            color="bg-cyan-400/10 text-cyan-300"
+          />
+          <StatCard
+            icon={MessageSquare}
+            label="Providers Active"
+            value={providerUsageSummary.providers.toLocaleString()}
+            color="bg-indigo-400/10 text-indigo-300"
+          />
+          <StatCard
+            icon={Sparkles}
+            label="Token-Tracked Runs"
+            value={providerUsageSummary.tokenRuns.toLocaleString()}
+            color="bg-violet-400/10 text-violet-300"
+          />
+          <StatCard
+            icon={TrendingUp}
+            label="Gateway Tokens"
+            value={`${(providerUsageSummary.totalTokens / 1000).toFixed(1)}k`}
+            color="bg-emerald-400/10 text-emerald-300"
+          />
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -219,6 +268,39 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
             Daily Completions Accepted
           </div>
           <MiniBarChart data={dailyData} />
+        </div>
+      )}
+
+      {providerUsage.length > 0 && (
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+              Provider Usage (Gateway Runs)
+            </div>
+            {data.dataSources && (
+              <div className="text-[10px] text-white/30">
+                {data.dataSources.antigravityRuntime ? 'Runtime + Gateway' : 'Gateway only'}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            {providerUsage.map((entry) => (
+              <div key={entry.provider} className="rounded-xl border border-white/6 bg-black/15 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white truncate">{entry.provider}</div>
+                    <div className="mt-1 text-[11px] text-white/40">
+                      {entry.runCount} runs · {entry.completedCount} completed · {entry.failedCount} failed · {entry.activeCount} active
+                    </div>
+                  </div>
+                  <div className="text-right text-[11px] text-white/50">
+                    <div>{(entry.totalTokens / 1000).toFixed(1)}k tokens</div>
+                    {entry.lastRunAt ? <div>{entry.lastRunAt.slice(0, 10)}</div> : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

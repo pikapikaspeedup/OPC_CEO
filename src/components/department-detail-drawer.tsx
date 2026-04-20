@@ -10,14 +10,19 @@ import {
   ArrowUpRight,
   CheckCircle2,
   AlertTriangle,
-  Clock,
   Loader2,
   Settings,
   XCircle,
   Activity,
   Zap,
 } from 'lucide-react';
-import type { Workspace, Project, DepartmentConfig, DailyDigestFE } from '@/lib/types';
+import type {
+  Workspace,
+  Project,
+  DepartmentConfig,
+  DailyDigestFE,
+  DepartmentManagementOverviewFE,
+} from '@/lib/types';
 import PipelineMiniDAG from '@/components/pipeline-mini-dag';
 
 interface DepartmentDetailDrawerProps {
@@ -41,18 +46,21 @@ export default function DepartmentDetailDrawer({
 }: DepartmentDetailDrawerProps) {
   const [digest, setDigest] = useState<DailyDigestFE | null>(null);
   const [quota, setQuota] = useState<{ daily: number; monthly: number; used: { daily: number; monthly: number } } | null>(null);
+  const [managementOverview, setManagementOverview] = useState<DepartmentManagementOverviewFE | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!open) return;
     setLoading(true);
     try {
-      const [digestResult, quotaResult] = await Promise.allSettled([
+      const [digestResult, quotaResult, managementResult] = await Promise.allSettled([
         api.getDailyDigest(workspace.uri),
         api.getDepartmentQuota(workspace.uri),
+        api.managementOverview(workspace.uri),
       ]);
       setDigest(digestResult.status === 'fulfilled' ? digestResult.value : null);
       setQuota(quotaResult.status === 'fulfilled' ? quotaResult.value.quota : null);
+      setManagementOverview(managementResult.status === 'fulfilled' ? managementResult.value as DepartmentManagementOverviewFE : null);
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
@@ -64,7 +72,7 @@ export default function DepartmentDetailDrawer({
   const activeProjects = projects.filter(p => p.status === 'active');
   const completedProjects = projects.filter(p => p.status === 'completed');
   const failedProjects = projects.filter(p => p.status === 'failed');
-  const blockedProjects = projects.filter(p => p.pipelineState?.stages?.find((s: any) => s.status === 'blocked'));
+  const blockedProjects = projects.filter((project) => project.pipelineState?.stages?.some((stage) => stage.status === 'blocked'));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -90,10 +98,10 @@ export default function DepartmentDetailDrawer({
               <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
                 <div className="text-xs font-semibold uppercase tracking-widest text-white/40">🎯 OKR</div>
                 <div className="text-sm text-white/80">{config.okr.objectives[0].title}</div>
-                {config.okr.objectives[0].keyResults?.map((kr: any, i: number) => (
+                {config.okr.objectives[0].keyResults?.map((kr, i: number) => (
                   <div key={i} className="flex items-center gap-2 text-xs text-white/50">
                     <span className="text-white/20">KR{i + 1}</span>
-                    <span>{kr.title || kr}</span>
+                    <span>{kr.description}</span>
                   </div>
                 ))}
               </div>
@@ -106,6 +114,49 @@ export default function DepartmentDetailDrawer({
               <StatBox icon={XCircle} label="失败" value={failedProjects.length} color="text-red-400 bg-red-400/10" />
               <StatBox icon={AlertTriangle} label="阻塞" value={blockedProjects.length} color="text-amber-400 bg-amber-400/10" />
             </div>
+
+            {managementOverview && (
+              <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-widest text-white/40">📈 经营指标</div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <MetricPill label="Throughput 30d" value={`${managementOverview.throughput30d}`} />
+                  <MetricPill label="Workflow Hit" value={`${Math.round(managementOverview.workflowHitRate * 100)}%`} />
+                  <MetricPill label="Recent Knowledge" value={`${managementOverview.recentKnowledge}`} />
+                  <MetricPill label="Pending Approvals" value={`${managementOverview.pendingApprovals}`} />
+                  <MetricPill
+                    label="OKR Progress"
+                    value={managementOverview.okrProgress !== null ? `${Math.round(managementOverview.okrProgress * 100)}%` : '—'}
+                  />
+                  <MetricPill label="Risks" value={`${managementOverview.risks.length}`} />
+                </div>
+              </div>
+            )}
+
+            {managementOverview && managementOverview.risks.length > 0 && (
+              <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-widest text-white/40">🚨 风险</div>
+                <div className="space-y-2">
+                  {managementOverview.risks.slice(0, 4).map((risk, index) => (
+                    <div key={`${risk.title}-${index}`} className="rounded-lg border border-white/6 bg-white/[0.02] px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-white/85">{risk.title}</div>
+                        <div className={cn(
+                          'rounded-full px-2 py-0.5 text-[10px]',
+                          risk.level === 'critical' ? 'bg-red-500/10 text-red-300' :
+                          risk.level === 'warning' ? 'bg-amber-500/10 text-amber-300' :
+                          'bg-white/10 text-white/60',
+                        )}>
+                          {risk.level}
+                        </div>
+                      </div>
+                      {risk.description ? (
+                        <div className="mt-1 text-[11px] text-white/45">{risk.description}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Token Quota */}
             {quota && (quota.daily > 0 || quota.monthly > 0) && (
@@ -253,9 +304,18 @@ function QuotaBar({ label, used, limit }: { label: string; used: number; limit: 
   );
 }
 
+function MetricPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2">
+      <div className="text-[10px] uppercase tracking-widest text-white/30">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-white/80">{value}</div>
+    </div>
+  );
+}
+
 function ProjectRow({ project, onNavigate, highlight }: { project: Project; onNavigate?: () => void; highlight?: boolean }) {
   const stages = project.pipelineState?.stages || [];
-  const done = stages.filter((s: any) => s.status === 'completed' || s.status === 'skipped').length;
+  const done = stages.filter((stage) => stage.status === 'completed' || stage.status === 'skipped').length;
   const total = stages.length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 

@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { GLOBAL_ASSETS_DIR } from '@/lib/agents/gateway-home';
+import { deleteCanonicalWorkflow, getCanonicalWorkflow, saveCanonicalWorkflow } from '@/lib/agents/canonical-assets';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,17 +25,7 @@ export async function PUT(
     return NextResponse.json({ error: 'content is required (string)' }, { status: 400 });
   }
 
-  const workflowsDir = path.join(GLOBAL_ASSETS_DIR, 'workflows');
-  fs.mkdirSync(workflowsDir, { recursive: true });
-  const filePath = path.join(workflowsDir, `${name}.md`);
-  fs.writeFileSync(filePath, body.content, 'utf-8');
-
-  // Also sync to repo workflows if directory exists
-  const repoWorkflowsDir = path.join(process.cwd(), '.agents', 'assets', 'workflows');
-  if (fs.existsSync(repoWorkflowsDir)) {
-    const repoPath = path.join(repoWorkflowsDir, `${name}.md`);
-    fs.writeFileSync(repoPath, body.content, 'utf-8');
-  }
+  saveCanonicalWorkflow(name, body.content);
 
   return NextResponse.json({ success: true, name });
 }
@@ -57,13 +45,31 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid workflow name (alphanumeric, hyphens, underscores only)' }, { status: 400 });
   }
 
-  const workflowsDir = path.join(GLOBAL_ASSETS_DIR, 'workflows');
-  const filePath = path.join(workflowsDir, `${name}.md`);
-
-  if (!fs.existsSync(filePath)) {
+  const workflow = getCanonicalWorkflow(name);
+  if (!workflow) {
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
-  const content = fs.readFileSync(filePath, 'utf-8');
-  return NextResponse.json({ name, content });
+  return NextResponse.json({ name: workflow.name, content: workflow.content, description: workflow.description, source: workflow.source });
+}
+
+/**
+ * DELETE /api/workflows/[name]
+ * Delete a workflow file.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ name: string }> },
+) {
+  const { name } = await params;
+
+  if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name) || name.length > 120) {
+    return NextResponse.json({ error: 'Invalid workflow name' }, { status: 400 });
+  }
+
+  if (!deleteCanonicalWorkflow(name)) {
+    return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
+  }
+
+  return NextResponse.json({ success: true, name });
 }

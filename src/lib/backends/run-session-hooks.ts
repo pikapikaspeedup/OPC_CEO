@@ -1,5 +1,7 @@
 import { TERMINAL_STATUSES } from '../agents/group-types';
+import type { SessionProvenance } from '../agents/group-types';
 import { getRun, updateRun } from '../agents/run-registry';
+import { appendRunHistoryEntry } from '../agents/run-history';
 import type { ProviderId } from '../providers';
 import { applyAfterRunMemoryHooks } from './memory-hooks';
 import type { BackendSessionConsumerHooks } from './session-consumer';
@@ -19,6 +21,10 @@ export interface CreateRunSessionHooksOptions {
   activeRoleId?: string;
   backendConfig?: BackendRunConfig;
   bindConversationHandleForProviders?: ProviderId[];
+  /** How this session was created (for provenance tracking) */
+  createdVia?: SessionProvenance['createdVia'];
+  /** Where the provider decision came from */
+  resolutionSource?: SessionProvenance['resolutionSource'];
   onStarted?(event: StartedAgentEvent): Awaitable<void>;
   onLiveState?(event: LiveStateAgentEvent): Awaitable<void>;
   onCompleted?(event: CompletedAgentEvent): Awaitable<void>;
@@ -46,10 +52,26 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
 
   return {
     onStarted: async (event) => {
+      const existingRun = getRun(options.runId);
       if (!shouldSkipRunUpdate(options.runId)) {
+        const previousHandle = existingRun?.sessionProvenance?.handle;
+
+        const provenance: SessionProvenance = {
+          handle: event.handle,
+          backendId: event.providerId,
+          handleKind: previousHandle ? 'resumed' : 'started',
+          workspacePath: options.backendConfig?.workspacePath || existingRun?.workspace || '',
+          model: options.backendConfig?.model || existingRun?.model,
+          resolutionSource: options.resolutionSource,
+          createdVia: options.createdVia || 'dispatch',
+          supersedesHandle: previousHandle !== event.handle ? previousHandle : undefined,
+          recordedAt: new Date().toISOString(),
+        };
+
         updateRun(options.runId, {
           status: 'running',
           startedAt: event.startedAt,
+          sessionProvenance: provenance,
           ...(options.activeRoleId ? { activeRoleId: options.activeRoleId } : {}),
           ...(bindHandleProviders.has(event.providerId)
             ? {
@@ -60,6 +82,19 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
         });
       }
 
+      appendRunHistoryEntry({
+        runId: options.runId,
+        provider: event.providerId,
+        sessionHandle: event.handle,
+        eventType: 'session.started',
+        details: {
+          startedAt: event.startedAt,
+          activeRoleId: options.activeRoleId,
+          backendModel: options.backendConfig?.model,
+          workspacePath: existingRun?.workspace || options.backendConfig?.workspacePath,
+        },
+      });
+
       await options.onStarted?.(event);
     },
 
@@ -67,6 +102,20 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
       if (!shouldSkipRunUpdate(options.runId)) {
         updateRun(options.runId, { liveState: event.liveState });
       }
+
+      appendRunHistoryEntry({
+        runId: options.runId,
+        provider: event.providerId,
+        sessionHandle: event.handle,
+        eventType: 'session.live_state',
+        details: {
+          cascadeStatus: event.liveState.cascadeStatus,
+          stepCount: event.liveState.stepCount,
+          lastStepAt: event.liveState.lastStepAt,
+          lastStepType: event.liveState.lastStepType,
+          staleSince: event.liveState.staleSince,
+        },
+      });
 
       await options.onLiveState?.(event);
     },
@@ -84,6 +133,37 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
         });
       }
 
+      appendRunHistoryEntry({
+        runId: options.runId,
+        provider: event.providerId,
+        sessionHandle: event.handle,
+        eventType: 'session.completed',
+        details: {
+          finishedAt: event.finishedAt,
+          finalText: event.finalText,
+          resultStatus: event.result.status,
+          summary: event.result.summary,
+          changedFiles: event.result.changedFiles,
+          blockers: event.result.blockers,
+          needsReview: event.result.needsReview,
+          rawStepCount: event.rawSteps?.length || 0,
+          tokenUsage: event.tokenUsage,
+        },
+      });
+
+      if (event.providerId === 'antigravity' && event.finalText?.trim()) {
+        appendRunHistoryEntry({
+          runId: options.runId,
+          provider: event.providerId,
+          sessionHandle: event.handle,
+          eventType: 'conversation.message.assistant',
+          details: {
+            content: event.finalText,
+            source: 'session.completed',
+          },
+        });
+      }
+
       await runAfterHook(options.backendConfig, event);
     },
 
@@ -98,6 +178,22 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
         });
       }
 
+      appendRunHistoryEntry({
+        runId: options.runId,
+        provider: event.providerId,
+        sessionHandle: event.handle,
+        eventType: 'session.failed',
+        details: {
+          finishedAt: event.finishedAt,
+          error: event.error.message,
+          code: event.error.code,
+          source: event.error.source,
+          retryable: event.error.retryable,
+          rawStepCount: event.rawSteps?.length || 0,
+          liveState: event.liveState,
+        },
+      });
+
       await runAfterHook(options.backendConfig, event);
     },
 
@@ -107,6 +203,17 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
       } else if (!shouldSkipRunUpdate(options.runId)) {
         updateRun(options.runId, { status: 'cancelled' });
       }
+
+      appendRunHistoryEntry({
+        runId: options.runId,
+        provider: event.providerId,
+        sessionHandle: event.handle,
+        eventType: 'session.cancelled',
+        details: {
+          finishedAt: event.finishedAt,
+          reason: event.reason,
+        },
+      });
 
       await runAfterHook(options.backendConfig, event);
     },

@@ -1,36 +1,58 @@
 import { NextResponse } from 'next/server';
-import { getAllConnections, grpc } from '@/lib/bridge/gateway';
+import { getAllConnections, grpc, resolveConversationRecord } from '@/lib/bridge/gateway';
 import { createLogger } from '@/lib/logger';
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
+import {
+  inferLocalProviderFromConversation,
+  readLocalProviderConversationSteps,
+} from '@/lib/local-provider-conversations';
+import {
+  isApiConversationProvider,
+  readApiConversationSteps,
+} from '@/lib/api-provider-conversations';
+import {
+  buildStepsFromTranscriptMessages,
+  readLocalProviderTranscriptMessages,
+} from '@/lib/run-conversation-transcript';
+import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
 
 const log = createLogger('StepsAPI');
 
 export const dynamic = 'force-dynamic';
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: cascadeId } = await params;
   try {
-    // ---------------------------------------------------------------------------
-    // Check if this is a Codex direct session (offline/no-IDE provider)
-    // ---------------------------------------------------------------------------
-    if (cascadeId.startsWith('codex-')) {
-      const convDir = path.join(os.homedir(), '.gemini/antigravity/conversations');
-      const codexFile = path.join(convDir, `${cascadeId}.codex.json`);
-      if (fs.existsSync(codexFile)) {
-        try {
-          const steps = JSON.parse(fs.readFileSync(codexFile, 'utf-8'));
-          return NextResponse.json({ cascadeId, steps });
-        } catch(e) {}
+    const conversationRecord = resolveConversationRecord(cascadeId);
+    const localProvider = inferLocalProviderFromConversation(cascadeId, conversationRecord?.provider);
+    if (localProvider) {
+      if (isApiConversationProvider(localProvider)) {
+        const apiSteps = await readApiConversationSteps(conversationRecord?.sessionHandle || cascadeId);
+        return NextResponse.json({ cascadeId, steps: apiSteps });
       }
-      return NextResponse.json({ cascadeId, steps: [] });
-    }
-    // ---------------------------------------------------------------------------
 
-    const conns = getAllConnections();
+      const conversationId = conversationRecord?.id || cascadeId;
+      const localSteps = readLocalProviderConversationSteps(conversationId);
+      if (localSteps.length > 0) {
+        return NextResponse.json({ cascadeId, steps: localSteps });
+      }
+
+      const sessionHandle = conversationRecord?.sessionHandle || cascadeId;
+      const backingRun = findRunRecordByConversationRef({
+        sessionHandles: [sessionHandle],
+        conversationIds: [sessionHandle, conversationId],
+      });
+      const transcript = readLocalProviderTranscriptMessages(localProvider, sessionHandle, backingRun);
+      const transcriptSteps = transcript ? buildStepsFromTranscriptMessages(transcript) : [];
+      return NextResponse.json({ cascadeId, steps: transcriptSteps });
+    }
+
+    const conns = await getAllConnections();
     log.info({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length }, 'Steps request');
-    let checkpointData: any = null;
+    let checkpointData: { steps?: unknown[] } | null = null;
     for (const conn of conns) {
       try {
         await grpc.loadTrajectory(conn.port, conn.csrf, cascadeId);
@@ -42,8 +64,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         } else {
           log.warn({ cascadeId: cascadeId.slice(0,8), port: conn.port, dataKeys: data ? Object.keys(data) : 'null' }, 'No steps from server');
         }
-      } catch (innerErr: any) {
-        log.warn({ cascadeId: cascadeId.slice(0,8), port: conn.port, err: innerErr.message }, 'Server attempt failed');
+      } catch (innerErr: unknown) {
+        log.warn({ cascadeId: cascadeId.slice(0,8), port: conn.port, err: getErrorMessage(innerErr) }, 'Server attempt failed');
       }
     }
 
@@ -52,8 +74,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
     return NextResponse.json(checkpointData);
-  } catch (e: any) {
-    log.error({ cascadeId: cascadeId.slice(0,8), err: e.message }, 'Steps request error');
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (error: unknown) {
+    log.error({ cascadeId: cascadeId.slice(0,8), err: getErrorMessage(error) }, 'Steps request error');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

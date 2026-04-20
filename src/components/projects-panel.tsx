@@ -26,7 +26,11 @@ import {
   Loader2,
   ArrowLeft,
   Repeat,
-
+  Package,
+  Building2,
+  ChevronDown,
+  ChevronUp,
+  
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ProjectWorkbench from '@/components/project-workbench';
@@ -38,8 +42,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NativeSelect } from '@/components/ui/native-select';
+import type { SchedulerJobResponse } from '@/lib/api';
 import type {
   AgentRun,
   Project,
@@ -89,7 +93,7 @@ function StatusBadge({ status }: { status: string }) {
 
   const Icon = config.icon;
   // Use status title from i18n
-  const label = t(`projects.status.${status as any}` as any) || status;
+  const label = t(`projects.status.${status}`) || status;
 
   return (
     <div className={cn('flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium', config.bg, config.color, config.border)}>
@@ -97,6 +101,21 @@ function StatusBadge({ status }: { status: string }) {
       <span className={config.color}>{label}</span>
     </div>
   );
+}
+
+function getJobIntervalMs(job: SchedulerJobResponse): number | null {
+  const value = (job as SchedulerJobResponse & { intervalMs?: number }).intervalMs;
+  return typeof value === 'number' && value > 0 ? value : null;
+}
+
+function formatLoopCadence(job: SchedulerJobResponse): string {
+  if (job.type !== 'interval') return job.type || 'job';
+  const intervalMs = getJobIntervalMs(job);
+  if (!intervalMs) return '循环';
+  if (intervalMs % 3_600_000 === 0) return `每 ${intervalMs / 3_600_000} 小时`;
+  if (intervalMs % 60_000 === 0) return `每 ${intervalMs / 60_000} 分钟`;
+  if (intervalMs % 1_000 === 0) return `每 ${intervalMs / 1_000} 秒`;
+  return `每 ${intervalMs} ms`;
 }
 
 export default function ProjectsPanel({
@@ -113,9 +132,10 @@ export default function ProjectsPanel({
   onResume,
   onCancelRun,
   onOpenConversation,
-  onDepartmentSaved,
+  onDepartmentSaved: _onDepartmentSaved,
 }: ProjectsPanelProps) {
   const { t, locale } = useI18n();
+  void _onDepartmentSaved;
 
   const handleEvaluateRun = async (runId: string) => {
     await api.interveneRun(runId, { action: 'evaluate' });
@@ -146,7 +166,6 @@ export default function ProjectsPanel({
 
   // CEO command quick-task feedback
   const [ceoToast, setCeoToast] = useState<{ success: boolean; message: string } | null>(null);
-  const [ceoSuggestions, setCeoSuggestions] = useState<import('@/lib/api').CEOSuggestion[] | null>(null);
   // Per-project pending CEO suggestions (for needs_decision projects)
   const [pendingSuggestions, setPendingSuggestions] = useState<Record<string, import('@/lib/api').CEOSuggestion[]>>({});
 
@@ -175,6 +194,20 @@ export default function ProjectsPanel({
   const [lintLoading, setLintLoading] = useState(false);
   const [convertLoading, setConvertLoading] = useState(false);
   const [convertMessage, setConvertMessage] = useState<string | null>(null);
+  const [schedulerJobs, setSchedulerJobs] = useState<SchedulerJobResponse[]>([]);
+  const [schedulerLoading, setSchedulerLoading] = useState(true);
+
+  const fetchSchedulerJobs = useCallback(async () => {
+    setSchedulerLoading(true);
+    try {
+      const data = await api.schedulerJobs();
+      setSchedulerJobs(data);
+    } catch {
+      // handled upstream
+    } finally {
+      setSchedulerLoading(false);
+    }
+  }, []);
 
   const handleLintTemplate = async (templateId: string) => {
     setLintLoading(true);
@@ -218,6 +251,63 @@ export default function ProjectsPanel({
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [projects]);
 
+  useEffect(() => {
+    void fetchSchedulerJobs();
+    const interval = setInterval(() => {
+      void fetchSchedulerJobs();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [fetchSchedulerJobs]);
+
+  const intervalJobs = useMemo(() => {
+    return [...schedulerJobs]
+      .filter((job) => job.type === 'interval')
+      .sort((a, b) => {
+        if (!!a.enabled !== !!b.enabled) return a.enabled ? -1 : 1;
+        const left = a.nextRunAt || a.lastRunAt || '';
+        const right = b.nextRunAt || b.lastRunAt || '';
+        return right.localeCompare(left);
+      });
+  }, [schedulerJobs]);
+
+  const enabledIntervalCount = useMemo(
+    () => intervalJobs.filter((job) => job.enabled).length,
+    [intervalJobs],
+  );
+
+  const failedIntervalCount = useMemo(
+    () => intervalJobs.filter((job) => job.lastRunResult === 'failed').length,
+    [intervalJobs],
+  );
+
+  const loopSummaryInline = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-8 rounded-full border border-cyan-400/18 bg-cyan-400/[0.06] px-3 text-cyan-300/85 hover:bg-cyan-400/[0.1] hover:text-cyan-200"
+        onClick={() => onOpenOperations?.()}
+      >
+        <Repeat className="mr-1.5 h-3.5 w-3.5" />
+        {schedulerLoading
+          ? '循环任务加载中'
+          : intervalJobs.length > 0
+            ? `${enabledIntervalCount}/${intervalJobs.length} loops`
+            : 'No loops'}
+      </Button>
+      {!schedulerLoading && intervalJobs.length > 0 ? (
+        <span className="text-[11px] text-white/40">
+          最近节奏：{formatLoopCadence(intervalJobs[0])}
+        </span>
+      ) : null}
+      {failedIntervalCount > 0 ? (
+        <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-300">
+          {failedIntervalCount} failed
+        </span>
+      ) : null}
+    </div>
+  );
+
   // Build lookup of child projects by parent ID
   const childProjectsByParent = useMemo(() => {
     const map = new Map<string, typeof projects>();
@@ -250,12 +340,10 @@ export default function ProjectsPanel({
     projects.flatMap(p => p.pipelineState?.stages || []),
     [projects],
   );
-  const ceoEvents = useMemo(() =>
-    generateCEOEvents(projects, allStages),
-    [projects, allStages],
-  );
+  generateCEOEvents(projects, allStages);
 
   const [deptConfig, setDeptConfig] = useState<DepartmentConfig | null>(null);
+  const [showDeptContext, setShowDeptContext] = useState(false);
 
   useEffect(() => {
     if (!detailProject?.workspace) { setDeptConfig(null); return; }
@@ -263,6 +351,10 @@ export default function ProjectsPanel({
       .then(setDeptConfig)
       .catch(() => setDeptConfig(null));
   }, [detailProject?.workspace]);
+
+  useEffect(() => {
+    setShowDeptContext(false);
+  }, [detailProject?.projectId, selectedProjectId]);
 
   const handleCreate = async () => {
     setIsSubmitting(true);
@@ -429,6 +521,23 @@ export default function ProjectsPanel({
           const viewProject = activeChildId
             ? children.find(c => c.projectId === activeChildId) || project
             : project;
+          const viewProjectRuns = agentRuns
+            .filter((run) => run.projectId === viewProject.projectId)
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          const latestProjectRun = viewProjectRuns[0] || null;
+          const hasProjectPromptRuns = viewProjectRuns.some((run) => run.executorKind === 'prompt');
+          const outputArtifactCount = viewProjectRuns.reduce(
+            (sum, run) => sum + (run.resultEnvelope?.outputArtifacts?.length || 0),
+            0,
+          );
+          const completedRunCount = viewProjectRuns.filter((run) => run.status === 'completed').length;
+          const latestVerifiedRun = viewProjectRuns.find((run) => typeof run.verificationPassed === 'boolean') || null;
+          const latestAttentionCount = (latestProjectRun?.result?.blockers?.length || 0) + (latestProjectRun?.result?.needsReview?.length || 0);
+          const workflowBoundSkills = deptConfig?.skills.filter((skill) => skill.workflowRef?.trim()).length || 0;
+          const fallbackSkillRefs = deptConfig?.skills.reduce(
+            (sum, skill) => sum + (skill.skillRefs?.filter((ref) => ref.trim()).length || 0),
+            0,
+          ) || 0;
 
           return (
             <div className="space-y-4">
@@ -441,7 +550,8 @@ export default function ProjectsPanel({
                   <ArrowLeft className="h-4 w-4" />
                   <span>{t('projects.title')}</span>
                 </button>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
+                  {loopSummaryInline}
                   {!project.pipelineState && (
                     <Button
                       variant="ghost"
@@ -513,49 +623,146 @@ export default function ProjectsPanel({
                 </div>
               </div>
 
-              {/* Department info (OPC V7) */}
-              {deptConfig && (
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">📦</span>
-                    <span className="text-sm font-semibold text-white/80">{deptConfig.name}</span>
-                    <span className="text-[10px] rounded-full bg-white/8 px-2 py-0.5 text-white/40 uppercase">
-                      {deptConfig.type}
-                    </span>
-                    {deptConfig.skills.length > 0 && (
-                      <span className="text-[10px] text-white/30">{deptConfig.skills.length} skills</span>
-                    )}
-                    {deptConfig.okr && (
-                      <span className="text-[10px] text-white/30">{deptConfig.okr.period} OKR</span>
-                    )}
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-emerald-400/14 bg-emerald-400/[0.05] px-4 py-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300/70">最近执行</div>
+                  <div className="mt-2 flex items-center gap-2">
+                    {latestProjectRun ? <StatusBadge status={latestProjectRun.status} /> : <StatusBadge status={viewProject.status} />}
                   </div>
-                  {deptConfig.okr && deptConfig.okr.objectives.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-white/40">🎯 OKR</div>
-                      {deptConfig.okr.objectives.map((obj, i) => (
-                        <div key={i} className="space-y-1">
-                          <div className="text-[12px] text-white/60">{obj.title}</div>
-                          {obj.keyResults.map((kr, j) => {
-                            const pct = kr.target > 0 ? Math.round((kr.current / kr.target) * 100) : 0;
-                            return (
-                              <div key={j} className="flex items-center gap-2 ml-2">
-                                <span className="text-[10px] text-white/40 min-w-[100px] truncate">{kr.description}</span>
-                                <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/8">
-                                  <div
-                                    className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400 transition-all"
-                                    style={{ width: `${Math.min(pct, 100)}%` }}
-                                  />
-                                </div>
-                                <span className="text-[10px] text-white/30 tabular-nums">{pct}%</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ))}
+                  <div className="mt-2 text-[12px] leading-6 text-white/50">
+                    {latestProjectRun
+                      ? `${formatRelativeTime(latestProjectRun.createdAt, locale)}`
+                      : '暂无执行记录'}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">结果概览</div>
+                  <div className="mt-2 text-sm font-medium leading-6 text-white/85 line-clamp-2">
+                    {latestProjectRun?.result?.summary || latestProjectRun?.resultEnvelope?.summary || '暂无结果摘要'}
+                  </div>
+                  <div className="mt-2 text-[12px] leading-6 text-white/50">
+                    {completedRunCount} completed runs
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Output Evidence</div>
+                  <div className="mt-2 flex items-center gap-2 text-sm font-medium text-white/85">
+                    <Package className="h-4 w-4 text-violet-300/80" />
+                    <span>{outputArtifactCount} artifacts</span>
+                  </div>
+                  <div className="mt-2 text-[12px] leading-6 text-white/50">
+                    {viewProjectRuns.length} total runs in this project
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">关注项</div>
+                  <div className="mt-2 flex items-center gap-2 text-sm font-medium text-white/85">
+                    <ShieldCheck className={cn(
+                      'h-4 w-4',
+                      latestAttentionCount === 0 && latestVerifiedRun?.verificationPassed !== false ? 'text-emerald-300/80' : 'text-amber-300/80',
+                    )} />
+                    <span>
+                      {latestAttentionCount > 0
+                        ? `${latestAttentionCount} item(s) need attention`
+                        : latestVerifiedRun?.verificationPassed === false
+                          ? 'Needs verification'
+                          : 'No issue'}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-[12px] leading-6 text-white/50">
+                    {latestVerifiedRun?.reportedEventCount !== undefined && latestVerifiedRun?.reportedEventCount !== null
+                      ? `${latestVerifiedRun.reportedEventCount} verified items${latestVerifiedRun.reportedEventDate ? ` · ${latestVerifiedRun.reportedEventDate}` : ''}`
+                      : '无额外校验结果'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Department context */}
+              {deptConfig && (
+                <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/70">
+                          <Building2 className="h-4 w-4" />
+                        </span>
+                        <span className="text-sm font-semibold text-white/85">{deptConfig.name}</span>
+                        <span className="text-[10px] rounded-full bg-white/8 px-2 py-0.5 text-white/40 uppercase">
+                          {deptConfig.type}
+                        </span>
+                      </div>
+                      {deptConfig.description && (
+                        <p className="mt-3 max-w-4xl text-[13px] leading-6 text-white/45 line-clamp-2">
+                          {deptConfig.description}
+                        </p>
+                      )}
                     </div>
-                  )}
-                  {deptConfig.skills.length > 0 && (
-                    <SkillBrowser skills={deptConfig.skills} />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-4 text-white/60 hover:bg-white/[0.06] hover:text-white"
+                      onClick={() => setShowDeptContext((prev) => !prev)}
+                    >
+                      {showDeptContext ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      {showDeptContext ? '收起部门上下文' : '查看部门上下文'}
+                    </Button>
+                  </div>
+
+                  {showDeptContext && (
+                    <div className="mt-4 grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Context Role</div>
+                          <div className="mt-1 text-sm text-white/80">部门上下文只用于解释执行路径，不再占据详情页主视图。</div>
+                        </div>
+                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 space-y-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Context Snapshot</div>
+                          <div className="text-[12px] text-white/55">{deptConfig.skills.length} skills</div>
+                          <div className="text-[12px] text-white/55">{workflowBoundSkills} workflow-bound</div>
+                          <div className="text-[12px] text-white/55">{fallbackSkillRefs} fallback refs</div>
+                          {deptConfig.provider && <div className="text-[12px] text-white/55">provider: {deptConfig.provider}</div>}
+                        </div>
+                        {deptConfig.okr && deptConfig.okr.objectives.length > 0 && (
+                          <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 space-y-3">
+                            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">OKR Snapshot</div>
+                            {deptConfig.okr.objectives.slice(0, 2).map((obj, i) => (
+                              <div key={i} className="space-y-1.5">
+                                <div className="text-[12px] text-white/70">{obj.title}</div>
+                                {obj.keyResults.slice(0, 2).map((kr, j) => {
+                                  const pct = kr.target > 0 ? Math.round((kr.current / kr.target) * 100) : 0;
+                                  return (
+                                    <div key={j} className="space-y-1">
+                                      <div className="flex items-center justify-between gap-3 text-[10px] text-white/45">
+                                        <span className="truncate">{kr.description}</span>
+                                        <span className="tabular-nums">{pct}%</span>
+                                      </div>
+                                      <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+                                        <div
+                                          className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400"
+                                          style={{ width: `${Math.min(pct, 100)}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        {deptConfig.skills.length > 0 ? (
+                          <SkillBrowser skills={deptConfig.skills} />
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-white/35">
+                            暂无部门技能定义
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
@@ -769,7 +976,7 @@ export default function ProjectsPanel({
               )}
 
               {/* Workbench content */}
-              {viewProject.pipelineState ? (
+              {viewProject.pipelineState || hasProjectPromptRuns ? (
                 (() => {
                   const templateId = viewProject.pipelineState?.templateId || viewProject.templateId || '';
                   const template = templates?.find(t => t.id === templateId);
@@ -989,18 +1196,21 @@ export default function ProjectsPanel({
       ) : (
         /* ── Browse mode: project card grid ── */
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2">
               <h2 className="text-2xl font-bold text-white">{t('projects.title')}</h2>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setIsGenerateDialogOpen(true)} className="gap-2 rounded-full">
+            <div className="flex flex-wrap items-center gap-2">
+              {loopSummaryInline}
+              <Button variant="ghost" onClick={() => setIsGenerateDialogOpen(true)} className="gap-2 rounded-full px-3 sm:px-4">
                 <Sparkles className="h-4 w-4 text-purple-400" />
-                {t('generate.title')}
+                <span className="hidden sm:inline">{t('generate.title')}</span>
+                <span className="sm:hidden">AI Generate</span>
               </Button>
-              <Button onClick={openCreateDialog} className="gap-2 rounded-full">
+              <Button onClick={openCreateDialog} className="gap-2 rounded-full px-3 sm:px-4">
                 <Plus className="h-4 w-4" />
-                {t('projects.createProject')}
+                <span className="hidden sm:inline">{t('projects.createProject')}</span>
+                <span className="sm:hidden">Create</span>
               </Button>
             </div>
           </div>
@@ -1226,7 +1436,7 @@ export default function ProjectsPanel({
       <Dialog open={!!confirmDialog} onOpenChange={(open) => { if (!open) setConfirmDialog(null); }}>
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader>
-            <DialogTitle>{t('common.confirm' as any) || '确认'}</DialogTitle>
+            <DialogTitle>{t('common.confirm') || '确认'}</DialogTitle>
           </DialogHeader>
           <p className="py-4 text-sm text-[var(--app-text-soft)]">{confirmDialog?.message}</p>
           <DialogFooter>
@@ -1235,7 +1445,7 @@ export default function ProjectsPanel({
               variant="destructive"
               onClick={() => { confirmDialog?.onConfirm(); setConfirmDialog(null); }}
             >
-              {t('common.confirm' as any) || '确认'}
+              {t('common.confirm') || '确认'}
             </Button>
           </DialogFooter>
         </DialogContent>

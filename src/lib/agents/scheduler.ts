@@ -1,21 +1,32 @@
 import { randomUUID } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import path from 'path';
+import { existsSync, mkdirSync } from 'fs';
 import cronParser from 'cron-parser';
 import { createLogger } from '../logger';
 import { validateCron } from '../cron-utils';
-import { GATEWAY_HOME, SCHEDULED_JOBS_FILE } from './gateway-home';
+import { GATEWAY_HOME } from './gateway-home';
 import { AssetLoader } from './asset-loader';
+import {
+  deriveExecutionProfileFromScheduledAction,
+  normalizeExecutionProfileForTarget,
+  summarizeExecutionProfile,
+} from '../execution';
 import { executeDispatch } from './dispatch-service';
 import { executePrompt } from './prompt-executor';
+import { appendAuditEvent } from './ops-audit';
+import { getProject } from './project-registry';
+import { getRun } from './run-registry';
 import type { ScheduledAction, ScheduledJob, SchedulerTriggerResult } from './scheduler-types';
+import { listScheduledJobRecords, upsertScheduledJobRecord } from '../storage/gateway-db';
+import { appendCEOEvent } from '../organization/ceo-event-store';
+import type { PipelineStageProgress } from './project-types';
 
 const log = createLogger('Scheduler');
-const LOOP_INTERVAL_MS = 30_000;
+const MIN_LOOP_INTERVAL_MS = 1_000;
+const MAX_LOOP_INTERVAL_MS = 30_000;
 
 type SchedulerState = {
   jobs: Map<string, ScheduledJob>;
-  timer?: ReturnType<typeof setInterval>;
+  timer?: ReturnType<typeof setTimeout>;
   initialized: boolean;
   tickRunning: boolean;
 };
@@ -43,7 +54,9 @@ function ensureHome(): void {
 function saveJobs(): void {
   ensureHome();
   const jobs = Array.from(state.jobs.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  writeFileSync(SCHEDULED_JOBS_FILE, JSON.stringify(jobs, null, 2), 'utf-8');
+  for (const job of jobs) {
+    upsertScheduledJobRecord(job);
+  }
 }
 
 function loadJobs(): void {
@@ -51,26 +64,24 @@ function loadJobs(): void {
     return;
   }
 
-  if (!existsSync(SCHEDULED_JOBS_FILE)) {
-    return;
-  }
-
   try {
-    const raw = readFileSync(SCHEDULED_JOBS_FILE, 'utf-8');
-    const jobs = JSON.parse(raw) as ScheduledJob[];
+    const jobs = listScheduledJobRecords();
     state.jobs.clear();
     for (const job of jobs) {
       state.jobs.set(job.jobId, job);
     }
     log.info({ count: jobs.length }, 'Scheduled jobs loaded');
-  } catch (err: any) {
-    log.error({ err: err.message }, 'Failed to load scheduled jobs');
+  } catch (err: unknown) {
+    log.error({ err: err instanceof Error ? err.message : String(err) }, 'Failed to load scheduled jobs');
   }
 }
 
 function getActionSummary(action: ScheduledAction): string {
   if (action.kind === 'dispatch-pipeline') {
     return `dispatch template ${action.templateId}${action.stageId ? ` stage ${action.stageId}` : ''}`;
+  }
+  if (action.kind === 'dispatch-execution-profile') {
+    return `dispatch ${summarizeExecutionProfile(action.executionProfile).label.toLowerCase()}`;
   }
   if (action.kind === 'create-project') {
     return 'create ad-hoc project';
@@ -175,6 +186,22 @@ export function normalizeScheduledJobDefinition(job: ScheduledJob): ScheduledJob
     delete normalized.opcAction;
   }
 
+  if (normalized.action.kind === 'dispatch-execution-profile') {
+    if (!normalized.action.workspace || !normalized.action.prompt) {
+      throw new Error('dispatch-execution-profile jobs require workspace and prompt');
+    }
+    if (normalized.action.executionProfile.kind !== 'workflow-run') {
+      if (!normalized.action.executionProfile.templateId) {
+        throw new Error('review-flow and dag-orchestration executionProfile jobs require templateId');
+      }
+      if (!AssetLoader.getTemplate(normalized.action.executionProfile.templateId)) {
+        throw new Error(`Template not found: ${normalized.action.executionProfile.templateId}`);
+      }
+    }
+    delete normalized.departmentWorkspaceUri;
+    delete normalized.opcAction;
+  }
+
   if (normalized.action.kind === 'create-project') {
     normalized.departmentWorkspaceUri = normalizeWorkspaceUri(normalized.departmentWorkspaceUri);
     if (!normalized.departmentWorkspaceUri || !normalized.opcAction?.goal) {
@@ -219,15 +246,78 @@ export function isScheduledJobDue(job: ScheduledJob, now: Date): boolean {
     const previous = interval.prev().toDate();
     if (!lastRunAt) return previous.getTime() <= now.getTime();
     return previous.getTime() > lastRunAt.getTime();
-  } catch (err: any) {
-    log.warn({ jobId: job.jobId, err: err.message }, 'Skipping invalid cron job');
+  } catch (err: unknown) {
+    log.warn({ jobId: job.jobId, err: err instanceof Error ? err.message : String(err) }, 'Skipping invalid cron job');
     return false;
   }
 }
 
+function getNextDueDate(job: ScheduledJob, now: Date): Date | null {
+  if (!job.enabled) return null;
+  if (isScheduledJobDue(job, now)) return now;
+
+  if (job.type === 'once') {
+    if (!job.scheduledAt || job.lastRunAt) return null;
+    return new Date(job.scheduledAt);
+  }
+
+  if (job.type === 'interval') {
+    if (!job.intervalMs || job.intervalMs <= 0) return null;
+    const base = job.lastRunAt ? new Date(job.lastRunAt) : now;
+    return new Date(base.getTime() + job.intervalMs);
+  }
+
+  if (!job.cronExpression) return null;
+  try {
+    const interval = cronParser.parse(job.cronExpression, {
+      currentDate: now,
+    });
+    return interval.next().toDate();
+  } catch (err: unknown) {
+    log.warn({ jobId: job.jobId, err: err instanceof Error ? err.message : String(err) }, 'Skipping invalid cron job when computing next due time');
+    return null;
+  }
+}
+
+export function getSchedulerLoopDelay(
+  now: Date = new Date(),
+  jobs: ScheduledJob[] = Array.from(state.jobs.values()),
+): number {
+  let soonestDelay = MAX_LOOP_INTERVAL_MS;
+
+  for (const job of jobs) {
+    const dueDate = getNextDueDate(job, now);
+    if (!dueDate) continue;
+
+    const delay = dueDate.getTime() - now.getTime();
+    if (delay <= MIN_LOOP_INTERVAL_MS) {
+      return MIN_LOOP_INTERVAL_MS;
+    }
+    soonestDelay = Math.min(soonestDelay, delay);
+  }
+
+  return Math.max(MIN_LOOP_INTERVAL_MS, Math.min(MAX_LOOP_INTERVAL_MS, soonestDelay));
+}
+
+function scheduleNextTick(): void {
+  if (!state.initialized) return;
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = undefined;
+  }
+
+  const delay = getSchedulerLoopDelay(new Date());
+  state.timer = setTimeout(() => {
+    state.timer = undefined;
+    void tick().finally(() => {
+      if (state.initialized) {
+        scheduleNextTick();
+      }
+    });
+  }, delay);
+}
+
 export function getProjectHealth(projectId: string): 'running' | 'completed' | 'stale' | 'blocked' | 'waiting' | 'failed' {
-  const { getProject } = require('./project-registry');
-  const { getRun } = require('./run-registry');
   const project = getProject(projectId);
   if (!project?.pipelineState) return 'failed';
 
@@ -235,18 +325,18 @@ export function getProjectHealth(projectId: string): 'running' | 'completed' | '
   if (pipelineState.status === 'completed') return 'completed';
   if (pipelineState.status === 'failed' || pipelineState.status === 'cancelled') return 'failed';
 
-  const activeStages = pipelineState.stages.filter((stage: any) => stage.status === 'running');
+  const activeStages = pipelineState.stages.filter((stage: PipelineStageProgress) => stage.status === 'running');
   if (activeStages.length === 0) {
-    if (pipelineState.stages.some((stage: any) => stage.status === 'blocked')) return 'blocked';
-    if (pipelineState.stages.some((stage: any) => stage.status === 'pending')) return 'waiting';
+    if (pipelineState.stages.some((stage: PipelineStageProgress) => stage.status === 'blocked')) return 'blocked';
+    if (pipelineState.stages.some((stage: PipelineStageProgress) => stage.status === 'pending')) return 'waiting';
     return 'failed';
   }
 
   for (const stage of activeStages) {
     const branchRunIds = (stage.branches || [])
-      .map((branch: any) => branch.runId)
+      .map((branch) => branch.runId)
       .filter(Boolean);
-    const runIds = [stage.runId, ...branchRunIds].filter(Boolean);
+    const runIds = [stage.runId, ...branchRunIds].filter((runId): runId is string => Boolean(runId));
     for (const runId of runIds) {
       const run = getRun(runId);
       if (run?.liveState?.staleSince) {
@@ -258,7 +348,7 @@ export function getProjectHealth(projectId: string): 'running' | 'completed' | '
   return 'running';
 }
 
-async function triggerAction(action: ScheduledAction): Promise<string | undefined> {
+async function triggerAction(action: ScheduledAction, schedulerJobId?: string): Promise<string | undefined> {
   if (action.kind === 'health-check') {
     const health = getProjectHealth(action.projectId);
     log.info({ projectId: action.projectId, health }, 'Scheduler health-check completed');
@@ -275,10 +365,54 @@ async function triggerAction(action: ScheduledAction): Promise<string | undefine
       prompt: action.prompt,
       model: action.model,
       projectId: action.projectId,
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId,
+      },
       executionTarget: {
         kind: 'prompt',
         ...(action.promptAssetRefs?.length ? { promptAssetRefs: action.promptAssetRefs } : {}),
         ...(action.skillHints?.length ? { skillHints: action.skillHints } : {}),
+      },
+    });
+    return `runId=${result.runId}`;
+  }
+
+  if (action.kind === 'dispatch-execution-profile') {
+    const target = normalizeExecutionProfileForTarget(action.executionProfile);
+    if (target.kind === 'prompt') {
+      const result = await executePrompt({
+        workspace: action.workspace,
+        prompt: action.prompt,
+        model: action.model,
+        projectId: action.projectId,
+        triggerContext: {
+          source: 'scheduler',
+          schedulerJobId,
+        },
+        executionTarget: {
+          kind: 'prompt',
+          ...(target.promptAssetRefs?.length ? { promptAssetRefs: target.promptAssetRefs } : {}),
+          ...(target.skillHints?.length ? { skillHints: target.skillHints } : {}),
+        },
+      });
+      return `runId=${result.runId}`;
+    }
+
+    if (!target.templateId) {
+      throw new Error('review-flow executionProfile requires a template-backed target');
+    }
+
+    const result = await executeDispatch({
+      workspace: action.workspace,
+      prompt: action.prompt,
+      model: action.model,
+      projectId: action.projectId,
+      templateId: target.templateId,
+      stageId: target.stageId,
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId,
       },
     });
     return `runId=${result.runId}`;
@@ -293,6 +427,10 @@ async function triggerAction(action: ScheduledAction): Promise<string | undefine
       templateId: action.templateId,
       stageId: action.stageId,
       sourceRunIds: action.sourceRunIds,
+      triggerContext: {
+        source: 'scheduler',
+        schedulerJobId,
+      },
     });
     return `runId=${result.runId}`;
   }
@@ -328,13 +466,17 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
           projectId: project.projectId,
           templateId: job.opcAction.templateId,
           prompt: job.opcAction.goal,
+          triggerContext: {
+            source: 'scheduler',
+            schedulerJobId: jobId,
+          },
         });
         message = `projectId=${project.projectId}, runId=${dispatchResult.runId}`;
       } else {
         message = `projectId=${project.projectId}`;
       }
     } else {
-      message = await triggerAction(job.action);
+      message = await triggerAction(job.action, jobId);
     }
     job.lastRunAt = triggeredAt;
     job.lastRunResult = 'success';
@@ -343,6 +485,9 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
       job.enabled = false;
     }
     saveJobs();
+    if (state.initialized) {
+      scheduleNextTick();
+    }
 
     try {
       const { appendAuditEvent } = await import('./ops-audit');
@@ -356,19 +501,22 @@ export async function triggerScheduledJob(jobId: string): Promise<SchedulerTrigg
     } catch { /* audit non-critical */ }
 
     return { jobId, status: 'success', triggeredAt, message };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     job.lastRunAt = triggeredAt;
     job.lastRunResult = 'failed';
-    job.lastRunError = err.message;
+    job.lastRunError = message;
     saveJobs();
+    if (state.initialized) {
+      scheduleNextTick();
+    }
 
     try {
-      const { appendAuditEvent } = await import('./ops-audit');
       appendAuditEvent({
         kind: 'scheduler:failed',
         jobId,
         projectId: getScheduledJobProjectId(job),
-        message: `Job '${job.name}' failed: ${err.message}`,
+        message: `Job '${job.name}' failed: ${message}`,
         meta: { action: job.action.kind },
       });
     } catch { /* audit non-critical */ }
@@ -388,8 +536,8 @@ async function tick(): Promise<void> {
       try {
         const result = await triggerScheduledJob(job.jobId);
         log.info({ jobId: job.jobId, action: getActionSummary(job.action), result }, 'Scheduled job executed');
-      } catch (err: any) {
-        log.error({ jobId: job.jobId, action: getActionSummary(job.action), err: err.message }, 'Scheduled job failed');
+      } catch (err: unknown) {
+        log.error({ jobId: job.jobId, action: getActionSummary(job.action), err: err instanceof Error ? err.message : String(err) }, 'Scheduled job failed');
       }
     }
 
@@ -407,26 +555,30 @@ async function tick(): Promise<void> {
 export function initializeScheduler(): void {
   if (state.initialized) return;
   loadJobs();
-  state.timer = setInterval(() => {
-    void tick();
-  }, LOOP_INTERVAL_MS);
   state.initialized = true;
-  log.info({ intervalMs: LOOP_INTERVAL_MS }, 'Scheduler initialized');
+  scheduleNextTick();
+  log.info({ minIntervalMs: MIN_LOOP_INTERVAL_MS, maxIntervalMs: MAX_LOOP_INTERVAL_MS }, 'Scheduler initialized');
 }
 
 export function stopScheduler(): void {
   if (state.timer) {
-    clearInterval(state.timer);
+    clearTimeout(state.timer);
     state.timer = undefined;
   }
   state.initialized = false;
 }
 
 export function listScheduledJobs(): ScheduledJob[] {
+  if (state.jobs.size === 0) {
+    loadJobs();
+  }
   return Array.from(state.jobs.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 export function getScheduledJob(jobId: string): ScheduledJob | null {
+  if (state.jobs.size === 0) {
+    loadJobs();
+  }
   return state.jobs.get(jobId) ?? null;
 }
 
@@ -438,8 +590,10 @@ export function createScheduledJob(input: Omit<ScheduledJob, 'jobId' | 'createdA
   });
   state.jobs.set(job.jobId, job);
   saveJobs();
+  if (state.initialized) {
+    scheduleNextTick();
+  }
   try {
-    const { appendAuditEvent } = require('./ops-audit') as typeof import('./ops-audit');
     appendAuditEvent({
       kind: 'scheduler:created',
       jobId: job.jobId,
@@ -454,6 +608,18 @@ export function createScheduledJob(input: Omit<ScheduledJob, 'jobId' | 'createdA
   } catch {
     // non-critical
   }
+  appendCEOEvent({
+    kind: 'scheduler',
+    level: 'info',
+    title: `定时任务已创建：${job.name}`,
+    description: `Action=${job.action.kind}`,
+    ...(job.departmentWorkspaceUri ? { workspaceUri: job.departmentWorkspaceUri } : {}),
+    meta: {
+      jobId: job.jobId,
+      action: job.action.kind,
+      type: job.type,
+    },
+  });
   return job;
 }
 
@@ -480,8 +646,10 @@ export function updateScheduledJob(jobId: string, updates: Partial<Omit<Schedule
 
   state.jobs.set(jobId, normalized);
   saveJobs();
+  if (state.initialized) {
+    scheduleNextTick();
+  }
   try {
-    const { appendAuditEvent } = require('./ops-audit') as typeof import('./ops-audit');
     const enabledChanged = typeof updates.enabled === 'boolean' && updates.enabled !== previousEnabled;
     appendAuditEvent({
       kind: 'scheduler:updated',
@@ -506,8 +674,10 @@ export function deleteScheduledJob(jobId: string): boolean {
   const deleted = state.jobs.delete(jobId);
   if (deleted) {
     saveJobs();
+    if (state.initialized) {
+      scheduleNextTick();
+    }
     try {
-      const { appendAuditEvent } = require('./ops-audit') as typeof import('./ops-audit');
       appendAuditEvent({
         kind: 'scheduler:deleted',
         jobId,
@@ -520,6 +690,14 @@ export function deleteScheduledJob(jobId: string): boolean {
     } catch {
       // non-critical
     }
+    appendCEOEvent({
+      kind: 'scheduler',
+      level: 'warning',
+      title: `定时任务已删除：${existing?.name || jobId}`,
+      description: existing ? `Action=${existing.action.kind}` : undefined,
+      ...(existing?.departmentWorkspaceUri ? { workspaceUri: existing.departmentWorkspaceUri } : {}),
+      meta: { jobId },
+    });
   }
   return deleted;
 }
@@ -557,6 +735,8 @@ export function getNextRunAt(job: ScheduledJob): string | null {
 
 export interface EnrichedScheduledJob extends ScheduledJob {
   nextRunAt: string | null;
+  executionProfile?: ReturnType<typeof deriveExecutionProfileFromScheduledAction>;
+  executionProfileSummary?: ReturnType<typeof summarizeExecutionProfile>;
 }
 
 /**
@@ -566,5 +746,10 @@ export function listScheduledJobsEnriched(): EnrichedScheduledJob[] {
   return listScheduledJobs().map(job => ({
     ...job,
     nextRunAt: getNextRunAt(job),
+    executionProfile: deriveExecutionProfileFromScheduledAction(job.action),
+    executionProfileSummary: (() => {
+      const profile = deriveExecutionProfileFromScheduledAction(job.action);
+      return profile ? summarizeExecutionProfile(profile) : undefined;
+    })(),
   }));
 }

@@ -1,20 +1,47 @@
 import { NextResponse } from 'next/server';
-import { getOwnerConnection, refreshOwnerMap, convOwnerMap, ownerMapAge, grpc, getConversations } from '@/lib/bridge/gateway';
+import {
+  getOwnerConnection,
+  refreshOwnerMap,
+  convOwnerMap,
+  ownerMapAge,
+  grpc,
+  resolveConversationRecord,
+  updateLocalConversation,
+} from '@/lib/bridge/gateway';
 import { getExecutor } from '@/lib/providers';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { createLogger } from '@/lib/logger';
+import {
+  appendLocalProviderConversationTurn,
+  inferLocalProviderFromConversation,
+} from '@/lib/local-provider-conversations';
+import {
+  isApiConversationProvider,
+  readApiConversationSteps,
+  runApiConversationTurn,
+} from '@/lib/api-provider-conversations';
+import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
 
 const log = createLogger('SendMsg');
 
 export const dynamic = 'force-dynamic';
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: cascadeId } = await params;
-  let { text, model, agenticMode = true, attachments } = await req.json();
+  const body = await req.json() as {
+    text?: string;
+    model?: string;
+    agenticMode?: boolean;
+    attachments?: { items?: Array<Record<string, unknown>> };
+  };
+  let text = body.text || '';
+  const model = body.model;
+  const agenticMode = body.agenticMode ?? true;
+  const attachments = body.attachments || {};
 
-  attachments = attachments || {};
   attachments.items = attachments.items || [];
 
   // Parse @[path/to/file] mentions
@@ -24,67 +51,83 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const originalText = text;
   text = ""; // Clear text so grpc.ts doesn't duplicate
 
-  // ---------------------------------------------------------------------------
-  // Check if this is a Codex direct session (offline/no-IDE provider)
-  // ---------------------------------------------------------------------------
-  if (cascadeId.startsWith('codex-')) {
-    const allConvs = getConversations();
-    const targetConv = allConvs.find((c: any) => c.id === cascadeId);
-    let codexWorkspace = targetConv?.workspace?.replace(/^file:\/\//, '') || process.cwd();
-    
-    log.info({ cascadeId, workspace: codexWorkspace }, 'Routing to Codex provider (no IDE required)');
-    
-    try {
-      const executor = getExecutor('codex');
-      // Codex executor appendMessage runs the whole turn and returns the final string and handle
-      const result = await executor.appendMessage(cascadeId, { 
-        prompt: originalText, 
-        workspace: codexWorkspace, 
-      });
-      
-      // Save it locally so the UI step poller can find it
-      const convDir = path.join(os.homedir(), '.gemini/antigravity/conversations');
-      const codexFile = path.join(convDir, `${cascadeId}.codex.json`);
-      
-      let pastSteps = [];
-      if (fs.existsSync(codexFile)) {
-        try { pastSteps = JSON.parse(fs.readFileSync(codexFile, 'utf-8')); } catch {}
-      }
-      
-      // Append user message step
-      pastSteps.push({
-        id: `u-${Date.now()}`,
-        status: 'CORTEX_STEP_STATUS_COMPLETED',
-        kind: 'CORTEX_STEP_KIND_MESSAGE',
-        assistantMessage: {
-          prompt: { text: originalText }
-        }
-      });
-      
-      // Append assistant message step
-      pastSteps.push({
-        id: `a-${Date.now()}`,
-        status: 'CORTEX_STEP_STATUS_COMPLETED',
-        kind: 'CORTEX_STEP_KIND_MESSAGE',
-        assistantMessage: {
-          response: { text: result.content }
-        }
-      });
-      
-      fs.writeFileSync(codexFile, JSON.stringify(pastSteps, null, 2));
+  const targetConv = resolveConversationRecord(cascadeId);
+  const localProvider = inferLocalProviderFromConversation(cascadeId, targetConv?.provider);
+  if (localProvider) {
+    const backingRun = findRunRecordByConversationRef({
+      sessionHandles: [cascadeId, targetConv?.sessionHandle].filter(Boolean) as string[],
+      conversationIds: [cascadeId, targetConv?.id].filter(Boolean) as string[],
+    });
+    const localWorkspace = targetConv?.workspace?.replace(/^file:\/\//, '')
+      || backingRun?.workspace.replace(/^file:\/\//, '')
+      || process.cwd();
+    const sessionHandle = targetConv?.sessionHandle || backingRun?.sessionProvenance?.handle || '';
+    const conversationId = targetConv?.id || cascadeId;
 
-      return NextResponse.json({ ok: true, data: { cascadeId: result.handle, state: 'idle' } });
-    } catch (e: any) {
-      log.error({ err: e.message, cascadeId }, 'Send message to Codex failed');
-      return NextResponse.json({ error: e.message }, { status: 500 });
+    log.info({ cascadeId, provider: localProvider, workspace: localWorkspace }, 'Routing to local provider conversation');
+
+    try {
+      let result;
+      if (isApiConversationProvider(localProvider)) {
+        result = await runApiConversationTurn(
+          localProvider,
+          localWorkspace,
+          originalText,
+          model,
+          sessionHandle || undefined,
+          cascadeId,
+        );
+      } else {
+        const executor = getExecutor(localProvider);
+        if (sessionHandle) {
+          try {
+            result = await executor.appendMessage(sessionHandle, {
+              prompt: originalText,
+              workspace: localWorkspace,
+              model,
+            });
+          } catch (appendErr: unknown) {
+            log.warn({ cascadeId, provider: localProvider, err: getErrorMessage(appendErr) }, 'Append failed; starting a fresh local provider session');
+            result = await executor.executeTask({
+              prompt: originalText,
+              workspace: localWorkspace,
+              model,
+            });
+          }
+        } else {
+          result = await executor.executeTask({
+            prompt: originalText,
+            workspace: localWorkspace,
+            model,
+          });
+        }
+      }
+
+      const steps = isApiConversationProvider(localProvider)
+        ? await readApiConversationSteps(result.handle)
+        : appendLocalProviderConversationTurn(conversationId, originalText, result.content || '');
+      if (targetConv) {
+        updateLocalConversation(targetConv.id, {
+          provider: localProvider,
+          sessionHandle: result.handle,
+          stepCount: steps.length,
+        });
+      }
+
+      return NextResponse.json({ ok: true, data: { cascadeId, state: 'idle', provider: localProvider } });
+    } catch (error: unknown) {
+      log.error({ err: getErrorMessage(error), cascadeId, provider: localProvider }, 'Send message to local provider failed');
+      return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
   }
-  // ---------------------------------------------------------------------------
 
-  const conn = getOwnerConnection(cascadeId);
-  if (!conn) return NextResponse.json({ error: 'No server available' }, { status: 503 });
+  const conn = await getOwnerConnection(cascadeId);
+  if (!conn) {
+    log.error({ cascadeId, ownerMapSize: convOwnerMap.size }, 'No server available — possibly a routing issue for new conversation');
+    return NextResponse.json({ error: 'No server available', cascadeId }, { status: 503 });
+  }
 
-  let workspacePath = conn.workspace?.replace(/^file:\/\//, '') || process.cwd();
+  const workspacePath = conn.workspace?.replace(/^file:\/\//, '') || process.cwd();
 
   while ((match = fileRegex.exec(originalText)) !== null) {
     // Push text before the match
@@ -93,7 +136,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
 
     const rawPath = match[1];
-    let absoluteUri = rawPath.startsWith('/') ? `file://${rawPath}` : `file://${workspacePath}/${rawPath}`;
+    const absoluteUri = rawPath.startsWith('/') ? `file://${rawPath}` : `file://${workspacePath}/${rawPath}`;
     
     // We omit workspaceUrisToRelativePaths because absoluteUri is sufficient 
     // for the Gateway to resolve the file reference in most setups.
@@ -113,20 +156,42 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     attachments.items.push({ text: originalText.substring(lastIndex) });
   }
 
-  log.info({ cascadeId, ownerMapHas: convOwnerMap.has(cascadeId), ownerMapAgeMs: Date.now() - ownerMapAge, mode: agenticMode ? 'planning' : 'fast' }, 'Send message');
+  log.info({ cascadeId, ownerMapHas: convOwnerMap.has(cascadeId), ownerMapAgeMs: Date.now() - ownerMapAge, mode: agenticMode ? 'planning' : 'fast', port: conn.port, workspace: conn.workspace }, 'Send message');
 
   if (!convOwnerMap.has(cascadeId) || Date.now() - ownerMapAge > 30_000) {
     await refreshOwnerMap();
     log.debug({ cascadeId, ownerMapHas: convOwnerMap.has(cascadeId) }, 'OwnerMap refreshed');
   }
 
-  log.debug({ port: conn.port, model: model || 'default' }, 'Routing to server');
+  log.debug({ port: conn.port, model: model || 'default', itemCount: attachments?.items?.length }, 'Routing to server');
   try {
     // We pass `text=""` because we packed all text and file mentions into attachments.items
     const data = await grpc.sendMessage(conn.port, conn.csrf, conn.apiKey, cascadeId, text, model, agenticMode, attachments);
+    // Check for gRPC-level errors in the response
+    if (data?.error) {
+      log.warn({ cascadeId, error: data.error, port: conn.port }, 'gRPC response contains error');
+      // Retry once on "agent state not found" — cascade may need a LoadTrajectory warm-up
+      if (typeof data.error?.message === 'string' && data.error.message.includes('agent state') && data.error.message.includes('not found')) {
+        log.info({ cascadeId, port: conn.port }, 'Agent state not found — attempting LoadTrajectory warm-up and retry');
+        try {
+          await grpc.loadTrajectory(conn.port, conn.csrf, cascadeId);
+          await new Promise(r => setTimeout(r, 500));
+          const retryData = await grpc.sendMessage(conn.port, conn.csrf, conn.apiKey, cascadeId, text, model, agenticMode, attachments);
+          if (retryData?.error) {
+            log.error({ cascadeId, error: retryData.error, port: conn.port }, 'Retry also failed');
+            return NextResponse.json({ error: retryData.error.message || 'Send failed after retry' }, { status: 500 });
+          }
+          log.info({ cascadeId }, 'Retry succeeded after LoadTrajectory warm-up');
+          return NextResponse.json({ ok: true, data: retryData });
+        } catch (retryErr: unknown) {
+          log.error({ err: getErrorMessage(retryErr), cascadeId }, 'Retry send failed');
+          return NextResponse.json({ error: getErrorMessage(retryErr) }, { status: 500 });
+        }
+      }
+    }
     return NextResponse.json({ ok: true, data });
-  } catch (e: any) {
-    log.error({ err: e.message, cascadeId }, 'Send message failed');
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (error: unknown) {
+    log.error({ err: getErrorMessage(error), cascadeId }, 'Send message failed');
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

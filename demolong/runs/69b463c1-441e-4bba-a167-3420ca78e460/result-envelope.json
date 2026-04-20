@@ -1,0 +1,11 @@
+{
+  "executionTarget": {
+    "kind": "prompt"
+  },
+  "runId": "69b463c1-441e-4bba-a167-3420ca78e460",
+  "status": "completed",
+  "summary": "NATIVE_CODEX_PROMPT_OK",
+  "outputArtifacts": [],
+  "risks": [],
+  "nextAction": "Prompt run completed"
+}

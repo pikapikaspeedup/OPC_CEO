@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export {};
 /**
  * ag-wechat — Helper CLI for cc-connect custom commands.
  *

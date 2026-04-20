@@ -1,19 +1,26 @@
 import { NextResponse } from 'next/server';
-import { deleteProject, getProject, updateProject } from '@/lib/agents/project-registry';
-import { getRun } from '@/lib/agents/run-registry';
 import { getErrorMessage, normalizeProject } from '@/lib/project-utils';
+import { getProjectRecord, listRunRecordsByIds } from '@/lib/storage/gateway-db';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const project = getProject(id);
+  const project = getProjectRecord(id);
   if (!project) {
     return NextResponse.json({ error: 'Project not found' }, { status: 404 });
   }
 
-  const normalizedProject = normalizeProject(project);
-  const runs = normalizedProject.runIds.map(runId => getRun(runId)).filter(Boolean);
+  const runIds = Array.from(new Set([
+    ...project.runIds,
+    ...(project.pipelineState?.stages.map((stage) => stage.runId).filter(Boolean) as string[] || []),
+  ]));
+  const runRecords = listRunRecordsByIds(runIds);
+  const runMap = new Map(runRecords.map((run) => [run.runId, run]));
+  const normalizedProject = normalizeProject(project, {
+    getRunById: (runId) => runMap.get(runId),
+  });
+  const runs = normalizedProject.runIds.map(runId => runMap.get(runId)).filter(Boolean);
 
   return NextResponse.json({ ...normalizedProject, runs });
 }
@@ -22,6 +29,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   try {
     const { id } = await params;
     const body = await req.json();
+    const { updateProject } = await import('@/lib/agents/project-registry');
     const project = updateProject(id, body);
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });
@@ -34,6 +42,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { deleteProject } = await import('@/lib/agents/project-registry');
   const deleted = deleteProject(id);
   if (!deleted) {
     return NextResponse.json({ error: 'Project not found' }, { status: 404 });

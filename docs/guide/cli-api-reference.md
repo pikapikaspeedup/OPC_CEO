@@ -11,6 +11,37 @@ The API runs on port 3000 by default.
 
 ## API Endpoints
 
+### Conversation Shell Compatibility
+
+- `POST /api/conversations`
+  - 当 workspace provider 为 `antigravity` 时，创建真实 Cascade conversation，仍依赖 language_server。
+  - 当 workspace provider 为本地 provider 轨道时，创建 Gateway 本地 conversation，不依赖 IDE。当前轨道包括：
+    - `codex`
+    - `native-codex`
+    - `claude-api`
+    - `openai-api`
+    - `gemini-api`
+    - `grok-api`
+    - `custom`
+- `POST /api/conversations/:id/send`
+  - `antigravity` conversation 仍走 gRPC send。
+  - 本地 provider conversation 走 Gateway 本地 executor / provider transcript store，并把 transcript 写回本地 steps。
+- `GET /api/conversations/:id/steps`
+  - 对本地 provider conversation，返回标准化的 CORTEX transcript step（例如 `CORTEX_STEP_TYPE_USER_INPUT`、`CORTEX_STEP_TYPE_PLANNER_RESPONSE`），可直接被前端聊天面板渲染。
+- `POST /api/conversations/:id/cancel`
+  - Antigravity conversation 走 gRPC cancel。
+  - 本地 provider conversation 若没有活动请求，会返回 `status = not_running`，不再错误回退到 IDE 路径。
+- `POST /api/conversations/:id/revert` / `GET /api/conversations/:id/revert-preview`
+  - Antigravity conversation 走 gRPC。
+  - 本地 provider conversation 直接对本地 transcript / transcript store 做 preview 与截断。
+- `GET /api/conversations/:id/files`
+  - 现在会优先使用 conversation record / backing run 的 workspace，不再只依赖 gRPC owner。
+
+这意味着：
+
+- `Projects / Scheduler / Run transcript` 继续使用统一 backend/run 路径
+- `Conversations / CEO Office chat` 现在也能在本地 provider 轨道下独立工作，不再只绑定 Antigravity IDE 会话
+
 ### 1. Projects
 
 #### Create a Project
@@ -109,6 +140,8 @@ The API runs on port 3000 by default.
   - `workspace` (String, required): Absolute path to the workspace.
   - `prompt` (String): Free-text prompt describing the goal (either `prompt` or `taskEnvelope.goal` is required).
   - `taskEnvelope` (Object): Structured task data (`goal`, `inputArtifacts`, etc.).
+  - `executionProfile` (Object, optional): 执行画像。会在路由层归一化后，透传到 `prompt-executor` / `group-runtime` / `BackendRunConfig`。
+  - `departmentRuntimeContract` / `runtimeContract` (Object, optional): Department 级 runtime 合同。用于声明工作目录、读写边界、工具集、权限模式与必交付物。路由层会把它写入 `taskEnvelope` carrier 后继续下传。
   - `projectId` (String, optional): ID of the project to associate this run with.
   - `sourceRunIds` (Array of Strings, optional): Used to chain dependencies (e.g., provide specs to an architecture run).
   - `pipelineStageIndex` (Number, optional): Current stage index within the pipeline (0-based). Default is 0 when expanding templates. If omitted while `templateId/pipelineId` and `sourceRunIds` are both present, the API infers the next stage from the first source run.
@@ -124,8 +157,36 @@ The API runs on port 3000 by default.
     "workspace": "/Users/user/workspace",
     "prompt": "Draft spec for user authentication",
     "projectId": "proj-1234",
-    "templateOverrides": { "maxConcurrency": 5 },
-    "conversationMode": "shared"
+    "executionProfile": {
+      "kind": "workflow-run",
+      "workflowRef": "/pm-author"
+    },
+    "departmentRuntimeContract": {
+      "workspaceRoot": "/Users/user/workspace",
+      "additionalWorkingDirectories": [
+        "/Users/user/shared-specs"
+      ],
+      "readRoots": [
+        "/Users/user/workspace",
+        "/Users/user/shared-specs"
+      ],
+      "writeRoots": [
+        "/Users/user/workspace/docs",
+        "/Users/user/workspace/demolong"
+      ],
+      "artifactRoot": "/Users/user/workspace/demolong/projects/proj-1234/runs/run-5678",
+      "executionClass": "review-loop",
+      "toolset": "coding",
+      "permissionMode": "acceptEdits",
+      "requiredArtifacts": [
+        {
+          "path": "spec.md",
+          "required": true,
+          "format": "md"
+        }
+      ]
+    },
+    "templateOverrides": { "maxConcurrency": 5 }
   }
   ```
 - **Response:** `201 Created`
@@ -135,6 +196,23 @@ The API runs on port 3000 by default.
     "status": "starting"
   }
   ```
+
+- **Department Runtime Contract 字段:**
+  - `workspaceRoot` (String, required when using contract): Department 主工作目录。
+  - `additionalWorkingDirectories` (String[], optional): 额外允许挂载的工作目录。
+  - `readRoots` (String[], optional): 允许读取的根路径列表。
+  - `writeRoots` (String[], optional): 允许写入的根路径列表。
+  - `artifactRoot` (String, optional): 产物根目录。
+  - `executionClass` (String, optional): `light` / `artifact-heavy` / `review-loop` / `delivery`。
+  - `toolset` (String, optional): `research` / `coding` / `safe` / `full`。
+  - `permissionMode` (String, optional): `default` / `dontAsk` / `acceptEdits` / `bypassPermissions`。
+  - `requiredArtifacts` (Array, optional): 结构化产物合同，字段包括 `path`、`required`、`format`、`description`。
+
+- **当前实现边界:**
+  - `departmentRuntimeContract` 已经会透传到 `BackendRunConfig`。
+  - 当前主消费方是 `ClaudeEngineAgentBackend`，覆盖 `claude-api`、`openai-api`、`gemini-api`、`grok-api`、`custom`、`native-codex`。
+  - `native-codex` 的 Department / agent-runs 主链已经切到 Claude Engine；旧 `NativeCodexExecutor` 仅保留本地 conversation / chat shell。
+  - `codex` 仍然只适合 `light` 任务；高约束任务会被 capability-aware routing 回退。
 
 #### List Runs
 - **URL:** `GET /api/agent-runs`
@@ -213,6 +291,10 @@ The API runs on port 3000 by default.
   ```
 - **Conflict Response:** `409 Conflict` when another intervention is already active for the same run.
 - **Important:** `retry` is a compatibility alias. New callers should prefer `restart_role`.
+- **Prompt-mode note:** `executorKind = prompt` 的 run 目前支持：
+  - `cancel`
+  - `evaluate`
+  其它 intervention 仍会被拒绝。
 - **Example:**
   ```bash
   # Nudge a critic that forgot DECISION: marker
@@ -265,7 +347,8 @@ The API runs on port 3000 by default.
 
 #### Send CEO Command
 - **URL:** `POST /api/ceo/command`
-- **Description:** CEO 自然语言命令入口。当前兼容层主要支持状态查询与自然语言定时任务创建。
+- **Description:** CEO 自然语言命令入口。当前兼容层支持状态查询、自然语言定时任务创建，以及“先创建 `Ad-hoc Project` 再执行”的即时部门任务。
+- **Notes:** 解析阶段会动态读取 CEO workspace 里的 `ceo-playbook.md` 和 `ceo-scheduler-playbook.md` 作为决策规则。
 - **Request Body (JSON):**
   - `command` (String, required): CEO 的自然语言命令
   - `model` (String, optional): 可选模型 ID
@@ -280,6 +363,86 @@ The API runs on port 3000 by default.
   }
   ```
 
+- **即时部门任务响应示例：**
+  ```json
+  {
+    "success": true,
+    "action": "create_project",
+    "projectId": "proj-1234",
+    "runId": "run-5678",
+    "message": "已创建 Ad-hoc Project，并发起即时执行。"
+  }
+  ```
+
+#### Dispatch Run With Execution Profile
+- **URL:** `POST /api/agent-runs`
+- **Description:** 统一执行入口，支持通过 `executionProfile` 分流。
+- **Request Body (JSON):**
+  - `workspace` (String, required)
+  - `prompt` (String, optional for template-backed profiles)
+  - `executionProfile` (Object, optional)
+
+- **Supported `executionProfile.kind`:**
+  - `workflow-run`
+    - optional `workflowRef`
+    - optional `skillHints`
+  - `dag-orchestration`
+    - `templateId`
+    - optional `stageId`
+
+- **Current limitation:**
+  - `review-flow` 现在可作为 direct execution profile 使用，但必须提供 template-backed target（`templateId`，可选 `stageId`）。
+
+#### Get CEO Profile
+- **URL:** `GET /api/ceo/profile`
+- **Response:** `200 OK` `CEOProfile` object.
+
+#### Update CEO Profile
+- **URL:** `PATCH /api/ceo/profile`
+- **Request Body (JSON):**
+  - 任意 `CEOProfile` 可更新字段的局部 patch，例如 `priorities`、`activeFocus`、`communicationStyle`
+
+#### Append CEO Feedback
+- **URL:** `POST /api/ceo/profile/feedback`
+- **Request Body (JSON):**
+  - `content` (String, required): 用户反馈内容
+  - `type` (String, optional): `correction` / `approval` / `rejection` / `preference`
+
+#### Get CEO Routine Summary
+- **URL:** `GET /api/ceo/routine`
+- **Response:** `200 OK` Object with:
+  - `generatedAt`
+  - `overview`
+  - `activeProjects`
+  - `pendingApprovals`
+  - `activeSchedulers`
+  - `recentKnowledge`
+  - `highlights`
+  - `actions`
+
+#### Get CEO Events
+- **URL:** `GET /api/ceo/events?limit=20`
+- **Response:** `200 OK` `{ events: CEOEventRecord[] }`
+
+#### Get Management Overview
+- **URL:** `GET /api/management/overview`
+- **Response:** `200 OK` organization-level overview with:
+  - `activeProjects`
+  - `completedProjects`
+  - `failedProjects`
+  - `blockedProjects`
+  - `pendingApprovals`
+  - `activeSchedulers`
+  - `recentKnowledge`
+  - `metrics`
+
+#### Get Department Management Overview
+- **URL:** `GET /api/management/overview?workspace=<workspace_uri>`
+- **Response:** `200 OK` department-level overview plus:
+  - `workspaceUri`
+  - `workflowHitRate`
+  - `throughput30d`
+
 ### 6. Approval
 
 #### List Approval Requests
@@ -289,7 +452,7 @@ The API runs on port 3000 by default.
 #### Submit Approval Request
 - **URL:** `POST /api/approval`
 - **Request Body (JSON):**
-  - `type` (String, required): `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `other`
+  - `type` (String, required): `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `proposal_publish` / `other`
   - `workspace` (String, required): 发起部门的 workspace URI
   - `title` (String, required): 审批标题
   - `description` (String, required): 详细描述
@@ -335,11 +498,74 @@ The API runs on port 3000 by default.
 #### Read/Write Department Memory
 - **URL:** `GET /api/departments/memory` / `POST /api/departments/memory`
 
+#### Knowledge Assets
+- **URL:** `GET /api/knowledge`
+- **Description:** 列出知识资产，支持：
+  - `workspace`
+  - `category`
+  - `limit`
+- **Response:** `200 OK` Array of `KnowledgeItem`
+
+#### Knowledge Asset Detail
+- **URL:** `GET /api/knowledge/:id`
+- **Response:** `200 OK` `KnowledgeDetail`
+
+#### Update Knowledge Asset
+- **URL:** `PUT /api/knowledge/:id`
+
+#### Delete Knowledge Asset
+- **URL:** `DELETE /api/knowledge/:id`
+
+#### Read/Write Knowledge Artifact
+- **URL:** `GET /api/knowledge/:id/artifacts/:path`
+- **URL:** `PUT /api/knowledge/:id/artifacts/:path`
+
+### 7.5 Evolution
+
+#### List Evolution Proposals
+- **URL:** `GET /api/evolution/proposals`
+- **Description:** 返回 evolution proposals，支持：
+  - `workspace`
+  - `kind`
+  - `status`
+  - `observe`
+
+#### Generate Evolution Proposals
+- **URL:** `POST /api/evolution/proposals/generate`
+- **Request Body (JSON):**
+  - `workspaceUri` (String, optional): 按部门范围生成
+  - `limit` (Number, optional): 本次最大生成数
+
+#### Get Evolution Proposal Detail
+- **URL:** `GET /api/evolution/proposals/:id`
+
+#### Evaluate Evolution Proposal
+- **URL:** `POST /api/evolution/proposals/:id/evaluate`
+
+#### Request Evolution Publish
+- **URL:** `POST /api/evolution/proposals/:id/publish`
+- **Description:** 创建发布审批，请求通过后由 approval callback 真正发布 workflow/skill。
+
+#### Refresh Evolution Observe
+- **URL:** `POST /api/evolution/proposals/:id/observe`
+
 ### 8. Scheduler
 
 #### List Scheduled Jobs
 - **URL:** `GET /api/scheduler/jobs`
 - **Response:** `200 OK` Array of `ScheduledJob` objects (including `lastRunAt`, `lastRunResult`, `enabled`).
+
+#### Scheduler Action Kinds
+- `dispatch-pipeline`
+- `dispatch-prompt`
+- `dispatch-execution-profile`
+- `health-check`
+- `create-project`
+
+`dispatch-execution-profile` 当前支持：
+- `workflow-run`
+- `review-flow`
+- `dag-orchestration`
 
 #### Create Scheduled Job
 - **URL:** `POST /api/scheduler/jobs`
@@ -371,6 +597,10 @@ The API runs on port 3000 by default.
 #### List Deliverables
 - **URL:** `GET /api/projects/:id/deliverables`
 - **Response:** `200 OK` Array of deliverable objects.
+- **Notes:**
+  - 读路径已经切到 SQLite 主库。
+  - 返回值同时包含手工 deliverables 与由 run `outputArtifacts` 自动同步出来的交付物。
+  - 自动同步项会额外携带可选字段 `sourceRunId`。
 
 #### Add Deliverable
 - **URL:** `POST /api/projects/:id/deliverables`
@@ -489,3 +719,59 @@ echo "Dispatched Pipeline Run: $(echo $DEV_RESP | jq -r .runId)"
 # uses pipeline autoTrigger rules, it will execute product-spec -> 
 # architecture-advisory -> autonomous-dev-pilot sequentially.
 ```
+
+## Provider Credentials API
+
+The Settings UI now relies on these endpoints to drive the provider matrix:
+
+```bash
+# Read current provider routing config
+curl -s http://localhost:3000/api/ai-config | jq
+
+# Read key presence + local install/login status
+curl -s http://localhost:3000/api/api-keys | jq
+
+# Save provider routing config
+curl -sX PUT http://localhost:3000/api/ai-config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "defaultProvider": "claude-api",
+    "layers": {
+      "executive": { "provider": "antigravity" },
+      "management": { "provider": "claude-api" },
+      "execution": { "provider": "codex" },
+      "utility": { "provider": "antigravity" }
+    }
+  }'
+
+# Save API-backed provider keys
+curl -sX PUT http://localhost:3000/api/api-keys \
+  -H "Content-Type: application/json" \
+  -d '{
+    "anthropic": "sk-ant-...",
+    "openai": "sk-...",
+    "gemini": "AIza...",
+    "grok": "xai-..."
+  }'
+
+# Test a custom OpenAI-compatible endpoint
+curl -sX POST http://localhost:3000/api/api-keys/test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "custom",
+    "apiKey": "sk-...",
+    "baseUrl": "https://api.deepseek.com"
+  }'
+```
+
+Supported test providers:
+- `anthropic`
+- `openai` / `openai-api`
+- `gemini` / `gemini-api`
+- `grok` / `grok-api`
+- `custom`
+
+Provider routing guardrails:
+- `PUT /api/ai-config` now rejects any unconfigured provider with `400`.
+- Settings `Provider 配置` / `Scene 覆盖` 下拉只显示当前真实可用的 provider。
+- Existing invalid configs remain visible as `(...未配置)` placeholders until the user switches them to a valid provider and saves.

@@ -3,10 +3,15 @@ import * as path from 'path';
 
 import { getApiKey, getOwnerConnection, grpc, refreshOwnerMap } from '../bridge/gateway';
 import type { GroupRoleDefinition, TaskResult } from '../agents/group-types';
+import { appendRunHistoryEntry, readRunHistory } from '../agents/run-history';
 import { compactCodingResult } from '../agents/result-parser';
+import { normalizeClaudeCodeEvents, type ClaudeStreamEvent } from '../providers/claude-code-normalizer';
 import { watchConversation, type ConversationWatchState } from '../agents/watch-conversation';
 import { createLogger } from '../logger';
 import { getExecutor, type ProviderCapabilities, type TaskExecutionResult } from '../providers';
+import { resolveAntigravityRuntimeConnection } from './antigravity-runtime-resolver';
+import { ClaudeEngineAgentBackend } from './claude-engine-backend';
+import type { GetRecentStepsOptions } from './extensions';
 import type {
   AgentBackend,
   AgentBackendCapabilities,
@@ -17,6 +22,7 @@ import type {
   BackendRunError,
 } from './types';
 import { hasAgentBackend, registerAgentBackend } from './registry';
+import { registerDepartmentMemoryBridge } from '../agents/department-memory-bridge';
 
 const log = createLogger('BuiltinBackends');
 const MAX_ANTIGRAVITY_RECONNECT_ATTEMPTS = 30;
@@ -52,6 +58,49 @@ function createBackendError(error: Partial<BackendRunError> & Pick<BackendRunErr
     message: error.message,
     retryable: error.retryable ?? true,
     source: error.source || 'backend',
+  };
+}
+
+function truncateHistoryText(value: string, maxLength = 500): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
+function summarizeAntigravityStep(step: any): Record<string, unknown> {
+  const text = [
+    step?.plannerResponse?.modifiedResponse,
+    step?.plannerResponse?.response,
+    step?.content?.text,
+    step?.errorMessage?.message,
+    step?.taskBoundary?.text,
+    step?.ephemeralMessage?.text,
+    step?.message?.text,
+  ].find((value) => typeof value === 'string' && value.trim().length > 0) as string | undefined;
+
+  const location = [
+    step?.absolutePath,
+    step?.path,
+    step?.uri,
+    step?.fileUri,
+    Array.isArray(step?.plannerResponse?.pathsToReview) ? step.plannerResponse.pathsToReview[0] : undefined,
+  ].find((value) => typeof value === 'string' && value.length > 0) as string | undefined;
+
+  const toolName = [
+    step?.toolCall?.toolName,
+    step?.toolName,
+    step?.tool,
+    step?.action,
+  ].find((value) => typeof value === 'string' && value.length > 0) as string | undefined;
+
+  return {
+    type: step?.type,
+    status: step?.status,
+    ...(text ? { text: truncateHistoryText(text) } : {}),
+    ...(location ? { location } : {}),
+    ...(toolName ? { toolName } : {}),
   };
 }
 
@@ -147,6 +196,9 @@ class CodexAgentSession implements AgentSession {
 
   private async run(): Promise<void> {
     try {
+      // Build baseInstructions from memoryContext if available
+      const memoryInstructions = formatMemoryContextForBaseInstructions(this.config.memoryContext);
+
       const result = await this.executor.executeTask({
         workspace: this.config.workspacePath,
         prompt: this.config.prompt,
@@ -157,6 +209,7 @@ class CodexAgentSession implements AgentSession {
         stageId: this.config.metadata?.stageId,
         roleId: this.config.metadata?.roleId,
         parentConversationId: this.config.parentConversationId,
+        baseInstructions: memoryInstructions || undefined,
       });
 
       if (this.cancelled || this.terminal) {
@@ -210,6 +263,7 @@ class CodexAgentSession implements AgentSession {
       prompt: request.prompt,
       model: request.model,
       workspace: request.workspacePath || this.config.workspacePath,
+      runId: this.runId,
     });
   }
 
@@ -239,6 +293,134 @@ class CodexAgentSession implements AgentSession {
   }
 }
 
+class NativeCodexAgentSession implements AgentSession {
+  readonly providerId = 'native-codex' as const;
+  readonly capabilities: AgentBackendCapabilities;
+  readonly handle: string;
+
+  private readonly executor = getExecutor('native-codex');
+  private readonly channel = createEventChannel<AgentEvent>();
+  private terminal = false;
+  private cancelled = false;
+
+  constructor(
+    readonly runId: string,
+    private readonly config: BackendRunConfig,
+    options: { handle?: string; startExecution?: boolean } = {},
+  ) {
+    this.handle = options.handle || `native-codex-${runId}`;
+    const baseCaps = mapCapabilities(this.executor.capabilities());
+    this.capabilities = { ...baseCaps, supportsAppend: true };
+    this.channel.push({
+      kind: 'started',
+      runId: this.runId,
+      providerId: this.providerId,
+      handle: this.handle,
+      startedAt: new Date().toISOString(),
+    });
+    if (options.startExecution !== false) {
+      void this.run();
+    }
+  }
+
+  private async run(): Promise<void> {
+    try {
+      const memoryInstructions = formatMemoryContextForBaseInstructions(this.config.memoryContext);
+      const result = await this.executor.executeTask({
+        workspace: this.config.workspacePath,
+        prompt: this.config.prompt,
+        model: this.config.model,
+        artifactDir: this.config.artifactDir,
+        timeout: this.config.timeoutMs,
+        runId: this.config.runId,
+        stageId: this.config.metadata?.stageId,
+        roleId: this.config.metadata?.roleId,
+        parentConversationId: this.config.parentConversationId,
+        baseInstructions: memoryInstructions || undefined,
+      });
+
+      if (this.cancelled || this.terminal) {
+        return;
+      }
+
+      this.channel.push({
+        kind: 'completed',
+        runId: this.runId,
+        providerId: this.providerId,
+        handle: result.handle || this.handle,
+        finishedAt: new Date().toISOString(),
+        result: toTaskResult(result),
+        finalText: result.content,
+        rawSteps: result.steps,
+      });
+      this.terminal = true;
+      this.channel.close();
+    } catch (err: any) {
+      if (this.cancelled || this.terminal) {
+        return;
+      }
+
+      this.channel.push({
+        kind: 'failed',
+        runId: this.runId,
+        providerId: this.providerId,
+        handle: this.handle,
+        finishedAt: new Date().toISOString(),
+        error: createBackendError({
+          code: 'provider_failed',
+          message: err?.message || 'Native Codex execution failed',
+          retryable: true,
+          source: 'provider',
+        }),
+      });
+      this.terminal = true;
+      this.channel.close();
+    }
+  }
+
+  events(): AsyncIterable<AgentEvent> {
+    return this.channel.iterate();
+  }
+
+  async append(request: AppendRunRequest): Promise<void> {
+    if (!this.capabilities.supportsAppend) {
+      throw new Error('append_not_supported');
+    }
+
+    await this.executor.appendMessage(this.handle, {
+      prompt: request.prompt,
+      model: request.model,
+      workspace: request.workspacePath || this.config.workspacePath,
+      runId: this.runId,
+    });
+  }
+
+  async cancel(reason?: string): Promise<void> {
+    if (this.terminal || this.cancelled) {
+      return;
+    }
+
+    this.cancelled = true;
+
+    try {
+      await this.executor.cancel(this.handle);
+    } catch (err: any) {
+      log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Native Codex cancel raised an error');
+    }
+
+    this.channel.push({
+      kind: 'cancelled',
+      runId: this.runId,
+      providerId: this.providerId,
+      handle: this.handle,
+      finishedAt: new Date().toISOString(),
+      reason,
+    });
+    this.terminal = true;
+    this.channel.close();
+  }
+}
+
 class AntigravityAgentSession implements AgentSession {
   readonly providerId = 'antigravity' as const;
   readonly capabilities: AgentBackendCapabilities;
@@ -253,6 +435,7 @@ class AntigravityAgentSession implements AgentSession {
   private reconnectAttempts = 0;
   private terminal = false;
   private cancelled = false;
+  private lastPersistedStepCount = 0;
 
   private constructor(
     readonly runId: string,
@@ -285,7 +468,7 @@ class AntigravityAgentSession implements AgentSession {
       throw new Error('Antigravity backend returned no handle');
     }
 
-    const conn = getOwnerConnection(handle);
+    const conn = await getOwnerConnection(handle);
     if (!conn) {
       throw new Error('Unable to resolve prompt conversation owner');
     }
@@ -303,7 +486,7 @@ class AntigravityAgentSession implements AgentSession {
   }
 
   static async attach(config: BackendRunConfig, handle: string): Promise<AntigravityAgentSession> {
-    const conn = getOwnerConnection(handle);
+    const conn = await getOwnerConnection(handle);
     if (!conn) {
       throw new Error('Unable to resolve prompt conversation owner');
     }
@@ -320,8 +503,8 @@ class AntigravityAgentSession implements AgentSession {
     return session;
   }
 
-  private getConnection(): { port: number; csrf: string; apiKey?: string } {
-    const connection = getOwnerConnection(this.handle) || this.ownerConnection;
+  private async getConnection(): Promise<{ port: number; csrf: string; apiKey?: string }> {
+    const connection = await getOwnerConnection(this.handle) || this.ownerConnection;
     return {
       ...connection,
       apiKey: connection.apiKey || this.ownerConnection.apiKey || getApiKey() || undefined,
@@ -467,7 +650,7 @@ class AntigravityAgentSession implements AgentSession {
       return;
     }
 
-    const conn = this.getConnection();
+    const conn = await this.getConnection();
     if (!conn.apiKey) {
       return;
     }
@@ -567,7 +750,7 @@ class AntigravityAgentSession implements AgentSession {
 
       try {
         await refreshOwnerMap();
-        const nextConn = this.getConnection();
+        const nextConn = await this.getConnection();
         this.abortWatch?.();
         this.startWatch(nextConn);
       } catch (err: any) {
@@ -584,6 +767,29 @@ class AntigravityAgentSession implements AgentSession {
     this.emitResult(this.buildAntigravityResult(state.steps), state.steps);
   }
 
+  private persistNewStepHistory(state: ConversationWatchState): void {
+    if (state.steps.length < this.lastPersistedStepCount) {
+      this.lastPersistedStepCount = 0;
+    }
+
+    for (let index = this.lastPersistedStepCount; index < state.steps.length; index += 1) {
+      const step = state.steps[index];
+      if (!step) continue;
+      appendRunHistoryEntry({
+        runId: this.runId,
+        provider: this.providerId,
+        sessionHandle: this.handle,
+        eventType: 'provider.step',
+        details: {
+          index,
+          ...summarizeAntigravityStep(step),
+        },
+      });
+    }
+
+    this.lastPersistedStepCount = state.steps.length;
+  }
+
   private startWatch(conn: { port: number; csrf: string; apiKey?: string }): void {
     this.startFilePoll();
     this.abortWatch = watchConversation(
@@ -595,6 +801,7 @@ class AntigravityAgentSession implements AgentSession {
         }
 
         this.reconnectAttempts = 0;
+        this.persistNewStepHistory(state);
         await this.handleAutoApprove(state);
         if (this.terminal || this.cancelled) {
           return;
@@ -653,7 +860,7 @@ class AntigravityAgentSession implements AgentSession {
       throw new Error('append_not_supported');
     }
 
-    const conn = this.getConnection();
+    const conn = await this.getConnection();
     if (!conn.apiKey) {
       throw new Error('No API key available');
     }
@@ -676,7 +883,7 @@ class AntigravityAgentSession implements AgentSession {
     this.cancelled = true;
 
     try {
-      const conn = this.getConnection();
+      const conn = await this.getConnection();
       if (conn.apiKey) {
         await grpc.cancelCascade(conn.port, conn.csrf, conn.apiKey, this.handle);
       }
@@ -713,6 +920,51 @@ export class CodexAgentBackend implements AgentBackend {
   }
 }
 
+export class NativeCodexAgentBackend implements AgentBackend {
+  readonly providerId = 'native-codex' as const;
+
+  capabilities(): AgentBackendCapabilities {
+    const base = mapCapabilities(getExecutor('native-codex').capabilities());
+    return { ...base, supportsAppend: true };
+  }
+
+  async start(config: BackendRunConfig): Promise<AgentSession> {
+    return new NativeCodexAgentSession(config.runId, config);
+  }
+
+  async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
+    return new NativeCodexAgentSession(config.runId, config, { handle, startExecution: false });
+  }
+
+  async getRecentSteps(handle: string, options?: GetRecentStepsOptions): Promise<unknown[]> {
+    const runId = handle.startsWith('native-codex-') ? handle.slice('native-codex-'.length) : '';
+    if (!runId) {
+      return [];
+    }
+
+    const steps = readRunHistory(runId)
+      .filter((entry) => entry.eventType === 'conversation.message.user' || entry.eventType === 'conversation.message.assistant')
+      .map((entry) => {
+        const content = typeof entry.details.content === 'string' ? entry.details.content : '';
+        if (entry.eventType === 'conversation.message.user') {
+          return {
+            type: 'CORTEX_STEP_TYPE_USER_INPUT',
+            userInput: { items: [{ text: content }], media: [] },
+          };
+        }
+        return {
+          type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+          plannerResponse: { response: content },
+        };
+      });
+
+    if (!options?.limit || options.limit <= 0) {
+      return steps;
+    }
+    return steps.slice(-options.limit);
+  }
+}
+
 export class AntigravityAgentBackend implements AgentBackend {
   readonly providerId = 'antigravity' as const;
 
@@ -727,10 +979,212 @@ export class AntigravityAgentBackend implements AgentBackend {
   async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
     return AntigravityAgentSession.attach(config, handle);
   }
+
+  async getRecentSteps(handle: string, options?: GetRecentStepsOptions): Promise<unknown[]> {
+    const conn = await getOwnerConnection(handle);
+    const apiKey = conn?.apiKey || getApiKey() || undefined;
+    if (!conn || !apiKey) {
+      throw new Error('Unable to resolve prompt conversation owner');
+    }
+
+    const resp = await grpc.getTrajectorySteps(conn.port, conn.csrf, apiKey, handle);
+    const steps = (resp?.steps || []).filter((step: unknown) => step != null);
+    if (!options?.limit || options.limit <= 0) {
+      return steps;
+    }
+
+    return steps.slice(-options.limit);
+  }
+
+  async annotateSession(handle: string, annotations: Record<string, unknown>): Promise<void> {
+    const conn = await getOwnerConnection(handle);
+    const apiKey = conn?.apiKey || getApiKey() || undefined;
+    if (!conn || !apiKey) {
+      throw new Error('Unable to resolve prompt conversation owner');
+    }
+
+    await grpc.updateConversationAnnotations(conn.port, conn.csrf, apiKey, handle, annotations);
+  }
+
+  resolveWorkspaceRuntime(workspacePath: string, workspaceUri: string) {
+    return resolveAntigravityRuntimeConnection(workspacePath, workspaceUri);
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Claude Code Backend — Phase 1 minimal adapter
+// ---------------------------------------------------------------------------
+
+class ClaudeCodeAgentSession implements AgentSession {
+  readonly providerId = 'claude-code' as const;
+  readonly capabilities: AgentBackendCapabilities;
+  readonly handle: string;
+
+  private readonly executor = getExecutor('claude-code');
+  private readonly channel = createEventChannel<AgentEvent>();
+  private terminal = false;
+  private cancelled = false;
+
+  constructor(
+    readonly runId: string,
+    private readonly config: BackendRunConfig,
+    options: { handle?: string; startExecution?: boolean } = {},
+  ) {
+    this.handle = options.handle || `claude-code-${runId}`;
+    // Phase 4: Claude Code supports append via --resume even without step watch
+    const baseCaps = mapCapabilities(this.executor.capabilities());
+    this.capabilities = { ...baseCaps, supportsAppend: true };
+    this.channel.push({
+      kind: 'started',
+      runId: this.runId,
+      providerId: this.providerId,
+      handle: this.handle,
+      startedAt: new Date().toISOString(),
+    });
+    if (options.startExecution !== false) {
+      void this.run();
+    }
+  }
+
+  static attach(config: BackendRunConfig, handle: string): ClaudeCodeAgentSession {
+    return new ClaudeCodeAgentSession(config.runId, config, {
+      handle,
+      startExecution: false,
+    });
+  }
+
+  private async run(): Promise<void> {
+    try {
+      const result = await this.executor.executeTask({
+        workspace: this.config.workspacePath,
+        prompt: this.config.prompt,
+        model: this.config.model,
+        artifactDir: this.config.artifactDir,
+        timeout: this.config.timeoutMs,
+        runId: this.config.runId,
+        stageId: this.config.metadata?.stageId,
+        roleId: this.config.metadata?.roleId,
+        parentConversationId: this.config.parentConversationId,
+      });
+
+      if (this.cancelled || this.terminal) return;
+
+      // Update handle if Claude returned a session ID
+      const effectiveHandle = result.handle || this.handle;
+
+      // Phase 3: emit live_state from normalized events
+      const rawEvents = (result.steps || []) as ClaudeStreamEvent[];
+      const normalized = normalizeClaudeCodeEvents(rawEvents);
+      this.channel.push({
+        kind: 'live_state',
+        runId: this.runId,
+        providerId: this.providerId,
+        handle: effectiveHandle,
+        liveState: normalized.liveState,
+      });
+
+      this.channel.push({
+        kind: 'completed',
+        runId: this.runId,
+        providerId: this.providerId,
+        handle: effectiveHandle,
+        finishedAt: new Date().toISOString(),
+        result: toTaskResult(result),
+        finalText: result.content,
+        rawSteps: result.steps,
+      });
+      this.terminal = true;
+      this.channel.close();
+    } catch (err: any) {
+      if (this.cancelled || this.terminal) return;
+
+      this.channel.push({
+        kind: 'failed',
+        runId: this.runId,
+        providerId: this.providerId,
+        handle: this.handle,
+        finishedAt: new Date().toISOString(),
+        error: createBackendError({
+          code: 'provider_failed',
+          message: err?.message || 'Claude Code execution failed',
+          retryable: true,
+          source: 'provider',
+        }),
+      });
+      this.terminal = true;
+      this.channel.close();
+    }
+  }
+
+  events(): AsyncIterable<AgentEvent> {
+    return this.channel.iterate();
+  }
+
+  async append(request: AppendRunRequest): Promise<void> {
+    if (!this.capabilities.supportsAppend) {
+      throw new Error('append_not_supported');
+    }
+
+    await this.executor.appendMessage(this.handle, {
+      prompt: request.prompt,
+      model: request.model,
+      workspace: request.workspacePath || this.config.workspacePath,
+      runId: this.runId,
+    });
+  }
+
+  async cancel(reason?: string): Promise<void> {
+    if (this.terminal || this.cancelled) return;
+    this.cancelled = true;
+
+    try {
+      await this.executor.cancel(this.handle);
+    } catch (err: any) {
+      log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Claude Code cancel raised an error');
+    }
+
+    this.channel.push({
+      kind: 'cancelled',
+      runId: this.runId,
+      providerId: this.providerId,
+      handle: this.handle,
+      finishedAt: new Date().toISOString(),
+      reason,
+    });
+    this.terminal = true;
+    this.channel.close();
+  }
+}
+
+export class ClaudeCodeAgentBackend implements AgentBackend {
+  readonly providerId = 'claude-code' as const;
+
+  capabilities(): AgentBackendCapabilities {
+    // Phase 4: Claude Code supports append via --resume
+    const base = mapCapabilities(getExecutor('claude-code').capabilities());
+    return { ...base, supportsAppend: true };
+  }
+
+  async start(config: BackendRunConfig): Promise<AgentSession> {
+    return new ClaudeCodeAgentSession(config.runId, config);
+  }
+
+  async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
+    return ClaudeCodeAgentSession.attach(config, handle);
+  }
+}
+
+export { ClaudeEngineAgentBackend };
+
 let codexBackend: CodexAgentBackend | null = null;
+let nativeCodexBackend: ClaudeEngineAgentBackend | null = null;
 let antigravityBackend: AntigravityAgentBackend | null = null;
+let claudeCodeBackend: ClaudeCodeAgentBackend | null = null;
+let claudeApiBackend: ClaudeEngineAgentBackend | null = null;
+let openaiApiBackend: ClaudeEngineAgentBackend | null = null;
+let geminiApiBackend: ClaudeEngineAgentBackend | null = null;
+let grokApiBackend: ClaudeEngineAgentBackend | null = null;
+let customApiBackend: ClaudeEngineAgentBackend | null = null;
 
 export function ensureBuiltInAgentBackends(): void {
   if (!hasAgentBackend('codex')) {
@@ -738,8 +1192,76 @@ export function ensureBuiltInAgentBackends(): void {
     registerAgentBackend(codexBackend);
   }
 
+  if (!hasAgentBackend('native-codex')) {
+    // Department runtime mainline routes native-codex through Claude Engine.
+    // The legacy NativeCodexExecutor remains available for local conversation flows.
+    nativeCodexBackend ||= new ClaudeEngineAgentBackend('native-codex');
+    registerAgentBackend(nativeCodexBackend);
+  }
+
   if (!hasAgentBackend('antigravity')) {
     antigravityBackend ||= new AntigravityAgentBackend();
     registerAgentBackend(antigravityBackend);
   }
+
+  if (!hasAgentBackend('claude-code')) {
+    claudeCodeBackend ||= new ClaudeCodeAgentBackend();
+    registerAgentBackend(claudeCodeBackend);
+  }
+
+  if (!hasAgentBackend('claude-api')) {
+    claudeApiBackend ||= new ClaudeEngineAgentBackend('claude-api');
+    registerAgentBackend(claudeApiBackend);
+  }
+
+  if (!hasAgentBackend('openai-api')) {
+    openaiApiBackend ||= new ClaudeEngineAgentBackend('openai-api');
+    registerAgentBackend(openaiApiBackend);
+  }
+
+  if (!hasAgentBackend('gemini-api')) {
+    geminiApiBackend ||= new ClaudeEngineAgentBackend('gemini-api');
+    registerAgentBackend(geminiApiBackend);
+  }
+
+  if (!hasAgentBackend('grok-api')) {
+    grokApiBackend ||= new ClaudeEngineAgentBackend('grok-api');
+    registerAgentBackend(grokApiBackend);
+  }
+
+  if (!hasAgentBackend('custom')) {
+    customApiBackend ||= new ClaudeEngineAgentBackend('custom');
+    registerAgentBackend(customApiBackend);
+  }
+
+  // Register memory hooks
+  registerDepartmentMemoryBridge();
+}
+
+// ---------------------------------------------------------------------------
+// Memory context → base instructions converter
+// ---------------------------------------------------------------------------
+
+import type { MemoryContext } from './types';
+
+function formatMemoryContextForBaseInstructions(
+  memoryContext: MemoryContext | undefined,
+): string {
+  if (!memoryContext) return '';
+
+  const parts: string[] = [];
+
+  for (const entry of memoryContext.departmentMemories ?? []) {
+    if (entry.content.trim()) parts.push(`[${entry.name}]\n${entry.content}`);
+  }
+  for (const entry of memoryContext.projectMemories ?? []) {
+    if (entry.content.trim()) parts.push(`[${entry.name}]\n${entry.content}`);
+  }
+  for (const entry of memoryContext.userPreferences ?? []) {
+    if (entry.content.trim()) parts.push(`[${entry.name}]\n${entry.content}`);
+  }
+
+  if (parts.length === 0) return '';
+
+  return `\n<department-memory>\n${parts.join('\n\n')}\n</department-memory>`;
 }

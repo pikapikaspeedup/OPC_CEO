@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock run-registry before importing project-utils
-vi.mock('@/lib/agents/run-registry', () => ({
-  getRun: vi.fn(),
-}));
-
 import {
   getErrorMessage,
   summarizeFailureText,
@@ -12,9 +7,9 @@ import {
   deriveRunFailureReason,
   normalizeProject,
 } from './project-utils';
-import { getRun } from '@/lib/agents/run-registry';
+import type { AgentRunState } from '@/lib/agents/group-types';
 
-const mockedGetRun = vi.mocked(getRun);
+const mockedGetRun = vi.fn<(runId: string) => AgentRunState | undefined>();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -121,7 +116,7 @@ describe('normalizeProject', () => {
         ],
       },
     };
-    const result = normalizeProject(project);
+    const result = normalizeProject(project, { getRunById: mockedGetRun });
     expect(result.runIds).toEqual(expect.arrayContaining(['r1', 'r2']));
     expect(result.runIds.length).toBe(2);
   });
@@ -136,7 +131,7 @@ describe('normalizeProject', () => {
         ],
       },
     };
-    const result = normalizeProject(project);
+    const result = normalizeProject(project, { getRunById: mockedGetRun });
     expect((result as any).childProjectIds).toEqual(expect.arrayContaining(['p1', 'p2']));
   });
 
@@ -153,7 +148,7 @@ describe('normalizeProject', () => {
         stages: [{ runId: 'r1', status: 'failed', branches: [] }],
       },
     };
-    const result = normalizeProject(project);
+    const result = normalizeProject(project, { getRunById: mockedGetRun });
     expect(result.pipelineState!.stages[0].lastError).toBe('model error');
   });
 
@@ -165,7 +160,7 @@ describe('normalizeProject', () => {
         stages: [{ runId: 'r1', status: 'failed', lastError: 'original', branches: [] }],
       },
     };
-    const result = normalizeProject(project);
+    const result = normalizeProject(project, { getRunById: mockedGetRun });
     expect(result.pipelineState!.stages[0].lastError).toBe('original');
   });
 

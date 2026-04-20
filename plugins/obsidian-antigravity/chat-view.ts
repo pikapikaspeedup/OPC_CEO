@@ -233,10 +233,17 @@ export class ChatView extends ItemView {
     const wasConnected = this.gatewayConnected;
     this.gatewayConnected = reachable;
 
-    if (wasConnected && !reachable) {
-      logger.warn(LOG_SRC, 'Heartbeat: Gateway became unreachable');
+    // Don't show disconnect banner if WebSocket is still connected
+    // HTTP might fail while WS streams are fine (different network paths)
+    const wsHealthy = this.plugin.client.getWsState() === 'connected';
+
+    if (wasConnected && !reachable && !wsHealthy) {
+      logger.warn(LOG_SRC, 'Heartbeat: Gateway became unreachable (HTTP + WS both down)');
       this.renderHeader();
       this.showDisconnectBanner('Gateway connection lost. Retrying...');
+    } else if (wasConnected && !reachable && wsHealthy) {
+      logger.debug(LOG_SRC, 'Heartbeat: HTTP check failed but WS still connected — skipping banner');
+      // Don't show banner — WS is fine, HTTP might just be momentarily slow
     } else if (!wasConnected && reachable) {
       logger.info(LOG_SRC, 'Heartbeat: Gateway recovered');
       this.renderHeader();
@@ -256,9 +263,15 @@ export class ChatView extends ItemView {
     switch (state) {
       case 'connected':
         this.hideDisconnectBanner();
+        // Also sync HTTP health — if WS reconnected, HTTP is likely fine too
+        this.gatewayConnected = true;
+        this.renderHeader();
         break;
       case 'reconnecting':
-        this.showDisconnectBanner(`Reconnecting to server... (${detail || ''})`);
+        // Only show reconnect banner after 2+ failed attempts to avoid flicker
+        if (detail && parseInt(detail) >= 2) {
+          this.showDisconnectBanner(`Reconnecting to server... (${detail})`);
+        }
         break;
       case 'disconnected':
         if (detail === 'max retries exceeded') {
@@ -612,7 +625,9 @@ export class ChatView extends ItemView {
     logger.info(LOG_SRC, 'Creating new conversation...');
     try {
       const workspace = await this.getWorkspaceUri();
+      logger.info(LOG_SRC, 'Resolved workspace URI for new conversation', { workspace });
       const result = await this.plugin.client.createConversation(workspace);
+      logger.info(LOG_SRC, 'CreateConversation response', { cascadeId: result.cascadeId?.slice(0, 8), error: result.error, hasState: result.state });
       if (result.cascadeId) {
         logger.info(LOG_SRC, `Conversation created: ${result.cascadeId.slice(0, 8)}`);
         await this.openConversation(result.cascadeId);
@@ -2115,27 +2130,6 @@ export class ChatView extends ItemView {
       this.renderToolbar(container);
     });
 
-    const smartBtn = container.createEl('button', {
-      cls: `ag-attach-btn ag-context-toggle-btn ag-smart-context-btn${this.smartContextEnabledForDraft ? ' is-active' : ''}`,
-      attr: {
-        'aria-label': 'Toggle smart context',
-        'aria-pressed': this.smartContextEnabledForDraft ? 'true' : 'false',
-      },
-    });
-    const smartIcon = smartBtn.createSpan({ cls: 'ag-mode-icon' });
-    setIcon(smartIcon, 'files');
-    smartBtn.createSpan({ text: ' Smart' });
-    if (this.getSmartContextMode() === 'auto') {
-      smartBtn.title = this.smartContextEnabledForDraft
-        ? 'Current note context is automatically included for this draft. Click to pause it for this message.'
-        : 'Automatic current note context is paused for this draft. Click to turn it back on.';
-    } else {
-      smartBtn.title = this.smartContextEnabledForDraft
-        ? 'Current note context will be included for this draft. Click to turn it off.'
-        : 'Click to add the current note context for this draft.';
-    }
-    smartBtn.addEventListener('click', () => this.toggleSmartContextForDraft());
-
     // Attach active file button
     const attachBtn = container.createEl('button', { cls: 'ag-attach-btn', attr: { 'aria-label': 'Attach current file' } });
     const attachIcon = attachBtn.createSpan({ cls: 'ag-mode-icon' });
@@ -2149,27 +2143,6 @@ export class ChatView extends ItemView {
     setIcon(promptIcon, 'file-text');
     promptBtn.title = 'Prompt Templates';
     promptBtn.addEventListener('click', () => this.showPromptPicker());
-
-    const relatedBtn = container.createEl('button', {
-      cls: `ag-attach-btn ag-context-toggle-btn ag-related-context-btn${this.knowledgeContextEnabledForDraft ? ' is-active' : ''}`,
-      attr: {
-        'aria-label': 'Toggle related notes context',
-        'aria-pressed': this.knowledgeContextEnabledForDraft ? 'true' : 'false',
-      },
-    });
-    const relatedIcon = relatedBtn.createSpan({ cls: 'ag-mode-icon' });
-    setIcon(relatedIcon, 'brain');
-    relatedBtn.createSpan({ text: ' Related' });
-    if (this.getKnowledgeContextMode() === 'auto') {
-      relatedBtn.title = this.knowledgeContextEnabledForDraft
-        ? 'Related notes are automatically included for this draft. Click to pause them for this message.'
-        : 'Automatic related notes are paused for this draft. Click to turn them back on.';
-    } else {
-      relatedBtn.title = this.knowledgeContextEnabledForDraft
-        ? 'Related notes will be included for this draft. Click to turn them off.'
-        : 'Click to add related notes for this draft.';
-    }
-    relatedBtn.addEventListener('click', () => this.toggleKnowledgeContextForDraft());
 
     // Pin count indicator (if pins exist)
     const pinCount = (this.plugin.settings.pins || []).length;
@@ -2295,7 +2268,10 @@ export class ChatView extends ItemView {
   }
 
   private async handleSend() {
-    if (!this.currentCascadeId) return;
+    if (!this.currentCascadeId) {
+      logger.warn(LOG_SRC, 'handleSend called but no currentCascadeId — ignoring');
+      return;
+    }
 
     if (this.isStreaming) {
       logger.info(LOG_SRC, 'Cancelling generation');
@@ -2402,7 +2378,22 @@ export class ChatView extends ItemView {
           inlineData: img.dataUrl.split(',')[1],
         })),
       } : undefined;
-      await this.plugin.client.sendMessage(this.currentCascadeId, text, this.agenticMode, model, attachments);
+      logger.info(LOG_SRC, 'Sending message to API', { cascadeId: this.currentCascadeId?.slice(0, 8), model: model || 'default', textLen: text.length, hasAttachments: !!attachments });
+      const sendResult = await this.plugin.client.sendMessage(this.currentCascadeId, text, this.agenticMode, model, attachments);
+      // Check for gRPC-level errors in the response (e.g. "agent state not found")
+      if (sendResult?.error) {
+        logger.error(LOG_SRC, 'Send returned gRPC error', { error: sendResult.error, cascadeId: this.currentCascadeId?.slice(0, 8) });
+        this.isStreaming = false;
+        const errorStep: Step = {
+          type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE',
+          errorMessage: {
+            message: `Server error: ${sendResult.error.message || JSON.stringify(sendResult.error)}`,
+          },
+        };
+        this.steps.push(errorStep);
+        this.renderMessages();
+        return;
+      }
     } catch (err: any) {
       logger.error(LOG_SRC, 'Send message failed', { message: err?.message });
       this.isStreaming = false;

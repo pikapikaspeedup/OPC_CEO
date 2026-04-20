@@ -9,7 +9,8 @@ export async function GET() {
   const playgrounds = getPlaygrounds();
 
   // Ensure the CEO workspace is opened in Antigravity on first load
-  const runningWs = discoverLanguageServers().map(s => s.workspace).filter(Boolean) as string[];
+  const servers = await discoverLanguageServers();
+  const runningWs = servers.map(s => s.workspace).filter(Boolean) as string[];
   ensureCEOWorkspaceOpen(runningWs);
 
   return NextResponse.json({ workspaces, playgrounds });

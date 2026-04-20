@@ -161,7 +161,7 @@ export default function DeliverablesPanel({ projectId, stages }: DeliverablesPan
         <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] py-10 text-center">
           <Package className="mx-auto mb-3 h-8 w-8 text-white/15" />
           <p className="text-sm text-white/40">No deliverables yet</p>
-          <p className="mt-1 text-xs text-white/25">Track outputs from pipeline stages</p>
+          <p className="mt-1 text-xs text-white/25">Track outputs from pipeline stages and prompt runs</p>
         </div>
       )}
 
@@ -184,6 +184,11 @@ export default function DeliverablesPanel({ projectId, stages }: DeliverablesPan
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-white/80 truncate">{d.title}</span>
                       <TypeBadge type={d.type} />
+                      {d.sourceRunId && (
+                        <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-[10px] text-sky-200">
+                          Run output
+                        </span>
+                      )}
                     </div>
                     {d.artifactPath && (
                       <div className="mt-0.5 text-[11px] text-white/25 truncate font-mono">

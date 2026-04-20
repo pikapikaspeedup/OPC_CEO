@@ -29,6 +29,10 @@ vi.mock('./department-memory', () => ({
   extractAndPersistMemory: vi.fn(),
 }));
 
+vi.mock('../knowledge', () => ({
+  persistKnowledgeForRun: vi.fn(),
+}));
+
 vi.mock('./gateway-home', () => ({
   ARTIFACT_ROOT_DIR: '.antigravity',
 }));

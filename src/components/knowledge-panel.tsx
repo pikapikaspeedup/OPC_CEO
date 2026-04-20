@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useState } from 'react';
 import { renderMarkdown } from '@/lib/render-markdown';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { api } from '@/lib/api';
-import type { KnowledgeDetail } from '@/lib/types';
+import type { KnowledgeDetail, KnowledgeItem } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/components/locale-provider';
 import {
@@ -70,6 +70,8 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   const [saveMsg, setSaveMsg] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [knowledgeListLoading, setKnowledgeListLoading] = useState(false);
 
   const resetSelectionState = useCallback(() => {
     setDetail(null);
@@ -111,14 +113,27 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
     }
   }, [onTitleChange]);
 
+  const loadKnowledgeItems = useCallback(async () => {
+    setKnowledgeListLoading(true);
+    try {
+      const items = await api.knowledge({ limit: 50 });
+      setKnowledgeItems(items);
+    } catch {
+      setKnowledgeItems([]);
+    } finally {
+      setKnowledgeListLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!selectedId) {
       resetSelectionState();
+      void loadKnowledgeItems();
       return;
     }
 
     void loadDetail(selectedId);
-  }, [selectedId, loadDetail, resetSelectionState]);
+  }, [selectedId, loadDetail, loadKnowledgeItems, resetSelectionState]);
 
   useEffect(() => {
     if (!detail || !activeArtifact) {
@@ -194,14 +209,59 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
     : false;
 
   if (!selectedId) {
+    const recentItems = [...knowledgeItems]
+      .sort((a, b) => a.timestamps.created.localeCompare(b.timestamps.created) > 0 ? -1 : 1)
+      .slice(0, 5);
+    const highReuse = [...knowledgeItems]
+      .sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0))
+      .filter((item) => (item.usageCount || 0) > 0)
+      .slice(0, 5);
+    const staleItems = knowledgeItems
+      .filter((item) => item.status === 'stale' || item.status === 'conflicted')
+      .slice(0, 5);
+    const proposalSignals = knowledgeItems
+      .filter((item) => item.status === 'proposal')
+      .slice(0, 5);
+
     return (
       <Pane tone="strong" className="min-h-[620px] p-6 md:p-8">
-        <EmptyState
-          icon={<BookOpen className="h-6 w-6" />}
-          title={t('knowledge.emptyTitle')}
-          body={t('knowledge.emptySubtitle')}
-          className="min-h-[520px]"
-        />
+        <div className="space-y-6">
+          <EmptyState
+            icon={<BookOpen className="h-6 w-6" />}
+            title={t('knowledge.emptyTitle')}
+            body={t('knowledge.emptySubtitle')}
+            className="min-h-[220px]"
+          />
+          <div className="grid gap-4 lg:grid-cols-4">
+            <KnowledgeListCard
+              title="Recent Additions"
+              loading={knowledgeListLoading}
+              items={recentItems}
+              emptyText="暂无新增知识"
+            />
+            <KnowledgeListCard
+              title="High Reuse"
+              loading={knowledgeListLoading}
+              items={highReuse}
+              emptyText="暂无高复用知识"
+              showUsage
+            />
+            <KnowledgeListCard
+              title="Stale / Conflict"
+              loading={knowledgeListLoading}
+              items={staleItems}
+              emptyText="暂无陈旧或冲突知识"
+              showStatus
+            />
+            <KnowledgeListCard
+              title="Proposal Signals"
+              loading={knowledgeListLoading}
+              items={proposalSignals}
+              emptyText="暂无待演化信号"
+              showStatus
+            />
+          </div>
+        </div>
       </Pane>
     );
   }
@@ -469,3 +529,45 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
 });
 
 export default KnowledgeWorkspace;
+
+function KnowledgeListCard({
+  title,
+  items,
+  loading,
+  emptyText,
+  showUsage,
+  showStatus,
+}: {
+  title: string;
+  items: KnowledgeItem[];
+  loading: boolean;
+  emptyText: string;
+  showUsage?: boolean;
+  showStatus?: boolean;
+}) {
+  return (
+    <div className="rounded-[22px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{title}</div>
+      {loading ? (
+        <div className="mt-4 text-sm text-[var(--app-text-muted)]">Loading…</div>
+      ) : items.length > 0 ? (
+        <div className="mt-4 space-y-2">
+          {items.map((item) => (
+            <div key={item.id} className="rounded-[16px] border border-[var(--app-border-soft)] bg-[var(--app-raised-2)] px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-sm font-medium text-[var(--app-text)]">{item.title}</div>
+                {showUsage ? <StatusChip>{item.usageCount || 0} uses</StatusChip> : null}
+                {showStatus && item.status ? <StatusChip>{item.status}</StatusChip> : null}
+              </div>
+              <div className="mt-1 line-clamp-2 text-xs leading-6 text-[var(--app-text-soft)]">
+                {item.summary}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 text-sm text-[var(--app-text-muted)]">{emptyText}</div>
+      )}
+    </div>
+  );
+}

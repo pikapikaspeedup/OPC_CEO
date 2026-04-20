@@ -58,6 +58,8 @@ export interface AppendMessageOptions {
   model?: string
   /** The workspace to execute within (optional, useful for stateless reconnections). */
   workspace?: string
+  /** Run ID for history tracking. */
+  runId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +115,16 @@ export interface TaskExecutor {
 // ---------------------------------------------------------------------------
 
 /** Provider type string literal. */
-export type ProviderId = 'antigravity' | 'codex' | 'claude-api' | 'openai-api' | 'custom';
+export type ProviderId =
+  | 'antigravity'
+  | 'codex'
+  | 'native-codex'
+  | 'claude-code'
+  | 'claude-api'
+  | 'openai-api'
+  | 'gemini-api'
+  | 'grok-api'
+  | 'custom';
 
 // ---------------------------------------------------------------------------
 // AI Provider Configuration (organization-wide)
@@ -174,6 +185,20 @@ export interface AIProviderConfig {
 
   /** Per-scene overrides (highest priority). */
   scenes?: Record<string, SceneProviderConfig>
+
+  /** Custom provider settings (when defaultProvider='custom'). */
+  customProvider?: {
+    /** Preset/vendor id for UI recovery (e.g. "deepseek", "groq", "ollama"). */
+    vendor?: string
+    /** Display name (e.g. "DeepSeek", "Groq"). */
+    name?: string
+    /** Base URL of the OpenAI-compatible API endpoint (e.g. "https://api.deepseek.com"). */
+    baseUrl?: string
+    /** API key for the custom provider. */
+    apiKey?: string
+    /** Default model identifier (e.g. "deepseek-chat"). */
+    defaultModel?: string
+  }
 }
 
 /**

@@ -99,6 +99,7 @@ graph LR
         ApprovalFW["Approval Framework<br/>审批请求 + 多通道通知"]
         DeptSync["Department Sync<br/>IDE 规则同步"]
         DeptMemory["Department Memory<br/>持久记忆"]
+        Evolution["Evolution Pipeline<br/>proposal/evaluate/publish/observe"]
         Scheduler["Scheduler<br/>定时任务"]
     end
 
@@ -128,6 +129,10 @@ graph LR
     CEOAgent --> DispatchService
     Scheduler --> DispatchService
     ApprovalFW --> CEOAgent
+    DeptMemory --> Evolution
+    RunRegistry --> Evolution
+    Evolution --> ApprovalFW
+    Evolution --> AssetLoader
     DeptSync --> Bridge
     ConvAPI --> Bridge
     RunAPI --> DispatchService
@@ -135,7 +140,7 @@ graph LR
     ApprovalAPI --> ApprovalFW
     DeptAPI --> DeptSync & DeptMemory
     ProjAPI --> ProjectRegistry
-    OtherAPI --> Bridge
+    OtherAPI --> Bridge & Evolution
 ```
 
 ---
@@ -274,8 +279,9 @@ sequenceDiagram
 
 | 文件 | 职责 |
 |---|---|
-| `src/app/api/conversations/route.ts` | 创建/列出对话 |
-| `src/app/api/conversations/[id]/send/route.ts` | 发送消息，支持 `@[file]` 附件 |
+| `src/app/api/conversations/route.ts` | 创建/列出对话；`antigravity` 走 Cascade，`codex / native-codex / claude-api / openai-api / gemini-api / grok-api / custom` 走本地 conversation |
+| `src/app/api/conversations/[id]/send/route.ts` | 发送消息；Antigravity 走 gRPC，本地 provider 走 Gateway executor / transcript store，支持 `@[file]` 附件 |
+| `src/app/api/conversations/[id]/steps/route.ts` | 读取对话步骤；支持 gRPC checkpoint、本地 transcript 文件与 API-backed transcript store |
 | `server.ts` `/ws` | WebSocket 订阅 (`subscribe` / `multi-subscribe` / `unsubscribe`) |
 | `src/lib/bridge/gateway.ts` | 服务发现 + Conv→Owner 路由映射 |
 | `src/lib/bridge/grpc.ts` | Connect 协议编解码 `[flags:1][len:4][payload]` |
@@ -443,7 +449,7 @@ sequenceDiagram
 | `src/lib/agents/result-parser.ts` | Result.json 解析 + step 启发式提取 |
 | `src/lib/agents/finalization.ts` | Advisory/Delivery run 终态处理 |
 | `src/lib/agents/runtime-helpers.ts` | 路径规范化、证据提取、审计构建、终止传播 |
-| `src/lib/agents/run-registry.ts` | Run 状态持久化 (`~/.gemini/antigravity/runs.json`) |
+| `src/lib/agents/run-registry.ts` | Run 状态持久化（SQLite `runs` 表 + `run-history.jsonl` 事件补写） |
 | `src/lib/agents/asset-loader.ts` | 从磁盘加载 template/review-policy，并做 inline-only normalize |
 | `src/lib/agents/watch-conversation.ts` | gRPC 流监听子对话，30s 心跳 / 3min 超时 |
 | `src/lib/agents/review-engine.ts` | Supervisor 审阅: approve / revise / reject |
@@ -452,6 +458,9 @@ sequenceDiagram
 | `src/lib/agents/scheduler.ts` | Cron 定时任务调度 |
 | `src/lib/agents/department-sync.ts` | IDE 规则同步（Antigravity/Claude/Codex/Cursor） |
 | `src/lib/agents/department-memory.ts` | 三层持久记忆（组织/部门/会话） |
+| `src/lib/knowledge/store.ts` | 结构化 `KnowledgeAsset` 存储（SQLite + filesystem mirror） |
+| `src/lib/knowledge/retrieval.ts` | 按 workspace / prompt / workflow / skill 召回相关知识 |
+| `src/lib/execution/contracts.ts` | `ExecutionProfile` 合同与 run/scheduler 推导逻辑 |
 | `src/lib/agents/approval-triggers.ts` | 异常时自动触发审批请求 |
 
 ---
@@ -539,9 +548,12 @@ stateDiagram-v2
 │   ├── templates/             # Pipeline 模板 JSON
 │   ├── workflows/             # 全局 Workflow .md（跨项目共享）
 │   └── review-policies/       # 审阅策略 JSON
-├── projects.json              # 全局项目索引
-├── agent_runs.json            # 全局 Run 索引
-└── local_conversations.json   # 对话缓存
+├── storage.sqlite             # 主数据库（projects / runs / sessions / jobs / deliverables）
+├── runs/{runId}/
+│   └── run-history.jsonl      # Run 级统一执行历史
+├── projects/{projectId}/
+│   └── journal.jsonl          # Project 级 control-flow 日志
+└── legacy-backup/             # 一次切换迁移后的旧 JSON 备份
 
 ~/.gemini/antigravity/
 └── conversations/             # 对话 .pb 文件
@@ -700,6 +712,8 @@ flowchart TB
         subgraph Executors["TaskExecutor 实现"]
             AE["AntigravityExecutor<br/>gRPC Child Conversation"]
             CE["CodexExecutor<br/>MCP 协议"]
+            CCE["ClaudeCodeExecutor<br/>Claude Code CLI / stream-json"]
+            CAE["ClaudeEngineBackend<br/>进程内 → Anthropic API"]
         end
     end
 
@@ -713,6 +727,7 @@ flowchart TB
     RE --> GE
     GE --> AE
     GE --> CE
+    GE --> CCE
     RE -.->|"读取"| AIC
     RE -.->|"读取"| DC
 ```
@@ -767,26 +782,91 @@ interface TaskExecutor {
 | ProviderId | 实现类 | 协议 | 状态 |
 |:-----------|:-------|:-----|:-----|
 | `antigravity` | `AntigravityExecutor` | gRPC → Language Server | ✅ 已实现 |
-| `codex` | `CodexExecutor` | MCP → Codex CLI | ✅ 已实现 |
-| `claude-api` | — | — | 🔧 预留 |
-| `openai-api` | — | — | 🔧 预留 |
-| `custom` | — | — | 🔧 预留 |
+| `codex` | `CodexExecutor` | MCP → Codex CLI subprocess | ✅ 已实现 |
+| `native-codex` | `NativeCodexExecutor` | OAuth → Codex Responses API (in-process) | ✅ 已实现 |
+| `claude-code` | `ClaudeCodeExecutor` | Claude Code CLI → stream-json | ✅ 已实现 |
+| `claude-api` | `ClaudeEngineAgentBackend` | 内存级 → Anthropic API | ✅ 已实现 |
+| `openai-api` | `ClaudeEngineAgentBackend` | 内存级 → OpenAI API | ✅ 已实现 |
+| `gemini-api` | `ClaudeEngineAgentBackend` | 内存级 → Gemini REST API | ✅ 已实现 |
+| `grok-api` | `ClaudeEngineAgentBackend` | 内存级 → xAI / Grok API | ✅ 已实现 |
+| `custom` | `ClaudeEngineAgentBackend` | 内存级 → OpenAI-compatible API | ✅ 已实现 |
 
 ### Capability 矩阵
 
-| 能力 | Antigravity | Codex |
-|:-----|:------------|:------|
-| 流式步骤数据 | ✅ | ❌ |
-| 多轮对话 | ✅ | ✅ |
-| IDE 技能（重构/导航） | ✅ | ❌ |
-| 沙盒执行 | ❌ | ✅ |
-| 取消运行 | ✅ | ❌ |
-| 实时步骤监听 | ✅ | ❌ |
+| 能力 | Antigravity | Codex | Native Codex | Claude Code | Claude / OpenAI / Gemini / Grok / Custom API |
+|:-----|:------------|:------|:-------------|:------------|:----------------------------------------------|
+| 流式步骤数据 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 流式文本输出 | ✅ | ❌ | ❌ | ❌ | ✅ |
+| 多轮对话 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| IDE 技能（重构/导航） | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 沙盒执行 | ❌ | ✅ | ❌ | ❌ | ❌ |
+| 取消运行 | ✅ | ❌ | ❌ | ✅ | ✅ |
+| 实时步骤监听 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 无需外部 Runtime | ❌ | ❌ | ✅ | ❌ | ✅ |
+| 免 API 额度消耗 | ❌ | ❌ | ✅ | ❌ | ❌ |
+| 内建工具执行 | ❌ | ❌ | ❌ | ❌ | ✅ |
+
+### Department Runtime Contract 当前接线边界
+
+`POST /api/agent-runs` 现在已经支持把 `executionProfile + departmentRuntimeContract` 作为结构化 carrier 注入 `taskEnvelope`，并由：
+
+1. `src/app/api/agent-runs/route.ts`
+2. `src/lib/agents/group-runtime.ts`
+3. `src/lib/agents/prompt-executor.ts`
+4. `src/lib/backends/types.ts`
+
+一路透传到 `BackendRunConfig`。
+
+当前真正消费这套 Department runtime 合同的是：
+
+- `src/lib/backends/claude-engine-backend.ts`
+
+因此已经覆盖的 provider 为：
+
+1. `claude-api`
+2. `openai-api`
+3. `gemini-api`
+4. `grok-api`
+5. `custom`
+
+当前已经完成的是：
+
+1. `native-codex`
+   - Department / `agent-runs` 主链已经切到 `ClaudeEngineAgentBackend('native-codex')`
+2. `claude-api / openai-api / gemini-api / grok-api / custom`
+   - 继续走同一条 Claude Engine Department runtime
+
+当前仍保留在轻量/local runtime 的是：
+
+1. `codex`
+
+它不进入 Claude Engine Department runtime 主链，高约束任务会由 capability-aware routing 回退到更强的 provider。
+
+### 运行历史与会话持久化
+
+| Provider 路径 | 原始过程来源 | Cutover 后持久化 | 当前可见性边界 |
+|:--------------|:-------------|:-----------------|:---------------|
+| `antigravity` | IDE conversation + gRPC step stream | `storage.sqlite` + `run-history.jsonl`（含 `provider.step`） | 新 run 可完整回放；老 run 若早于 cutover，通常只能回放 transcript/result/artifact 级别信息 |
+| `codex` / `native-codex` | Gateway 自管 transcript / thread handle | `storage.sqlite` + `run-history.jsonl`（user/assistant/tool/result） | 新 run 可完整回放；老 run 通过迁移补出 transcript/result/verification/artifact |
+| `claude-code` / `claude-api` / `openai-api` / `gemini-api` / `grok-api` / `custom` | Gateway 自管 stream / tool / completion 事件 | `storage.sqlite` + `run-history.jsonl` | 新 run 按统一 schema 可回放；历史 run 取决于 cutover 前是否已有可导入 transcript |
+
+**重要边界**
+
+- `storage.sqlite` 是结构化主数据真相源。
+- `run-history.jsonl` 是 run 级执行历史真相源。
+- `Project journal.jsonl` 仍保留，但只承担 project 级 control-flow，不承担完整 conversation 语义。
+- **只有 cutover 后的新 run 保证完整 provider 过程历史。** cutover 前的老 run 经过迁移后可见，但不保证恢复出完整 step-by-step 过程。
 
 ### 配置文件
 
 - **组织级**: `~/.gemini/antigravity/ai-config.json`
 - **部门级**: `workspace/.department/config.json` 中的 `provider` 字段
+
+### Provider 可用性约束
+
+- Settings `Provider 配置` / `Scene 覆盖` 下拉只展示当前真实可用的 Provider。
+- 可用性来源于 `ProviderInventory`：API Key 是否已配置、本地 CLI 是否已安装、OAuth / CLI 登录态是否存在。
+- `/api/ai-config` 在保存前会对 `defaultProvider`、`layers.*.provider`、`scenes.*.provider` 做同一套校验，拒绝任何未配置 Provider，避免前端绕过。
 
 ### 关键文件
 
@@ -794,9 +874,161 @@ interface TaskExecutor {
 |---|---|
 | `src/lib/providers/types.ts` | `TaskExecutor`、`AIProviderConfig`、`ProviderId` 等类型定义 |
 | `src/lib/providers/ai-config.ts` | 配置加载/缓存/持久化 + `resolveProvider()` 4 级解析 |
+| `src/lib/providers/provider-availability.ts` | Provider 可用性规则、选择器可选项过滤、配置保存校验 |
+| `src/lib/providers/provider-inventory.ts` | 读取 API Key 状态 + 本地 CLI / 登录态，生成 `ProviderInventory` |
 | `src/lib/providers/antigravity-executor.ts` | gRPC 子对话创建 + 消息发送 |
-| `src/lib/providers/codex-executor.ts` | MCP Client 池管理 + 同步任务执行 |
+| `src/lib/providers/codex-executor.ts` | MCP Client 池管理 + 同步任务执行 (legacy, 依赖 codex CLI) |
+| `src/lib/providers/native-codex-executor.ts` | 原生 Codex OAuth 执行器 (in-process, 免 API 额度) |
+| `src/lib/bridge/native-codex-auth.ts` | Codex OAuth Token 读取 / JWT 过期检查 / 自动刷新 |
+| `src/lib/bridge/native-codex-adapter.ts` | Responses Streaming API 适配 (chatgpt.com/backend-api/codex) |
+| `src/lib/providers/claude-code-executor.ts` | Claude Code CLI 调用 + stream-json 结果归一化入口 |
+| `src/lib/backends/claude-engine-backend.ts` | ClaudeEngine 进程内执行器 + AgentBackend 适配 |
 | `src/lib/providers/index.ts` | 导出 + `getExecutor()` 工厂函数 |
+
+### Claude Engine 子系统（M1 类型基座 + M2 上下文层 + M3 记忆层 + M4 工具层 + M5 权限层 + M6 API 层 + M7 MCP 层 + M8 查询引擎）
+
+`src/lib/claude-engine/` 是 Claude Code 内嵌迁移的新子系统。当前已经落了八层基础能力：
+
+1. **M1 类型基座**：提供消息、权限、工具合同。
+2. **M2 上下文层**：提供参数化 Git 快照、CLAUDE.md 分层发现与 prompt 上下文聚合。
+3. **M3 记忆层**：提供文件型 MEMORY.md 目录约定、安全路径校验、frontmatter 扫描、记忆存储与系统提示拼装。
+4. **M4 工具层**：提供 6 个核心工具与独立注册器，可直接完成文本文件读写编辑、shell 执行、glob 搜索与 grep 搜索。
+5. **M5 权限层**：提供规则类型、规则字符串解析、MCP 工具前缀匹配、来源优先级和内存态 `PermissionChecker`。
+6. **M6 API 层**：提供原生 `fetch` 版 Anthropic Messages API 客户端、SSE 解析、指数退避重试、工具 schema 转换与 token/费用跟踪。
+7. **M7 MCP 层**：提供 stdio-only MCP client、工具/资源发现、工具调用、多 server 管理，以及 `mcp__server__tool` 到 Claude Engine Tool 的桥接。
+8. **M8 查询引擎**：提供 tool-aware 的多 turn query loop、顺序/并行工具执行器，以及维护对话历史与累计 usage 的 `ClaudeEngine` 高层封装。
+
+```mermaid
+flowchart LR
+    Message["types/message.ts<br/>消息块 / StreamEvent / TokenUsage"] --> TypesIndex["types/index.ts<br/>类型统一导出"]
+    Permissions["types/permissions.ts<br/>PermissionMode / Rule / Decision"] --> TypesIndex
+    Tool["types/tool.ts<br/>Tool / ToolContext / lookup"] --> TypesIndex
+    Git["context/git-context.ts<br/>branch / defaultBranch / status"] --> ContextBuilder["context/context-builder.ts<br/>buildContext / formatContextForPrompt"]
+    ClaudeMd["context/claudemd-loader.ts<br/>分层发现 / 聚合 / 注释清理"] --> ContextBuilder
+    TypesIndex --> ContextBuilder
+    ContextTests["context/__tests__/context.test.ts<br/>Vitest 18 条 TDD 用例"] --> ContextBuilder
+    MemoryTypes["memory/memory-types.ts<br/>记忆类型 / frontmatter"] --> MemoryScanner["memory/memory-scanner.ts<br/>frontmatter 扫描 / manifest"]
+    MemoryPaths["memory/memory-paths.ts<br/>memory dir / path safety"] --> MemoryStore["memory/memory-store.ts<br/>目录管理 / 读写 / 截断"]
+    MemoryScanner --> MemoryStore
+    MemoryAge["memory/memory-age.ts<br/>age / freshness note"] --> MemoryScanner
+    MemoryAge --> MemoryPrompt["memory/memory-prompt-builder.ts<br/>记忆系统提示拼装"]
+    MemoryStore --> MemoryPrompt
+    MemoryTests["memory/__tests__/memory.test.ts<br/>Vitest 25 条 TDD 用例"] --> MemoryStore
+    PermissionRuleTypes["permissions/types.ts<br/>Rule / Decision / SOURCE_PRIORITY"] --> PermissionCheckerNode["permissions/checker.ts<br/>deny > ask > mode > allow"]
+    RuleParserNode["permissions/rule-parser.ts<br/>rule parse / escape / format"] --> PermissionCheckerNode
+    McpMatchingNode["permissions/mcp-matching.ts<br/>server prefix / wildcard / exact"] --> PermissionCheckerNode
+    TypesIndex --> PermissionCheckerNode
+    PermissionTests["permissions/__tests__/permissions.test.ts<br/>Vitest 25 条 TDD 用例"] --> PermissionCheckerNode
+    TypesIndex --> ToolRegistry["tools/registry.ts<br/>ToolRegistry / default registry"]
+    ToolRegistry --> FileRead["tools/file-read.ts<br/>文本读取 / 行号 / 范围截取"]
+    ToolRegistry --> FileWrite["tools/file-write.ts<br/>整文件写入 / 简单 diff"]
+    ToolRegistry --> FileEdit["tools/file-edit.ts<br/>精确替换 / 多匹配保护"]
+    ToolRegistry --> BashToolNode["tools/bash.ts<br/>context.exec / timeout / 只读检测"]
+    ToolRegistry --> GlobToolNode["tools/glob.ts<br/>递归 glob / 200 结果上限"]
+    ToolRegistry --> GrepToolNode["tools/grep.ts<br/>grep 搜索 / context lines / 截断"]
+    ToolTests["tools/__tests__/tools.test.ts<br/>Vitest 36 条 TDD 用例"] --> ToolRegistry
+    TypesIndex --> ApiTypesNode["api/types.ts<br/>APIProvider / QueryOptions / StreamEvent"]
+    ApiTypesNode --> ApiClientNode["api/client.ts<br/>fetch / headers / SSE / query"]
+    ToolRegistry --> ToolSchemaNode["api/tool-schema.ts<br/>Tool -> APITool / JSON Schema"]
+    TypesIndex --> ToolSchemaNode
+    ApiTypesNode --> ApiRetryNode["api/retry.ts<br/>指数退避 / jitter / retry event"]
+    ApiTypesNode --> ApiUsageNode["api/usage.ts<br/>usage 累加 / 费用估算"]
+    ApiTestsNode["api/__tests__/api.test.ts<br/>Vitest 37 条 TDD 用例"] --> ApiClientNode
+    ApiTestsNode --> ApiRetryNode
+    ApiTestsNode --> ToolSchemaNode
+    ApiTestsNode --> ApiUsageNode
+    McpTypesNode["mcp/types.ts<br/>server config / tool / resource"] --> McpClientNode["mcp/client.ts<br/>SDK Client / stdio / list/call/read"]
+    JsonRpcNode["mcp/json-rpc.ts<br/>JSON-RPC helper / parse / id"] --> StdioTransportNode["mcp/stdio-transport.ts<br/>line-delimited JSON-RPC over stdio"]
+    McpClientNode --> McpManagerNode["mcp/manager.ts<br/>multi-server / mcp__server__tool"]
+    PermissionCheckerNode --> McpManagerNode
+    TypesIndex --> McpManagerNode
+    McpTestsNode["mcp/__tests__/mcp.test.ts<br/>Vitest 25 条 TDD 用例"] --> JsonRpcNode
+    McpTestsNode --> StdioTransportNode
+    McpTestsNode --> McpClientNode
+    McpTestsNode --> McpManagerNode
+    ApiTypesNode --> EngineTypesNode["engine/types.ts<br/>EngineConfig / EngineEvent / TurnResult"]
+    ToolRegistry --> ToolExecutorNode["engine/tool-executor.ts<br/>tool batching / safe parallel / error wrap"]
+    ApiClientNode --> QueryLoopNode["engine/query-loop.ts<br/>turn loop / tool_result user message / token budget"]
+    EngineTypesNode --> QueryLoopNode
+    ToolExecutorNode --> QueryLoopNode
+    QueryLoopNode --> ClaudeEngineNode["engine/claude-engine.ts<br/>conversation history / chat / chatSimple"]
+    EngineTypesNode --> ClaudeEngineNode
+    ClaudeEngineNode --> EngineIndexNode["engine/index.ts<br/>统一导出 M8 API"]
+    EngineTestsNode["engine/__tests__/engine.test.ts<br/>Vitest 18 条 TDD 用例"] --> ToolExecutorNode
+    EngineTestsNode --> QueryLoopNode
+    EngineTestsNode --> ClaudeEngineNode
+```
+
+当前边界：
+
+1. 不依赖 React / UI / AppState。
+2. 不依赖 `bun:bundle` 或 Claude Code 仓库内部模块。
+3. Git 调用通过注入的 `exec` 执行；M3 的文件系统访问使用 Node `fs/promises` 与显式路径校验。
+4. 当前只迁入本地文件型 memory primitives：目录定位、扫描、读写、截断和 prompt 组装。
+5. M5 当前只覆盖内存态权限 primitives：规则解析、MCP 前缀匹配、来源优先级和 mode 判定；不包含权限 UI、磁盘持久化、classifier 或 denial tracking。
+6. M6 当前只覆盖 Anthropic 直连：原生 `fetch` + SSE 解析 + `query()` + retry/tool-schema/usage；`openai` / `bedrock` / `vertex` 仅保留 provider 接口与类型，未实现实际调用。
+7. M6 当前不实现 OAuth、Bedrock/Vertex 鉴权适配，也不依赖 `@anthropic-ai/sdk` 或 `zod-to-json-schema`。
+8. M7 当前运行时主链优先使用 `@modelcontextprotocol/sdk` 的 `Client` 与 `StdioClientTransport`，只实现 stdio transport；SSE/HTTP 仅保留配置字段，未落地。
+9. M7 当前不实现 OAuth、远程认证或真实 MCP server 端到端联调；`json-rpc.ts` 与 `stdio-transport.ts` 主要作为 repo 内轻量 helper / fallback primitive 保留并测试。
+10. M8 当前只覆盖核心 main loop、tool execution loop 与对话历史管理；不实现消息压缩、streaming tool execution、UI/React 集成或 provider 级 fallback。
+11. 当前仍未迁入 Claude Code 的 LLM 相关记忆检索、memory extraction agent 与非核心工具集。
+12. M4 本地核心工具当前只覆盖 6 个基础工具；MCP 工具通过 M7 管理器桥接，不属于本地内建工具集。
+
+关键文件：
+
+| 文件 | 职责 |
+|---|---|
+| `src/lib/claude-engine/types/message.ts` | 定义 Claude Engine 的消息块、流事件与 token usage |
+| `src/lib/claude-engine/types/permissions.ts` | 定义权限模式、规则、决策与工作目录来源 |
+| `src/lib/claude-engine/types/tool.ts` | 定义 Tool/ToolContext/ToolResult，并提供名称匹配与查找函数 |
+| `src/lib/claude-engine/context/git-context.ts` | 提取工作区 Git 上下文，返回 branch、defaultBranch、commit 与 status 摘要 |
+| `src/lib/claude-engine/context/claudemd-loader.ts` | 分层发现并加载 CLAUDE.md / CLAUDE.local.md / `.claude/rules/*.md` |
+| `src/lib/claude-engine/context/context-builder.ts` | 聚合 Git、日期、CLAUDE.md，并格式化为 prompt 可消费上下文 |
+| `src/lib/claude-engine/context/index.ts` | 统一导出上下文层公共 API |
+| `src/lib/claude-engine/context/__tests__/context.test.ts` | 锁定 M2 上下文层的 18 条最小 TDD 基线 |
+| `src/lib/claude-engine/memory/memory-types.ts` | 定义 4 种记忆类型、header 和 frontmatter 合同 |
+| `src/lib/claude-engine/memory/memory-paths.ts` | 计算 per-project memory 目录、entrypoint 路径并校验安全路径 |
+| `src/lib/claude-engine/memory/memory-age.ts` | 将文件 mtime 转换成 age / freshness reminder |
+| `src/lib/claude-engine/memory/memory-scanner.ts` | 扫描 memory 目录、解析 frontmatter、格式化清单 |
+| `src/lib/claude-engine/memory/memory-store.ts` | 管理 memory 目录、记忆文件读写、删除和 MEMORY.md 截断 |
+| `src/lib/claude-engine/memory/memory-prompt-builder.ts` | 构建记忆系统提示、类型指导与禁止保存清单 |
+| `src/lib/claude-engine/memory/index.ts` | 统一导出 M3 记忆层公共 API |
+| `src/lib/claude-engine/memory/__tests__/memory.test.ts` | 锁定 M3 记忆层的 25 条最小 TDD 基线 |
+| `src/lib/claude-engine/tools/registry.ts` | 提供 ToolRegistry、默认 registry 与按 enabled/read-only 过滤 helper |
+| `src/lib/claude-engine/tools/file-read.ts` | 读取文本文件并附加行号、offset/limit 截取与元数据 |
+| `src/lib/claude-engine/tools/file-write.ts` | 整文件创建/覆盖写入，返回 create/update 类型与简单行级 diff 统计 |
+| `src/lib/claude-engine/tools/file-edit.ts` | 基于 exact match 做精确替换，拦截 0 匹配或多匹配未确认写入 |
+| `src/lib/claude-engine/tools/bash.ts` | 通过 `ToolContext.exec()` 执行 shell，提供 timeout、输出截断和只读/破坏性检测 |
+| `src/lib/claude-engine/tools/glob.ts` | 递归扫描目录并按 glob 模式返回相对路径，最多 200 条结果 |
+| `src/lib/claude-engine/tools/grep.ts` | 基于 grep 命令搜索文件内容，支持大小写、上下文行和结果截断 |
+| `src/lib/claude-engine/tools/index.ts` | 统一导出 M4 工具层公共 API |
+| `src/lib/claude-engine/tools/__tests__/tools.test.ts` | 锁定 M4 工具层的 36 条最小 TDD 基线 |
+| `src/lib/claude-engine/permissions/types.ts` | 定义权限规则来源、行为、决策与来源优先级 |
+| `src/lib/claude-engine/permissions/rule-parser.ts` | 解析 / 格式化规则字符串，并处理 `(` `)` `\` 转义 |
+| `src/lib/claude-engine/permissions/mcp-matching.ts` | 解析 MCP 工具名，支持 server 级、通配符和精确匹配 |
+| `src/lib/claude-engine/permissions/checker.ts` | 提供内存态 PermissionChecker，支持 deny/ask/allow 优先级、mode 和 session 规则 |
+| `src/lib/claude-engine/permissions/index.ts` | 统一导出 M5 权限层公共 API |
+| `src/lib/claude-engine/permissions/__tests__/permissions.test.ts` | 锁定 M5 权限层的 25 条最小 TDD 基线 |
+| `src/lib/claude-engine/api/types.ts` | 定义 APIProvider、ModelConfig、QueryOptions、StreamEvent、APIResponse 等 M6 合同 |
+| `src/lib/claude-engine/api/client.ts` | 原生 `fetch` 调用 Anthropic Messages API，构建 headers/body，解析 SSE，并提供 `streamQuery()` / `query()` |
+| `src/lib/claude-engine/api/retry.ts` | 提供 `streamQueryWithRetry()`、指数退避 + jitter 与 retry event 流 |
+| `src/lib/claude-engine/api/tool-schema.ts` | 将内部 Tool 定义转换为 Anthropic API `tools` 所需 JSON Schema |
+| `src/lib/claude-engine/api/usage.ts` | 累加 token usage 并按模型定价表估算 USD 成本 |
+| `src/lib/claude-engine/api/index.ts` | 统一导出 M6 API 层公共 API |
+| `src/lib/claude-engine/api/__tests__/api.test.ts` | 锁定 M6 API 层的 37 条最小 TDD 基线 |
+| `src/lib/claude-engine/mcp/types.ts` | 定义 MCP server 配置、状态、工具、资源、tool result 与 resource content 合同 |
+| `src/lib/claude-engine/mcp/json-rpc.ts` | 提供轻量 JSON-RPC 2.0 helper：请求序列化、响应解析、通知识别与自增 ID |
+| `src/lib/claude-engine/mcp/stdio-transport.ts` | 提供基于 `spawn()` 的 line-delimited JSON-RPC over stdio helper transport |
+| `src/lib/claude-engine/mcp/client.ts` | 基于 `@modelcontextprotocol/sdk` 的 stdio-only MCP client，封装 connect/list/call/read |
+| `src/lib/claude-engine/mcp/manager.ts` | 管理多个 MCP server，并将外部 `McpTool` 转换成 `mcp__server__tool` 形式的 Claude Engine Tool |
+| `src/lib/claude-engine/mcp/index.ts` | 统一导出 M7 MCP 层公共 API |
+| `src/lib/claude-engine/mcp/__tests__/mcp.test.ts` | 锁定 M7 MCP 层的 25 条最小 TDD 基线 |
+| `src/lib/claude-engine/engine/types.ts` | 定义 `EngineConfig`、`EngineEvent`、`TurnResult`、`ToolCallResult` 与停止原因 |
+| `src/lib/claude-engine/engine/tool-executor.ts` | 执行 `tool_use` 块，按并发安全性分组并包装错误/耗时元数据 |
+| `src/lib/claude-engine/engine/query-loop.ts` | 驱动多 turn API 调用、流式块累积、工具执行、`tool_result` 注入与 token budget 检查 |
+| `src/lib/claude-engine/engine/claude-engine.ts` | 提供维护对话历史的高层封装：`chat()`、`chatSimple()`、`getMessages()`、`getUsage()` |
+| `src/lib/claude-engine/engine/index.ts` | 统一导出 M8 查询引擎公共 API |
+| `src/lib/claude-engine/engine/__tests__/engine.test.ts` | 锁定 ToolExecutor、queryLoop 与 ClaudeEngine 的 18 条最小 TDD 基线 |
 
 ---
 
@@ -824,7 +1056,7 @@ interface DepartmentConfig {
   skills: DepartmentSkill[]             // 技能清单
   okr?: DepartmentOKR                   // OKR 目标
   roster?: DepartmentRoster[]           // 角色花名册（UI 人格化显示）
-  provider?: 'antigravity' | 'codex'    // 默认 Provider（覆盖组织级配置）
+    provider?: 'antigravity' | 'codex' | 'native-codex' | 'claude-code' | 'claude-api' | 'openai-api' | 'gemini-api' | 'grok-api' | 'custom'    // 默认 Provider（覆盖组织级配置）
   tokenQuota?: TokenQuota               // Token 配额
 }
 ```
@@ -927,6 +1159,14 @@ workspace/
 | `src/lib/agents/ceo-agent.ts` | CEO 命令处理 + 部门匹配 + 任务分发 |
 | `src/lib/agents/ceo-tools.ts` | `listDepartments()` / `getDepartmentLoad()` / `ceoCreateProject()` |
 | `src/lib/agents/ceo-prompts.ts` | CEO Agent 系统提示词 + 公司上下文构建 |
+| `src/lib/organization/ceo-profile-store.ts` | CEOProfile 持久状态存储 |
+| `src/lib/organization/ceo-routine.ts` | CEO routine summary 生成 |
+| `src/lib/organization/ceo-event-store.ts` | CEO 事件持久化存储 |
+| `src/lib/organization/ceo-event-consumer.ts` | Project event → CEO event 消费器 |
+| `src/lib/management/metrics.ts` | 经营指标与组织/部门概览计算 |
+| `src/lib/evolution/generator.ts` | 从 knowledge / repeated runs 生成 workflow/skill proposal |
+| `src/lib/evolution/evaluator.ts` | 基于历史 runs 对 proposal 做评估 |
+| `src/lib/evolution/publisher.ts` | proposal 审批发布与 rollout observe |
 | `src/lib/approval/types.ts` | 审批数据模型（`ApprovalRequest` / `ApprovalResponse`） |
 | `src/lib/approval/channels/web.ts` | Web UI 通知通道 |
 | `src/lib/approval/channels/webhook.ts` | Slack/Discord Webhook 通道 |
@@ -934,7 +1174,62 @@ workspace/
 | `src/lib/ceo-events.ts` | CEO 事件流（critical/warning/info/done） |
 | `src/app/api/departments/route.ts` | 部门配置 API（GET/PUT） |
 | `src/app/api/ceo/command/route.ts` | CEO 命令入口 API |
+| `src/app/api/ceo/profile/route.ts` | CEOProfile 读写 API |
+| `src/app/api/ceo/profile/feedback/route.ts` | CEO 反馈信号写入 API |
+| `src/app/api/ceo/routine/route.ts` | CEO routine summary API |
+| `src/app/api/ceo/events/route.ts` | CEO 事件流 API |
+| `src/app/api/management/overview/route.ts` | 组织/部门经营概览 API |
+| `src/app/api/evolution/proposals/route.ts` | Evolution proposal 列表 API |
+| `src/app/api/evolution/proposals/[id]/publish/route.ts` | Evolution proposal 发布审批入口 |
 | `src/app/api/approval/route.ts` | 审批请求列表/提交 API |
+
+---
+
+## 7.5 Evolution Pipeline
+
+### 概述
+
+`Phase 5` 把“知识沉淀”进一步升级为“受控自演化闭环”：
+
+1. `Proposal Generator`
+   - 从 `KnowledgeAsset(status=proposal)` 与 repeated prompt runs 生成候选 proposal
+2. `Replay Evaluator`
+   - 用历史 runs 对 proposal 做样本匹配与成功率评估
+3. `Approval Publish Flow`
+   - proposal 先转为 `proposal_publish` 审批请求，再由 approval callback 真正发布
+4. `Rollout Observe`
+   - 发布后持续观测命中 run 数、成功率与最近采用时间
+
+### 模块关系
+
+```mermaid
+graph LR
+    Knowledge["Knowledge Store"] --> Generator["Evolution Generator"]
+    Runs["Run Records"] --> Generator
+    Runs --> Evaluator["Evolution Evaluator"]
+    Generator --> Store["Evolution Store"]
+    Evaluator --> Store
+    Store --> PublishRoute["/api/evolution/proposals/:id/publish"]
+    PublishRoute --> Approval["Approval Framework"]
+    Approval --> Publisher["Evolution Publisher"]
+    Publisher --> Assets["Canonical Workflows / Skills"]
+    Publisher --> Observe["Rollout Observe"]
+    Observe --> Store
+```
+
+### 关键文件
+
+| 文件 | 职责 |
+|---|---|
+| `src/lib/evolution/contracts.ts` | Proposal / Evaluation / Rollout 合同 |
+| `src/lib/evolution/store.ts` | `evolution_proposals` SQLite 主存储 + 镜像 |
+| `src/lib/evolution/generator.ts` | proposal 生成器 |
+| `src/lib/evolution/evaluator.ts` | 历史 run 评估器 |
+| `src/lib/evolution/publisher.ts` | 发布 + rollout 观察 |
+| `src/app/api/evolution/proposals/generate/route.ts` | 生成 proposal |
+| `src/app/api/evolution/proposals/[id]/evaluate/route.ts` | 评估 proposal |
+| `src/app/api/evolution/proposals/[id]/publish/route.ts` | 创建发布审批 |
+| `src/app/api/evolution/proposals/[id]/observe/route.ts` | 刷新 rollout 观察 |
 
 ---
 
@@ -1206,17 +1501,17 @@ flowchart TB
 
 | 路径 | 方法 | 模块 | 说明 |
 |---|---|---|---|
-| `/api/conversations` | GET / POST | Conversation | 列表 / 创建对话 |
-| `/api/conversations/{id}/send` | POST | Conversation | 发送消息（支持 `@file` 附件）|
+| `/api/conversations` | GET / POST | Conversation | 列表 / 创建对话；本地 provider 返回 `local-*` conversation |
+| `/api/conversations/{id}/send` | POST | Conversation | 发送消息（支持 `@file` 附件；本地 provider 走 Gateway executor / transcript store）|
 | `/api/conversations/{id}/cancel` | POST | Conversation | 取消生成 |
-| `/api/conversations/{id}/steps` | GET | Conversation | 获取步骤历史 |
+| `/api/conversations/{id}/steps` | GET | Conversation | 获取步骤历史（gRPC checkpoint、本地 transcript 文件或 API-backed transcript store） |
 | `/api/conversations/{id}/proceed` | POST | Conversation | 审批 Artifact / 继续 |
 | `/api/conversations/{id}/revert` | POST | Conversation | 回退到指定步骤 |
 | `/api/conversations/{id}/revert-preview` | GET | Conversation | 回退预览 ⚠️ *后端未实现* |
 | `/api/conversations/{id}/files` | GET | Conversation | 对话关联的文件列表 |
 | `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run |
 | `/api/agent-runs/{id}` | GET / DELETE | Agent | 详情 / 取消 Run |
-| `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate) |
+| `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate；prompt-mode 支持 cancel/evaluate) |
 | `/api/scope-check` | POST | Agent | 写入范围校验 |
 | `/api/projects` | GET / POST | Project | 列表 / 创建项目 |
 | `/api/projects/{id}` | GET / PATCH / DELETE | Project | 项目 CRUD |
@@ -1241,16 +1536,28 @@ flowchart TB
 | `/api/pipelines/policies` | GET | Pipeline (V5.4) | 资源策略列表 |
 | `/api/pipelines/policies/check` | POST | Pipeline (V5.4) | 配额检查 |
 | `/api/operations/audit` | GET | Operations | 审计日志 |
-| `/api/models` | GET | Core | 可用模型 + 配额 |
+| `/api/models` | GET | Core | 可用模型 + 配额（有 gRPC 时合并 Antigravity 模型；无 gRPC 时返回 provider-aware fallback） |
+| `/api/agent-runs` | POST | Agent | 支持 `executionProfile` 分流到 `workflow-run / dag-orchestration`，并可附带 `departmentRuntimeContract/runtimeContract` 透传到 backend |
 | `/api/servers` | GET | Core | 已发现的 Language Server |
 | `/api/workspaces` | GET | Core | 工作区列表 |
 | `/api/workspaces/launch` | POST | Core | 启动工作区 |
 | `/api/workspaces/close` | POST | Core | 关闭工作区（隐藏）|
 | `/api/workspaces/kill` | POST | Core | 终止工作区 Language Server |
 | `/api/me` | GET | Core | 用户信息 |
-| `/api/knowledge` | GET | Knowledge | 知识库条目列表 |
-| `/api/knowledge/{id}` | GET / PUT / DELETE | Knowledge | 知识条目 CRUD |
-| `/api/knowledge/{id}/artifacts/{path}` | GET | Knowledge | 知识条目附件 |
+| `/api/knowledge` | GET | Knowledge | 知识库条目列表（支持 workspace/category/limit 过滤） |
+| `/api/knowledge/{id}` | GET / PUT / DELETE | Knowledge | 知识条目 CRUD（结构化资产 + 文件镜像双轨同步） |
+| `/api/knowledge/{id}/artifacts/{path}` | GET / PUT | Knowledge | 知识条目附件读写 |
+| `/api/ceo/profile` | GET / PATCH | CEO | CEOProfile 读取与更新 |
+| `/api/ceo/profile/feedback` | POST | CEO | 写入用户对 CEO 的反馈信号 |
+| `/api/ceo/routine` | GET | CEO | CEO routine summary / digest 视图 |
+| `/api/ceo/events` | GET | CEO | CEO 最近组织事件流 |
+| `/api/management/overview` | GET | Management | 组织/部门经营概览与指标 |
+| `/api/evolution/proposals` | GET | Evolution | proposal 列表（可附带 rollout observe） |
+| `/api/evolution/proposals/generate` | POST | Evolution | 从 knowledge / repeated runs 生成 proposal |
+| `/api/evolution/proposals/{id}` | GET | Evolution | proposal 详情 |
+| `/api/evolution/proposals/{id}/evaluate` | POST | Evolution | 基于历史 runs 评估 proposal |
+| `/api/evolution/proposals/{id}/publish` | POST | Evolution | 创建 proposal 发布审批请求 |
+| `/api/evolution/proposals/{id}/observe` | POST | Evolution | 刷新 proposal rollout 观察 |
 | `/api/skills` | GET | Skill | 技能列表（全局 + workspace）|
 | `/api/skills/{name}` | GET | Skill | 技能详情 |
 | `/api/workflows` | GET | Workflow | 工作流列表（全局 + workspace，去重）|
@@ -1264,7 +1571,7 @@ flowchart TB
 | `/api/codex` | POST | Codex | 单次任务执行 (`codex exec`) |
 | `/api/codex/sessions` | POST | Codex | 创建多轮 MCP 会话 |
 | `/api/codex/sessions/{threadId}` | POST | Codex | 多轮会话续接 |
-| `/api/ceo/command` | POST | CEO | CEO 命令解析 + 自动派发 |
+| `/api/ceo/command` | POST | CEO | CEO 命令解析；即时部门任务会先创建 `Ad-hoc Project`，再派发 template/prompt run |
 | `/api/approval` | GET / POST | Approval | 审批请求列表 / 提交 |
 | `/api/approval/{id}` | GET / PATCH | Approval | 审批详情 / 更新 |
 | `/api/approval/{id}/feedback` | POST | Approval | 审批反馈 |
@@ -1276,7 +1583,7 @@ flowchart TB
 | `/api/scheduler/jobs` | GET | Scheduler | 定时任务列表 |
 | `/api/scheduler/jobs/{id}` | GET / PATCH / DELETE | Scheduler | 任务 CRUD |
 | `/api/scheduler/jobs/{id}/trigger` | POST | Scheduler | 手动触发任务 |
-| `/api/projects/{id}/deliverables` | GET / POST | Project | 交付物管理 |
+| `/api/projects/{id}/deliverables` | GET / POST | Project | SQLite-backed 交付物管理（含 run output 自动同步） |
 | `/api/logs` | GET | Core | 日志查看 |
 | `/api/workflows/{name}` | GET | Workflow | 单个工作流详情 |
 | `/api/scheduler` | GET | Scheduler | 调度器状态 |

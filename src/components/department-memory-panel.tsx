@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
-import type { Workspace } from '@/lib/types';
+import type { KnowledgeItem, Workspace } from '@/lib/types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +32,8 @@ export default function DepartmentMemoryPanel({
   const [activeWorkspace, setActiveWorkspace] = useState<string>(selectedWorkspace || workspaces[0]?.uri || '');
   const [memory, setMemory] = useState<Record<MemoryCategory, string>>({ knowledge: '', decisions: '', patterns: '' });
   const [loading, setLoading] = useState(false);
+  const [recentAssets, setRecentAssets] = useState<KnowledgeItem[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
   const [activeCategory, setActiveCategory] = useState<MemoryCategory>('knowledge');
   const [addContent, setAddContent] = useState('');
   const [adding, setAdding] = useState(false);
@@ -51,11 +53,25 @@ export default function DepartmentMemoryPanel({
     }
   }, []);
 
+  const loadRecentAssets = useCallback(async (workspace: string) => {
+    if (!workspace) return;
+    setAssetsLoading(true);
+    try {
+      const result = await api.knowledge({ workspace, limit: 6 });
+      setRecentAssets(result);
+    } catch {
+      setRecentAssets([]);
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeWorkspace) {
       void loadMemory(activeWorkspace);
+      void loadRecentAssets(activeWorkspace);
     }
-  }, [activeWorkspace, loadMemory]);
+  }, [activeWorkspace, loadMemory, loadRecentAssets]);
 
   const handleAdd = async () => {
     if (!addContent.trim() || !activeWorkspace) return;
@@ -124,7 +140,34 @@ export default function DepartmentMemoryPanel({
           加载中…
         </div>
       ) : (
-        <Tabs value={activeCategory} onValueChange={(v) => setActiveCategory(v as MemoryCategory)}>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+            <div className="mb-2">
+              <div className="text-xs font-medium text-foreground">Recent Knowledge Assets</div>
+              <div className="text-[11px] text-muted-foreground">最近自动沉淀的结构化知识资产</div>
+            </div>
+            {assetsLoading ? (
+              <div className="py-4 text-xs text-muted-foreground">加载中…</div>
+            ) : recentAssets.length > 0 ? (
+              <div className="space-y-2">
+                {recentAssets.map((item) => (
+                  <div key={item.id} className="rounded-md border border-border/50 bg-background/80 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-medium text-foreground">{item.title}</div>
+                      <div className="text-[10px] text-muted-foreground">{item.category || 'knowledge'}</div>
+                    </div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground line-clamp-2">
+                      {item.summary || 'No summary'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-4 text-xs text-muted-foreground">暂无结构化知识资产。完成任务后会自动生成。</div>
+            )}
+          </div>
+
+          <Tabs value={activeCategory} onValueChange={(v) => setActiveCategory(v as MemoryCategory)}>
           <TabsList className="w-full">
             {(Object.entries(CATEGORY_META) as [MemoryCategory, typeof CATEGORY_META[MemoryCategory]][]).map(([key, meta]) => {
               const count = memory[key] ? (memory[key].match(/^### /gm)?.length || 0) : 0;
@@ -171,10 +214,10 @@ export default function DepartmentMemoryPanel({
                         </div>
                       );
                     })}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
-                    暂无{meta.label}记录。Agent 完成任务后会自动沉淀。
+              </div>
+            ) : (
+              <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
+                暂无{meta.label}记录。Agent 完成任务后会自动沉淀。
                   </div>
                 )}
               </ScrollArea>
@@ -200,7 +243,8 @@ export default function DepartmentMemoryPanel({
               </div>
             </TabsContent>
           ))}
-        </Tabs>
+          </Tabs>
+        </div>
       )}
     </div>
   );

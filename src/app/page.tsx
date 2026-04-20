@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import Sidebar from '@/components/sidebar';
+import Sidebar, { type PrimarySection } from '@/components/sidebar';
 import Chat from '@/components/chat';
 import ChatInput from '@/components/chat-input';
 import KnowledgeWorkspace from '@/components/knowledge-panel';
@@ -13,38 +13,92 @@ import TokenQuotaWidget from '@/components/token-quota-widget';
 import McpStatusWidget from '@/components/mcp-status-widget';
 import CodexWidget from '@/components/codex-widget';
 import CeoOfficeSettings from '@/components/ceo-office-settings';
+import SettingsPanel, { type SettingsFocusTarget, type SettingsTabId } from '@/components/settings-panel';
 import SchedulerPanel from '@/components/scheduler-panel';
 import TunnelStatusWidget from '@/components/tunnel-status-widget';
+import AssetsManager from '@/components/assets-manager';
 import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
 import NotificationIndicators from '@/components/notification-indicators';
 import { useI18n } from '@/components/locale-provider';
+import { buildAppUrl, parseAppUrlState } from '@/lib/app-url-state';
 import { api, connectWs, type AuditEvent } from '@/lib/api';
-import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
+import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
-import { Download, Menu, Terminal } from 'lucide-react';
+import { Download, Menu, PanelLeftOpen, Settings2, Terminal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { buildWorkspaceOptions } from '@/lib/workspace-options';
 import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
-import { getModelLabel } from '@/lib/model-labels';
-import { AppShell, StatusChip, WorkspaceHeader } from '@/components/ui/app-shell';
+import { AppShell } from '@/components/ui/app-shell';
+import { cn } from '@/lib/utils';
 
-type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
+type UtilityPanel = 'settings' | null;
+type ConversationScope = 'ceo' | 'conversations' | null;
+type UrlNavigationMode = 'push' | 'replace';
+
+type SettingsPanelRequest = {
+  tab: SettingsTabId;
+  focusTarget: SettingsFocusTarget;
+  nonce: number;
+};
+
+type OpsAssetRequest = {
+  tab: 'workflows' | 'skills' | 'rules';
+  itemName: string | null;
+  nonce: number;
+};
+
+function isLocalProviderConversation(id: string | null | undefined): boolean {
+  return !!id && (
+    id.startsWith('conversation-') ||
+    id.startsWith('local-codex-') ||
+    id.startsWith('local-native-codex-') ||
+    id.startsWith('local-claude-api-') ||
+    id.startsWith('local-openai-api-') ||
+    id.startsWith('local-gemini-api-') ||
+    id.startsWith('local-grok-api-') ||
+    id.startsWith('local-custom-') ||
+    id.startsWith('codex-') ||
+    id.startsWith('native-codex-') ||
+    id.startsWith('claude-api-') ||
+    id.startsWith('openai-api-') ||
+    id.startsWith('gemini-api-') ||
+    id.startsWith('grok-api-') ||
+    id.startsWith('custom-')
+  );
+}
 
 export default function Home() {
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarSection, setSidebarSection] = useState<SidebarSection>('projects');
+  const [mainMenuOpen, setMainMenuOpen] = useState(false);
+  const [sidebarSection, setSidebarSection] = useState<PrimarySection>('projects');
+  const [utilityPanel, setUtilityPanel] = useState<UtilityPanel>(null);
+  const [settingsPanelRequest, setSettingsPanelRequest] = useState<SettingsPanelRequest>({
+    tab: 'provider',
+    focusTarget: null,
+    nonce: 0,
+  });
+  const [opsAssetRequest, setOpsAssetRequest] = useState<OpsAssetRequest>({
+    tab: 'workflows',
+    itemName: null,
+    nonce: 0,
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState('Antigravity');
+  const [activeConversationScope, setActiveConversationScope] = useState<ConversationScope>(null);
   const [steps, setSteps] = useState<StepsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [currentModel, setCurrentModel] = useState('MODEL_PLACEHOLDER_M26');
-  const [skills] = useState<Skill[]>([]);
-  const [workflows] = useState<Workflow[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [discoveredSkills, setDiscoveredSkills] = useState<Skill[]>([]);
+  const [discoveredWorkflows, setDiscoveredWorkflows] = useState<Workflow[]>([]);
+  const [discoveredRules, setDiscoveredRules] = useState<Rule[]>([]);
   const [connected, setConnected] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [, setCascadeStatus] = useState('idle');
@@ -53,7 +107,6 @@ export default function Home() {
   const [activeTasks, setActiveTasks] = useState<ActiveTask[]>([]);
   const [dismissedTasks, setDismissedTasks] = useState<Set<string>>(new Set());
   const [sendError, setSendError] = useState<string | null>(null);
-  const [activeRunsCount, setActiveRunsCount] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
@@ -66,10 +119,12 @@ export default function Home() {
   const [selectedKnowledgeTitle, setSelectedKnowledgeTitle] = useState('');
   const [knowledgeRefreshSignal, setKnowledgeRefreshSignal] = useState(0);
   const [pendingApprovals, setPendingApprovals] = useState(0);
+  const [urlStateReady, setUrlStateReady] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const lastStepCountRef = useRef(0);
   const apiLoadedRef = useRef(false);
   const agentStateLoadedRef = useRef(false);
+  const nextUrlNavigationModeRef = useRef<UrlNavigationMode>('replace');
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
   const [recentAuditEvents, setRecentAuditEvents] = useState<AuditEvent[]>([]);
 
@@ -91,6 +146,14 @@ export default function Home() {
 
     // Load pipeline templates once on mount
     api.pipelines().then(setTemplates).catch(() => { });
+
+    // Load skills, workflows, rules
+    api.skills().then(setSkills).catch(() => { });
+    api.discoveredSkills().then(setDiscoveredSkills).catch(() => { });
+    api.workflows().then(setWorkflows).catch(() => { });
+    api.discoveredWorkflows().then(setDiscoveredWorkflows).catch(() => { });
+    api.rules().then(setRules).catch(() => { });
+    api.discoveredRules().then(setDiscoveredRules).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -164,12 +227,10 @@ export default function Home() {
       setSelectedAgentRunId(prev => preferredRunId
         ? (runs.some(run => run.runId === preferredRunId) ? preferredRunId : pickDefaultAgentRun(runs, prev))
         : pickDefaultAgentRun(runs, prev));
-      setActiveRunsCount(runs.filter(run => isAgentRunActive(run.status)).length);
       setAgentServers(servers);
       setAgentWorkspacesRaw(workspaces.workspaces || []);
       setHiddenWorkspaces(hidden || []);
     } catch {
-      setActiveRunsCount(0);
       setAgentRuns([]);
       setSelectedAgentRunId(null);
       setAgentServers([]);
@@ -207,38 +268,140 @@ export default function Home() {
     setLoading(false);
   }, []);
 
-  const handleSelect = (id: string, title: string, targetSection?: SidebarSection) => {
-    setSidebarSection(targetSection || 'conversations');
+  const queueUrlSync = useCallback((mode: UrlNavigationMode = 'push') => {
+    nextUrlNavigationModeRef.current = mode;
+  }, []);
+
+  const activateSection = useCallback((section: PrimarySection, mode: UrlNavigationMode = 'push') => {
+    queueUrlSync(mode);
+    setSidebarSection(section);
+    setUtilityPanel(null);
+    setSidebarOpen(false);
+    setMainMenuOpen(false);
+  }, [queueUrlSync]);
+
+  const openSettingsPanel = useCallback((
+    options?: Partial<Pick<SettingsPanelRequest, 'tab' | 'focusTarget'>>,
+    mode: UrlNavigationMode = 'push',
+  ) => {
+    queueUrlSync(mode);
+    setSettingsPanelRequest((prev) => ({
+      tab: options?.tab ?? 'provider',
+      focusTarget: options?.focusTarget ?? null,
+      nonce: prev.nonce + 1,
+    }));
+    setUtilityPanel('settings');
+    setSidebarOpen(false);
+    setMainMenuOpen(false);
+  }, [queueUrlSync]);
+
+  const syncConversationSelection = useCallback((
+    id: string | null,
+    title: string | null,
+    scope: ConversationScope,
+  ) => {
     lastStepCountRef.current = 0;
     apiLoadedRef.current = false;
+    setActiveConversationScope(scope);
+    setSendError(null);
+    setSteps(null);
+    setIsActive(false);
+    setCascadeStatus('idle');
+
+    if (!id) {
+      setActiveId(null);
+      setActiveTitle(scope === 'ceo' ? 'CEO Office' : scope === 'conversations' ? t('shell.chats') : 'Antigravity');
+      return;
+    }
+
     setActiveId(id);
     setActiveTitle(title || id.slice(0, 8));
-    setSteps(null);
-    setSendError(null);
     void loadSteps(id);
 
-    if (wsRef.current?.readyState === 1) {
+    if (!isLocalProviderConversation(id) && wsRef.current?.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: 'subscribe', cascadeId: id }));
     }
 
     setActiveTasks(prev => prev.map(task => task.cascadeId === id ? { ...task, title: title || id.slice(0, 8) } : task));
-  };
+  }, [loadSteps, t]);
 
-  const handleLoadAgentConversation = (id: string, title: string) => {
-    lastStepCountRef.current = 0;
-    apiLoadedRef.current = false;
-    setActiveId(id);
-    setActiveTitle(title || id.slice(0, 8));
-    setSteps(null);
-    setSendError(null);
-    void loadSteps(id);
+  const openOpsAsset = useCallback((tab: OpsAssetRequest['tab'], itemName: string, mode: UrlNavigationMode = 'push') => {
+    activateSection('operations', mode);
+    setOpsAssetRequest((prev) => ({
+      tab,
+      itemName,
+      nonce: prev.nonce + 1,
+    }));
+  }, [activateSection]);
 
-    if (wsRef.current?.readyState === 1) {
-      wsRef.current.send(JSON.stringify({ type: 'subscribe', cascadeId: id }));
+  const handleSelect = useCallback((id: string, title: string, targetSection?: PrimarySection, mode: UrlNavigationMode = 'push') => {
+    const nextSection = targetSection || 'conversations';
+    activateSection(nextSection, mode);
+    syncConversationSelection(id, title, nextSection === 'ceo' ? 'ceo' : 'conversations');
+  }, [activateSection, syncConversationSelection]);
+
+  const navigateToProject = useCallback((projectId: string | null, mode: UrlNavigationMode = 'push') => {
+    activateSection('projects', mode);
+    setSelectedProjectId(projectId);
+  }, [activateSection]);
+
+  const navigateToKnowledge = useCallback((knowledgeId: string | null, title: string | null, mode: UrlNavigationMode = 'push') => {
+    activateSection('knowledge', mode);
+    setSelectedKnowledgeId(knowledgeId);
+    setSelectedKnowledgeTitle(title || '');
+  }, [activateSection]);
+
+  const applyUrlState = useCallback((search: string) => {
+    const nextState = parseAppUrlState(search);
+
+    nextUrlNavigationModeRef.current = 'replace';
+    setSidebarSection(nextState.section);
+    setUtilityPanel(nextState.utilityPanel);
+    setSidebarOpen(false);
+    setMainMenuOpen(false);
+
+    if (nextState.section === 'projects') {
+      setSelectedProjectId(nextState.projectId);
     }
 
-    setActiveTasks(prev => prev.map(task => task.cascadeId === id ? { ...task, title: title || id.slice(0, 8) } : task));
-  };
+    if (nextState.section === 'knowledge') {
+      setSelectedKnowledgeId(nextState.knowledgeId);
+      setSelectedKnowledgeTitle('');
+    }
+
+    if (nextState.section === 'ceo' || nextState.section === 'conversations') {
+      syncConversationSelection(
+        nextState.conversationId,
+        nextState.conversationTitle,
+        nextState.section === 'ceo' ? 'ceo' : 'conversations',
+      );
+    }
+
+    if (nextState.utilityPanel === 'settings') {
+      setSettingsPanelRequest((prev) => ({
+        tab: nextState.settingsTab,
+        focusTarget: nextState.settingsFocus,
+        nonce: prev.nonce + 1,
+      }));
+    }
+  }, [syncConversationSelection]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    applyUrlState(window.location.search);
+    setUrlStateReady(true);
+  }, [applyUrlState]);
+
+  useEffect(() => {
+    if (!urlStateReady || typeof window === 'undefined') return;
+
+    const onPopState = () => {
+      applyUrlState(window.location.search);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [applyUrlState, urlStateReady]);
 
   const handleNew = async (workspace: string) => {
     try {
@@ -262,13 +425,15 @@ export default function Home() {
          if (!isCurrentlyCeo) {
            const ceoConv = data.find(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace');
            if (ceoConv) {
-             handleSelect(ceoConv.id, 'CEO Office', 'ceo');
+             handleSelect(ceoConv.id, 'CEO Office', 'ceo', 'replace');
            } else {
-             api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace').then(res => {
-               if (res.cascadeId) {
-                 handleSelect(res.cascadeId, 'CEO Office', 'ceo');
-               }
-             });
+             api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace')
+               .then(res => {
+                 if (res.cascadeId) {
+                   handleSelect(res.cascadeId, 'CEO Office', 'ceo', 'replace');
+                 }
+               })
+               .catch(() => {});
            }
          }
       }).catch(() => {});
@@ -302,6 +467,11 @@ export default function Home() {
 
     try {
       await api.sendMessage(activeId, text, targetModel, agenticMode, attachments);
+      if (isLocalProviderConversation(activeId)) {
+        await loadSteps(activeId);
+        setIsActive(false);
+        setCascadeStatus('idle');
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setSendError(`发送失败: ${message}`);
@@ -389,6 +559,8 @@ export default function Home() {
     }
   };
 
+  const allowInlineRevert = !!activeId;
+
   const handleExportMarkdown = useCallback(() => {
     if (!steps?.steps?.length) return;
 
@@ -424,10 +596,8 @@ export default function Home() {
   }, [steps, activeTitle]);
 
   const handleKnowledgeSelect = useCallback((id: string, title: string) => {
-    setSidebarSection('knowledge');
-    setSelectedKnowledgeId(id);
-    setSelectedKnowledgeTitle(title);
-  }, []);
+    navigateToKnowledge(id, title);
+  }, [navigateToKnowledge]);
 
   const handleKnowledgeTitleChange = useCallback((title: string | null) => {
     setSelectedKnowledgeTitle(title || '');
@@ -439,8 +609,71 @@ export default function Home() {
     setKnowledgeRefreshSignal(value => value + 1);
   }, []);
 
+  useEffect(() => {
+    if (!activeId) return;
+    if (activeTitle && activeTitle !== activeId.slice(0, 8)) return;
+
+    let cancelled = false;
+    api.conversations()
+      .then((items) => {
+        if (cancelled) return;
+        const conversation = items.find(item => item.id === activeId);
+        if (conversation?.title) {
+          setActiveTitle(conversation.title);
+        }
+      })
+      .catch(() => { });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, activeTitle]);
+
+  const currentUrlState = useMemo(() => ({
+    section: sidebarSection,
+    utilityPanel,
+    conversationId:
+      (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
+      || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
+        ? activeId
+        : null,
+    conversationTitle:
+      (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
+      || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
+        ? activeTitle
+        : null,
+    projectId: sidebarSection === 'projects' ? selectedProjectId : null,
+    knowledgeId: sidebarSection === 'knowledge' ? selectedKnowledgeId : null,
+    settingsTab: settingsPanelRequest.tab,
+    settingsFocus: settingsPanelRequest.focusTarget,
+  }), [
+    activeConversationScope,
+    activeId,
+    activeTitle,
+    selectedKnowledgeId,
+    selectedProjectId,
+    settingsPanelRequest.focusTarget,
+    settingsPanelRequest.tab,
+    sidebarSection,
+    utilityPanel,
+  ]);
+
+  useEffect(() => {
+    if (!urlStateReady || typeof window === 'undefined') return;
+
+    const nextUrl = buildAppUrl(window.location.pathname, currentUrlState);
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    if (nextUrl === currentUrl) return;
+
+    if (nextUrlNavigationModeRef.current === 'push') {
+      window.history.pushState(window.history.state, '', nextUrl);
+    } else {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
+    nextUrlNavigationModeRef.current = 'replace';
+  }, [currentUrlState, urlStateReady]);
+
   const isRunning = isActive;
-  const currentModelLabel = getModelLabel(currentModel, models, { autoLabel: t('composer.autoSelect') });
   const agentWorkspaces = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces)
     .filter(workspace => (workspace.running || workspace.uri.includes('ceo-workspace')) && !workspace.hidden)
     .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
@@ -511,62 +744,113 @@ export default function Home() {
     () => agentRuns.filter(r => isAgentRunActive(r.status)),
     [agentRuns],
   );
+  const selectedProject = projects.find(project => project.projectId === selectedProjectId) || null;
+  const primaryNavItems: Array<{ value: PrimarySection; label: string; description: string }> = [
+    { value: 'ceo', label: 'CEO Office', description: 'Executive chat, decisions, and company-level control.' },
+    { value: 'projects', label: 'OPC', description: 'Departments, project workbench, and company execution overview.' },
+    { value: 'conversations', label: t('shell.chats'), description: 'Workspace conversations grouped by active threads.' },
+    { value: 'knowledge', label: t('shell.knowledge'), description: 'Artifacts, summaries, and department memory.' },
+    { value: 'operations', label: 'Ops', description: 'Scheduler, policy, tunnel, MCP, and operational assets.' },
+  ];
 
+  const currentSectionLabel = utilityPanel === 'settings'
+    ? 'Settings'
+    : primaryNavItems.find(item => item.value === sidebarSection)?.label || t('common.appName');
 
+  const currentViewTitle = utilityPanel === 'settings'
+    ? 'Settings'
+    : sidebarSection === 'projects'
+      ? (selectedProject?.name || 'OPC')
+      : sidebarSection === 'knowledge'
+        ? (selectedKnowledgeTitle || t('shell.knowledge'))
+        : sidebarSection === 'ceo'
+          ? (activeTitle || 'CEO Office')
+          : sidebarSection === 'conversations'
+            ? (activeTitle || t('shell.chats'))
+            : 'Operations';
 
-  const selectedAgentRun = agentRuns.find(run => run.runId === selectedAgentRunId) || null;
-  const displayTitle = sidebarSection === 'knowledge'
-    ? t('shell.knowledge')
-    : activeTitle;
+  const currentViewCaption = utilityPanel === 'settings'
+    ? 'Provider, API key, MCP, and scene configuration.'
+    : sidebarSection === 'projects'
+      ? (selectedProject ? `Project workbench · ${selectedProject.status}` : 'Company operations and project context.')
+      : sidebarSection === 'knowledge'
+        ? 'Knowledge entries, artifacts, and department memory.'
+        : sidebarSection === 'ceo'
+          ? 'Executive workspace with approvals and project follow-through.'
+          : sidebarSection === 'conversations'
+            ? 'Thread history, workspace selection, and live execution chat.'
+            : 'System operations, assets, quotas, and runtime health.';
 
   return (
     <>
       <AppShell
-        sidebar={(
+        sidebar={utilityPanel === 'settings' ? null : (
           <Sidebar
             activeId={activeId}
             onSelect={handleSelect}
             onNew={handleNew}
             open={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
-            currentModelLabel={currentModelLabel}
-            onSectionChange={(section) => setSidebarSection(section)}
-            activeRunsCount={activeRunsCount}
-            agentRuns={agentRuns}
-            selectedAgentRunId={selectedAgentRunId}
-            onSelectAgentRun={(runId) => {
-              setSidebarSection('projects');
-              setSelectedAgentRunId(runId);
-            }}
             selectedKnowledgeId={selectedKnowledgeId}
             onSelectKnowledge={handleKnowledgeSelect}
             knowledgeRefreshSignal={knowledgeRefreshSignal}
             section={sidebarSection}
             projects={projects}
             selectedProjectId={selectedProjectId}
-            onSelectProject={(id: string) => {
-              setSidebarSection('projects');
-              setSelectedProjectId(id);
-            }}
+            onSelectProject={navigateToProject}
+            onOpenOpsAsset={openOpsAsset}
           />
         )}
         header={(
-          <header className="relative z-10 flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.90)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.82)] md:px-5">
-            <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setSidebarOpen(true)}>
-              <Menu className="h-4 w-4" />
-            </Button>
-
-            {/* Logo */}
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-sm font-bold text-[var(--app-text)] shadow-[0_8px_20px_rgba(0,0,0,0.15)]">
-                A
-              </div>
-              <span className="hidden md:block text-xs font-semibold text-white/60">{displayTitle || t('common.appName')}</span>
+          <header className="relative z-20 flex h-16 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.90)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.82)] md:px-5">
+            <div className="flex shrink-0 items-center gap-1">
+              <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setMainMenuOpen(true)}>
+                <Menu className="h-4 w-4" />
+              </Button>
+              {utilityPanel !== 'settings' ? (
+                <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setSidebarOpen(true)}>
+                  <PanelLeftOpen className="h-4 w-4" />
+                </Button>
+              ) : null}
             </div>
 
-            <div className="flex-1" />
+            <div className="flex min-w-0 shrink-0 items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-sm font-bold text-[var(--app-text)] shadow-[0_8px_20px_rgba(0,0,0,0.15)]">
+                A
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">{currentSectionLabel}</div>
+                <div className="truncate text-sm font-semibold text-white">{currentViewTitle || t('common.appName')}</div>
+              </div>
+            </div>
 
-            {/* Right: Notifications + Utils */}
+            <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
+              <nav className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--app-border-soft)] bg-[var(--app-raised)]/88 p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {primaryNavItems.map(item => {
+                  const active = utilityPanel === null && sidebarSection === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={cn(
+                        'inline-flex shrink-0 items-center rounded-full px-4 py-2.5 text-sm font-medium transition-all',
+                        active
+                          ? 'bg-[var(--app-accent-soft)] text-white'
+                          : 'text-[var(--app-text-muted)] hover:bg-white/[0.05] hover:text-white',
+                      )}
+                      onClick={() => activateSection(item.value)}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+
+            <div className="hidden min-w-0 flex-1 xl:block">
+              <div className="truncate text-xs text-white/35">{currentViewCaption}</div>
+            </div>
+
             <div className="flex items-center gap-1.5 shrink-0">
               <NotificationIndicators
                 events={ceoEvents}
@@ -577,24 +861,19 @@ export default function Home() {
                   const payload = action.payload || {};
                   const target = typeof payload.target === 'string' ? payload.target : undefined;
                   if (target === 'scheduler') {
-                    setSidebarSection('operations');
-                    setSidebarOpen(true);
+                    activateSection('operations');
                     return;
                   }
                   const projectId = typeof payload.projectId === 'string' ? payload.projectId : event.projectId;
                   if (projectId) {
-                    setSidebarSection('projects');
-                    setSelectedProjectId(projectId);
+                    navigateToProject(projectId);
                   }
                 }}
                 onIntervene={async (runId, action) => {
                   await api.interveneRun(runId, { action });
                   loadAgentState();
                 }}
-                onNavigateToProject={(id) => {
-                  setSidebarSection('projects');
-                  setSelectedProjectId(id);
-                }}
+                onNavigateToProject={navigateToProject}
               />
 
               <div className="w-px h-5 bg-white/8 mx-0.5" />
@@ -622,11 +901,34 @@ export default function Home() {
                   <Download className="h-4 w-4" />
                 </Button>
               ) : null}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => openSettingsPanel()}
+                className={cn('text-white/40 hover:bg-white/10 hover:text-white', utilityPanel === 'settings' && 'bg-white/10 text-white')}
+                aria-label="Settings"
+                title="Settings"
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
             </div>
           </header>
         )}
       >
-        {sidebarSection === 'projects' ? (
+        {utilityPanel === 'settings' ? (
+          <div className="app-shell-stage relative flex-1 overflow-hidden">
+            <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
+            <ScrollArea className="h-full">
+              <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                <SettingsPanel
+                  requestedTab={settingsPanelRequest.tab}
+                  focusTarget={settingsPanelRequest.focusTarget}
+                  requestToken={settingsPanelRequest.nonce}
+                />
+              </div>
+            </ScrollArea>
+          </div>
+        ) : sidebarSection === 'projects' ? (
           <div className="agent-stage relative flex-1 overflow-hidden">
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-30" />
             <ScrollArea className="h-full">
@@ -670,10 +972,9 @@ export default function Home() {
                   workspaces={agentWorkspaces}
                   selectedProjectId={selectedProjectId}
                   departments={departmentsMap}
-                  onSelectProject={setSelectedProjectId}
+                  onSelectProject={navigateToProject}
                   onOpenOperations={() => {
-                    setSidebarSection('operations');
-                    setSidebarOpen(true);
+                    activateSection('operations');
                   }}
                   onSelectRun={(runId) => {
                     setSelectedAgentRunId(runId);
@@ -686,10 +987,10 @@ export default function Home() {
                   onCancelRun={handleCancelAgentRun}
                   onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
                   onRefresh={() => loadAgentState(selectedAgentRunId)}
-                  onDepartmentSaved={(uri, config) => {
-                    setDepartmentsMap(prev => new Map(prev).set(uri, config));
-                    api.updateDepartment(uri, config).catch(() => { });
-                  }}
+                   onDepartmentSaved={(uri, config) => {
+                   setDepartmentsMap(prev => new Map(prev).set(uri, config));
+                   api.updateDepartment(uri, config).catch(() => { });
+                 }}
                 />
               </div>
             </ScrollArea>
@@ -716,6 +1017,32 @@ export default function Home() {
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                <div className="rounded-[28px] border border-sky-400/15 bg-[linear-gradient(140deg,rgba(16,26,42,0.8),rgba(10,16,28,0.92))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.22)]">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="max-w-2xl">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-300/55">Third-Party Provider</div>
+                      <div className="mt-2 text-xl font-semibold text-white">添加第三方 Provider</div>
+                      <div className="mt-2 text-sm leading-6 text-white/60">
+                        从这里直接接入 DeepSeek、Groq、Ollama 或任意 OpenAI-compatible 服务，完成配置、测试连通和应用到默认/分层路由。
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        onClick={() => openSettingsPanel({ tab: 'provider', focusTarget: 'third-party-provider' })}
+                        className="rounded-full bg-[var(--app-accent)] px-4 text-slate-950 hover:brightness-105"
+                      >
+                        添加第三方 Provider
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => openSettingsPanel({ tab: 'api-keys' })}
+                        className="rounded-full border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06] hover:text-white"
+                      >
+                        管理 API Keys
+                      </Button>
+                    </div>
+                  </div>
+                </div>
                 <SchedulerPanel />
                 <AnalyticsDashboard />
                 <div className="grid gap-4 md:grid-cols-2">
@@ -724,6 +1051,25 @@ export default function Home() {
                 </div>
                 <TunnelStatusWidget />
                 <CodexWidget />
+                <AssetsManager
+                  workflows={workflows}
+                  skills={skills}
+                  rules={rules}
+                  discoveredWorkflows={discoveredWorkflows}
+                  discoveredSkills={discoveredSkills}
+                  discoveredRules={discoveredRules}
+                  requestedTab={opsAssetRequest.tab}
+                  requestedItemName={opsAssetRequest.itemName}
+                  requestToken={opsAssetRequest.nonce}
+                  onRefresh={() => {
+                    api.skills().then(setSkills).catch(() => {});
+                    api.discoveredSkills().then(setDiscoveredSkills).catch(() => {});
+                    api.workflows().then(setWorkflows).catch(() => {});
+                    api.discoveredWorkflows().then(setDiscoveredWorkflows).catch(() => {});
+                    api.rules().then(setRules).catch(() => {});
+                    api.discoveredRules().then(setDiscoveredRules).catch(() => {});
+                  }}
+                />
               </div>
             </ScrollArea>
           </div>
@@ -739,7 +1085,7 @@ export default function Home() {
                     loading={loading}
                     currentModel={currentModel}
                     onProceed={handleProceed}
-                    onRevert={handleRevert}
+                    onRevert={allowInlineRevert ? handleRevert : undefined}
                     isActive={isActive}
                   />
                 </div>
@@ -775,13 +1121,9 @@ export default function Home() {
                      setDepartmentsMap(prev => new Map(prev).set(uri, config));
                      api.updateDepartment(uri, config).catch(() => { });
                    }}
-                   onNavigateToProject={(id) => {
-                     setSidebarSection('projects');
-                     setSelectedProjectId(id);
-                   }}
+                   onNavigateToProject={navigateToProject}
                    onOpenScheduler={() => {
-                     setSidebarSection('operations');
-                     setSidebarOpen(true);
+                     activateSection('operations');
                    }}
                    onRefresh={() => loadAgentState(selectedAgentRunId)}
                  />
@@ -801,7 +1143,7 @@ export default function Home() {
                     loading={loading}
                     currentModel={currentModel}
                     onProceed={handleProceed}
-                    onRevert={handleRevert}
+                    onRevert={allowInlineRevert ? handleRevert : undefined}
                     isActive={isActive}
                   />
                 </div>
@@ -839,6 +1181,66 @@ export default function Home() {
           </div>
         )}
       </AppShell>
+
+      {mainMenuOpen ? (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMainMenuOpen(false)} />
+          <div className="absolute inset-x-3 top-20 bottom-3 overflow-hidden rounded-[28px] border border-white/10 bg-[rgba(9,17,27,0.97)] shadow-[0_28px_80px_rgba(0,0,0,0.42)]">
+            <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">Primary Navigation</div>
+                <div className="mt-1 text-lg font-semibold text-white">Switch workspace</div>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setMainMenuOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="h-full overflow-y-auto px-4 py-4 pb-10">
+              <div className="space-y-3">
+                {primaryNavItems.map(item => {
+                  const active = utilityPanel === null && sidebarSection === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-start gap-3 rounded-[22px] border px-4 py-4 text-left transition-all',
+                        active
+                          ? 'border-[var(--app-border-strong)] bg-[linear-gradient(135deg,rgba(88,243,212,0.12),rgba(12,20,34,0.9))]'
+                          : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.05]',
+                      )}
+                      onClick={() => activateSection(item.value)}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-white">{item.label}</div>
+                        <div className="mt-1 text-xs leading-5 text-[var(--app-text-soft)]">{item.description}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  className={cn(
+                    'flex w-full items-start gap-3 rounded-[22px] border px-4 py-4 text-left transition-all',
+                    utilityPanel === 'settings'
+                      ? 'border-[var(--app-border-strong)] bg-[linear-gradient(135deg,rgba(88,243,212,0.12),rgba(12,20,34,0.9))]'
+                      : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.05]',
+                  )}
+                  onClick={() => openSettingsPanel()}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-white">Settings</div>
+                    <div className="mt-1 text-xs leading-5 text-[var(--app-text-soft)]">
+                      Provider、API key、MCP、scene override 和系统配置。
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <LogViewerPanel open={logViewerOpen} onClose={() => setLogViewerOpen(false)} />
       <ActiveTasksPanel

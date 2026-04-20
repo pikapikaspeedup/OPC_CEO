@@ -36,6 +36,7 @@ const {
   mockGetDownstreamStages,
   mockCanActivateStage,
   mockFilterSourcesByContract,
+  mockIsAuthoritativeConversation,
   mockPropagateTermination,
   mockFinalizeAdvisoryRun,
   mockFinalizeDeliveryRun,
@@ -43,6 +44,9 @@ const {
   mockCopyUpstreamArtifacts,
   mockCompactCodingResult,
   mockStartSupervisorLoop,
+  mockApplyProviderExecutionContext,
+  mockBuildTemplateProviderExecutionContext,
+  mockResolveCapabilityAwareProvider,
 } = vi.hoisted(() => ({
   mockDiscoverLanguageServers: vi.fn(),
   mockGetApiKey: vi.fn(),
@@ -83,6 +87,7 @@ const {
   mockGetDownstreamStages: vi.fn(),
   mockCanActivateStage: vi.fn(),
   mockFilterSourcesByContract: vi.fn(),
+  mockIsAuthoritativeConversation: vi.fn(),
   mockPropagateTermination: vi.fn(),
   mockFinalizeAdvisoryRun: vi.fn(),
   mockFinalizeDeliveryRun: vi.fn(),
@@ -90,6 +95,29 @@ const {
   mockCopyUpstreamArtifacts: vi.fn(),
   mockCompactCodingResult: vi.fn(),
   mockStartSupervisorLoop: vi.fn(),
+  mockApplyProviderExecutionContext: vi.fn((prompt: string, context?: { promptPreamble?: string }) => (
+    context?.promptPreamble ? `${context.promptPreamble}\n\n${prompt}` : prompt
+  )),
+  mockBuildTemplateProviderExecutionContext: vi.fn((workspacePath: string, templateId: string) => ({
+    promptPreamble: '',
+    resolutionReason: `template context for ${templateId}`,
+    runtimeContract: undefined,
+    executionProfile: undefined,
+  })),
+  mockResolveCapabilityAwareProvider: vi.fn((options: {
+    requestedProvider: string;
+    requestedModel?: string;
+    requiredExecutionClass?: string;
+  }) => ({
+    requestedProvider: options.requestedProvider,
+    selectedProvider: options.requestedProvider,
+    requestedModel: options.requestedModel,
+    selectedModel: options.requestedModel,
+    requiredExecutionClass: options.requiredExecutionClass ?? 'light',
+    routingMode: 'preferred',
+    reason: `Capability-aware routing kept provider "${options.requestedProvider}"`,
+    missingCapabilities: [],
+  })),
 }));
 
 vi.mock('../bridge/gateway', () => ({
@@ -117,6 +145,12 @@ vi.mock('./asset-loader', () => ({
     getTemplate: vi.fn(),
     getReviewPolicy: vi.fn(() => null),
   },
+}));
+
+vi.mock('./department-execution-resolver', () => ({
+  applyProviderExecutionContext: (...args: any[]) => mockApplyProviderExecutionContext(...args),
+  buildTemplateProviderExecutionContext: (...args: any[]) => mockBuildTemplateProviderExecutionContext(...args),
+  resolveCapabilityAwareProvider: (...args: any[]) => mockResolveCapabilityAwareProvider(...args),
 }));
 
 vi.mock('../providers', () => ({
@@ -185,7 +219,7 @@ vi.mock('./run-artifacts', () => ({
 }));
 
 vi.mock('./runtime-helpers', () => ({
-  isAuthoritativeConversation: vi.fn((run: any, conversationId: string) => !!run && (!run.activeConversationId || run.activeConversationId === conversationId)),
+  isAuthoritativeConversation: (...args: any[]) => mockIsAuthoritativeConversation(...args),
   cancelCascadeBestEffort: vi.fn(),
   propagateTermination: (...args: any[]) => mockPropagateTermination(...args),
   getFailureReason: vi.fn((result: any) => result?.blockers?.[0] || result?.summary),
@@ -274,6 +308,7 @@ describe('group-runtime multi-role AgentBackend migration', () => {
     mockGetDownstreamStages.mockReset();
     mockCanActivateStage.mockReset();
     mockFilterSourcesByContract.mockReset();
+    mockIsAuthoritativeConversation.mockReset();
     mockPropagateTermination.mockReset();
     mockFinalizeAdvisoryRun.mockReset();
     mockFinalizeDeliveryRun.mockReset();
@@ -281,6 +316,9 @@ describe('group-runtime multi-role AgentBackend migration', () => {
     mockCopyUpstreamArtifacts.mockReset();
     mockCompactCodingResult.mockReset();
     mockStartSupervisorLoop.mockReset();
+    mockApplyProviderExecutionContext.mockReset();
+    mockBuildTemplateProviderExecutionContext.mockReset();
+    mockResolveCapabilityAwareProvider.mockReset();
     mockGrpc.addTrackedWorkspace.mockReset();
     mockGrpc.startCascade.mockReset();
     mockGrpc.updateConversationAnnotations.mockReset();
@@ -375,6 +413,7 @@ describe('group-runtime multi-role AgentBackend migration', () => {
     mockGetDownstreamStages.mockReturnValue([]);
     mockCanActivateStage.mockReturnValue({ ready: false, missingUpstreams: [] });
     mockFilterSourcesByContract.mockImplementation((_templateId: string, _stageId: string, runIds: string[]) => runIds);
+    mockIsAuthoritativeConversation.mockImplementation((run: any, conversationId: string) => !!run && (!run.activeConversationId || run.activeConversationId === conversationId));
     mockPropagateTermination.mockImplementation((_runId: string, status: string, reason?: string) => {
       runState = {
         ...runState,
@@ -382,6 +421,29 @@ describe('group-runtime multi-role AgentBackend migration', () => {
         lastError: reason,
       };
     });
+    mockApplyProviderExecutionContext.mockImplementation((prompt: string, context?: { promptPreamble?: string }) => (
+      context?.promptPreamble ? `${context.promptPreamble}\n\n${prompt}` : prompt
+    ));
+    mockBuildTemplateProviderExecutionContext.mockImplementation((_workspacePath: string, templateId: string) => ({
+      promptPreamble: '',
+      resolutionReason: `template context for ${templateId}`,
+      runtimeContract: undefined,
+      executionProfile: undefined,
+    }));
+    mockResolveCapabilityAwareProvider.mockImplementation((options: {
+      requestedProvider: string;
+      requestedModel?: string;
+      requiredExecutionClass?: string;
+    }) => ({
+      requestedProvider: options.requestedProvider,
+      selectedProvider: options.requestedProvider,
+      requestedModel: options.requestedModel,
+      selectedModel: options.requestedModel,
+      requiredExecutionClass: options.requiredExecutionClass ?? 'light',
+      routingMode: 'preferred',
+      reason: `Capability-aware routing kept provider "${options.requestedProvider}"`,
+      missingCapabilities: [],
+    }));
     mockGetExecutor.mockImplementation((provider: string) => provider === 'codex' ? codexExecutor : antigravityExecutor);
     mockBuildRoleSwitchPrompt.mockImplementation(() => 'switch prompt');
   });
@@ -672,6 +734,114 @@ describe('group-runtime multi-role AgentBackend migration', () => {
       'approved',
       expect.objectContaining({ status: 'completed' }),
     );
+  });
+
+  it('skips shared-conversation writeback when an attached session is superseded', async () => {
+    vi.useFakeTimers();
+    mockResolveProvider.mockReturnValue({ provider: 'antigravity', model: 'MODEL_PLACEHOLDER_M26', source: 'default' });
+    mockGetStageDefinition.mockReturnValue({
+      id: 'review-stage',
+      templateId: 'tpl-review',
+      executionMode: 'review-loop',
+      capabilities: { advisory: true, emitsManifest: true },
+      reviewPolicyId: 'policy-review',
+      roles: [
+        { id: 'author', workflow: '/author', timeoutMs: 60_000, autoApprove: false },
+        { id: 'reviewer', workflow: '/reviewer', timeoutMs: 60_000, autoApprove: false },
+      ],
+    });
+    mockBuildRolePrompt.mockImplementation((role: any, _goal: string, _artifactDir: string, _artifactAbsDir: string, round: number, isReviewer: boolean) => (
+      `${role.id}-round-${round}-${isReviewer ? 'reviewer' : 'author'}`
+    ));
+    mockBuildRoleSwitchPrompt.mockReturnValue('switch prompt');
+    mockExtractReviewDecision.mockReturnValueOnce('revise');
+    mockCompactCodingResult.mockReturnValue({
+      status: 'completed',
+      summary: 'shared done',
+      changedFiles: [],
+      blockers: [],
+      needsReview: [],
+    });
+    mockIsAuthoritativeConversation.mockImplementation((run: any, conversationId: string) => {
+      if (run?.currentRound === 2 && conversationId === 'cascade-author-r1') {
+        return false;
+      }
+      return !!run && (!run.activeConversationId || run.activeConversationId === conversationId);
+    });
+
+    const handlePlan = ['cascade-author-r1', 'cascade-reviewer-r1'];
+    antigravityExecutor.executeTask.mockImplementation(async () => ({
+      handle: handlePlan.shift() || 'cascade-fallback',
+      content: '',
+      steps: [],
+      changedFiles: [],
+      status: 'completed' as const,
+    }));
+
+    const watchCounts = new Map<string, number>();
+    mockWatchConversation.mockImplementation((_conn: any, handle: string, onUpdate: any) => {
+      const count = (watchCounts.get(handle) || 0) + 1;
+      watchCounts.set(handle, count);
+
+      if (handle === 'cascade-author-r1' && count === 1 && runState?.artifactDir) {
+        const artifactAbsDir = path.join(tempWorkspace, runState.artifactDir);
+        fs.mkdirSync(path.join(artifactAbsDir, 'specs'), { recursive: true });
+        fs.writeFileSync(path.join(artifactAbsDir, 'specs', 'shared-author.md'), 'shared author output');
+      }
+
+      setTimeout(() => {
+        onUpdate({
+          steps: [],
+          cascadeStatus: 'running',
+          isActive: true,
+          hasErrorSteps: false,
+          lastTaskBoundary: null,
+          stepCount: 1,
+          lastStepAt: '2026-04-09T00:00:00.000Z',
+          lastStepType: 'PLANNER_RESPONSE',
+        });
+      }, 0);
+
+      setTimeout(() => {
+        onUpdate({
+          steps: [],
+          cascadeStatus: 'idle',
+          isActive: false,
+          hasErrorSteps: false,
+          lastTaskBoundary: null,
+          stepCount: 1,
+          lastStepAt: '2026-04-09T00:00:01.000Z',
+          lastStepType: 'PLANNER_RESPONSE',
+        });
+      }, 1);
+
+      return vi.fn();
+    });
+
+    const result = await dispatchRun({
+      workspace: `file://${tempWorkspace}`,
+      templateId: 'tpl-review',
+      stageId: 'review-stage',
+      prompt: '共享对话复审 superseded',
+      model: 'MODEL_PLACEHOLDER_M26',
+      conversationMode: 'shared',
+    });
+
+    for (let index = 0; index < 6; index++) {
+      await vi.advanceTimersByTimeAsync(2200);
+      await Promise.resolve();
+    }
+
+    expect(result).toEqual({ runId: 'run-1' });
+    expect(mockGrpc.sendMessage).toHaveBeenCalledWith(
+      1,
+      'csrf',
+      'api-key',
+      'cascade-author-r1',
+      'switch prompt',
+      'MODEL_PLACEHOLDER_M26',
+    );
+    expect(mockFinalizeAdvisoryRun).not.toHaveBeenCalled();
   });
 
   it('propagates failed terminal sessions for delivery-single-pass runs', async () => {

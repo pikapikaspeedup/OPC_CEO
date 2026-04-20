@@ -44,7 +44,20 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ## 可用模型速查表
 
-通过 `GET /api/models` 获取实时列表。当前可用：
+通过 `GET /api/models` 获取模型列表。当前策略是：
+
+- 若存在 Antigravity server：返回 gRPC 模型列表，并合并 provider-aware fallback
+- 若没有 Antigravity server：返回 provider-aware fallback model 列表
+
+因此在纯云端 provider 场景下，`/api/models` 也能出现例如：
+
+- `Native Codex · GPT-5.4`
+- `Claude API · Sonnet 4`
+- `OpenAI API · GPT-4.1`
+- `Gemini API · Gemini 2.5 Pro`
+- `Grok API · Grok 3`
+
+当前 gRPC 实时列表示例如下：
 
 | 内部 Model ID | 显示名称 | 图片 | 推荐 | 说明 |
 |---------------|----------|------|------|------|
@@ -63,7 +76,17 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ### `GET /api/conversations` — 列出所有对话
 
-**功能**: 从 `.pb` 文件扫描 + gRPC 实时查询 + SQLite 兜底，合并返回所有已知对话。
+**功能**: 从 `.pb` 文件扫描 + gRPC 实时查询 + SQLite / 本地缓存兜底，合并返回所有已知对话。
+
+> 当 workspace provider 命中本地 provider 轨道时，对话可能只存在于 Gateway 本地缓存，不会落 `.pb`。当前该轨道包括：
+>
+> - `codex`
+> - `native-codex`
+> - `claude-api`
+> - `openai-api`
+> - `gemini-api`
+> - `grok-api`
+> - `custom`
 
 **Query 参数**:
 
@@ -96,7 +119,10 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ### `POST /api/conversations` — 创建新对话
 
-**功能**: 创建一个新的 Cascade 对话。内部自动处理 `AddTrackedWorkspace`（非专属 server 时）和 `UpdateConversationAnnotations`（防幽灵对话过滤）。
+**功能**: 创建一个新的对话。
+
+- `antigravity` / Playground：创建真实 Cascade，对接 language_server
+- 本地 provider conversation：创建 Gateway 本地 conversation，不依赖 IDE / language_server
 
 **Request Body**:
 
@@ -115,13 +141,23 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 { "cascadeId": "3cb98b88-b875-4611-85d7-0782321db911" }
 ```
 
+当 provider 为本地 provider 时，返回可能类似：
+
+```json
+{
+  "cascadeId": "local-native-codex-7f8498a5-a7a9-4aec-9d3d-167ecffccdc2",
+  "state": "idle",
+  "provider": "native-codex"
+}
+```
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `cascadeId` | `string` | 新建对话的 UUID，后续所有操作需用此 ID |
 
 **错误响应**:
 
-当指定的 workspace 没有运行中的 language_server 时，返回 `503`：
+当指定的 workspace provider 仍是 `antigravity` 且没有运行中的 language_server 时，返回 `503`：
 ```json
 {
   "error": "workspace_not_running",
@@ -132,21 +168,26 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **内部执行流程**（客户端无需关心）:
 ```
-1. getLanguageServer(wsUri) → 找专属 server？
-   ├─ YES → 直接使用
-   └─ NO  → 返回 503 workspace_not_running
-2. grpc.addTrackedWorkspace(port, csrf, workspacePath)
-3. grpc.startCascade(port, csrf, apiKey, wsUri)
-4. grpc.updateConversationAnnotations(cascadeId, {lastUserViewTime: now, summary: ...})
-5. preRegisterOwner(cascadeId, conn) → ownerMap 预注册
-6. addLocalConversation(cascadeId, wsUri, title) → 本地缓存
+1. resolveProvider('execution', workspacePath)
+2. 若 provider ∈ {`codex`, `native-codex`, `claude-api`, `openai-api`, `gemini-api`, `grok-api`, `custom`}
+   ├─ 直接创建 `local-*` conversation
+   └─ 写入 SQLite / 本地缓存
+3. 若 provider = `antigravity`
+   ├─ getLanguageServer(wsUri) → 找专属 server
+   ├─ grpc.addTrackedWorkspace(...)
+   ├─ grpc.startCascade(...)
+   ├─ grpc.updateConversationAnnotations(...)
+   └─ preRegisterOwner(...) + addLocalConversation(...)
 ```
 
 ---
 
 ### `POST /api/conversations/:id/send` — 发送消息
 
-**功能**: 异步提交用户消息给 AI。返回成功仅表示消息已提交，AI 回复需通过 WebSocket 或轮询 `/steps` 获取。
+**功能**: 提交用户消息给 AI。
+
+- Antigravity conversation：异步提交给 gRPC，后续通过 WebSocket 或轮询 `/steps` 获取
+- 本地 provider conversation：Gateway 同步执行本地 provider，随后把 transcript 写回本地 steps 文件
 
 **URL 参数**: `:id` = `cascadeId`
 
@@ -185,17 +226,26 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **内部执行流程**:
 ```
-1. 解析 @[path] 文件引用 → 转换为 attachments.items
-2. refreshOwnerMap() → 确保 ownerMap 新鲜（30s 缓存）
-3. getOwnerConnection(cascadeId) → 找到此对话所属的 server
-4. grpc.sendMessage(port, csrf, apiKey, cascadeId, text, model, agenticMode, attachments)
+1. 判断 conversation 是否为本地 provider conversation
+2. 若是本地 provider conversation
+   ├─ 首次消息：`executor.executeTask(...)`
+   ├─ 后续消息：`executor.appendMessage(sessionHandle, ...)`
+   └─ transcript 写回本地 steps 文件
+3. 若是 Antigravity conversation
+   ├─ 解析 `@[path]` → `attachments.items`
+   ├─ refreshOwnerMap()
+   ├─ getOwnerConnection(cascadeId)
+   └─ grpc.sendMessage(...)
 ```
 
 ---
 
 ### `GET /api/conversations/:id/steps` — 获取对话步骤
 
-**功能**: 获取对话的完整步骤列表（从 checkpoint `.pb` 加载）。
+**功能**: 获取对话的完整步骤列表。
+
+- Antigravity conversation：从 checkpoint / gRPC 拉取
+- 本地 provider conversation：从 Gateway 管理的本地 transcript / provider transcript store 回放
 
 **URL 参数**: `:id` = `cascadeId`
 
@@ -237,6 +287,11 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 }
 ```
 
+> 本地 provider conversation 返回的 transcript 也会标准化成前端可渲染的 CORTEX step，例如：
+>
+> - `CORTEX_STEP_TYPE_USER_INPUT`
+> - `CORTEX_STEP_TYPE_PLANNER_RESPONSE`
+
 **Step 对象完整字段**:
 
 | 字段 | 类型 | 说明 |
@@ -253,7 +308,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 | `searchWeb` | `object?` | 网络搜索（仅 `SEARCH_WEB` 类型） |
 | `grepSearch` | `object?` | 代码搜索（仅 `GREP_SEARCH` 类型） |
 | `listDirectory` | `object?` | 目录列举（仅 `LIST_DIRECTORY` 类型） |
-| `errorMessage` | `object?` | 错误信息（仅 `ERROR_MESSAGE` 类型） |
+| `errorMessage` | `object?` | 结构化错误信息（仅 `ERROR_MESSAGE` 类型） |
 
 **Step Types 完整枚举**:
 
@@ -269,15 +324,31 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 | `CORTEX_STEP_TYPE_SEARCH_WEB` | 网络搜索 | `searchWeb.query`, `.results` |
 | `CORTEX_STEP_TYPE_GREP_SEARCH` | 代码搜索 | `grepSearch.query`, `.results` |
 | `CORTEX_STEP_TYPE_LIST_DIRECTORY` | 列出目录 | `listDirectory.path`, `.entries` |
-| `CORTEX_STEP_TYPE_ERROR_MESSAGE` | 错误信息 | `errorMessage.message` |
+| `CORTEX_STEP_TYPE_ERROR_MESSAGE` | 错误信息 | `errorMessage.error.userErrorMessage`, `errorMessage.message`, `errorMessage.error.shortError` |
 | `CORTEX_STEP_TYPE_EPHEMERAL_MESSAGE` | 系统临时消息 | （通常无可用字段） |
 | `CORTEX_STEP_TYPE_CHECKPOINT` | 状态检查点标记 | （无数据，仅分隔符） |
+
+`ERROR_MESSAGE` 的常用字段：
+
+| 字段 | 说明 |
+|------|------|
+| `errorMessage.message` / `errorMessage.errorMessage` | 旧版纯文本错误，兼容保留 |
+| `errorMessage.error.userErrorMessage` | 用户可读的失败原因，前端优先展示 |
+| `errorMessage.error.shortError` | 简短技术原因，适合做次级说明 |
+| `errorMessage.error.errorCode` | HTTP / RPC 错误码 |
+| `errorMessage.error.fullError` | 完整原始错误文本，适合展开查看 |
+| `errorMessage.error.rpcErrorDetails` | 结构化 RPC 细节 |
 
 ---
 
 ### `POST /api/conversations/:id/cancel` — 取消生成
 
 **功能**: 停止 AI 当前的生成任务。
+
+- Antigravity conversation：调用 gRPC `cancelCascade`
+- 本地 provider conversation：
+  - 若当前有进行中的 API-backed 请求：尝试中断
+  - 若当前没有活动请求：返回 `not_running`
 
 **Request Body**: 无需 Body。
 
@@ -286,11 +357,28 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 { "ok": true, "data": {} }
 ```
 
+本地 provider conversation 的典型返回可能是：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "status": "not_running",
+    "provider": "native-codex"
+  }
+}
+```
+
 ---
 
 ### `POST /api/conversations/:id/proceed` — 审批继续
 
 **功能**: 当 AI 在某个 `NOTIFY_USER` 步骤等待用户审批时（`isBlocking: true`），调用此接口让 AI 继续工作。
+
+> 对本地 provider conversation，这类审批语义通常不适用。当前会返回：
+>
+> - `ok: true`
+> - `status: "not_applicable"`
 
 **Request Body**:
 
@@ -314,6 +402,9 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **功能**: 回退对话到指定步骤索引处。
 
+- Antigravity conversation：通过 gRPC 回退
+- 本地 provider conversation：直接截断本地 transcript / transcript store
+
 **Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -325,11 +416,27 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 { "stepIndex": 5, "model": "MODEL_PLACEHOLDER_M26" }
 ```
 
+本地 provider conversation 的典型响应：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "cascadeId": "local-native-codex-...",
+    "stepIndex": 0,
+    "stepCount": 1
+  }
+}
+```
+
 ---
 
 ### `GET /api/conversations/:id/revert-preview` — 回退预览
 
-> ⚠️ **注意**: 此端点目前仅在前端客户端代码中有调用，**后端尚未实现对应的 route handler**。调用会返回 404。
+**功能**: 获取回退后的步骤预览。
+
+- Antigravity conversation：通过 gRPC 获取预览
+- 本地 provider conversation：直接返回截断后的 preview steps
 
 **Query 参数**:
 
@@ -341,6 +448,116 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 ```
 GET /api/conversations/abc123/revert-preview?stepIndex=5&model=MODEL_PLACEHOLDER_M26
 ```
+
+本地 provider conversation 返回示例：
+
+```json
+{
+  "cascadeId": "local-native-codex-...",
+  "stepIndex": 0,
+  "steps": [
+    {
+      "type": "CORTEX_STEP_TYPE_USER_INPUT"
+    }
+  ]
+}
+```
+
+---
+
+## Agent Run 调度
+
+### `POST /api/agent-runs` — 派发 Department Run
+
+**功能**: 创建一个新的 prompt run 或 template run，并允许调用方显式下发 Department runtime 合同。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `workspace` | `string` | ✅ | 目标工作区绝对路径 |
+| `templateId` / `pipelineId` | `string` | 否 | 模板 ID；与 `executionTarget.kind = "template"` 二选一 |
+| `stageId` | `string` | 否 | 目标 stage ID |
+| `prompt` | `string` | 否 | 自由文本目标；`prompt` 或 `taskEnvelope.goal` 至少其一 |
+| `taskEnvelope` | `object` | 否 | 结构化任务体 |
+| `executionTarget` | `object` | 否 | 显式指定 `prompt` 或 `template` 路径 |
+| `executionProfile` | `object` | 否 | 执行画像；会在路由层归一化并继续下传 |
+| `departmentRuntimeContract` / `runtimeContract` | `object` | 否 | Department 级 runtime 合同，声明目录边界、工具集、权限模式与交付要求 |
+| `projectId` | `string` | 否 | 归属 Project |
+| `sourceRunIds` | `string[]` | 否 | 上游 run 依赖 |
+| `model` | `string` | 否 | 覆盖模型 |
+| `parentConversationId` | `string` | 否 | 父会话 ID |
+
+**Department runtime 合同字段**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `workspaceRoot` | `string` | Department 主工作目录 |
+| `additionalWorkingDirectories` | `string[]` | 额外挂载目录 |
+| `readRoots` | `string[]` | 允许读取的目录根 |
+| `writeRoots` | `string[]` | 允许写入的目录根 |
+| `artifactRoot` | `string` | 产物根目录 |
+| `executionClass` | `string` | `light` / `artifact-heavy` / `review-loop` / `delivery` |
+| `toolset` | `string` | `research` / `coding` / `safe` / `full` |
+| `permissionMode` | `string` | `default` / `dontAsk` / `acceptEdits` / `bypassPermissions` |
+| `requiredArtifacts[]` | `array` | 每个产物包含 `path`、`required`、可选 `format`、`description` |
+
+**示例**:
+
+```json
+{
+  "templateId": "development-template-1",
+  "stageId": "product-spec",
+  "workspace": "/Users/you/project",
+  "prompt": "输出产品规格草案",
+  "executionProfile": {
+    "kind": "workflow-run",
+    "workflowRef": "/pm-author"
+  },
+  "departmentRuntimeContract": {
+    "workspaceRoot": "/Users/you/project",
+    "additionalWorkingDirectories": [
+      "/Users/you/shared-notes"
+    ],
+    "readRoots": [
+      "/Users/you/project",
+      "/Users/you/shared-notes"
+    ],
+    "writeRoots": [
+      "/Users/you/project/docs",
+      "/Users/you/project/demolong"
+    ],
+    "artifactRoot": "/Users/you/project/demolong/projects/proj-123/runs/run-456",
+    "executionClass": "review-loop",
+    "toolset": "coding",
+    "permissionMode": "acceptEdits",
+    "requiredArtifacts": [
+      {
+        "path": "spec.md",
+        "required": true,
+        "format": "md"
+      }
+    ]
+  }
+}
+```
+
+**Response** `201 Created`:
+
+```json
+{
+  "runId": "run-456",
+  "status": "starting"
+}
+```
+
+**当前实现边界**:
+
+- 路由层会把 `executionProfile + departmentRuntimeContract` 写入 `taskEnvelope` carrier。
+- `group-runtime` 与 `prompt-executor` 会把它们继续合并进 `BackendRunConfig`。
+- 当前真正消费这套合同的是 `ClaudeEngineAgentBackend`，覆盖 `claude-api`、`openai-api`、`gemini-api`、`grok-api`、`custom`、`native-codex`。
+- `native-codex` 的 Department / agent-runs 主链已经切到 Claude Engine；旧 `NativeCodexExecutor` 仅保留给本地 conversation / chat shell 路径。
+- `codex` 仍然属于 light/local runtime，遇到 `artifact-heavy / review-loop / delivery` 任务会被 capability-aware routing 回退。
 
 ---
 
@@ -716,7 +933,7 @@ done
 
 ### `POST /api/ceo/command` — CEO 自然语言命令
 
-**功能**: 接收 CEO 的自然语言命令。支持状态查询、即时 Prompt Mode 执行和自然语言定时任务创建。
+**功能**: 接收 CEO 的自然语言命令。支持状态查询、即时部门任务调度和自然语言定时任务创建。
 
 **Request Body**:
 
@@ -740,15 +957,140 @@ done
 }
 ```
 
-说明：当 `/api/ceo/command` 解析到 `create-project` 且能唯一确定模板时，会把模板写入 scheduler job，后续触发时自动执行 `createProject + executeDispatch`；若不能唯一确定模板，则只创建项目，不直接启动 run。
+说明：
+
+1. 定时场景：当 `/api/ceo/command` 解析到 `create-project` 且能唯一确定模板时，会把模板写入 scheduler job，后续触发时自动执行 `createProject + executeDispatch`；若不能唯一确定模板，则只创建项目，不直接启动 run。
+2. 即时部门业务任务：现在会**先创建一个 `Ad-hoc Project`**。如果有明确模板，则在该项目下派发 template run；否则在该项目下派发 prompt run。不会再创建裸 prompt run。
+3. CEO 命令解析现在会动态加载 CEO workspace 中的 `ceo-playbook.md` 与 `ceo-scheduler-playbook.md`，由 playbook 驱动 LLM 决策，再由后端执行。
 
 | Action 值 | 说明 |
 |:----------|:-----|
 | `create_scheduler_job` | 创建了一个定时任务 |
-| `dispatch_prompt` | 即时发起了 Prompt Mode 执行（返回 `runId`） |
+| `create_project` | 即时创建了一个 `Ad-hoc Project`，并可选附带 `runId` |
 | `info` | 查询了特定信息 |
 | `needs_decision` | 需要 CEO 在多个方案间选择（返回 `suggestions` 数组） |
 | `report_to_human` | 当前兼容层无法直接处理，请转到 CEO Office 会话或手动派发 |
+
+### `GET /api/ceo/profile` — CEOProfile
+
+**功能**: 读取当前 CEO 的持久状态，包括：
+
+- `priorities`
+- `activeFocus`
+- `communicationStyle`
+- `recentDecisions`
+- `feedbackSignals`
+
+### `PATCH /api/ceo/profile` — 更新 CEOProfile
+
+**功能**: 更新 CEO 的持久状态字段。
+
+**Request Body**:
+
+- 任意 `CEOProfile` 可更新字段的局部 patch，例如：
+  - `priorities`
+  - `activeFocus`
+  - `communicationStyle`
+  - `riskTolerance`
+  - `reviewPreference`
+
+### `POST /api/ceo/profile/feedback` — 写入 CEO 反馈信号
+
+**功能**: 记录用户对 CEO 的偏好/修正/批准/拒绝信号。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | `string` | 否 | `correction` / `approval` / `rejection` / `preference`（默认 `preference`） |
+| `content` | `string` | ✅ | 用户反馈内容 |
+
+### `GET /api/ceo/routine` — CEO Routine Summary
+
+**功能**: 返回当前 CEO 的 routine summary，包括：
+
+- `activeProjects`
+- `pendingApprovals`
+- `activeSchedulers`
+- `recentKnowledge`
+- `highlights`
+- `actions`
+
+### `GET /api/ceo/events` — CEO Events
+
+**功能**: 返回最近的 CEO 组织事件流。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `limit` | `number` | 否。默认 `20` |
+
+### `GET /api/management/overview` — Management Overview
+
+**功能**: 返回经营概览与管理指标。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 否。提供时返回部门级概览；省略时返回组织级概览 |
+
+**Response**:
+
+- 组织级：
+  - `activeProjects`
+  - `completedProjects`
+  - `failedProjects`
+  - `blockedProjects`
+  - `pendingApprovals`
+  - `activeSchedulers`
+  - `recentKnowledge`
+  - `metrics`
+- 部门级额外返回：
+  - `workspaceUri`
+  - `workflowHitRate`
+  - `throughput30d`
+
+### `GET /api/evolution/proposals` — Evolution Proposals
+
+**功能**: 返回当前 evolution proposals 列表，可选附带 rollout observe 结果。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 否。按部门过滤 |
+| `kind` | `string` | 否。`workflow` / `skill` |
+| `status` | `string` | 否。`draft` / `evaluated` / `pending-approval` / `published` / `rejected` |
+| `observe` | `boolean` | 否。默认 `true`，published proposal 会附带 rollout 观察 |
+
+### `POST /api/evolution/proposals/generate` — Generate Proposals
+
+**功能**: 从 knowledge proposal signals 与 repeated prompt runs 生成 proposals。
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `workspaceUri` | `string` | 否 | 按部门范围生成 |
+| `limit` | `number` | 否 | 限制本次生成数量 |
+
+### `GET /api/evolution/proposals/:id` — Proposal Detail
+
+**功能**: 返回单个 proposal 详情。
+
+### `POST /api/evolution/proposals/:id/evaluate` — Evaluate Proposal
+
+**功能**: 用历史 runs 对 proposal 做样本匹配和成功率评估。
+
+### `POST /api/evolution/proposals/:id/publish` — Request Publish Approval
+
+**功能**: 为 proposal 创建发布审批，请求通过后由 approval callback 真正发布 workflow/skill。
+
+### `POST /api/evolution/proposals/:id/observe` — Refresh Rollout Observe
+
+**功能**: 刷新 proposal 发布后的 adoption / success observe 指标。
 
 ---
 
@@ -768,7 +1110,7 @@ done
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `type` | `string` | ✅ | `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `other` |
+| `type` | `string` | ✅ | `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `proposal_publish` / `other` |
 | `workspace` | `string` | ✅ | 发起部门的 workspace URI |
 | `title` | `string` | ✅ | 审批标题 |
 | `description` | `string` | ✅ | 详细描述 |
@@ -861,6 +1203,17 @@ done
 
 ### `POST /api/departments/memory` — 写入部门记忆
 
+说明：
+
+- 当前知识系统已采用：
+  - SQLite 结构化 `knowledge_assets`
+  - filesystem mirror (`~/.gemini/antigravity/knowledge/`)
+
+双轨持久化。
+
+- `/api/departments/memory` 仍负责传统 Markdown 部门记忆。
+- `/api/knowledge*` 负责结构化知识资产与镜像兼容视图。
+
 **功能**: 追加或更新部门记忆文件。
 
 ---
@@ -918,8 +1271,20 @@ done
 |------|------|---------|
 | `dispatch-pipeline` | 派发 Pipeline / Stage | `templateId`, `workspace`, `prompt`，可选 `stageId` |
 | `dispatch-prompt` | Prompt Mode 执行（无需模板） | `workspace`, `prompt`，可选 `promptAssetRefs`, `skillHints`, `projectId` |
+| `dispatch-execution-profile` | 按统一 `ExecutionProfile` 触发 | `workspace`, `prompt`, `executionProfile`，可选 `projectId` |
 | `health-check` | 项目健康检查 | `projectId` |
 | `create-project` | 定时创建 Ad-hoc Project | `departmentWorkspaceUri`, `opcAction.goal`，可选 `opcAction.skillHint`, `opcAction.templateId` |
+
+说明：
+
+- `dispatch-execution-profile` 目前支持：
+  - `workflow-run`
+  - `review-flow`
+  - `dag-orchestration`
+- `review-flow` 现在要求提供 template-backed target：
+  - `templateId`
+  - 可选 `stageId`
+  并会走已有 `review-loop` stage runtime。
 
 ### `GET /api/scheduler/jobs/:id` — 任务详情
 
@@ -945,6 +1310,10 @@ done
 
 **功能**: 获取项目的所有交付物。
 
+- 当前实现已经改为 **SQLite 主路径**。
+- 返回值既包含手工添加的 deliverable，也包含从 `Run.resultEnvelope.outputArtifacts` 自动同步出来的 run outputs。
+- 接口会在读取前执行一次项目级 backfill，确保 prompt-only / 第三方 Codex 项目也能看到交付物，不再依赖前端 fallback。
+
 **Response** `200 OK`:
 ```json
 [
@@ -952,6 +1321,7 @@ done
     "id": "del-001",
     "projectId": "proj-123",
     "stageId": "stage-0",
+    "sourceRunId": "run-5678",
     "type": "document",
     "title": "产品需求文档 v1",
     "artifactPath": "specs/product-spec.md",
@@ -964,9 +1334,16 @@ done
 ]
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sourceRunId` | `string?` | 若存在，表示该交付物是由某次 Run 的产物自动同步而来 |
+
 ### `POST /api/projects/:id/deliverables` — 添加交付物
 
 **功能**: 为项目添加一个交付物记录。
+
+- 手工添加的 deliverable 同样写入 SQLite 主库。
+- 自动同步的 run outputs 与手工 deliverable 共用同一个读路径。
 
 **Request Body**:
 
@@ -1179,7 +1556,7 @@ done
 | `name` | `string` | 用户名 |
 | `email` | `string` | 邮箱 |
 | `hasApiKey` | `boolean` | 是否已登录（有 API Key） |
-| `credits` | `object` | 模型配额信息（同 `/api/models` 返回） |
+| `credits` | `object` | Antigravity runtime 的模型配额信息（并不覆盖所有云端 provider） |
 
 > ⚠️ `apiKey` 字段被有意隐藏，不对外暴露。
 
@@ -1187,7 +1564,10 @@ done
 
 ### `GET /api/models` — 可用模型与配额
 
-**功能**: 从 language_server 获取当前可用的 AI 模型列表，含实时配额信息。
+**功能**: 获取可用模型列表。
+
+- 有 Antigravity server 时：返回 gRPC 模型与实时配额
+- 无 Antigravity server 时：返回 provider-aware fallback model 列表
 
 **Response** `200 OK`:
 ```json
@@ -1485,4 +1865,150 @@ ws.on('message', (data) => {
     }
   }
 });
+```
+
+---
+
+## Settings / Provider API
+
+### `GET /api/ai-config` — 读取组织级 Provider 配置
+
+**功能**: 返回当前组织级 AI Provider 配置（`~/.gemini/antigravity/ai-config.json`）。
+
+**Response** `200 OK`:
+```json
+{
+  "defaultProvider": "antigravity",
+  "layers": {
+    "executive": { "provider": "antigravity" },
+    "management": { "provider": "antigravity" },
+    "execution": { "provider": "antigravity" },
+    "utility": { "provider": "antigravity" }
+  },
+  "scenes": {}
+}
+```
+
+### `PUT /api/ai-config` — 保存组织级 Provider 配置
+
+**功能**: 保存组织级 Provider 配置，并在落盘前校验所有 `defaultProvider` / `layers.*.provider` / `scenes.*.provider` 是否真实可用。
+
+> 2026-04-16 起，未配置 Provider 不再允许通过 Settings 被选中；即便绕过前端直接调用本接口，也会被服务端拒绝。
+
+**Request Body**:
+```json
+{
+  "defaultProvider": "claude-api",
+  "layers": {
+    "executive": { "provider": "antigravity" },
+    "management": { "provider": "claude-api" },
+    "execution": { "provider": "codex" },
+    "utility": { "provider": "antigravity" }
+  },
+  "scenes": {
+    "review-decision": { "provider": "claude-api", "model": "claude-sonnet-4-20250514" }
+  }
+}
+```
+
+**Response** `200 OK`:
+```json
+{ "ok": true }
+```
+
+**错误响应** `400 Bad Request`:
+```json
+{
+  "error": "Provider \"OpenAI API\" at \"defaultProvider\" is not configured and cannot be selected",
+  "issues": [
+    { "path": "defaultProvider", "provider": "openai-api" }
+  ]
+}
+```
+
+### `GET /api/api-keys` — Provider 凭据与本地登录状态
+
+**功能**: 返回已配置的 API Key 状态，以及本机 Provider 的安装/登录检测结果。不会返回真实 key 内容。
+
+**Response** `200 OK`:
+```json
+{
+  "anthropic": { "set": true },
+  "openai": { "set": false },
+  "gemini": { "set": false },
+  "grok": { "set": false },
+  "providers": {
+    "codex": { "installed": true },
+    "nativeCodex": {
+      "installed": true,
+      "loggedIn": true,
+      "authFilePath": "/Users/you/.codex/auth.json"
+    },
+    "claudeCode": {
+      "installed": true,
+      "loginDetected": false,
+      "command": "claude",
+      "installSource": "global"
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `anthropic/openai/gemini/grok.set` | `boolean` | 对应 API key 是否已写入 `~/.gemini/antigravity/api-keys.json` |
+| `providers.codex.installed` | `boolean` | 是否检测到 `codex` 可执行文件 |
+| `providers.nativeCodex.loggedIn` | `boolean` | 是否检测到 `~/.codex/auth.json`，可复用本地 Codex OAuth 登录 |
+| `providers.claudeCode.installed` | `boolean` | 是否检测到 Claude Code CLI 或 sibling 开发版本 |
+| `providers.claudeCode.loginDetected` | `boolean` | 是否检测到本地 Claude 配置文件，可用于提示本地登录态 |
+
+### `PUT /api/api-keys` — 保存 API Keys
+
+**功能**: 保存或覆盖 API 凭据。支持 `anthropic`、`openai`、`gemini`、`grok` 四种 key。
+
+**Request Body**:
+```json
+{
+  "anthropic": "sk-ant-...",
+  "openai": "sk-...",
+  "gemini": "AIza...",
+  "grok": "xai-..."
+}
+```
+
+**Response** `200 OK`:
+```json
+{ "ok": true }
+```
+
+### `POST /api/api-keys/test` — 测试 Provider 凭据
+
+**功能**: 对给定 provider 做在线连通性测试。当前支持：
+- `anthropic`
+- `openai` / `openai-api`
+- `gemini` / `gemini-api`
+- `grok` / `grok-api`
+- `custom`（OpenAI-compatible）
+
+**Request Body**:
+```json
+{
+  "provider": "custom",
+  "apiKey": "sk-...",
+  "baseUrl": "https://api.deepseek.com"
+}
+```
+
+**Response** `200 OK`:
+```json
+{ "status": "ok" }
+```
+
+**错误示例**:
+```json
+{ "status": "invalid", "error": "Invalid API key" }
+```
+
+```json
+{ "status": "error", "error": "base URL invalid" }
 ```

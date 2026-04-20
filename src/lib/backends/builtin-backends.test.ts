@@ -5,21 +5,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockGetExecutor,
+  mockDiscoverLanguageServers,
   mockGetApiKey,
   mockGetOwnerConnection,
   mockRefreshOwnerMap,
   mockGrpcSendMessage,
   mockGrpcCancelCascade,
+  mockGrpcGetTrajectorySteps,
+  mockGrpcUpdateConversationAnnotations,
   mockGrpcProceedArtifact,
   mockWatchConversation,
   mockCompactCodingResult,
 } = vi.hoisted(() => ({
   mockGetExecutor: vi.fn(),
+  mockDiscoverLanguageServers: vi.fn(),
   mockGetApiKey: vi.fn(),
   mockGetOwnerConnection: vi.fn(),
   mockRefreshOwnerMap: vi.fn(),
   mockGrpcSendMessage: vi.fn(),
   mockGrpcCancelCascade: vi.fn(),
+  mockGrpcGetTrajectorySteps: vi.fn(),
+  mockGrpcUpdateConversationAnnotations: vi.fn(),
   mockGrpcProceedArtifact: vi.fn(),
   mockWatchConversation: vi.fn(),
   mockCompactCodingResult: vi.fn(),
@@ -30,12 +36,15 @@ vi.mock('../providers', () => ({
 }));
 
 vi.mock('../bridge/gateway', () => ({
+  discoverLanguageServers: (...args: any[]) => mockDiscoverLanguageServers(...args),
   getApiKey: (...args: any[]) => mockGetApiKey(...args),
   getOwnerConnection: (...args: any[]) => mockGetOwnerConnection(...args),
   refreshOwnerMap: (...args: any[]) => mockRefreshOwnerMap(...args),
   grpc: {
     sendMessage: (...args: any[]) => mockGrpcSendMessage(...args),
     cancelCascade: (...args: any[]) => mockGrpcCancelCascade(...args),
+    getTrajectorySteps: (...args: any[]) => mockGrpcGetTrajectorySteps(...args),
+    updateConversationAnnotations: (...args: any[]) => mockGrpcUpdateConversationAnnotations(...args),
     proceedArtifact: (...args: any[]) => mockGrpcProceedArtifact(...args),
   },
 }));
@@ -59,9 +68,15 @@ vi.mock('../agents/result-parser', () => ({
 
 import {
   AntigravityAgentBackend,
+  ClaudeCodeAgentBackend,
+  ClaudeEngineAgentBackend,
   CodexAgentBackend,
   clearAgentBackends,
   ensureBuiltInAgentBackends,
+  getAgentBackend,
+  getBackendDiagnosticsExtension,
+  getBackendRuntimeResolverExtension,
+  getBackendSessionMetadataExtension,
   listAgentBackends,
 } from './index';
 import type { AgentEvent, AgentSession, BackendRunConfig } from './types';
@@ -102,6 +117,15 @@ const antigravityCapabilities = {
   supportsStepWatch: true,
 };
 
+const claudeCodeCapabilities = {
+  supportsStreaming: false,
+  supportsMultiTurn: true,
+  supportsIdeSkills: false,
+  supportsSandbox: false,
+  supportsCancel: true,
+  supportsStepWatch: false,
+};
+
 function makeConfig(runId: string): BackendRunConfig {
   return {
     runId,
@@ -121,15 +145,19 @@ describe('builtin-backends', () => {
   beforeEach(() => {
     clearAgentBackends();
     mockGetExecutor.mockReset();
+    mockDiscoverLanguageServers.mockReset();
     mockGetApiKey.mockReset();
     mockGetOwnerConnection.mockReset();
     mockRefreshOwnerMap.mockReset();
     mockGrpcSendMessage.mockReset();
     mockGrpcCancelCascade.mockReset();
+    mockGrpcGetTrajectorySteps.mockReset();
+    mockGrpcUpdateConversationAnnotations.mockReset();
     mockGrpcProceedArtifact.mockReset();
     mockWatchConversation.mockReset();
     mockCompactCodingResult.mockReset();
     mockGetApiKey.mockReturnValue('api-key');
+    mockDiscoverLanguageServers.mockReturnValue([{ port: 1, csrf: 'csrf', workspace: '/tmp/workspace' }]);
   });
 
   afterEach(() => {
@@ -413,6 +441,72 @@ describe('builtin-backends', () => {
     expect(executor.cancel).toHaveBeenCalledWith('codex-thread-existing');
   });
 
+  it('exposes recent-step diagnostics for Antigravity backends', async () => {
+    mockGetExecutor.mockReturnValue({
+      capabilities: () => antigravityCapabilities,
+      executeTask: vi.fn(),
+      appendMessage: vi.fn(),
+      cancel: vi.fn(),
+    });
+    mockGetOwnerConnection.mockReturnValue({ port: 1, csrf: 'csrf', apiKey: 'api-key' });
+    mockGrpcGetTrajectorySteps.mockResolvedValue({
+      steps: [{ type: 'A' }, null, { type: 'B' }],
+    });
+
+    const backend = new AntigravityAgentBackend();
+    const diagnostics = getBackendDiagnosticsExtension(backend);
+
+    expect(diagnostics).not.toBeNull();
+    await expect(diagnostics?.getRecentSteps('cascade-7', { limit: 1 })).resolves.toEqual([{ type: 'B' }]);
+    expect(mockGrpcGetTrajectorySteps).toHaveBeenCalledWith(1, 'csrf', 'api-key', 'cascade-7');
+  });
+
+  it('exposes session metadata writing for Antigravity backends', async () => {
+    mockGetExecutor.mockReturnValue({
+      capabilities: () => antigravityCapabilities,
+      executeTask: vi.fn(),
+      appendMessage: vi.fn(),
+      cancel: vi.fn(),
+    });
+    mockGetOwnerConnection.mockReturnValue({ port: 1, csrf: 'csrf', apiKey: 'api-key' });
+    mockGrpcUpdateConversationAnnotations.mockResolvedValue(undefined);
+
+    const backend = new AntigravityAgentBackend();
+    const metadataWriter = getBackendSessionMetadataExtension(backend);
+
+    expect(metadataWriter).not.toBeNull();
+    await expect(metadataWriter?.annotateSession('cascade-8', {
+      'antigravity.task.type': 'supervisor-evaluate',
+    })).resolves.toBeUndefined();
+    expect(mockGrpcUpdateConversationAnnotations).toHaveBeenCalledWith(
+      1,
+      'csrf',
+      'api-key',
+      'cascade-8',
+      { 'antigravity.task.type': 'supervisor-evaluate' },
+    );
+  });
+
+  it('exposes workspace runtime resolution for Antigravity backends', async () => {
+    mockGetExecutor.mockReturnValue({
+      capabilities: () => antigravityCapabilities,
+      executeTask: vi.fn(),
+      appendMessage: vi.fn(),
+      cancel: vi.fn(),
+    });
+
+    const backend = new AntigravityAgentBackend();
+    const runtimeResolver = getBackendRuntimeResolverExtension(backend);
+
+    expect(runtimeResolver).not.toBeNull();
+    await expect(runtimeResolver?.resolveWorkspaceRuntime('/tmp/workspace', 'file:///tmp/workspace')).resolves.toEqual({
+      port: 1,
+      csrf: 'csrf',
+      workspace: '/tmp/workspace',
+      apiKey: 'api-key',
+    });
+  });
+
   it('auto-approves blocking artifacts when the backend metadata enables it', async () => {
     vi.useFakeTimers();
     let onUpdate: ((state: any) => void) | undefined;
@@ -446,7 +540,7 @@ describe('builtin-backends', () => {
     });
     const eventsPromise = collectEvents(session);
 
-    onUpdate?.({
+    await onUpdate?.({
       steps: [{
         type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
         plannerResponse: {
@@ -463,7 +557,6 @@ describe('builtin-backends', () => {
       lastStepType: 'PLANNER_RESPONSE',
     });
 
-    await Promise.resolve();
     await session.cancel('stop');
     await eventsPromise;
 
@@ -652,11 +745,155 @@ describe('builtin-backends', () => {
       appendMessage: vi.fn(),
       cancel: vi.fn(),
     };
-    mockGetExecutor.mockImplementation((provider: string) => provider === 'codex' ? codexExecutor : antigravityExecutor);
+    const claudeCodeExecutor = {
+      capabilities: () => claudeCodeCapabilities,
+      executeTask: vi.fn(),
+      appendMessage: vi.fn(),
+      cancel: vi.fn(),
+    };
+    mockGetExecutor.mockImplementation((provider: string) => {
+      if (provider === 'codex') return codexExecutor;
+      if (provider === 'claude-code') return claudeCodeExecutor;
+      return antigravityExecutor;
+    });
 
     ensureBuiltInAgentBackends();
     ensureBuiltInAgentBackends();
 
-    expect(listAgentBackends()).toHaveLength(2);
+    expect(listAgentBackends()).toHaveLength(9);
+    expect(getAgentBackend('native-codex')).toBeInstanceOf(ClaudeEngineAgentBackend);
+    expect(getAgentBackend('native-codex').providerId).toBe('native-codex');
+  });
+
+  // -------------------------------------------------------------------------
+  // Claude Code AgentBackend tests
+  // -------------------------------------------------------------------------
+
+  describe('ClaudeCodeAgentBackend', () => {
+    const claudeCodeExecutor = {
+      capabilities: () => claudeCodeCapabilities,
+      executeTask: vi.fn(),
+      appendMessage: vi.fn(),
+      cancel: vi.fn(),
+    };
+
+    beforeEach(() => {
+      claudeCodeExecutor.executeTask.mockReset();
+      claudeCodeExecutor.appendMessage.mockReset();
+      claudeCodeExecutor.cancel.mockReset();
+      mockGetExecutor.mockImplementation((provider: string) => {
+        if (provider === 'claude-code') return claudeCodeExecutor;
+        return { capabilities: () => codexCapabilities, executeTask: vi.fn(), appendMessage: vi.fn(), cancel: vi.fn() };
+      });
+    });
+
+    it('emits started, live_state, then completed for successful execution', async () => {
+      claudeCodeExecutor.executeTask.mockResolvedValue({
+        handle: 'claude-session-abc',
+        content: 'Task completed successfully',
+        steps: [{ type: 'result', result: 'done' }],
+        changedFiles: ['src/main.ts', 'src/utils.ts'],
+        status: 'completed',
+      });
+
+      const backend = new ClaudeCodeAgentBackend();
+      const session = await backend.start(makeConfig('run-cc-1'));
+      const events = await collectEvents(session);
+
+      expect(events).toHaveLength(3);
+      expect(events[0].kind).toBe('started');
+      expect(events[0].providerId).toBe('claude-code');
+      expect(events[1].kind).toBe('live_state');
+      expect(events[2].kind).toBe('completed');
+      expect(events[2].providerId).toBe('claude-code');
+      if (events[2].kind === 'completed') {
+        expect(events[2].handle).toBe('claude-session-abc');
+        expect(events[2].result.status).toBe('completed');
+        expect(events[2].result.changedFiles).toEqual(['src/main.ts', 'src/utils.ts']);
+        expect(events[2].result.summary).toBe('Task completed successfully');
+        expect(events[2].finalText).toBe('Task completed successfully');
+      }
+    });
+
+    it('emits started then failed when execution throws', async () => {
+      claudeCodeExecutor.executeTask.mockRejectedValue(new Error('Anthropic API key missing'));
+
+      const backend = new ClaudeCodeAgentBackend();
+      const session = await backend.start(makeConfig('run-cc-2'));
+      const events = await collectEvents(session);
+
+      expect(events).toHaveLength(2);
+      expect(events[0].kind).toBe('started');
+      expect(events[1].kind).toBe('failed');
+      if (events[1].kind === 'failed') {
+        expect(events[1].error.code).toBe('provider_failed');
+        expect(events[1].error.message).toBe('Anthropic API key missing');
+        expect(events[1].error.retryable).toBe(true);
+      }
+    });
+
+    it('emits started, live_state, then completed when executor returns failed status', async () => {
+      claudeCodeExecutor.executeTask.mockResolvedValue({
+        handle: 'claude-session-fail',
+        content: 'Could not complete the task',
+        steps: [],
+        changedFiles: [],
+        status: 'failed',
+      });
+
+      const backend = new ClaudeCodeAgentBackend();
+      const session = await backend.start(makeConfig('run-cc-3'));
+      const events = await collectEvents(session);
+
+      expect(events).toHaveLength(3);
+      expect(events[0].kind).toBe('started');
+      expect(events[1].kind).toBe('live_state');
+      expect(events[2].kind).toBe('completed');
+      if (events[2].kind === 'completed') {
+        expect(events[2].result.status).toBe('failed');
+        expect(events[2].result.summary).toBe('Could not complete the task');
+      }
+    });
+
+    it('cancel emits cancelled event', async () => {
+      const neverResolve = new Promise<never>(() => {});
+      claudeCodeExecutor.executeTask.mockReturnValue(neverResolve);
+      claudeCodeExecutor.cancel.mockResolvedValue(undefined);
+
+      const backend = new ClaudeCodeAgentBackend();
+      const session = await backend.start(makeConfig('run-cc-4'));
+
+      // Collect first event (started)
+      const iter = session.events()[Symbol.asyncIterator]();
+      const first = await iter.next();
+      expect(first.value.kind).toBe('started');
+
+      // Cancel
+      await session.cancel('user requested');
+
+      const second = await iter.next();
+      expect(second.value.kind).toBe('cancelled');
+      if (second.value.kind === 'cancelled') {
+        expect(second.value.reason).toBe('user requested');
+      }
+    });
+
+    it('attach creates a session without starting execution', async () => {
+      const backend = new ClaudeCodeAgentBackend();
+      const session = await backend.attach(makeConfig('run-cc-5'), 'existing-handle-123');
+
+      expect(session.handle).toBe('existing-handle-123');
+      expect(session.providerId).toBe('claude-code');
+      expect(claudeCodeExecutor.executeTask).not.toHaveBeenCalled();
+    });
+
+    it('capabilities reports correct values', () => {
+      const backend = new ClaudeCodeAgentBackend();
+      const caps = backend.capabilities();
+
+      expect(caps.supportsCancel).toBe(true);
+      expect(caps.emitsLiveState).toBe(false);
+      expect(caps.emitsRawSteps).toBe(false);
+    });
   });
 });

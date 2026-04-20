@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type {
-  AgentRun,
   Conversation,
   KnowledgeItem,
+  Project,
   Rule,
   Server,
   Skill,
-  Project,
   UserInfo,
   Workflow,
   Workspace,
@@ -18,16 +17,16 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { buildWorkspaceOptions, isWorkspaceHidden } from '@/lib/workspace-options';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
-import { getAgentRunTimeAgo, getAgentRunWorkspaceName, isAgentRunActive } from '@/lib/agent-run-utils';
 import {
   BookOpen,
   Bot,
   ChevronRight,
-  ExternalLink,
   Eye,
   EyeOff,
+  FolderKanban,
   FolderOpen,
   Gamepad2,
+  GitBranch,
   Loader2,
   MessageSquare,
   Plus,
@@ -36,48 +35,31 @@ import {
   Puzzle,
   ScrollText,
   Server as ServerIcon,
-  Sparkles,
-  FolderKanban,
   Zap,
-  Settings,
-  GitBranch,
-  Briefcase
 } from 'lucide-react';
-import SchedulerPanel from '@/components/scheduler-panel';
-import SubgraphPanel from '@/components/subgraph-panel';
-import PolicyPanel from '@/components/policy-panel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { ModeTabs } from '@/components/ui/app-shell';
 
-type SidebarSection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
+export type PrimarySection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
 
 interface SidebarProps {
   activeId: string | null;
-  onSelect: (id: string, title: string, targetSection?: SidebarSection) => void;
+  onSelect: (id: string, title: string, targetSection?: PrimarySection) => void;
   onNew: (workspace: string) => void;
   open: boolean;
   onClose: () => void;
-  currentModelLabel: string;
-  activeRunsCount?: number;
-  agentRuns?: AgentRun[];
-  selectedAgentRunId?: string | null;
-  onSelectAgentRun?: (runId: string) => void;
   selectedKnowledgeId?: string | null;
   onSelectKnowledge?: (id: string, title: string) => void;
   knowledgeRefreshSignal?: number;
-  section: SidebarSection;
-  onSectionChange?: (section: SidebarSection) => void;
+  section: PrimarySection;
   projects?: Project[];
   selectedProjectId?: string | null;
   onSelectProject?: (id: string) => void;
+  onOpenOpsAsset?: (type: 'workflows' | 'skills' | 'rules', name: string) => void;
 }
 
 function getWorkspaceName(uri: string) {
@@ -134,25 +116,47 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div className="px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">{children}</div>;
 }
 
+function SidebarCard({
+  title,
+  body,
+  icon,
+  meta,
+}: {
+  title: string;
+  body: string;
+  icon: React.ReactNode;
+  meta?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-[20px] border border-white/6 bg-white/[0.03] p-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] border border-white/8 bg-white/[0.04] text-[var(--app-accent)]">
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-white/90">{title}</div>
+          <div className="mt-1 text-xs leading-5 text-[var(--app-text-soft)]">{body}</div>
+          {meta ? <div className="mt-3 flex flex-wrap items-center gap-2">{meta}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Sidebar({
   activeId,
   onSelect,
   onNew,
   open,
   onClose,
-  currentModelLabel,
-  activeRunsCount = 0,
-  agentRuns = [],
-  selectedAgentRunId = null,
-  onSelectAgentRun,
   selectedKnowledgeId = null,
   onSelectKnowledge,
   knowledgeRefreshSignal = 0,
   section,
-  onSectionChange,
   projects = [],
   selectedProjectId = null,
   onSelectProject,
+  onOpenOpsAsset,
 }: SidebarProps) {
   const { locale, t } = useI18n();
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -163,7 +167,6 @@ export default function Sidebar({
   const [servers, setServers] = useState<Server[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
-  const [resourcesOpen, setResourcesOpen] = useState(false);
   const [selectedWs, setSelectedWs] = useState('');
   const [launchDialogOpen, setLaunchDialogOpen] = useState(false);
   const [launchTarget, setLaunchTarget] = useState('');
@@ -338,13 +341,13 @@ export default function Sidebar({
     .filter(conversation => !isWorkspaceHidden(conversation.workspace || '', hiddenWorkspaces))
     .sort((a, b) => b.mtime - a.mtime);
 
-  // Group conversations by workspace
   const convGroups: Record<string, typeof visibleConversations> = {};
-  visibleConversations.forEach(c => {
-    const wsName = getWorkspaceName(c.workspace || '');
+  visibleConversations.forEach(conversation => {
+    const wsName = getWorkspaceName(conversation.workspace || '');
     if (!convGroups[wsName]) convGroups[wsName] = [];
-    convGroups[wsName].push(c);
+    convGroups[wsName].push(conversation);
   });
+
   const sortedGroupNames = Object.keys(convGroups).sort((a, b) => {
     if (a === 'Playground') return 1;
     if (b === 'Playground') return -1;
@@ -352,39 +355,58 @@ export default function Sidebar({
     if (b === 'Other') return -1;
     return convGroups[b].length - convGroups[a].length;
   });
-  const activeAgentRuns = agentRuns.filter(run => isAgentRunActive(run.status));
-  const recentAgentRuns = agentRuns.filter(run => !isAgentRunActive(run.status));
+
   const sortedKnowledgeItems = [...knowledgeItems].sort((a, b) => {
     return new Date(b.timestamps.accessed).getTime() - new Date(a.timestamps.accessed).getTime();
   });
 
-  const sectionTitle =
-    section === 'knowledge'
-      ? t('shell.knowledge')
-      : section === 'operations'
-        ? 'Operations'
-        : section === 'projects'
-          ? 'OPC'
-          : t('shell.chats');
-  const sectionCount =
-    section === 'projects'
-      ? projects.length
-      : section === 'knowledge'
-        ? knowledgeItems.length
-        : section === 'operations'
-          ? null
-          : visibleConversations.length;
+  const selectedProject = projects.find(project => project.projectId === selectedProjectId) || null;
+  const visibleWorkspaceCount = wsOptions.filter(option => !option.hidden).length;
+  const runningWorkspaceCount = wsOptions.filter(option => option.running && !option.hidden).length;
+
+  const sectionMeta: Record<PrimarySection, { eyebrow: string; title: string; description: string }> = {
+    ceo: {
+      eyebrow: 'Executive',
+      title: 'CEO Office',
+      description: '管理 CEO 会话历史和高优先级决策入口。',
+    },
+    projects: {
+      eyebrow: 'Company View',
+      title: 'OPC Context',
+      description: '浏览项目结构和当前项目上下文，不在这里承载主导航。',
+    },
+    conversations: {
+      eyebrow: 'Workspace Threads',
+      title: t('shell.chats'),
+      description: '选择工作区、创建对话，并按工作区浏览历史线程。',
+    },
+    knowledge: {
+      eyebrow: 'Artifacts',
+      title: t('shell.knowledge'),
+      description: '浏览知识条目和沉淀结果，快速回到正在查看的条目。',
+    },
+    operations: {
+      eyebrow: 'System Ops',
+      title: 'Operations',
+      description: '低频资产、工作区状态和系统入口集中到运维上下文里。',
+    },
+  };
+
+  const currentMeta = sectionMeta[section];
+  const ceoHistory = conversations
+    .filter(conversation => conversation.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace')
+    .sort((a, b) => b.mtime - a.mtime);
 
   return (
     <>
       {open ? (
-        <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={onClose} />
+        <div className="fixed inset-x-0 bottom-0 top-16 z-30 bg-black/50 md:hidden" onClick={onClose} />
       ) : null}
 
       <aside
         className={cn(
-          'fixed left-0 top-0 z-50 flex h-dvh flex-col overflow-hidden border-r border-white/6 bg-[var(--agent-shell)] text-foreground transition-transform duration-300 ease-out md:static md:translate-x-0',
-          'w-[85vw] max-w-[320px] md:relative md:w-[320px]',
+          'fixed inset-y-16 left-0 z-40 flex h-[calc(100dvh-4rem)] flex-col overflow-hidden border-r border-white/6 bg-[var(--agent-shell)] text-foreground transition-transform duration-300 ease-out md:static md:inset-auto md:h-full md:translate-x-0',
+          'w-[88vw] max-w-[360px] md:w-[320px]',
           open ? 'translate-x-0 shadow-xl' : '-translate-x-full md:translate-x-0',
         )}
       >
@@ -395,41 +417,59 @@ export default function Sidebar({
           <div className="absolute bottom-24 right-[-40px] h-44 w-44 rounded-full bg-[radial-gradient(circle,rgba(245,183,76,0.12),transparent_72%)] blur-3xl" />
         </div>
 
-        <div className="relative flex items-center gap-3 px-4 pb-4 pt-5">
-          <Avatar className="h-11 w-11 border border-white/8 shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
-            <AvatarFallback className="bg-white text-slate-950 font-semibold">
-              {user?.name?.[0]?.toUpperCase() || '?'}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-base font-semibold leading-none">{user?.name || t('shell.profileLoading')}</div>
-            <div className="mt-1 truncate text-xs text-[var(--agent-text-soft)]">{user?.email || ''}</div>
+        <div className="relative shrink-0 border-b border-white/6 px-4 pb-4 pt-5">
+          <div className="flex items-center gap-3">
+            <Avatar className="h-11 w-11 border border-white/8 shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
+              <AvatarFallback className="bg-white font-semibold text-slate-950">
+                {user?.name?.[0]?.toUpperCase() || '?'}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-base font-semibold leading-none">{user?.name || t('shell.profileLoading')}</div>
+              <div className="mt-1 truncate text-xs text-[var(--agent-text-soft)]">{user?.email || ''}</div>
+            </div>
           </div>
         </div>
 
-        <Separator className="bg-white/6" />
-
-        <div className="relative space-y-3 px-4 py-4">
-          <ModeTabs
-            value={section}
-            onValueChange={(value) => onSectionChange?.(value as SidebarSection)}
-            fill
-            className="w-full"
-            tabs={[
-              { value: 'ceo', label: 'CEO Office', icon: <Briefcase className="h-4 w-4" /> },
-              { value: 'projects', label: 'OPC', icon: <FolderKanban className="h-4 w-4" /> },
-              { value: 'conversations', label: t('shell.chats'), icon: <MessageSquare className="h-4 w-4" /> },
-              { value: 'knowledge', label: t('shell.knowledge'), icon: <BookOpen className="h-4 w-4" /> },
-              { value: 'operations', label: 'Ops', icon: <Settings className="h-4 w-4" /> },
-            ]}
-          />
-
+        <div className="relative shrink-0 border-b border-white/6 px-4 py-4">
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">
+                {currentMeta.eyebrow}
+              </div>
+              <div className="mt-2 text-lg font-semibold text-white">{currentMeta.title}</div>
+              <div className="mt-2 text-xs leading-5 text-[var(--app-text-soft)]">{currentMeta.description}</div>
+            </div>
+            {section === 'ceo' ? (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0 rounded-full hover:bg-white/10"
+                aria-label="新建 CEO 对话"
+                title="新建 CEO 对话"
+                onClick={() => {
+                  api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace')
+                    .then(res => {
+                      if (res.cascadeId) {
+                        onSelect(res.cascadeId, 'CEO Office', 'ceo');
+                        onClose();
+                      }
+                    })
+                    .catch((error: unknown) => {
+                      window.alert(error instanceof Error ? error.message : '新建 CEO 对话失败');
+                    });
+                }}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            ) : null}
+          </div>
 
           {section === 'conversations' ? (
-            <div className="rounded-[24px] border border-white/6 bg-[linear-gradient(180deg,rgba(18,30,49,0.92),rgba(13,22,36,0.94))] p-4 shadow-[var(--panel-shadow)]">
-              <div className="mt-4 space-y-3">
+            <div className="mt-4 rounded-[22px] border border-white/6 bg-[linear-gradient(180deg,rgba(18,30,49,0.92),rgba(13,22,36,0.94))] p-4 shadow-[var(--panel-shadow)]">
+              <div className="space-y-3">
                 <Select value={effectiveSelectedWs} onValueChange={(value) => value && setSelectedWs(value)}>
-                  <SelectTrigger className="h-12 rounded-[18px] border-white/8 bg-white/[0.04] text-sm">
+                  <SelectTrigger className="h-11 rounded-[16px] border-white/8 bg-white/[0.04] text-sm">
                     <SelectValue placeholder={t('sidebar.selectWorkspace')} />
                   </SelectTrigger>
                   <SelectContent>
@@ -444,7 +484,7 @@ export default function Sidebar({
                   </SelectContent>
                 </Select>
                 <Button
-                  className="h-12 w-full rounded-[18px] border-0 bg-[linear-gradient(135deg,#58f3d4,#33c2ff)] text-sm font-semibold text-slate-950 shadow-[0_20px_50px_rgba(22,163,200,0.22)] transition-transform hover:-translate-y-0.5 hover:shadow-[0_24px_60px_rgba(22,163,200,0.28)]"
+                  className="h-11 w-full rounded-[16px] border-0 bg-[linear-gradient(135deg,#58f3d4,#33c2ff)] text-sm font-semibold text-slate-950 shadow-[0_20px_50px_rgba(22,163,200,0.22)] transition-transform hover:-translate-y-0.5 hover:shadow-[0_24px_60px_rgba(22,163,200,0.28)]"
                   onClick={handleStartConversation}
                   disabled={!effectiveSelectedWs}
                 >
@@ -454,45 +494,40 @@ export default function Sidebar({
               </div>
             </div>
           ) : null}
-        </div>
 
-        <Separator className="bg-white/6" />
+          {section === 'projects' && selectedProject ? (
+            <div className="mt-4 rounded-[20px] border border-white/6 bg-white/[0.03] p-4">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">Current project</div>
+              <div className="mt-2 text-sm font-semibold text-white">{selectedProject.name}</div>
+              <div className="mt-1 text-xs text-[var(--app-text-soft)]">{selectedProject.goal || 'Project workbench currently in focus.'}</div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                  {selectedProject.status}
+                </Badge>
+                {selectedProject.workspace ? (
+                  <span className="truncate text-[11px] text-[var(--app-text-muted)]">{getWorkspaceName(selectedProject.workspace)}</span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="space-y-5 p-4">
               {section === 'ceo' ? (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <SectionLabel>History</SectionLabel>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 rounded-full hover:bg-white/10"
-                      onClick={() => {
-                        api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace').then(res => {
-                          if (res.cascadeId) {
-                            onSelect(res.cascadeId, 'CEO Office', 'ceo');
-                            onClose();
-                          }
-                        });
-                      }}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  <div className="space-y-1">
-                    {conversations
-                      .filter(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace')
-                      .sort((a, b) => b.mtime - a.mtime)
-                      .map(conversation => (
+                  <SectionLabel>History</SectionLabel>
+                  {ceoHistory.length > 0 ? (
+                    <div className="space-y-2">
+                      {ceoHistory.map(conversation => (
                         <RailItem
                           key={conversation.id}
                           icon={<MessageSquare className="h-4 w-4" />}
                           title={conversation.title || t('sidebar.untitled')}
                           meta={(
                             <>
-                              {conversation.steps > 0 && <span>{conversation.steps} steps</span>}
+                              {conversation.steps > 0 ? <span>{conversation.steps} steps</span> : null}
                               <span>{formatRelativeTime(new Date(conversation.mtime).toISOString(), locale)}</span>
                             </>
                           )}
@@ -503,12 +538,12 @@ export default function Sidebar({
                           }}
                         />
                       ))}
-                    {conversations.filter(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace').length === 0 && (
-                      <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
-                        No history
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
+                      No history
+                    </div>
+                  )}
                 </div>
               ) : null}
 
@@ -519,8 +554,8 @@ export default function Sidebar({
                       <div key={wsName} className="space-y-1.5">
                         <button
                           type="button"
-                          className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/[0.04] group"
-                          onClick={() => setWsCollapsed(p => ({ ...p, [wsName]: !p[wsName] }))}
+                          className="group flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/[0.04]"
+                          onClick={() => setWsCollapsed(prev => ({ ...prev, [wsName]: !prev[wsName] }))}
                         >
                           <ChevronRight className={cn('h-3 w-3 shrink-0 text-[var(--app-text-muted)] transition-transform', !wsCollapsed[wsName] && 'rotate-90')} />
                           {wsName === 'Playground'
@@ -534,7 +569,7 @@ export default function Sidebar({
                           </Badge>
                         </button>
 
-                        {!wsCollapsed[wsName] && (
+                        {!wsCollapsed[wsName] ? (
                           <div className="space-y-1 pl-2">
                             {convGroups[wsName].map(conversation => (
                               <RailItem
@@ -545,9 +580,7 @@ export default function Sidebar({
                                 title={conversation.title || t('sidebar.untitled')}
                                 meta={(
                                   <>
-                                    {conversation.steps > 0 && (
-                                      <span>{conversation.steps} steps</span>
-                                    )}
+                                    {conversation.steps > 0 ? <span>{conversation.steps} steps</span> : null}
                                     <span>{formatRelativeTime(new Date(conversation.mtime).toISOString(), locale)}</span>
                                   </>
                                 )}
@@ -559,7 +592,7 @@ export default function Sidebar({
                               />
                             ))}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -571,73 +604,91 @@ export default function Sidebar({
               ) : null}
 
               {section === 'projects' ? (
-                projects.length > 0 ? (
-                  <div className="space-y-2">
-                    {projects
-                      .filter(p => !p.parentProjectId) // Top-level only
-                      .map(project => {
-                        const children = projects.filter(c => c.parentProjectId === project.projectId);
-                        const hasChildren = children.length > 0;
-                        const isParentOrChildSelected = selectedProjectId === project.projectId ||
-                          children.some(c => c.projectId === selectedProjectId);
+                <>
+                  <SidebarCard
+                    title="Workspace coverage"
+                    body="当前左栏只提供项目上下文，不再承载主菜单或低频资源入口。"
+                    icon={<FolderKanban className="h-4 w-4" />}
+                    meta={(
+                      <>
+                        <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                          {projects.length} projects
+                        </Badge>
+                        <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                          {visibleWorkspaceCount} workspaces
+                        </Badge>
+                      </>
+                    )}
+                  />
 
-                        return (
-                          <div key={project.projectId}>
-                            <RailItem
-                              icon={<FolderKanban className="h-4 w-4" />}
-                              title={project.name}
-                              meta={(
-                                <>
-                                  <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
-                                    {project.status}
-                                  </Badge>
-                                  {hasChildren && (
-                                    <span className="text-violet-400/70">{children.length} branches</span>
-                                  )}
-                                </>
-                              )}
-                              active={selectedProjectId === project.projectId}
-                              onClick={() => {
-                                onSelectProject?.(project.projectId);
-                                onClose();
-                              }}
-                            />
-                            {/* Nested child projects — auto-expand when parent or child is selected */}
-                            {hasChildren && isParentOrChildSelected && (
-                              <div className="ml-6 mt-1 space-y-0.5 border-l border-violet-500/20 pl-3">
-                                {children.map(child => (
-                                  <RailItem
-                                    key={child.projectId}
-                                    icon={<GitBranch className="h-3.5 w-3.5 text-violet-400/60" />}
-                                    title={<span className="text-[13px]">{child.name}</span>}
-                                    meta={(
-                                      <Badge variant="outline" className="h-4 rounded-full border-white/8 bg-white/[0.03] px-1.5 text-[9px]">
-                                        {child.status}
-                                      </Badge>
-                                    )}
-                                    active={selectedProjectId === child.projectId}
-                                    onClick={() => {
-                                      onSelectProject?.(child.projectId);
-                                      onClose();
-                                    }}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                  </div>
-                ) : (
-                  <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
-                    No projects found
-                  </div>
-                )
+                  {projects.length > 0 ? (
+                    <div className="space-y-2">
+                      <SectionLabel>Project Tree</SectionLabel>
+                      {projects
+                        .filter(project => !project.parentProjectId)
+                        .map(project => {
+                          const children = projects.filter(candidate => candidate.parentProjectId === project.projectId);
+                          const hasChildren = children.length > 0;
+                          const isParentOrChildSelected = selectedProjectId === project.projectId
+                            || children.some(candidate => candidate.projectId === selectedProjectId);
+
+                          return (
+                            <div key={project.projectId}>
+                              <RailItem
+                                icon={<FolderKanban className="h-4 w-4" />}
+                                title={project.name}
+                                meta={(
+                                  <>
+                                    <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                                      {project.status}
+                                    </Badge>
+                                    {hasChildren ? <span className="text-violet-400/70">{children.length} branches</span> : null}
+                                  </>
+                                )}
+                                active={selectedProjectId === project.projectId}
+                                onClick={() => {
+                                  onSelectProject?.(project.projectId);
+                                  onClose();
+                                }}
+                              />
+
+                              {hasChildren && isParentOrChildSelected ? (
+                                <div className="ml-6 mt-1 space-y-0.5 border-l border-violet-500/20 pl-3">
+                                  {children.map(child => (
+                                    <RailItem
+                                      key={child.projectId}
+                                      icon={<GitBranch className="h-3.5 w-3.5 text-violet-400/60" />}
+                                      title={<span className="text-[13px]">{child.name}</span>}
+                                      meta={(
+                                        <Badge variant="outline" className="h-4 rounded-full border-white/8 bg-white/[0.03] px-1.5 text-[9px]">
+                                          {child.status}
+                                        </Badge>
+                                      )}
+                                      active={selectedProjectId === child.projectId}
+                                      onClick={() => {
+                                        onSelectProject?.(child.projectId);
+                                        onClose();
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  ) : (
+                    <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
+                      No projects found
+                    </div>
+                  )}
+                </>
               ) : null}
 
               {section === 'knowledge' ? (
                 sortedKnowledgeItems.length > 0 ? (
                   <div className="space-y-2">
+                    <SectionLabel>Entries</SectionLabel>
                     {sortedKnowledgeItems.map(item => (
                       <RailItem
                         key={item.id}
@@ -667,162 +718,164 @@ export default function Sidebar({
               ) : null}
 
               {section === 'operations' ? (
-                <div className="space-y-6">
-                  <SchedulerPanel />
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3 px-1">Subgraphs</div>
-                    <SubgraphPanel />
+                <div className="space-y-5">
+                  <div className="grid gap-3">
+                    <SidebarCard
+                      title="Automation & control"
+                      body="Scheduler、策略和系统入口留在 Ops 主视图，左栏只展示概览和常用资产。"
+                      icon={<Bot className="h-4 w-4" />}
+                      meta={(
+                        <>
+                          <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                            {runningWorkspaceCount} running
+                          </Badge>
+                          <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">
+                            {visibleWorkspaceCount} visible
+                          </Badge>
+                        </>
+                      )}
+                    />
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <SidebarCard
+                        title={t('sidebar.skills')}
+                        body={skills[0]?.name ? `最近技能：${skills[0].name}` : '无可用技能'}
+                        icon={<Puzzle className="h-4 w-4" />}
+                        meta={<Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">{skills.length}</Badge>}
+                      />
+                      <SidebarCard
+                        title={t('sidebar.flows')}
+                        body={workflows[0]?.name ? `最近流程：/${workflows[0].name}` : '无工作流'}
+                        icon={<Zap className="h-4 w-4" />}
+                        meta={<Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">{workflows.length}</Badge>}
+                      />
+                      <SidebarCard
+                        title={t('sidebar.rules')}
+                        body={rules[0]?.name ? `最近规则：${rules[0].name}` : '无规则'}
+                        icon={<ScrollText className="h-4 w-4" />}
+                        meta={<Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">{rules.length}</Badge>}
+                      />
+                      <SidebarCard
+                        title={t('sidebar.servers')}
+                        body={wsOptions[0]?.name ? `最近工作区：${wsOptions[0].name}` : '无工作区'}
+                        icon={<ServerIcon className="h-4 w-4" />}
+                        meta={<Badge variant="outline" className="h-5 rounded-full border-white/10 bg-white/[0.04] px-2 text-[10px]">{wsOptions.length}</Badge>}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <PolicyPanel />
+
+                  <div className="space-y-2">
+                    <SectionLabel>Assets</SectionLabel>
+                    {skills.slice(0, 4).map(skill => (
+                      <RailItem
+                        key={`skill-${skill.name}`}
+                        icon={<Puzzle className="h-4 w-4 text-indigo-400" />}
+                        title={skill.name}
+                        meta={<span className="line-clamp-2">{skill.description}</span>}
+                        onClick={() => {
+                          onOpenOpsAsset?.('skills', skill.name);
+                          onClose();
+                        }}
+                      />
+                    ))}
+                    {workflows.slice(0, 4).map(workflow => (
+                      <RailItem
+                        key={`workflow-${workflow.name}`}
+                        icon={<Zap className="h-4 w-4 text-amber-400" />}
+                        title={`/${workflow.name}`}
+                        meta={<span className="line-clamp-2">{workflow.description}</span>}
+                        onClick={() => {
+                          onOpenOpsAsset?.('workflows', workflow.name);
+                          onClose();
+                        }}
+                      />
+                    ))}
+                    {rules.slice(0, 4).map(rule => (
+                      <RailItem
+                        key={`rule-${rule.path || rule.name}`}
+                        icon={<ScrollText className="h-4 w-4 text-emerald-400" />}
+                        title={rule.name || rule.path.split('/').pop() || 'Rule'}
+                        meta={rule.description ? <span className="line-clamp-2">{rule.description}</span> : undefined}
+                        onClick={() => {
+                          onOpenOpsAsset?.('rules', rule.name || rule.path.split('/').pop() || 'Rule');
+                          onClose();
+                        }}
+                      />
+                    ))}
+                    {!skills.length && !workflows.length && !rules.length ? (
+                      <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
+                        Assets move here from the old resources tray.
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <SectionLabel>Workspaces</SectionLabel>
+                    {wsOptions.length > 0 ? wsOptions.map(option => (
+                      <div key={option.uri} className={cn('group flex items-center gap-2 rounded-xl border border-white/6 bg-white/[0.03] p-2', option.hidden && 'opacity-40')}>
+                        <div className={cn('h-2 w-2 shrink-0 rounded-full', option.running ? (option.hidden ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-muted-foreground/30')} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-semibold">{option.name}</div>
+                          <div className="truncate text-[10px] text-muted-foreground">{option.uri.replace('file://', '')}</div>
+                        </div>
+                        {option.hidden ? (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                            onClick={() => handleUnhideWorkspace(option.uri)}
+                            title={t('sidebar.showInSidebar')}
+                          >
+                            <Eye className="h-3 w-3" />
+                          </Button>
+                        ) : option.running ? (
+                          <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="text-muted-foreground hover:text-foreground"
+                              onClick={() => handleCloseWorkspace(option.uri)}
+                              disabled={closingWs === option.uri}
+                              title={t('sidebar.hideFromSidebar')}
+                            >
+                              {closingWs === option.uri ? <Loader2 className="h-3 w-3 animate-spin" /> : <EyeOff className="h-3 w-3" />}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => {
+                                setCloseTarget(option.uri);
+                                setCloseDialogOpen(true);
+                              }}
+                              title={t('sidebar.closeCompletely')}
+                            >
+                              <PowerOff className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="shrink-0 text-emerald-600 opacity-0 transition-opacity group-hover:opacity-100 hover:text-emerald-600"
+                            onClick={() => handleLaunchWorkspace(option.uri)}
+                            title={t('sidebar.launchWorkspace')}
+                          >
+                            <Power className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
+                    )) : (
+                      <div className="rounded-[20px] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-[var(--app-text-soft)]">
+                        {t('sidebar.noWorkspaces')}
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : null}
             </div>
           </ScrollArea>
         </div>
-
-        <Separator className="bg-white/6" />
-
-        <Collapsible open={resourcesOpen} onOpenChange={setResourcesOpen} className="relative shrink-0">
-          <CollapsibleTrigger className="mx-3 mb-3 flex w-[calc(100%-1.5rem)] items-center gap-3 rounded-[22px] border border-white/6 bg-white/[0.03] px-4 py-3 text-left transition-colors hover:bg-white/[0.05]">
-            <div className="min-w-0 flex-1">
-              <div className="app-eyebrow">{t('shell.resources')}</div>
-              <div className="truncate text-xs text-[var(--agent-text-soft)]">{t('sidebar.resourcesBody')}</div>
-            </div>
-            <Badge variant="outline" className="h-5 rounded-full border-white/10 bg-black/10 px-1.5 text-[10px]">
-              4
-            </Badge>
-            <ChevronRight className={cn('h-4 w-4 text-[color:var(--agent-text-muted)] transition-transform', resourcesOpen && 'rotate-90')} />
-          </CollapsibleTrigger>
-
-          <CollapsibleContent className="mx-3 mb-3 rounded-[24px] border border-white/6 bg-white/[0.02]">
-            <div className="p-4">
-              <Tabs defaultValue="skills" className="flex w-full flex-col">
-                <TabsList className="grid h-10 w-full grid-cols-4 border-white/6 bg-white/[0.03] p-1">
-                  <TabsTrigger value="skills" className="text-[10px] font-semibold data-[state=active]:bg-[var(--app-accent-soft)]">
-                    {t('sidebar.skills')}
-                  </TabsTrigger>
-                  <TabsTrigger value="flows" className="text-[10px] font-semibold data-[state=active]:bg-[var(--app-accent-soft)]">
-                    {t('sidebar.flows')}
-                  </TabsTrigger>
-                  <TabsTrigger value="rules" className="text-[10px] font-semibold data-[state=active]:bg-[var(--app-accent-soft)]">
-                    {t('sidebar.rules')}
-                  </TabsTrigger>
-                  <TabsTrigger value="servers" className="text-[10px] font-semibold data-[state=active]:bg-[var(--app-accent-soft)]">
-                    {t('sidebar.servers')}
-                  </TabsTrigger>
-                </TabsList>
-
-                <div className="mt-3 h-[240px] overflow-hidden">
-                  <ScrollArea className="h-[240px] pr-3">
-                    <TabsContent value="skills" className="m-0 space-y-4">
-                      {skills.length > 0 ? skills.map(skill => (
-                        <div key={skill.name} className="space-y-1">
-                          <div className="flex items-start gap-2">
-                            <Puzzle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-400" />
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-semibold">{skill.name}</div>
-                              <div className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{skill.description}</div>
-                            </div>
-                          </div>
-                        </div>
-                      )) : <div className="py-8 text-center text-[11px] text-muted-foreground">{t('sidebar.noSkills')}</div>}
-                    </TabsContent>
-
-                    <TabsContent value="flows" className="m-0 space-y-4">
-                      {workflows.length > 0 ? workflows.map(workflow => (
-                        <div key={workflow.name} className="space-y-1">
-                          <div className="flex items-start gap-2">
-                            <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-semibold">/{workflow.name}</div>
-                              <div className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{workflow.description}</div>
-                            </div>
-                          </div>
-                        </div>
-                      )) : <div className="py-8 text-center text-[11px] text-muted-foreground">{t('sidebar.noFlows')}</div>}
-                    </TabsContent>
-
-                    <TabsContent value="rules" className="m-0 space-y-4">
-                      {rules.length > 0 ? rules.map(rule => (
-                        <div key={rule.path || rule.name} className="space-y-1">
-                          <div className="flex items-start gap-2">
-                            <ScrollText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-semibold">{rule.name || rule.path.split('/').pop()}</div>
-                              {rule.description ? (
-                                <div className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{rule.description}</div>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      )) : <div className="py-8 text-center text-[11px] text-muted-foreground">{t('sidebar.noRules')}</div>}
-                    </TabsContent>
-
-                    <TabsContent value="servers" className="m-0 space-y-2.5">
-                      {wsOptions.length > 0 ? wsOptions.map(option => (
-                        <div key={option.uri} className={cn('group flex items-center gap-2 rounded-xl border border-white/6 bg-white/[0.03] p-2', option.hidden && 'opacity-40')}>
-                          <div className={cn('h-2 w-2 shrink-0 rounded-full', option.running ? (option.hidden ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-muted-foreground/30')} />
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-xs font-semibold">{option.name}</div>
-                            <div className="truncate text-[10px] text-muted-foreground">{option.uri.replace('file://', '')}</div>
-                          </div>
-                          {option.hidden ? (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-                              onClick={() => handleUnhideWorkspace(option.uri)}
-                              title={t('sidebar.showInSidebar')}
-                            >
-                              <Eye className="h-3 w-3" />
-                            </Button>
-                          ) : option.running ? (
-                            <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                                onClick={() => handleCloseWorkspace(option.uri)}
-                                disabled={closingWs === option.uri}
-                                title={t('sidebar.hideFromSidebar')}
-                              >
-                                {closingWs === option.uri ? <Loader2 className="h-3 w-3 animate-spin" /> : <EyeOff className="h-3 w-3" />}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-destructive hover:text-destructive"
-                                onClick={() => {
-                                  setCloseTarget(option.uri);
-                                  setCloseDialogOpen(true);
-                                }}
-                                title={t('sidebar.closeCompletely')}
-                              >
-                                <PowerOff className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0 text-emerald-600 opacity-0 transition-opacity group-hover:opacity-100 hover:text-emerald-600"
-                              onClick={() => handleLaunchWorkspace(option.uri)}
-                              title={t('sidebar.launchWorkspace')}
-                            >
-                              <Power className="h-3 w-3" />
-                            </Button>
-                          )}
-                        </div>
-                      )) : <div className="py-8 text-center text-[11px] text-muted-foreground">{t('sidebar.noWorkspaces')}</div>}
-                    </TabsContent>
-                  </ScrollArea>
-                </div>
-              </Tabs>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
 
         <Dialog
           open={launchDialogOpen}
@@ -875,12 +928,11 @@ export default function Sidebar({
                 <>
                   <Button variant="outline" onClick={() => setLaunchDialogOpen(false)}>{t('common.cancel')}</Button>
                   <Button onClick={() => handleLaunchWorkspace(launchTarget)}>
-                    <ExternalLink className="mr-2 h-4 w-4" />
                     {t('sidebar.openInAntigravity')}
                   </Button>
                 </>
               ) : null}
-              {(launchStatus === 'launching' || launchStatus === 'polling') ? (
+              {launchStatus === 'launching' || launchStatus === 'polling' ? (
                 <Button
                   variant="outline"
                   onClick={() => {

@@ -15,11 +15,13 @@ import { AssetLoader } from './asset-loader';
 import { getDownstreamStages } from './pipeline/pipeline-registry';
 import { resolveStageId } from './pipeline/pipeline-graph';
 import { getStageDefinition } from './stage-resolver';
+import { buildTemplateProviderExecutionContext } from './department-execution-resolver';
 import {
   addRunToProject,
   initializePipelineState,
   trackStageDispatch,
 } from './project-registry';
+import type { TriggerContext } from './group-types';
 import { createLogger } from '../logger';
 
 const log = createLogger('DispatchService');
@@ -48,6 +50,9 @@ export interface ExecuteDispatchInput {
   pipelineStageIndex?: number;
   templateOverrides?: Record<string, unknown>;
   conversationMode?: 'shared' | 'isolated';
+  /** V6.1: Explicit provider override (bypasses resolveProvider). */
+  provider?: string;
+  triggerContext?: TriggerContext;
 }
 
 export interface ExecuteDispatchResult {
@@ -83,6 +88,7 @@ export async function executeDispatch(input: ExecuteDispatchInput): Promise<Exec
   let finalPipelineStageId = input.pipelineStageId;
   let finalPipelineStageIndex = input.pipelineStageIndex;
   const finalPipelineId = input.pipelineId || input.templateId;
+  const workspacePath = input.workspace.replace(/^file:\/\//, '');
 
   if (!finalPipelineId) {
     throw new DispatchError('Missing required field: templateId');
@@ -158,6 +164,8 @@ export async function executeDispatch(input: ExecuteDispatchInput): Promise<Exec
     throw new DispatchError('Either prompt or taskEnvelope.goal is required');
   }
 
+  const templateExecutionContext = buildTemplateProviderExecutionContext(workspacePath, finalPipelineId);
+
   // Source contract validation
   const stage = getStageDefinition(finalPipelineId, finalStageId);
   if (!stage) {
@@ -202,6 +210,10 @@ export async function executeDispatch(input: ExecuteDispatchInput): Promise<Exec
     pipelineStageId: finalPipelineStageId,
     pipelineStageIndex: finalPipelineStageIndex,
     conversationMode: input.conversationMode,
+    provider: input.provider,
+    triggerContext: input.triggerContext,
+    promptPreamble: templateExecutionContext.promptPreamble,
+    resolutionReason: templateExecutionContext.resolutionReason,
   });
 
   // ── Step 4: Link to project ──

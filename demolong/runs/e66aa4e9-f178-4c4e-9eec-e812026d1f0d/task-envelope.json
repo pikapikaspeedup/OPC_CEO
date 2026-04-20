@@ -1,0 +1,7 @@
+{
+  "goal": "Write a single markdown file named smoke-note.md inside the run artifact directory. Content exactly: storage smoke ok. Then finish with a one-line confirmation.",
+  "executionTarget": {
+    "kind": "prompt"
+  },
+  "runId": "e66aa4e9-f178-4c4e-9eec-e812026d1f0d"
+}

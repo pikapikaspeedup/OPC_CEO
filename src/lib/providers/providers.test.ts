@@ -20,7 +20,7 @@ vi.mock('../bridge/codex-adapter', () => ({
 
 import { CodexExecutor } from './codex-executor';
 import { getExecutor } from './index';
-import type { TaskExecutor, ProviderCapabilities } from './types';
+import type { TaskExecutor } from './types';
 
 let tmpDir: string;
 
@@ -160,6 +160,11 @@ describe('getExecutor', () => {
     expect(executor.providerId).toBe('codex');
   });
 
+  it('returns NativeCodexExecutor for "native-codex"', () => {
+    const executor = getExecutor('native-codex');
+    expect(executor.providerId).toBe('native-codex');
+  });
+
   it('returns AntigravityExecutor for "antigravity"', () => {
     const executor = getExecutor('antigravity');
     expect(executor.providerId).toBe('antigravity');
@@ -172,7 +177,7 @@ describe('getExecutor', () => {
   });
 
   it('throws for unknown provider', () => {
-    expect(() => getExecutor('unknown' as any)).toThrow('Unknown provider');
+    expect(() => getExecutor('unknown' as never)).toThrow('Unknown provider');
   });
 });
 

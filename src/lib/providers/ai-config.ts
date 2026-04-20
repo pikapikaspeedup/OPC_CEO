@@ -61,6 +61,8 @@ const SCENE_LAYER_MAP: Record<string, AILayer> = {
 // ---------------------------------------------------------------------------
 
 let cachedConfig: AIProviderConfig | null = null;
+let cachedConfigMtimeMs: number | null = null;
+let cachedConfigSource: 'file' | 'override' | 'default' | null = null;
 
 function getConfigPath(): string {
   return path.join(process.env.HOME || '~', '.gemini', 'antigravity', 'ai-config.json');
@@ -71,21 +73,37 @@ function getConfigPath(): string {
  * Falls back to DEFAULT_CONFIG if file doesn't exist.
  */
 export function loadAIConfig(): AIProviderConfig {
-  if (cachedConfig) return cachedConfig;
+  if (cachedConfigSource === 'override' && cachedConfig) {
+    return cachedConfig;
+  }
 
   const configPath = getConfigPath();
   try {
     if (fs.existsSync(configPath)) {
+      const mtimeMs = fs.statSync(configPath).mtimeMs;
+      if (cachedConfig && cachedConfigSource === 'file' && cachedConfigMtimeMs === mtimeMs) {
+        return cachedConfig;
+      }
+
       const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       cachedConfig = { ...DEFAULT_CONFIG, ...raw } as AIProviderConfig;
+      cachedConfigMtimeMs = mtimeMs;
+      cachedConfigSource = 'file';
       log.info({ configPath }, 'AI config loaded');
       return cachedConfig!;
     }
-  } catch (err: any) {
-    log.warn({ err: err.message, configPath }, 'Failed to load AI config, using defaults');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn({ err: message, configPath }, 'Failed to load AI config, using defaults');
+  }
+
+  if (cachedConfig && cachedConfigSource === 'default') {
+    return cachedConfig;
   }
 
   cachedConfig = { ...DEFAULT_CONFIG };
+  cachedConfigMtimeMs = null;
+  cachedConfigSource = 'default';
   return cachedConfig;
 }
 
@@ -94,6 +112,8 @@ export function loadAIConfig(): AIProviderConfig {
  */
 export function setAIConfig(config: Partial<AIProviderConfig>): void {
   cachedConfig = { ...DEFAULT_CONFIG, ...config };
+  cachedConfigMtimeMs = null;
+  cachedConfigSource = 'override';
 }
 
 /**
@@ -101,6 +121,8 @@ export function setAIConfig(config: Partial<AIProviderConfig>): void {
  */
 export function resetAIConfigCache(): void {
   cachedConfig = null;
+  cachedConfigMtimeMs = null;
+  cachedConfigSource = null;
 }
 
 /**
@@ -114,6 +136,12 @@ export function saveAIConfig(config: AIProviderConfig): void {
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   cachedConfig = config;
+  try {
+    cachedConfigMtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {
+    cachedConfigMtimeMs = null;
+  }
+  cachedConfigSource = 'file';
   log.info({ configPath }, 'AI config saved');
 }
 

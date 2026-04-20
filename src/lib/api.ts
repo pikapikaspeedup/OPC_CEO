@@ -12,6 +12,7 @@ import type {
   TemplateDetailFE,
   ApprovalRequestFE,
   ApprovalSummaryFE,
+  EvolutionProposalFE,
 } from './types';
 
 // V4.3 Operations & Observability types
@@ -108,6 +109,8 @@ export interface SchedulerJobResponse {
   name?: string;
   type?: string;
   action?: { kind: string; [key: string]: unknown };
+  executionProfile?: import('./types').ExecutionProfileFE;
+  executionProfileSummary?: import('./types').ExecutionProfileSummaryFE;
   enabled?: boolean;
   nextRunAt?: string | null;
   lastRunAt?: string;
@@ -153,8 +156,8 @@ export interface ValidateResponse extends LintResponse {
 }
 
 export interface ConvertResponse {
-  pipeline?: any[];
-  graphPipeline?: any;
+  pipeline?: unknown[];
+  graphPipeline?: unknown;
 }
 
 export interface CEOSuggestion {
@@ -226,13 +229,47 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   me: () => fetchJson<UserInfo>('/api/me'),
   models: () => fetchJson<ModelsResponse>('/api/models'),
+  aiConfig: () => fetchJson<{ defaultProvider: string; layers?: Record<string, { provider?: string }> }>('/api/ai-config'),
   servers: () => fetchJson<Server[]>('/api/servers'),
   workspaces: () => fetchJson<WorkspacesResponse>('/api/workspaces'),
   conversations: () => fetchJson<Conversation[]>('/api/conversations'),
   conversationSteps: (id: string) => fetchJson<StepsData>(`/api/conversations/${id}/steps`),
   skills: () => fetchJson<Skill[]>('/api/skills'),
+  discoveredSkills: () => fetchJson<Skill[]>('/api/skills/discovered'),
   workflows: () => fetchJson<Workflow[]>('/api/workflows'),
+  discoveredWorkflows: () => fetchJson<Workflow[]>('/api/workflows/discovered'),
   rules: () => fetchJson<Rule[]>('/api/rules'),
+  discoveredRules: () => fetchJson<Rule[]>('/api/rules/discovered'),
+
+  // Workflow CRUD
+  workflowDetail: (name: string) =>
+    fetchJson<{ name: string; content: string }>(`/api/workflows/${encodeURIComponent(name)}`),
+  deleteWorkflow: (name: string) =>
+    fetchJson<{ success: boolean; name: string }>(`/api/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  // Skill CRUD
+  skillDetail: (name: string) =>
+    fetchJson<Record<string, unknown>>(`/api/skills/${encodeURIComponent(name)}`),
+  updateSkill: (name: string, content: string) =>
+    fetchJson<{ success: boolean; name: string }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }),
+  deleteSkill: (name: string) =>
+    fetchJson<{ success: boolean; name: string }>(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  // Rule CRUD
+  ruleDetail: (name: string) =>
+    fetchJson<{ name: string; content: string }>(`/api/rules/${encodeURIComponent(name)}`),
+  updateRule: (name: string, content: string) =>
+    fetchJson<{ success: boolean; name: string }>(`/api/rules/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }),
+  deleteRule: (name: string) =>
+    fetchJson<{ success: boolean; name: string }>(`/api/rules/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   mcp: () => fetchJson<McpConfig>('/api/mcp'),
   analytics: () => fetchJson<AnalyticsData>('/api/analytics'),
   conversationFiles: (id: string, q: string) => fetchJson<{ files: unknown[] }>(`/api/conversations/${id}/files?q=${encodeURIComponent(q)}`),
@@ -322,7 +359,7 @@ export const api = {
       `/api/departments/quota?workspace=${encodeURIComponent(workspaceUri)}`,
     ),
   tunnelStatus: () =>
-    fetchJson<{ running: boolean; starting: boolean; url: string | null; error: string | null; configured: boolean; config: any }>(
+    fetchJson<{ running: boolean; starting: boolean; url: string | null; error: string | null; configured: boolean; config: unknown }>(
       '/api/tunnel',
     ),
   tunnelStart: () =>
@@ -378,7 +415,14 @@ export const api = {
     }),
 
   // Knowledge Items
-  knowledge: () => fetchJson<KnowledgeItem[]>('/api/knowledge'),
+  knowledge: (params?: { workspace?: string; category?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.workspace) search.set('workspace', params.workspace);
+    if (params?.category) search.set('category', params.category);
+    if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
+    const qs = search.toString();
+    return fetchJson<KnowledgeItem[]>(`/api/knowledge${qs ? `?${qs}` : ''}`);
+  },
   knowledgeDetail: (id: string) => fetchJson<KnowledgeDetail>(`/api/knowledge/${encodeURIComponent(id)}`),
   updateKnowledge: (id: string, data: { title?: string; summary?: string }) =>
     fetchJson<{ ok: boolean }>(`/api/knowledge/${encodeURIComponent(id)}`, {
@@ -395,17 +439,43 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
 
+  // CEO / Management
+  ceoProfile: () => fetchJson<import('./types').CEOProfileFE>('/api/ceo/profile'),
+  updateCeoProfile: (patch: Partial<import('./types').CEOProfileFE>) =>
+    fetchJson<import('./types').CEOProfileFE>('/api/ceo/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  appendCeoFeedback: (payload: { content: string; type?: 'correction' | 'approval' | 'rejection' | 'preference' }) =>
+    fetchJson<import('./types').CEOProfileFE>('/api/ceo/profile/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  ceoRoutine: () => fetchJson<import('./types').CEORoutineSummaryFE>('/api/ceo/routine'),
+  ceoEvents: (limit = 20) =>
+    fetchJson<{ events: import('./types').CEOEvent[] }>(`/api/ceo/events?limit=${limit}`),
+  managementOverview: (workspaceUri?: string) =>
+    fetchJson<import('./types').ManagementOverviewFE | import('./types').DepartmentManagementOverviewFE>(
+      `/api/management/overview${workspaceUri ? `?workspace=${encodeURIComponent(workspaceUri)}` : ''}`,
+    ),
+
   // Agent Runs & Projects
   projects: () => fetchJson<Project[]>('/api/projects'),
   agentRuns: (status?: string) => fetchJson<AgentRun[]>(`/api/agent-runs${status ? `?status=${status}` : ''}`),
-  agentRunsByFilter: (filter: { stageId?: string; status?: string; reviewOutcome?: string }) => {
+  agentRunsByFilter: (filter: { stageId?: string; status?: string; reviewOutcome?: string; schedulerJobId?: string; projectId?: string; executorKind?: string }) => {
     const params = new URLSearchParams();
     if (filter.stageId) params.set('stageId', filter.stageId);
     if (filter.status) params.set('status', filter.status);
     if (filter.reviewOutcome) params.set('reviewOutcome', filter.reviewOutcome);
+    if (filter.schedulerJobId) params.set('schedulerJobId', filter.schedulerJobId);
+    if (filter.projectId) params.set('projectId', filter.projectId);
+    if (filter.executorKind) params.set('executorKind', filter.executorKind);
     return fetchJson<AgentRun[]>(`/api/agent-runs?${params.toString()}`);
   },
   agentRun: (id: string) => fetchJson<AgentRun>(`/api/agent-runs/${id}`),
+  agentRunConversation: (id: string) => fetchJson<import('./types').RunConversationFE>(`/api/agent-runs/${id}/conversation`),
   dispatchRun: (input: {
     templateId?: string;
     stageId?: string;
@@ -502,14 +572,14 @@ export const api = {
       body: JSON.stringify({ templateId }),
     }),
 
-  validateTemplate: (input: { templateId?: string; template?: any }) =>
+  validateTemplate: (input: { templateId?: string; template?: unknown }) =>
     fetchJson<ValidateResponse>('/api/pipelines/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     }),
 
-  convertTemplate: (input: { direction: 'pipeline-to-graph' | 'graph-to-pipeline'; pipeline?: any[]; graphPipeline?: any }) =>
+  convertTemplate: (input: { direction: 'pipeline-to-graph' | 'graph-to-pipeline'; pipeline?: unknown[]; graphPipeline?: unknown }) =>
     fetchJson<ConvertResponse>('/api/pipelines/convert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -725,6 +795,41 @@ export const api = {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, message: message || '', channel: 'web' }),
+    }),
+
+  evolutionProposals: (params?: { workspaceUri?: string; kind?: 'workflow' | 'skill'; status?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.workspaceUri) sp.set('workspace', params.workspaceUri);
+    if (params?.kind) sp.set('kind', params.kind);
+    if (params?.status) sp.set('status', params.status);
+    return fetchJson<{ proposals: EvolutionProposalFE[] }>(`/api/evolution/proposals?${sp.toString()}`);
+  },
+
+  generateEvolutionProposals: (payload?: { workspaceUri?: string; limit?: number }) =>
+    fetchJson<{ proposals: EvolutionProposalFE[] }>('/api/evolution/proposals/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+
+  evaluateEvolutionProposal: (id: string) =>
+    fetchJson<EvolutionProposalFE>(`/api/evolution/proposals/${encodeURIComponent(id)}/evaluate`, {
+      method: 'POST',
+    }),
+
+  publishEvolutionProposal: (id: string, message?: string) =>
+    fetchJson<{ proposal: EvolutionProposalFE | null; approvalRequestId?: string }>(
+      `/api/evolution/proposals/${encodeURIComponent(id)}/publish`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(message ? { message } : {}) }),
+      },
+    ),
+
+  observeEvolutionProposal: (id: string) =>
+    fetchJson<EvolutionProposalFE>(`/api/evolution/proposals/${encodeURIComponent(id)}/observe`, {
+      method: 'POST',
     }),
 };
 

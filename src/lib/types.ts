@@ -4,6 +4,23 @@ export interface UserInfo {
   name?: string;
   email?: string;
   hasApiKey: boolean;
+  credits?: ModelsResponse | null;
+  creditSource?: string | null;
+  providerAwareNotice?: string | null;
+  providerUsageSummary?: {
+    totalRuns: number;
+    providers: number;
+    tokenRuns: number;
+    totalTokens: number;
+    windowDays: number;
+  };
+  providerCredits?: Array<{
+    provider: string;
+    category: 'runtime' | 'oauth' | 'api-key' | 'custom-profile';
+    configured: boolean;
+    usageTracked: boolean;
+    note: string;
+  }>;
 }
 
 export interface ModelConfig {
@@ -51,7 +68,8 @@ export interface DepartmentSkill {
   skillId: string;
   name: string;
   category: string;
-  workflowRef: string;
+  workflowRef?: string;
+  skillRefs?: string[];
   difficulty?: 'junior' | 'mid' | 'senior';
   deliverableSpec?: {
     format: string;
@@ -104,7 +122,7 @@ export interface DepartmentConfig {
   roomLayout?: RoomLayoutItem[];  // preserved for backward compat
   roomBg?: string;                // preserved for backward compat
   /** V6: Default provider for this department's agent tasks */
-  provider?: 'antigravity' | 'codex';
+  provider?: 'antigravity' | 'codex' | 'native-codex' | 'claude-code' | 'claude-api' | 'openai-api' | 'gemini-api' | 'grok-api' | 'custom';
   /** V6: Token quota for this department */
   tokenQuota?: TokenQuota | null;
 }
@@ -138,6 +156,31 @@ export type ExecutionTargetFE =
   | PromptExecutionTargetFE
   | ProjectOnlyExecutionTargetFE;
 
+export type ExecutionProfileFE =
+  | {
+      kind: 'workflow-run';
+      workflowRef?: string;
+      skillHints?: string[];
+    }
+  | {
+      kind: 'review-flow';
+      templateId: string;
+      stageId?: string;
+      reviewPolicyId?: string;
+      roles?: string[];
+    }
+  | {
+      kind: 'dag-orchestration';
+      templateId: string;
+      stageId?: string;
+    };
+
+export interface ExecutionProfileSummaryFE {
+  kind: ExecutionProfileFE['kind'];
+  label: string;
+  detail?: string;
+}
+
 export type ExecutorKindFE = 'template' | 'prompt';
 
 export interface TriggerContextFE {
@@ -162,10 +205,41 @@ export interface AgentRunResult {
   changedFiles: string[];
   blockers: string[];
   needsReview: string[];
+  promptResolution?: PromptModeResolutionFE;
+  reportedEventDate?: string;
+  reportedEventCount?: number;
+  verificationPassed?: boolean;
+  reportApiResponse?: string;
 }
 
 export type ReviewDecision = 'approved' | 'revise' | 'rejected';
 export type ReviewOutcome = 'approved' | 'rejected' | 'revise-exhausted';
+
+export interface PromptResolutionEvidenceFE {
+  requestedWorkflowRefs: string[];
+  requestedSkillHints: string[];
+  matchedWorkflowRefs: string[];
+  matchedSkillRefs: string[];
+}
+
+export interface PromptWorkflowSuggestionFE {
+  shouldCreateWorkflow: true;
+  source: 'skill' | 'prompt';
+  title: string;
+  reason: string;
+  recommendedScope: 'department';
+  evidence: PromptResolutionEvidenceFE;
+}
+
+export interface PromptModeResolutionFE {
+  mode: 'workflow' | 'skill' | 'prompt';
+  requestedWorkflowRefs: string[];
+  requestedSkillHints: string[];
+  matchedWorkflowRefs: string[];
+  matchedSkillRefs: string[];
+  resolutionReason: string;
+  workflowSuggestion?: PromptWorkflowSuggestionFE;
+}
 
 export type ProjectStatus = "active" | "completed" | "archived" | "failed" | "cancelled" | "paused";
 
@@ -430,6 +504,172 @@ export interface CEOEvent {
   }>;
 }
 
+export interface CEORoutineSummaryFE {
+  generatedAt: string;
+  overview: string;
+  digest: string;
+  activeProjects: number;
+  pendingApprovals: number;
+  activeSchedulers: number;
+  recentKnowledge: number;
+  highlights: string[];
+  reminders: string[];
+  escalations: string[];
+  actions: Array<{
+    label: string;
+    type: 'approval' | 'project' | 'scheduler' | 'knowledge' | 'focus';
+  }>;
+}
+
+export interface CEOProfileFE {
+  id: 'default-ceo';
+  identity: {
+    name: string;
+    role: 'ceo';
+    tone?: string;
+  };
+  priorities: string[];
+  activeFocus?: string[];
+  communicationStyle?: {
+    verbosity?: 'brief' | 'normal' | 'detailed';
+    escalationStyle?: 'aggressive' | 'balanced' | 'minimal';
+  };
+  riskTolerance?: 'low' | 'medium' | 'high';
+  reviewPreference?: 'result-first' | 'process-first' | 'balanced';
+  recentDecisions?: Array<{
+    timestamp: string;
+    summary: string;
+    source: 'user' | 'ceo' | 'system';
+    command?: string;
+    action?: string;
+    projectId?: string;
+    runId?: string;
+  }>;
+  feedbackSignals?: Array<{
+    timestamp: string;
+    type: 'correction' | 'approval' | 'rejection' | 'preference';
+    content: string;
+    source?: 'user' | 'system';
+  }>;
+  pendingIssues?: Array<{
+    id: string;
+    title: string;
+    level: 'critical' | 'warning' | 'info';
+    source: 'approval' | 'project' | 'scheduler' | 'knowledge' | 'ceo';
+    projectId?: string;
+    workspaceUri?: string;
+    createdAt: string;
+  }>;
+  updatedAt: string;
+}
+
+export interface ManagementMetricFE {
+  key:
+    | 'objectiveContribution'
+    | 'taskSuccessRate'
+    | 'blockageRate'
+    | 'retryRate'
+    | 'selfHealRate'
+    | 'memoryReuseRate'
+    | 'workflowHitRate'
+    | 'departmentThroughput'
+    | 'ceoDecisionQuality';
+  scope: 'organization' | 'department' | 'ceo';
+  workspaceUri?: string;
+  value: number;
+  unit: 'ratio' | 'count' | 'score' | 'hours';
+  window: 'day' | 'week' | 'month' | 'rolling-30d';
+  computedAt: string;
+  evidence?: string[];
+}
+
+export interface ManagementRiskFE {
+  level: 'critical' | 'warning' | 'info';
+  title: string;
+  description?: string;
+  projectId?: string;
+  workspaceUri?: string;
+}
+
+export interface ManagementOverviewFE {
+  generatedAt: string;
+  activeProjects: number;
+  completedProjects: number;
+  failedProjects: number;
+  blockedProjects: number;
+  pendingApprovals: number;
+  activeSchedulers: number;
+  recentKnowledge: number;
+  okrProgress: number | null;
+  risks: ManagementRiskFE[];
+  metrics: ManagementMetricFE[];
+}
+
+export interface DepartmentManagementOverviewFE extends ManagementOverviewFE {
+  workspaceUri: string;
+  workflowHitRate: number;
+  throughput30d: number;
+}
+
+export type EvolutionProposalKindFE = 'workflow' | 'skill';
+export type EvolutionProposalStatusFE =
+  | 'draft'
+  | 'evaluated'
+  | 'pending-approval'
+  | 'published'
+  | 'rejected';
+
+export interface EvolutionProposalEvidenceFE {
+  source: 'knowledge' | 'repeated-runs';
+  label: string;
+  detail: string;
+  workspaceUri?: string;
+  knowledgeId?: string;
+  runIds?: string[];
+  count?: number;
+}
+
+export interface EvolutionProposalEvaluationFE {
+  evaluatedAt: string;
+  sampleSize: number;
+  matchedRunIds: string[];
+  successRate: number;
+  blockedRate: number;
+  recommendation: 'publish' | 'revise' | 'hold';
+  summary: string;
+}
+
+export interface EvolutionProposalRolloutFE {
+  observedAt: string;
+  hitCount: number;
+  matchedRunIds: string[];
+  successRate: number | null;
+  lastUsedAt?: string;
+  summary: string;
+}
+
+export interface EvolutionProposalFE {
+  id: string;
+  kind: EvolutionProposalKindFE;
+  status: EvolutionProposalStatusFE;
+  workspaceUri?: string;
+  title: string;
+  targetName: string;
+  targetRef: string;
+  rationale: string;
+  content: string;
+  sourceKnowledgeIds: string[];
+  evidence: EvolutionProposalEvidenceFE[];
+  evaluation?: EvolutionProposalEvaluationFE;
+  approvalRequestId?: string;
+  governanceNote?: string;
+  publishedAt?: string;
+  publishedArtifactPath?: string;
+  rollout?: EvolutionProposalRolloutFE;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // OPC: Deliverable (Phase 3)
 // ---------------------------------------------------------------------------
@@ -438,6 +678,7 @@ export interface Deliverable {
   id: string;
   projectId: string;
   stageId: string;
+  sourceRunId?: string;
   type: 'document' | 'code' | 'data' | 'review';
   title: string;
   artifactPath?: string;
@@ -507,6 +748,8 @@ export interface AgentRun {
   sourceRunIds?: string[];
   executorKind?: ExecutorKindFE;
   executionTarget?: ExecutionTargetFE;
+  executionProfile?: ExecutionProfileFE;
+  executionProfileSummary?: ExecutionProfileSummaryFE;
   triggerContext?: TriggerContextFE;
   liveState?: {
     cascadeStatus: string;
@@ -522,6 +765,33 @@ export interface AgentRun {
   pipelineId?: string;
   pipelineStageId?: string;
   pipelineStageIndex?: number;
+  sessionProvenance?: {
+    backendId?: string;
+    handle?: string;
+    model?: string;
+    mode?: string;
+    resolutionSource?: 'scene' | 'department' | 'layer' | 'default';
+    createdVia?: 'dispatch' | 'nudge' | 'restart' | 'evaluate' | 'pipeline';
+    supersedesHandle?: string;
+    recordedAt?: string;
+    transcriptPath?: string;
+    projectPath?: string;
+  };
+  // V6.1: Provider & Usage tracking
+  provider?: string;
+  resolvedWorkflowRef?: string;
+  resolvedSkillRefs?: string[];
+  resolutionReason?: string;
+  promptResolution?: PromptModeResolutionFE;
+  reportedEventDate?: string;
+  reportedEventCount?: number;
+  verificationPassed?: boolean;
+  reportApiResponse?: string;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +847,11 @@ export interface ResultEnvelopeFE {
   risks?: string[];
   openQuestions?: string[];
   nextAction?: string;
+  promptResolution?: PromptModeResolutionFE;
+  reportedEventDate?: string;
+  reportedEventCount?: number;
+  verificationPassed?: boolean;
+  reportApiResponse?: string;
 }
 
 export interface ArtifactManifestFE {
@@ -585,6 +860,32 @@ export interface ArtifactManifestFE {
   executionTarget?: ExecutionTargetFE;
   items: ArtifactRefFE[];
 }
+
+export interface RunConversationMessageFE {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export type RunConversationFE =
+  | {
+      kind: 'conversation';
+      provider?: string;
+      conversationId: string;
+      title: string;
+    }
+  | {
+      kind: 'transcript';
+      provider?: string;
+      handle?: string;
+      messages: RunConversationMessageFE[];
+      viewerConversationId?: string;
+      viewerTitle?: string;
+    }
+  | {
+      kind: 'unavailable';
+      provider?: string;
+      reason: string;
+    };
 
 export interface RoleReadEvidenceFE {
   stepIndex: number;
@@ -626,6 +927,8 @@ export interface Skill {
   path: string;
   baseDir: string;
   scope: 'global' | 'workspace';
+  source?: 'canonical' | 'discovered';
+  content?: string;
 }
 
 export interface Workflow {
@@ -636,6 +939,7 @@ export interface Workflow {
   content?: string;
   scope?: 'global' | 'workspace';
   baseDir?: string;
+  source?: 'canonical' | 'discovered';
 }
 
 export interface Rule {
@@ -645,6 +949,7 @@ export interface Rule {
   content?: string;
   scope?: 'global' | 'workspace';
   baseDir?: string;
+  source?: 'canonical' | 'discovered';
 }
 
 export interface AnalyticsData {
@@ -664,6 +969,33 @@ export interface AnalyticsData {
     model?: string;
     numChats?: number;
   }>;
+  providerUsage?: Array<{
+    provider: string;
+    runCount: number;
+    completedCount: number;
+    activeCount: number;
+    failedCount: number;
+    blockedCount: number;
+    cancelledCount: number;
+    promptRunCount: number;
+    tokenRuns: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    lastRunAt?: string;
+  }>;
+  providerUsageSummary?: {
+    totalRuns: number;
+    providers: number;
+    tokenRuns: number;
+    totalTokens: number;
+    windowDays: number;
+  };
+  dataSources?: {
+    antigravityRuntime: boolean;
+    gatewayRuns: boolean;
+  };
+  providerAwareNotice?: string;
 }
 
 export interface McpConfig {
@@ -671,9 +1003,20 @@ export interface McpConfig {
 }
 
 export interface McpServer {
-  name?: string;
+  name: string;
+  type?: 'stdio' | 'sse' | 'http';
   command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
   description?: string;
+}
+
+export interface McpToolInfo {
+  name: string;
+  serverName: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
 }
 
 // === Knowledge Item Types ===
@@ -685,6 +1028,11 @@ export interface KnowledgeItem {
   references: Array<{ type: string; value: string }>;
   timestamps: { created: string; modified: string; accessed: string };
   artifactFiles: string[];
+  workspaceUri?: string;
+  category?: string;
+  status?: string;
+  usageCount?: number;
+  lastAccessedAt?: string;
 }
 
 export interface KnowledgeDetail extends KnowledgeItem {
@@ -717,6 +1065,23 @@ export interface MessageMedia {
   inlineData?: string;
   uri?: string;
   thumbnail?: string;
+}
+
+export interface ConversationStructuredError {
+  userErrorMessage?: string;
+  modelErrorMessage?: string;
+  shortError?: string;
+  fullError?: string;
+  errorCode?: number | string;
+  details?: unknown;
+  rpcErrorDetails?: unknown[];
+}
+
+export interface ConversationStepErrorMessage extends ConversationStructuredError {
+  message?: string;
+  errorMessage?: string;
+  shouldShowUser?: boolean;
+  error?: ConversationStructuredError;
 }
 
 export interface Step {
@@ -789,10 +1154,7 @@ export interface Step {
     taskName?: string;
     task?: string;
   };
-  errorMessage?: {
-    message?: string;
-    errorMessage?: string;
-  };
+  errorMessage?: ConversationStepErrorMessage;
 }
 
 export interface StepsData {
@@ -903,6 +1265,7 @@ export type ApprovalRequestTypeFE =
   | 'provider_change'
   | 'scope_extension'
   | 'pipeline_approval'
+  | 'proposal_publish'
   | 'other';
 
 export type ApprovalUrgencyFE = 'low' | 'normal' | 'high' | 'critical';

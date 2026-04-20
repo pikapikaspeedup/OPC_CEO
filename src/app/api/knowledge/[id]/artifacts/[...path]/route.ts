@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
+import { getKnowledgeAsset, updateKnowledgeAssetArtifact } from '@/lib/knowledge';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,14 +19,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   try {
     const content = readFileSync(filePath, 'utf-8');
     return NextResponse.json({ path: path.join('/'), content });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string; path: string[] }> }) {
   const { id, path } = await params;
   const filePath = join(KNOWLEDGE_DIR, id, 'artifacts', ...path);
+  const storedAsset = getKnowledgeAsset(id);
 
   // Security: ensure the path doesn't escape the knowledge directory
   const resolved = join(KNOWLEDGE_DIR, id, 'artifacts', ...path);
@@ -42,6 +44,9 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     // Ensure parent directory exists
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, body.content, 'utf-8');
+    if (storedAsset) {
+      updateKnowledgeAssetArtifact(id, path.join('/'), body.content);
+    }
 
     // Update timestamps
     const tsPath = join(KNOWLEDGE_DIR, id, 'timestamps.json');
@@ -53,7 +58,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     writeFileSync(tsPath, JSON.stringify(timestamps, null, 2), 'utf-8');
 
     return NextResponse.json({ ok: true, path: path.join('/') });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

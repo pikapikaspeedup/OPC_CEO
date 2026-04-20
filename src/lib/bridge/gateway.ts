@@ -16,21 +16,33 @@ const log = createLogger('Gateway');
 
 // Re-export bridge modules for convenience
 export { discoverLanguageServers, getLanguageServer } from './discovery';
-export { getApiKey, getUserInfo, getWorkspaces, getPlaygrounds, getConversations, addLocalConversation } from './statedb';
+export {
+  getApiKey,
+  getUserInfo,
+  getWorkspaces,
+  getPlaygrounds,
+  getConversations,
+  addLocalConversation,
+  getConversationRecord,
+  findConversationRecordBySessionHandle,
+  resolveConversationRecord,
+  ensureConversationRecordForSession,
+  updateLocalConversation,
+} from './statedb';
 export * as grpc from './grpc';
 export { CodexMCPClient, codexExec, isCodexAvailable } from './codex-adapter';
 export type { CodexExecOptions, CodexMCPSessionOptions, CodexMCPResult, CodexSandbox, CodexApprovalPolicy } from './codex-adapter';
 
 // --- Helper: get all server connections ---
-export function getAllConnections() {
-  const servers = discoverLanguageServers();
+export async function getAllConnections() {
+  const servers = await discoverLanguageServers();
   const apiKey = getApiKey();
   if (!apiKey || servers.length === 0) return [];
   return servers.map(s => ({ ...s, apiKey }));
 }
 
-export function getDefaultConnection() {
-  const srv = getLanguageServer();
+export async function getDefaultConnection() {
+  const srv = await getLanguageServer();
   const apiKey = getApiKey();
   if (!srv || !apiKey) return null;
   return { ...srv, apiKey };
@@ -58,7 +70,7 @@ export function preRegisterOwner(cascadeId: string, info: OwnerInfo) {
 }
 
 /** Get the owner server connection for a specific conversation */
-export function getOwnerConnection(cascadeId: string) {
+export async function getOwnerConnection(cascadeId: string) {
   // 1. Check main ownerMap (populated by refreshOwnerMap)
   const owner = convOwnerMap.get(cascadeId);
   if (owner) {
@@ -72,16 +84,16 @@ export function getOwnerConnection(cascadeId: string) {
     return preReg;
   }
   // 3. Fallback
-  const conns = getAllConnections();
+  const conns = await getAllConnections();
   log.debug({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length, source: 'fallback' }, 'Owner lookup fallback');
   return conns.length > 0 ? conns[0] : null;
 }
 
 /** Refresh the owner map from all servers */
 export async function refreshOwnerMap() {
-  const conns = getAllConnections();
+  const conns = await getAllConnections();
   const serverWorkspaceMap = new Map<number, string>();
-  const servers = discoverLanguageServers();
+  const servers = await discoverLanguageServers();
   for (const conn of conns) {
     const srv = servers.find(s => s.port === conn.port);
     if (srv?.workspace) {
@@ -175,7 +187,7 @@ export async function tryAllServers<T>(
   fn: (port: number, csrf: string, apiKey: string) => Promise<T>,
   timeoutMs = 5000
 ): Promise<T> {
-  const conns = getAllConnections();
+  const conns = await getAllConnections();
   if (conns.length === 0) throw new Error('No language_server found');
 
   const errors: string[] = [];

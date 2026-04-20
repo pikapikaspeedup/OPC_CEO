@@ -1,17 +1,49 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./prompt-executor', () => ({
   executePrompt: vi.fn(async () => ({ runId: 'prompt-run-ceo-1' })),
 }));
 
-// Mock LLM to return null by default (forces regex fallback), override in specific tests
+vi.mock('./dispatch-service', () => ({
+  executeDispatch: vi.fn(async () => ({ runId: 'dispatch-run-ceo-1' })),
+}));
+
+vi.mock('./project-registry', () => ({
+  createProject: vi.fn((input: {
+    workspace: string;
+    name: string;
+    goal: string;
+    templateId?: string;
+    projectType: string;
+    skillHint?: string;
+  }) => ({
+    projectId: 'project-ceo-1',
+    workspace: input.workspace,
+    name: input.name,
+    goal: input.goal,
+    templateId: input.templateId,
+    projectType: input.projectType,
+    skillHint: input.skillHint,
+  })),
+  listProjects: vi.fn(() => []),
+}));
+
 vi.mock('./llm-oneshot', () => ({
   callLLMOneshot: vi.fn(async () => { throw new Error('LLM not available in test'); }),
 }));
 
+const mockAppendCEODecision = vi.fn();
+const mockUpdateCEOActiveFocus = vi.fn();
+vi.mock('../organization', () => ({
+  appendCEODecision: (...args: unknown[]) => mockAppendCEODecision(...args),
+  updateCEOActiveFocus: (...args: unknown[]) => mockUpdateCEOActiveFocus(...args),
+}));
+
 import { executePrompt } from './prompt-executor';
+import { executeDispatch } from './dispatch-service';
 import { callLLMOneshot } from './llm-oneshot';
-import { buildSchedulerIntentPreview, processCEOCommand } from './ceo-agent';
+import { createProject } from './project-registry';
+import { processCEOCommand } from './ceo-agent';
 import type { DepartmentConfig } from '../types';
 
 function makeDepartments(): Map<string, DepartmentConfig> {
@@ -38,162 +70,48 @@ function makeDepartments(): Map<string, DepartmentConfig> {
 beforeEach(() => {
   vi.mocked(executePrompt).mockClear();
   vi.mocked(executePrompt).mockResolvedValue({ runId: 'prompt-run-ceo-1' });
+  vi.mocked(executeDispatch).mockClear();
+  vi.mocked(executeDispatch).mockResolvedValue({ runId: 'dispatch-run-ceo-1' });
+  vi.mocked(createProject).mockClear();
+  vi.mocked(callLLMOneshot).mockReset();
+  vi.mocked(callLLMOneshot).mockRejectedValue(new Error('LLM not available in test'));
+  mockAppendCEODecision.mockReset();
+  mockUpdateCEOActiveFocus.mockReset();
 });
 
-describe('buildSchedulerIntentPreview', () => {
-  it('parses weekday department report requests into create-project jobs', () => {
-    const preview = buildSchedulerIntentPreview(
-      '每天工作日上午 9 点让市场部生成日报，目标是汇总当前项目风险',
-      makeDepartments(),
-    );
-
-    expect(preview.schedule).toMatchObject({
-      type: 'cron',
-      cronExpression: '0 9 * * 1-5',
+describe('processCEOCommand — playbook-driven routing', () => {
+  it('injects CEO playbook content into the LLM parser prompt', async () => {
+    vi.mocked(callLLMOneshot).mockImplementationOnce(async (prompt) => {
+      expect(prompt).toContain('<ceo-playbook>');
+      expect(prompt).toContain('CEO 决策与派发工作流');
+      expect(prompt).toContain('<ceo-scheduler-playbook>');
+      expect(prompt).toContain('CEO 定时调度 + 即时执行工作流');
+      expect(prompt).toContain('部门分配、是否走 template、是否走 prompt，必须由 playbook');
+      return JSON.stringify({
+        isSchedule: false,
+        isImmediate: false,
+        isStatusQuery: true,
+        scheduleType: null,
+        cronExpression: null,
+        intervalMs: null,
+        scheduledAt: null,
+        scheduleLabel: null,
+        actionKind: 'create-project',
+        departmentName: null,
+        projectName: null,
+        templateId: null,
+        goal: '状态',
+        skillHint: null,
+      });
     });
-    expect(preview.actionDraft).toMatchObject({
-      kind: 'create-project',
-      departmentWorkspaceUri: 'file:///Users/darrel/Documents/marketing',
-      templateId: 'universal-batch-template',
-    });
-  });
 
-  it('parses explicit once schedules', () => {
-    const preview = buildSchedulerIntentPreview(
-      '明天上午 9 点让市场部创建一个 ad-hoc 项目，目标是整理 backlog',
-      makeDepartments(),
-    );
-
-    expect(preview.schedule?.type).toBe('once');
-    expect(preview.actionDraft).toMatchObject({
-      kind: 'create-project',
-      departmentWorkspaceUri: 'file:///Users/darrel/Documents/marketing',
-    });
-  });
-
-  it('returns missing_schedule when cadence is absent', () => {
-    const preview = buildSchedulerIntentPreview('让市场部生成日报', makeDepartments());
-    expect(preview.error).toBe('missing_schedule');
-    expect(preview.schedule).toBeNull();
-  });
-
-  it('keeps create-project intent while allowing explicit template selection', () => {
-    const preview = buildSchedulerIntentPreview(
-      '明天上午 10 点让设计部创建一个 ad-hoc 项目，模板 ux-driven-dev-template，目标是评审首页交互体验',
-      makeDepartments(),
-    );
-
-    expect(preview.actionDraft).toMatchObject({
-      kind: 'create-project',
-      departmentWorkspaceUri: 'file:///Users/darrel/Documents/design',
-      templateId: 'ux-driven-dev-template',
-    });
-  });
-
-  it('degrades to project-only when no unique template and no execution intent', () => {
-    const preview = buildSchedulerIntentPreview(
-      '明天上午 10 点让设计部创建一个 ad-hoc 项目，只创建项目，目标是整理 backlog',
-      makeDepartments(),
-    );
-
-    expect(preview.actionDraft).toMatchObject({
-      kind: 'create-project',
-      departmentWorkspaceUri: 'file:///Users/darrel/Documents/design',
-    });
-    expect(preview.actionDraft && 'templateId' in preview.actionDraft ? preview.actionDraft.templateId : undefined).toBeUndefined();
-  });
-
-  it('routes to dispatch-prompt when no unique template but has execution intent keywords', () => {
-    const depts = new Map([
-      ...makeDepartments(),
-      ['file:///Users/darrel/Documents/ai-news', {
-        name: 'AI 资讯部',
-        type: 'operations',
-        templateIds: [],
-        skills: [],
-        okr: null,
-        description: '负责 AI 领域情报收集',
-      }],
-    ]);
-
-    const preview = buildSchedulerIntentPreview(
-      '明天上午 10 点让 AI 资讯部执行一次信号梳理',
-      depts,
-    );
-
-    expect(preview.actionDraft).toMatchObject({
-      kind: 'dispatch-prompt',
-      workspace: 'file:///Users/darrel/Documents/ai-news',
-    });
-    expect(preview.actionDraft && 'prompt' in preview.actionDraft ? preview.actionDraft.prompt : '').toContain('信号梳理');
-  });
-});
-
-describe('processCEOCommand — immediate Prompt Mode', () => {
-  it('dispatches immediate prompt when command has execution intent and matches a department', async () => {
-    const result = await processCEOCommand('让市场部分析最近一周的竞品动态', makeDepartments());
+    const result = await processCEOCommand('公司状态如何', makeDepartments());
 
     expect(result.success).toBe(true);
-    expect(result.action).toBe('dispatch_prompt');
-    expect(result.runId).toBe('prompt-run-ceo-1');
-    expect(result.message).toContain('市场部');
-    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
-      workspace: 'file:///Users/darrel/Documents/marketing',
-      executionTarget: expect.objectContaining({ kind: 'prompt' }),
-    }));
+    expect(result.action).toBe('info');
   });
 
-  it('falls back to report_to_human when no department matches and no schedule intent', async () => {
-    const result = await processCEOCommand('看看天气预报', makeDepartments());
-
-    expect(result.success).toBe(false);
-    expect(result.action).toBe('report_to_human');
-    expect(vi.mocked(executePrompt)).not.toHaveBeenCalled();
-  });
-
-  it('returns failure message when executePrompt throws', async () => {
-    vi.mocked(executePrompt).mockRejectedValueOnce(new Error('no provider'));
-
-    const result = await processCEOCommand('让市场部执行一次内部审查', makeDepartments());
-
-    expect(result.success).toBe(false);
-    expect(result.action).toBe('report_to_human');
-    expect(result.message).toContain('no provider');
-  });
-});
-
-describe('processCEOCommand — LLM-based parsing', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('uses LLM result when available for scheduling', async () => {
-    vi.mocked(callLLMOneshot).mockResolvedValueOnce(JSON.stringify({
-      isSchedule: true,
-      isImmediate: false,
-      isStatusQuery: false,
-      scheduleType: 'cron',
-      cronExpression: '0 15 * * 1,5',
-      intervalMs: null,
-      scheduledAt: null,
-      scheduleLabel: '每周一和周五 15:00',
-      actionKind: 'dispatch-prompt',
-      departmentName: '市场部',
-      projectName: null,
-      templateId: null,
-      goal: '分析竞品动态',
-      skillHint: null,
-    }));
-
-    const result = await processCEOCommand('每周一和周五下午3点让市场部分析竞品动态', makeDepartments());
-
-    expect(result.success).toBe(true);
-    expect(result.action).toBe('create_scheduler_job');
-    expect(result.message).toContain('15:00');
-    expect(result.message).toContain('Prompt Mode');
-  });
-
-  it('uses LLM result for immediate execution', async () => {
+  it('maps LLM immediate dispatch-prompt output into an ad-hoc project prompt run', async () => {
     vi.mocked(callLLMOneshot).mockResolvedValueOnce(JSON.stringify({
       isSchedule: false,
       isImmediate: true,
@@ -214,16 +132,96 @@ describe('processCEOCommand — LLM-based parsing', () => {
     const result = await processCEOCommand('让市场部分析竞品动态', makeDepartments());
 
     expect(result.success).toBe(true);
-    expect(result.action).toBe('dispatch_prompt');
+    expect(result.action).toBe('create_project');
+    expect(result.projectId).toBe('project-ceo-1');
     expect(result.runId).toBe('prompt-run-ceo-1');
+    expect(vi.mocked(createProject)).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: 'file:///Users/darrel/Documents/marketing',
+      projectType: 'adhoc',
+    }));
+    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: 'file:///Users/darrel/Documents/marketing',
+      projectId: 'project-ceo-1',
+      executionTarget: expect.objectContaining({ kind: 'prompt' }),
+    }));
+    expect(mockAppendCEODecision).toHaveBeenCalled();
+    expect(mockUpdateCEOActiveFocus).toHaveBeenCalledWith(['分析竞品动态']);
   });
 
-  it('falls back to regex when LLM fails', async () => {
-    vi.mocked(callLLMOneshot).mockRejectedValueOnce(new Error('timeout'));
+  it('maps LLM immediate create-project output with templateId into template dispatch', async () => {
+    vi.mocked(callLLMOneshot).mockResolvedValueOnce(JSON.stringify({
+      isSchedule: false,
+      isImmediate: true,
+      isStatusQuery: false,
+      scheduleType: null,
+      cronExpression: null,
+      intervalMs: null,
+      scheduledAt: null,
+      scheduleLabel: null,
+      actionKind: 'create-project',
+      departmentName: '市场部',
+      projectName: null,
+      templateId: 'coding-basic-template',
+      goal: '处理一个即时任务',
+      skillHint: null,
+    }));
 
+    const result = await processCEOCommand(
+      '让市场部使用 coding-basic-template 处理一个即时任务',
+      makeDepartments(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('create_project');
+    expect(result.projectId).toBe('project-ceo-1');
+    expect(result.runId).toBe('dispatch-run-ceo-1');
+    expect(vi.mocked(executeDispatch)).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-ceo-1',
+      templateId: 'coding-basic-template',
+      workspace: 'file:///Users/darrel/Documents/marketing',
+    }));
+  });
+
+  it('maps LLM scheduled dispatch-prompt output into a scheduler job', async () => {
+    vi.mocked(callLLMOneshot).mockResolvedValueOnce(JSON.stringify({
+      isSchedule: true,
+      isImmediate: false,
+      isStatusQuery: false,
+      scheduleType: 'interval',
+      cronExpression: null,
+      intervalMs: 5000,
+      scheduledAt: null,
+      scheduleLabel: '每隔5秒',
+      actionKind: 'dispatch-prompt',
+      departmentName: '市场部',
+      projectName: null,
+      templateId: null,
+      goal: '分析竞品动态',
+      skillHint: null,
+    }));
+
+    const result = await processCEOCommand('每隔5秒让市场部分析竞品动态', makeDepartments());
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('create_scheduler_job');
+    expect(result.message).toContain('每隔5秒');
+    expect(result.message).toContain('Prompt Mode');
+  });
+
+  it('falls back to status summary only when LLM/playbook parsing is unavailable', async () => {
     const result = await processCEOCommand('状态', makeDepartments());
 
     expect(result.success).toBe(true);
     expect(result.action).toBe('info');
+  });
+
+  it('refuses to auto-route execution when LLM/playbook parsing is unavailable', async () => {
+    const result = await processCEOCommand('让市场部分析竞品动态', makeDepartments());
+
+    expect(result.success).toBe(false);
+    expect(result.action).toBe('report_to_human');
+    expect(result.message).toContain('避免用硬编码规则');
+    expect(vi.mocked(executePrompt)).not.toHaveBeenCalled();
+    expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
   });
 });

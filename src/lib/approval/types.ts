@@ -22,6 +22,7 @@ export type ApprovalRequestType =
   | 'provider_change'    // 请求切换 Provider
   | 'scope_extension'    // 请求扩展写入范围
   | 'pipeline_approval'  // Pipeline 阶段卡点审批
+  | 'proposal_publish'   // Evolution proposal 发布审批
   | 'other';
 
 export type ApprovalUrgency = 'low' | 'normal' | 'high' | 'critical';

@@ -1,0 +1,7 @@
+{
+  "goal": "Reply with exactly: NATIVE_CODEX_SMOKE_OK",
+  "executionTarget": {
+    "kind": "prompt"
+  },
+  "runId": "16b73574-65e2-4cab-ba60-d4c7eaf5a4d8"
+}

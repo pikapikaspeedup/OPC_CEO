@@ -60,8 +60,9 @@ export function readDeliveryPacket(
     }
 
     return raw as DevelopmentDeliveryPacket;
-  } catch (err: any) {
-    log.error({ runId: shortRunId, err: err.message }, 'Failed to parse delivery-packet.json');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ runId: shortRunId, err: message }, 'Failed to parse delivery-packet.json');
     return undefined;
   }
 }
@@ -107,8 +108,9 @@ export function buildWriteScopeAudit(
     log.info({ runId: shortRunId, withinScope: audit.withinScope, outOfScope: outOfScopeFiles.length }, 'Scope audit written');
 
     return audit;
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Failed to build scope audit');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn({ runId: shortRunId, err: message }, 'Failed to build scope audit');
     return undefined;
   }
 }
@@ -125,6 +127,12 @@ export function scanArtifactManifest(
 ): ArtifactManifest {
   const items: ArtifactRef[] = [];
   const allowedExtensions = new Set(['.md', '.json', '.txt']);
+  const ignoredPromptRootFiles = new Set([
+    'artifacts.manifest.json',
+    'result-envelope.json',
+    'result.json',
+    'task-envelope.json',
+  ]);
 
   const scanDirs = [
     { dir: 'specs', kindPrefix: 'product' },
@@ -164,9 +172,35 @@ export function scanArtifactManifest(
     }
   }
 
+  function scanPromptRootArtifacts(): void {
+    if (executionTarget?.kind !== 'prompt' || !fs.existsSync(artifactAbsDir)) return;
+    try {
+      const entries = fs.readdirSync(artifactAbsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (ignoredPromptRootFiles.has(entry.name)) continue;
+        const ext = path.extname(entry.name).toLowerCase();
+        if (!allowedExtensions.has(ext)) continue;
+
+        const baseName = path.basename(entry.name, ext);
+        items.push({
+          id: randomUUID(),
+          kind: `prompt.${baseName}`,
+          title: baseName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          path: entry.name,
+          format: ext.slice(1) as 'md' | 'json' | 'txt',
+          sourceRunId: runId,
+        });
+      }
+    } catch {
+      // Directory read failed, skip
+    }
+  }
+
   for (const { dir, kindPrefix } of scanDirs) {
     scanRecursive(path.join(artifactAbsDir, dir), kindPrefix);
   }
+  scanPromptRootArtifacts();
   return {
     runId,
     ...(templateId ? { templateId } : {}),
@@ -215,8 +249,9 @@ export function copyUpstreamArtifacts(
     }
 
     log.info({ runId: shortRunId, count: inputArtifacts.length }, 'Upstream artifacts copied to input/');
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Failed to copy upstream artifacts (non-fatal)');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn({ runId: shortRunId, err: message }, 'Failed to copy upstream artifacts (non-fatal)');
   }
 }
 
@@ -257,7 +292,8 @@ export function writeEnvelopeFile(artifactAbsDir: string, filename: string, data
       fs.mkdirSync(artifactAbsDir, { recursive: true });
     }
     fs.writeFileSync(path.join(artifactAbsDir, filename), JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err: any) {
-    log.warn({ filename, err: err.message }, 'Failed to write envelope file');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn({ filename, err: message }, 'Failed to write envelope file');
   }
 }

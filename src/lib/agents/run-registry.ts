@@ -1,13 +1,13 @@
 /**
  * V2 Multi-Agent System — Run Registry
  *
- * In-memory store for AgentRunState with JSON file persistence.
+ * In-memory store for AgentRunState with SQLite-backed persistence.
  * Survives dev-mode restarts. In-progress runs are marked failed on recovery.
  * V2: supports envelope fields, templateId, sourceRunIds.
  */
 
 import { randomUUID } from 'crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import type {
   AgentRunState,
@@ -19,15 +19,10 @@ import type {
 } from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
 import { createLogger } from '../logger';
-import { GATEWAY_HOME, RUNS_FILE } from './gateway-home';
+import { appendRunHistoryEntry } from './run-history';
+import { listRunRecords, syncRunArtifactsToDeliverables, upsertRunRecord } from '../storage/gateway-db';
 
 const log = createLogger('RunRegistry');
-
-// ---------------------------------------------------------------------------
-// Persistence path
-// ---------------------------------------------------------------------------
-
-const PERSIST_FILE = RUNS_FILE;
 
 // ---------------------------------------------------------------------------
 // In-memory store (Preserved across Next.js HMR)
@@ -48,15 +43,33 @@ if (process.env.NODE_ENV !== 'production') {
 
 function saveToDisk(): void {
   try {
-    if (!existsSync(GATEWAY_HOME)) {
-      mkdirSync(GATEWAY_HOME, { recursive: true });
-    }
     const entries = Array.from(runs.values());
-    writeFileSync(PERSIST_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+    for (const run of entries) {
+      upsertRunRecord(run);
+    }
     log.debug({ count: entries.length }, 'Runs persisted');
   } catch (err: any) {
     log.error({ err: err.message }, 'Failed to persist runs');
   }
+}
+
+function artifactSignature(run: AgentRunState): string {
+  return JSON.stringify(
+    (run.resultEnvelope?.outputArtifacts || []).map((artifact) => ({
+      path: artifact.path,
+      title: artifact.title,
+      kind: artifact.kind,
+    })),
+  );
+}
+
+function verificationSignature(run: AgentRunState): string {
+  return JSON.stringify({
+    verificationPassed: run.verificationPassed,
+    reportedEventDate: run.reportedEventDate,
+    reportedEventCount: run.reportedEventCount,
+    reportApiResponse: run.reportApiResponse,
+  });
 }
 
 /**
@@ -122,9 +135,7 @@ function loadFromDisk(): void {
       return;
     }
 
-    if (!existsSync(PERSIST_FILE)) return;
-    const raw = readFileSync(PERSIST_FILE, 'utf-8');
-    const entries: AgentRunState[] = JSON.parse(raw);
+    const entries = listRunRecords();
     let recovered = 0;
     let autoRecovered = 0;
     let skippedLegacy = 0;
@@ -135,12 +146,12 @@ function loadFromDisk(): void {
         log.warn({ runId: entry.runId }, 'Skipping persisted run without stageId/pipelineStageId; legacy fallback removed');
         continue;
       }
-      const { groupId: _legacyGroupId, ...rest } = entry as AgentRunState & { groupId?: string };
-      const normalizedEntry: AgentRunState = {
-        ...rest,
+      const normalizedEntry = {
+        ...(entry as AgentRunState & { groupId?: string }),
         stageId: canonicalStageId,
         pipelineStageId: entry.pipelineStageId || canonicalStageId,
       };
+      delete normalizedEntry.groupId;
       // In-progress runs that survived a true process restart.
       // Try to recover from completed artifacts, otherwise mark failed.
       if (!TERMINAL_STATUSES.has(normalizedEntry.status)) {
@@ -154,6 +165,9 @@ function loadFromDisk(): void {
         recovered++;
       }
       runs.set(normalizedEntry.runId, normalizedEntry);
+      if (normalizedEntry.resultEnvelope?.outputArtifacts?.length) {
+        syncRunArtifactsToDeliverables(normalizedEntry);
+      }
     }
     log.info({ total: entries.length, recovered, autoRecovered, skippedLegacy }, 'Runs loaded from disk');
 
@@ -193,6 +207,12 @@ export function createRun(input: {
   executorKind?: ExecutorKind;
   executionTarget?: ExecutionTarget;
   triggerContext?: TriggerContext;
+  // V6.1: Provider tracking
+  provider?: string;
+  resolvedWorkflowRef?: string;
+  resolvedSkillRefs?: string[];
+  resolutionReason?: string;
+  promptResolution?: AgentRunState['promptResolution'];
 }): AgentRunState {
   const run: AgentRunState = {
     runId: randomUUID(),
@@ -215,6 +235,12 @@ export function createRun(input: {
     pipelineId: input.pipelineId,
     pipelineStageId: input.pipelineStageId ?? (input.templateId ? input.stageId : undefined),
     pipelineStageIndex: input.pipelineStageIndex,
+    // V6.1: Provider tracking
+    provider: input.provider,
+    resolvedWorkflowRef: input.resolvedWorkflowRef,
+    resolvedSkillRefs: input.resolvedSkillRefs,
+    resolutionReason: input.resolutionReason,
+    promptResolution: input.promptResolution,
   };
   // Runtime will backfill runId into taskEnvelope after creation
   if (run.taskEnvelope) {
@@ -222,6 +248,17 @@ export function createRun(input: {
   }
   runs.set(run.runId, run);
   saveToDisk();
+  appendRunHistoryEntry({
+    runId: run.runId,
+    provider: run.provider,
+    eventType: 'run.created',
+    details: {
+      projectId: run.projectId,
+      stageId: run.stageId,
+      executorKind: run.executorKind,
+      pipelineStageId: run.pipelineStageId,
+    },
+  });
   log.info({
     runId: run.runId.slice(0, 8),
     stageId: run.stageId,
@@ -239,6 +276,10 @@ export function updateRun(
   if (!run) return null;
 
   const prevStatus = run.status;
+  const prevSummary = run.result?.summary;
+  const prevResultStatus = run.result?.status;
+  const prevArtifacts = artifactSignature(run);
+  const prevVerification = verificationSignature(run);
   Object.assign(run, updates);
 
   // Auto-set finishedAt for terminal statuses
@@ -254,10 +295,78 @@ export function updateRun(
   saveToDisk();
   log.debug({ runId: runId.slice(0, 8), status: run.status }, 'Run updated');
 
+  if (run.resultEnvelope?.outputArtifacts?.length) {
+    syncRunArtifactsToDeliverables(run);
+  }
+
   // Pipeline state auto-sync: when a run transitions to terminal status,
   // propagate the change to the Project's pipelineState
   if (updates.status && updates.status !== prevStatus && run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
     syncRunStatusToProject(run);
+  }
+
+  if (updates.status && updates.status !== prevStatus) {
+    appendRunHistoryEntry({
+      runId,
+      provider: run.provider,
+      sessionHandle: run.sessionProvenance?.handle,
+      eventType: 'run.status_changed',
+      details: {
+        from: prevStatus,
+        to: run.status,
+        lastError: run.lastError,
+      },
+    });
+  }
+
+  if (run.result?.summary && (run.result.summary !== prevSummary || run.result.status !== prevResultStatus)) {
+    appendRunHistoryEntry({
+      runId,
+      provider: run.provider,
+      sessionHandle: run.sessionProvenance?.handle,
+      eventType: 'result.discovered',
+      details: {
+        status: run.result.status,
+        summary: run.result.summary,
+      },
+    });
+  }
+
+  if (run.resultEnvelope?.outputArtifacts?.length && artifactSignature(run) !== prevArtifacts) {
+    appendRunHistoryEntry({
+      runId,
+      provider: run.provider,
+      sessionHandle: run.sessionProvenance?.handle,
+      eventType: 'artifact.discovered',
+      details: {
+        count: run.resultEnvelope.outputArtifacts.length,
+        items: run.resultEnvelope.outputArtifacts.map((artifact) => ({
+          title: artifact.title,
+          kind: artifact.kind,
+          path: artifact.path,
+        })),
+      },
+    });
+  }
+
+  if (verificationSignature(run) !== prevVerification && (
+    run.verificationPassed !== undefined
+    || run.reportedEventDate
+    || run.reportedEventCount !== undefined
+    || run.reportApiResponse
+  )) {
+    appendRunHistoryEntry({
+      runId,
+      provider: run.provider,
+      sessionHandle: run.sessionProvenance?.handle,
+      eventType: 'verification.discovered',
+      details: {
+        verificationPassed: run.verificationPassed,
+        reportedEventDate: run.reportedEventDate,
+        reportedEventCount: run.reportedEventCount,
+        reportApiResponse: run.reportApiResponse,
+      },
+    });
   }
 
   return run;
@@ -352,7 +461,7 @@ export function getRun(runId: string): AgentRunState | null {
   return runs.get(runId) ?? null;
 }
 
-export function listRuns(filter?: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string; executorKind?: string }): AgentRunState[] {
+export function listRuns(filter?: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string; executorKind?: string; schedulerJobId?: string }): AgentRunState[] {
   let all = Array.from(runs.values());
   if (filter?.status) {
     all = all.filter(r => r.status === filter.status);
@@ -368,6 +477,9 @@ export function listRuns(filter?: { status?: RunStatus; stageId?: string; review
   }
   if (filter?.executorKind) {
     all = all.filter(r => r.executorKind === filter.executorKind);
+  }
+  if (filter?.schedulerJobId) {
+    all = all.filter(r => r.triggerContext?.schedulerJobId === filter.schedulerJobId);
   }
   // Return newest first
   return all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

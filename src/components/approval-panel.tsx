@@ -36,6 +36,7 @@ function TypeIcon({ type }: { type: ApprovalRequestFE['type'] }) {
     provider_change: '🔄',
     scope_extension: '📂',
     pipeline_approval: '🔗',
+    proposal_publish: '🧬',
     other: '📋',
   };
   return <span className="text-sm">{icons[type] || '📋'}</span>;

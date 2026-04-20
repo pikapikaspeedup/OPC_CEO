@@ -10,6 +10,7 @@
  */
 
 import { createLogger } from '../logger';
+import { appendRunHistoryEntry } from '../agents/run-history';
 import {
   discoverLanguageServers,
   getApiKey,
@@ -45,7 +46,7 @@ export class AntigravityExecutor implements TaskExecutor {
     const wsUri = opts.workspace.startsWith('file://') ? opts.workspace : `file://${opts.workspace}`;
 
     // 1. Find the language server
-    const servers = discoverLanguageServers();
+    const servers = await discoverLanguageServers();
     const server = servers.find(
       (s) => s.workspace && (
         s.workspace.includes(opts.workspace) || opts.workspace.includes(s.workspace)
@@ -100,6 +101,27 @@ export class AntigravityExecutor implements TaskExecutor {
       server.port, server.csrf, apiKey, cascadeId,
       opts.prompt, model, false, undefined, 'ARTIFACT_REVIEW_MODE_TURBO',
     );
+    if (opts.runId) {
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: cascadeId,
+        eventType: 'provider.dispatch',
+        details: {
+          cascadeId,
+          workspace: opts.workspace,
+          model,
+          promptLength: opts.prompt.length,
+        },
+      });
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: cascadeId,
+        eventType: 'conversation.message.user',
+        details: { content: opts.prompt },
+      });
+    }
 
     // Phase 1: Return handle immediately — caller watches for completion
     return {
@@ -116,7 +138,7 @@ export class AntigravityExecutor implements TaskExecutor {
    * Used for nudge/revise operations.
    */
   async appendMessage(handle: string, opts: AppendMessageOptions): Promise<TaskExecutionResult> {
-    const servers = discoverLanguageServers();
+    const servers = await discoverLanguageServers();
     const apiKey = getApiKey();
     if (!apiKey) throw new Error('No API key available');
 
@@ -129,6 +151,15 @@ export class AntigravityExecutor implements TaskExecutor {
       server.port, server.csrf, apiKey, handle,
       opts.prompt, opts.model || 'MODEL_PLACEHOLDER_M26',
     );
+    if (opts.runId) {
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: handle,
+        eventType: 'conversation.message.user',
+        details: { content: opts.prompt },
+      });
+    }
 
     return {
       handle,
@@ -143,7 +174,7 @@ export class AntigravityExecutor implements TaskExecutor {
    * Cancel an in-progress conversation.
    */
   async cancel(handle: string): Promise<void> {
-    const servers = discoverLanguageServers();
+    const servers = await discoverLanguageServers();
     const apiKey = getApiKey();
     if (!apiKey) return;
 

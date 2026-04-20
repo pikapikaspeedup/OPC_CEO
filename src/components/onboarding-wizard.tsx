@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { api } from '@/lib/api';
+import SkillBrowser from '@/components/skill-browser';
 import type { DepartmentConfig } from '@/lib/types';
 
 // ─── Preset Types ────────────────────────────────────────────────────────────
@@ -72,6 +73,22 @@ export default function OnboardingWizard({
   const wsIndex = step - 1;
   const currentWs = workspaces[wsIndex];
   const currentCfg = stepConfigs[wsIndex];
+  const currentDept = currentWs ? departments.get(currentWs.uri) : undefined;
+  const currentSkills = currentDept?.skills ?? [];
+  const previewSkillMap = new Map<string, typeof currentSkills[number]>();
+  for (const ws of workspaces) {
+    for (const skill of departments.get(ws.uri)?.skills ?? []) {
+      if (!previewSkillMap.has(skill.skillId)) {
+        previewSkillMap.set(skill.skillId, skill);
+      }
+    }
+  }
+  const previewSkills = Array.from(previewSkillMap.values());
+  const currentSkillSummary = {
+    total: currentSkills.length,
+    withWorkflow: currentSkills.filter(skill => skill.workflowRef?.trim()).length,
+    withFallback: currentSkills.filter(skill => (skill.skillRefs ?? []).some(ref => ref.trim())).length,
+  };
 
   // ── Mutators ────────────────────────────────────────────────────────────
 
@@ -178,6 +195,11 @@ export default function OnboardingWizard({
                   配置部门名称、类型和定位后，CEO 就能精准派活了。
                 </DialogDescription>
               </DialogHeader>
+              <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground leading-relaxed">
+                Onboarding 负责部门身份初始化；更细的能力声明会在部门配置里维护，并按
+                <span className="text-foreground font-medium"> skill → workflowRef → skillRefs </span>
+                的顺序执行。
+              </div>
               <div className="flex justify-between pt-2">
                 <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => onOpenChange(false)}>
                   跳过
@@ -227,6 +249,27 @@ export default function OnboardingWizard({
                     className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none"
                   />
                   <p className="text-xs text-muted-foreground">CEO 根据定位来匹配部门</p>
+                </div>
+
+                <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-foreground">能力声明预览</div>
+                    <div className="text-[11px] text-muted-foreground">skill → workflowRef → skillRefs</div>
+                  </div>
+                  <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-3">
+                    <div>技能数：<span className="text-foreground font-medium">{currentSkillSummary.total}</span></div>
+                    <div>绑定 Workflow：<span className="text-foreground font-medium">{currentSkillSummary.withWorkflow}</span></div>
+                    <div>Fallback 列表：<span className="text-foreground font-medium">{currentSkillSummary.withFallback}</span></div>
+                  </div>
+                  {currentSkills.length > 0 ? (
+                    <div className="max-h-56 overflow-y-auto pr-1">
+                      <SkillBrowser skills={currentSkills} />
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground leading-relaxed">
+                      这个部门还没有配置技能。完成初始化后，可以到部门配置页补全能力声明。
+                    </div>
+                  )}
                 </div>
 
                 {/* Type */}
@@ -310,6 +353,15 @@ export default function OnboardingWizard({
                     );
                   })}
                 </div>
+                {previewSkills.length > 0 && (
+                  <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-foreground">部门能力预览</div>
+                      <div className="text-[11px] text-muted-foreground">skill → workflowRef → skillRefs</div>
+                    </div>
+                    <SkillBrowser skills={previewSkills} />
+                  </div>
+                )}
                 <p className="text-[11px] text-muted-foreground leading-relaxed pt-1">
                   在 CEO 指令框输入任务 → 自动匹配最合适的部门
                 </p>

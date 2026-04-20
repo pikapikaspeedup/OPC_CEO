@@ -4,12 +4,11 @@ import path from 'path';
 import type { BranchProgress, ProjectDefinition, ProjectPipelineState, PipelineStageProgress } from './project-types';
 import { AssetLoader } from './asset-loader';
 import { createLogger } from '../logger';
-import { GATEWAY_HOME, PROJECTS_FILE, ARTIFACT_ROOT_DIR } from './gateway-home';
+import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { resolveStageId } from './pipeline/pipeline-graph';
+import { listProjectRecords, upsertProjectRecord } from '../storage/gateway-db';
 
 const log = createLogger('ProjectRegistry');
-
-const PERSIST_FILE = PROJECTS_FILE;
 
 // ---------------------------------------------------------------------------
 // In-memory store (Preserved across Next.js HMR via globalThis)
@@ -26,11 +25,10 @@ if (process.env.NODE_ENV !== 'production') {
 
 function saveToDisk(): void {
   try {
-    if (!existsSync(GATEWAY_HOME)) {
-      mkdirSync(GATEWAY_HOME, { recursive: true });
-    }
     const entries = Array.from(projects.values());
-    writeFileSync(PERSIST_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+    for (const project of entries) {
+      upsertProjectRecord(project);
+    }
 
     // V3.6 Fix (E4): Synchronize per-project `project.json`
     for (const project of entries) {
@@ -57,9 +55,7 @@ function loadFromDisk(): void {
       return;
     }
 
-    if (!existsSync(PERSIST_FILE)) return;
-    const raw = readFileSync(PERSIST_FILE, 'utf-8');
-    const entries: ProjectDefinition[] = JSON.parse(raw);
+    const entries = listProjectRecords();
     let skippedLegacy = 0;
     for (const entry of entries) {
       if (entry.pipelineState) {

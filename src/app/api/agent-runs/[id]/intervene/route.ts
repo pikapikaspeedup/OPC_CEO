@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getRun } from '@/lib/agents/run-registry';
 import { interveneRun, cancelRun, InterventionConflictError } from '@/lib/agents/group-runtime';
-import { cancelPromptRun } from '@/lib/agents/prompt-executor';
+import { cancelPromptRun, evaluatePromptRun } from '@/lib/agents/prompt-executor';
 import { createLogger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
@@ -27,9 +27,9 @@ export async function POST(
       );
     }
 
-    if (run?.executorKind === 'prompt' && action !== 'cancel') {
+    if (run?.executorKind === 'prompt' && action !== 'cancel' && action !== 'evaluate') {
       return NextResponse.json(
-        { error: 'Prompt-mode runs do not support interventions yet. Use cancel only.' },
+        { error: 'Prompt-mode runs currently support cancel and evaluate only.' },
         { status: 400 },
       );
     }
@@ -45,26 +45,29 @@ export async function POST(
         resultPromise = run?.executorKind === 'prompt'
           ? cancelPromptRun(runId)
           : cancelRun(runId);
+      } else if (action === 'evaluate' && run?.executorKind === 'prompt') {
+        resultPromise = evaluatePromptRun(runId);
       } else {
         resultPromise = interveneRun(runId, action, prompt, roleId);
       }
 
-      resultPromise.catch((err: any) => {
-        log.error({ runId: runId.slice(0, 8), err: err.message }, 'Intervention failed');
+      resultPromise.catch((error: unknown) => {
+        log.error({ runId: runId.slice(0, 8), err: error instanceof Error ? error.message : String(error) }, 'Intervention failed');
       });
-    } catch (err: any) {
-      if (err instanceof InterventionConflictError) {
-        return NextResponse.json({ error: err.message }, { status: 409 });
+    } catch (error: unknown) {
+      if (error instanceof InterventionConflictError) {
+        return NextResponse.json({ error: error.message }, { status: 409 });
       }
-      throw err;
+      throw error;
     }
 
     return NextResponse.json(
       { status: 'intervening', action, runId },
       { status: 202 },
     );
-  } catch (err: any) {
-    log.error({ err: err.message }, 'Intervention request failed');
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error({ err: message }, 'Intervention request failed');
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

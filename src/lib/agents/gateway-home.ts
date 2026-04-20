@@ -10,7 +10,7 @@
 
 import { homedir } from 'os';
 import path from 'path';
-import { existsSync, mkdirSync, readdirSync, copyFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync, cpSync } from 'fs';
 
 const DEFAULT_HOME = path.join(homedir(), '.gemini', 'antigravity', 'gateway');
 
@@ -20,7 +20,9 @@ if (!existsSync(GATEWAY_HOME)) {
   mkdirSync(GATEWAY_HOME, { recursive: true });
 }
 
-// Registry files
+// Legacy registry files.
+// Runtime persistence now lives in storage.sqlite; these are kept only so the
+// one-shot migration/backfill path can import and archive old installs.
 export const PROJECTS_FILE = path.join(GATEWAY_HOME, 'projects.json');
 export const RUNS_FILE = path.join(GATEWAY_HOME, 'agent_runs.json');
 export const CONVS_FILE = path.join(GATEWAY_HOME, 'local_conversations.json');
@@ -33,27 +35,76 @@ export const GLOBAL_ASSETS_DIR = path.join(GATEWAY_HOME, 'assets');
 // Per-workspace artifact directory name (relative to workspace root)
 export const ARTIFACT_ROOT_DIR = 'demolong';
 
+function syncFlatRepoDir(src: string, dest: string, ext: string): void {
+  if (!existsSync(src)) return;
+  mkdirSync(dest, { recursive: true });
+  for (const file of readdirSync(src)) {
+    if (!file.endsWith(ext)) continue;
+    copyFileSync(path.join(src, file), path.join(dest, file));
+  }
+}
+
+function syncDirIfMissing(src: string, dest: string): void {
+  if (!existsSync(src)) return;
+  mkdirSync(path.dirname(dest), { recursive: true });
+  if (!existsSync(dest)) {
+    cpSync(src, dest, { recursive: true });
+  }
+}
+
 /**
  * Sync repo assets to global directory on startup.
- * Uses cp -n semantics (skip existing files, never overwrite).
+ * Repo-owned assets are refreshed on every startup; legacy home assets only
+ * fill gaps when canonical targets are missing.
  */
 function syncAssetsToGlobal(): void {
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
-  const dirs = [
-    { src: path.join(repoRoot, '.agents', 'assets', 'templates'), dest: path.join(GLOBAL_ASSETS_DIR, 'templates'), ext: '.json' },
-    { src: path.join(repoRoot, '.agents', 'assets', 'review-policies'), dest: path.join(GLOBAL_ASSETS_DIR, 'review-policies'), ext: '.json' },
-    { src: path.join(repoRoot, '.agents', 'workflows'), dest: path.join(GLOBAL_ASSETS_DIR, 'workflows'), ext: '.md' },
-  ];
+  syncFlatRepoDir(path.join(repoRoot, '.agents', 'assets', 'templates'), path.join(GLOBAL_ASSETS_DIR, 'templates'), '.json');
+  syncFlatRepoDir(path.join(repoRoot, '.agents', 'assets', 'review-policies'), path.join(GLOBAL_ASSETS_DIR, 'review-policies'), '.json');
+  syncFlatRepoDir(path.join(repoRoot, '.agents', 'workflows'), path.join(GLOBAL_ASSETS_DIR, 'workflows'), '.md');
 
-  for (const { src, dest, ext } of dirs) {
-    if (!existsSync(src)) continue;
-    mkdirSync(dest, { recursive: true });
-    for (const file of readdirSync(src)) {
-      if (!file.endsWith(ext)) continue;
-      const target = path.join(dest, file);
+  const legacyWorkflowDir = path.join(homedir(), '.gemini', 'antigravity', 'global_workflows');
+  if (existsSync(legacyWorkflowDir)) {
+    const canonicalWorkflowDir = path.join(GLOBAL_ASSETS_DIR, 'workflows');
+    mkdirSync(canonicalWorkflowDir, { recursive: true });
+    for (const file of readdirSync(legacyWorkflowDir)) {
+      if (!file.endsWith('.md')) continue;
+      const target = path.join(canonicalWorkflowDir, file);
       if (!existsSync(target)) {
-        copyFileSync(path.join(src, file), target);
+        copyFileSync(path.join(legacyWorkflowDir, file), target);
       }
+    }
+  }
+
+  const legacySkillsDir = path.join(homedir(), '.gemini', 'antigravity', 'skills');
+  const repoSkillsDir = path.join(repoRoot, '.agents', 'skills');
+  const canonicalSkillsDir = path.join(GLOBAL_ASSETS_DIR, 'skills');
+  if (existsSync(repoSkillsDir)) {
+    mkdirSync(canonicalSkillsDir, { recursive: true });
+    for (const entry of readdirSync(repoSkillsDir)) {
+      const src = path.join(repoSkillsDir, entry);
+      const dst = path.join(canonicalSkillsDir, entry);
+      try {
+        if (!statSync(src).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      if (!existsSync(path.join(src, 'SKILL.md'))) continue;
+      cpSync(src, dst, { recursive: true, force: true });
+    }
+  }
+  if (existsSync(legacySkillsDir)) {
+    mkdirSync(canonicalSkillsDir, { recursive: true });
+    for (const entry of readdirSync(legacySkillsDir)) {
+      const src = path.join(legacySkillsDir, entry);
+      const dst = path.join(canonicalSkillsDir, entry);
+      try {
+        if (!statSync(src).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      if (!existsSync(path.join(src, 'SKILL.md'))) continue;
+      syncDirIfMissing(src, dst);
     }
   }
 }

@@ -46,6 +46,31 @@ export type ScheduledAction =
       model?: string;
     }
   | {
+      kind: 'dispatch-execution-profile';
+      executionProfile:
+        | {
+            kind: 'workflow-run';
+            workflowRef?: string;
+            skillHints?: string[];
+          }
+        | {
+            kind: 'review-flow';
+            templateId: string;
+            stageId?: string;
+            reviewPolicyId?: string;
+            roles?: string[];
+          }
+        | {
+            kind: 'dag-orchestration';
+            templateId: string;
+            stageId?: string;
+          };
+      workspace: string;
+      prompt: string;
+      projectId?: string;
+      model?: string;
+    }
+  | {
       kind: 'health-check';
       projectId: string;
     }

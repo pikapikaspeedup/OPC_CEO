@@ -9,6 +9,7 @@ import * as path from 'path';
 import { createLogger } from '../logger';
 import { getRun, updateRun } from './run-registry';
 import { extractAndPersistMemory } from './department-memory';
+import { persistKnowledgeForRun } from '../knowledge';
 import {
   readDeliveryPacket,
   buildWriteScopeAudit,
@@ -70,13 +71,22 @@ export function finalizeAdvisoryRun(
         const wsPath = run.workspace.replace(/^file:\/\//, '');
         try {
           extractAndPersistMemory(wsPath, runId, result.summary, result.changedFiles);
-        } catch (e: any) {
-          log.debug({ runId: shortRunId, err: e.message }, 'Memory extraction failed (non-fatal)');
+          persistKnowledgeForRun({
+            runId,
+            workspaceUri: run.workspace,
+            result,
+            promptResolution: run.promptResolution,
+            resolvedWorkflowRef: run.resolvedWorkflowRef,
+            resolvedSkillRefs: run.resolvedSkillRefs,
+            createdAt: run.finishedAt || run.createdAt,
+          });
+        } catch (e: unknown) {
+          log.debug({ runId: shortRunId, err: e instanceof Error ? e.message : String(e) }, 'Memory extraction failed (non-fatal)');
         }
       }
     }
-  } catch (err: any) {
-    log.warn({ runId: shortRunId, err: err.message }, 'Failed to finalize advisory run (non-fatal)');
+  } catch (err: unknown) {
+    log.warn({ runId: shortRunId, err: err instanceof Error ? err.message : String(err) }, 'Failed to finalize advisory run (non-fatal)');
   }
 }
 
@@ -161,13 +171,40 @@ export function finalizeDeliveryRun(
       lastError: decision === 'blocked-by-team' ? deliveryPacket?.blockedReason : undefined,
     });
 
+    if (finalStatus === 'completed' && run?.workspace) {
+      try {
+        extractAndPersistMemory(
+          run.workspace.replace(/^file:\/\//, ''),
+          runId,
+          deliveryPacket?.summary || result.summary,
+          result.changedFiles,
+        );
+        persistKnowledgeForRun({
+          runId,
+          workspaceUri: run.workspace,
+          result: {
+            ...result,
+            status: finalStatus,
+            summary: deliveryPacket?.summary || result.summary,
+          },
+          promptResolution: run.promptResolution,
+          resolvedWorkflowRef: run.resolvedWorkflowRef,
+          resolvedSkillRefs: run.resolvedSkillRefs,
+          createdAt: run.finishedAt || run.createdAt,
+        });
+      } catch (e: unknown) {
+        log.debug({ runId: shortRunId, err: e instanceof Error ? e.message : String(e) }, 'Delivery knowledge persistence failed (non-fatal)');
+      }
+    }
+
     log.info({ runId: shortRunId, decision, scopeOk: scopeAudit?.withinScope }, 'Delivery run finalized');
-  } catch (err: any) {
-    log.error({ runId: shortRunId, err: err.message }, 'Delivery finalization failed');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ runId: shortRunId, err: message }, 'Delivery finalization failed');
     updateRun(runId, {
       status: 'blocked',
       result: { ...result, status: 'blocked' },
-      lastError: `Delivery finalization error: ${err.message}`,
+      lastError: `Delivery finalization error: ${message}`,
     });
   }
 }

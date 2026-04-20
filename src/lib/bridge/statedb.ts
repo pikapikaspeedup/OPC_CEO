@@ -1,8 +1,14 @@
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { homedir } from 'os';
 import path from 'path';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { GATEWAY_HOME, CONVS_FILE } from '../agents/gateway-home';
+import {
+  findConversationRecordBySessionHandle as findStoredConversationRecordBySessionHandle,
+  getConversationRecordById as getStoredConversationRecordById,
+  LocalConversationRecord,
+  listConversationRecords,
+  upsertConversationRecord,
+} from '../storage/gateway-db';
 
 const STATE_DB_PATH = path.join(
   homedir(),
@@ -10,9 +16,7 @@ const STATE_DB_PATH = path.join(
 );
 
 const BRAIN_DIR = path.join(homedir(), '.gemini/antigravity/brain');
-const LOCAL_CACHE_FILE = CONVS_FILE;
-
-export interface ConversationInfo {
+export interface ConversationInfo extends LocalConversationRecord {
   id: string;
   title: string;
   workspace: string;
@@ -22,24 +26,31 @@ export interface ConversationInfo {
 
 // --- Local conversation cache ---
 function readLocalCache(): ConversationInfo[] {
-  try {
-    return JSON.parse(readFileSync(LOCAL_CACHE_FILE, 'utf-8'));
-  } catch {
-    return [];
-  }
+  return listConversationRecords();
 }
 
 function writeLocalCache(convs: ConversationInfo[]) {
-  try {
-    mkdirSync(GATEWAY_HOME, { recursive: true });
-    writeFileSync(LOCAL_CACHE_FILE, JSON.stringify(convs, null, 2));
-  } catch {}
+  for (const conv of convs) {
+    upsertConversationRecord(conv);
+  }
 }
 
-export function addLocalConversation(id: string, workspace: string, title: string = 'New conversation') {
+export function addLocalConversation(
+  id: string,
+  workspace: string,
+  title: string = 'New conversation',
+  extras: Partial<LocalConversationRecord> = {},
+) {
   const cache = readLocalCache();
   if (cache.some(c => c.id === id)) return;
-  cache.unshift({ id, title, workspace, stepCount: 0, createdAt: new Date().toISOString() });
+  cache.unshift({
+    id,
+    title,
+    workspace,
+    stepCount: 0,
+    createdAt: new Date().toISOString(),
+    ...extras,
+  });
   writeLocalCache(cache);
 }
 
@@ -52,15 +63,90 @@ export function updateLocalConversationTitle(id: string, title: string) {
   }
 }
 
+export function getConversationRecord(id: string): ConversationInfo | null {
+  return getStoredConversationRecordById(id);
+}
+
+export function findConversationRecordBySessionHandle(sessionHandle: string): ConversationInfo | null {
+  return findStoredConversationRecordBySessionHandle(sessionHandle);
+}
+
+export function resolveConversationRecord(idOrHandle: string): ConversationInfo | null {
+  return getConversationRecord(idOrHandle) ?? findConversationRecordBySessionHandle(idOrHandle);
+}
+
+function normalizeConversationTitle(title: string): string {
+  const normalized = title.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'Conversation';
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+export function ensureConversationRecordForSession(input: {
+  sessionHandle: string;
+  workspace: string;
+  title: string;
+  provider?: LocalConversationRecord['provider'];
+  stepCount?: number;
+}): ConversationInfo {
+  const existing = findConversationRecordBySessionHandle(input.sessionHandle);
+  const nextTitle = normalizeConversationTitle(input.title);
+  const nextStepCount = input.stepCount ?? existing?.stepCount ?? 0;
+
+  if (existing) {
+    const next: ConversationInfo = {
+      ...existing,
+      title: nextTitle || existing.title,
+      workspace: input.workspace || existing.workspace,
+      provider: input.provider || existing.provider,
+      sessionHandle: input.sessionHandle,
+      stepCount: Math.max(existing.stepCount || 0, nextStepCount),
+    };
+    upsertConversationRecord(next);
+    return next;
+  }
+
+  const created: ConversationInfo = {
+    id: `conversation-${randomUUID()}`,
+    title: nextTitle,
+    workspace: input.workspace,
+    stepCount: nextStepCount,
+    createdAt: new Date().toISOString(),
+    provider: input.provider,
+    sessionHandle: input.sessionHandle,
+  };
+  upsertConversationRecord(created);
+  return created;
+}
+
+export function updateLocalConversation(id: string, patch: Partial<LocalConversationRecord>): ConversationInfo | null {
+  const cache = readLocalCache();
+  const existing = cache.find((conv) => conv.id === id);
+  if (!existing) return null;
+
+  const next: ConversationInfo = {
+    ...existing,
+    ...patch,
+    id: existing.id,
+  };
+  upsertConversationRecord(next);
+  return next;
+}
+
 function queryDb(sql: string): string {
   try {
-    return execSync(`sqlite3 "${STATE_DB_PATH}" "${sql}"`, {
-      encoding: 'utf-8',
-      timeout: 5000
-    }).trim();
+    return execSync(
+      `sqlite3 "${STATE_DB_PATH}" ${escapeShellArg(sql)}`,
+      { encoding: 'utf-8', timeout: 5000 }
+    ).trim();
   } catch {
     return '';
   }
+}
+
+/** Escape a string for safe use as a single shell argument */
+function escapeShellArg(arg: string): string {
+  // Wrap in single quotes, escape any embedded single quotes
+  return "'" + arg.replace(/'/g, "'\\''") + "'";
 }
 
 export function getApiKey(): string {
@@ -279,10 +365,10 @@ for t in trajectories:
 db.close()
 print(json.dumps(result, ensure_ascii=False))
 `;
-    const output = execSync(`python3 -c '${script.replace(/'/g, "'\\''")}'`, {
+    const output = spawnSync('python3', ['-c', script], {
       encoding: 'utf-8',
       timeout: 15000
-    });
+    }).stdout;
     return JSON.parse(output.trim());
   } catch {
     return [];

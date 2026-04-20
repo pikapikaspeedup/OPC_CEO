@@ -1,188 +1,220 @@
 /**
- * V6: Department Rules & Memory Sync
+ * Department Sync — Canonical Assets → IDE Mirrors
  *
- * Manages symlinks from `.department/rules/` and `.department/workflows/`
- * to IDE-specific locations (Antigravity, Codex CLI, Claude Code, Cursor).
+ * Source of truth:
+ *   1. workspace/.department/config.json
+ *   2. gateway/assets/workflows|skills|rules
+ *   3. workspace/.department/memory
  *
- * Also provides helpers for reading/writing persistent department memory.
+ * Output:
+ *   - Antigravity: workspace/.agents/rules + workspace/.agents/workflows
+ *   - Codex / Claude Code / Cursor: single-file instructions with embedded
+ *     department rules, memory references, and allowed workflow catalog
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+
+import { getCanonicalWorkflow } from './canonical-assets';
+import {
+  buildDepartmentIdentityRule,
+  getTemplateWorkflowRefs,
+  readDepartmentConfig,
+} from './department-capability-registry';
 import { createLogger } from '../logger';
 
 const log = createLogger('DepartmentSync');
 
-// ---------------------------------------------------------------------------
-// IDE Adapter definitions
-// ---------------------------------------------------------------------------
-
 export type IDETarget = 'antigravity' | 'codex' | 'claude-code' | 'cursor';
 
 interface IDEAdapterConfig {
-  /** Target file or directory for rules */
-  rulesTarget: (workspace: string) => string | string[];
-  /** Target directory for workflows (if supported) */
+  rulesTarget: (workspace: string) => string;
   workflowsTarget?: (workspace: string) => string;
-  /** Whether this IDE supports multiple rule files or needs concatenation into one */
   supportsMultipleFiles: boolean;
 }
 
 const IDE_ADAPTERS: Record<IDETarget, IDEAdapterConfig> = {
   antigravity: {
-    rulesTarget: (ws) => path.join(ws, '.agent', 'rules'),
-    workflowsTarget: (ws) => path.join(ws, '.agent', 'workflows'),
+    rulesTarget: (workspace) => path.join(workspace, '.agents', 'rules'),
+    workflowsTarget: (workspace) => path.join(workspace, '.agents', 'workflows'),
     supportsMultipleFiles: true,
   },
   codex: {
-    rulesTarget: (ws) => path.join(ws, 'AGENTS.md'),
+    rulesTarget: (workspace) => path.join(workspace, 'AGENTS.md'),
     supportsMultipleFiles: false,
   },
   'claude-code': {
-    rulesTarget: (ws) => path.join(ws, 'CLAUDE.md'),
+    rulesTarget: (workspace) => path.join(workspace, 'CLAUDE.md'),
     supportsMultipleFiles: false,
   },
   cursor: {
-    rulesTarget: (ws) => path.join(ws, '.cursorrules'),
+    rulesTarget: (workspace) => path.join(workspace, '.cursorrules'),
     supportsMultipleFiles: false,
   },
 };
 
-// ---------------------------------------------------------------------------
-// Sync logic
-// ---------------------------------------------------------------------------
+type SyncArtifact = { name: string; content: string };
 
-/**
- * Sync department rules to a specific IDE target.
- *
- * For multi-file IDEs (Antigravity): creates symlinks per rule file.
- * For single-file IDEs (Codex/Claude/Cursor): concatenates all rules into one file.
- */
-export function syncRulesToIDE(workspace: string, target: IDETarget): { synced: string[] } {
-  const rulesDir = path.join(workspace, '.department', 'rules');
-  const adapter = IDE_ADAPTERS[target];
-  const synced: string[] = [];
+function readLocalDepartmentRules(workspace: string): SyncArtifact[] {
+  const canonicalDir = path.join(workspace, '.department', 'rules');
+  const legacyDir = path.join(workspace, '.agents', 'rules');
+  const seen = new Set<string>();
+  const artifacts: SyncArtifact[] = [];
 
-  if (!fs.existsSync(rulesDir)) {
-    log.info({ workspace, target }, 'No .department/rules/ found, skipping');
-    return { synced };
+  for (const dir of [canonicalDir, legacyDir]) {
+    if (!fs.existsSync(dir)) continue;
+    for (const file of fs.readdirSync(dir).filter((entry) => entry.endsWith('.md')).sort()) {
+      const name = file.replace(/\.md$/i, '');
+      if (name === 'department-identity' || seen.has(name)) continue;
+      seen.add(name);
+      artifacts.push({
+        name,
+        content: fs.readFileSync(path.join(dir, file), 'utf-8'),
+      });
+    }
   }
 
-  const ruleFiles = fs.readdirSync(rulesDir).filter(f => f.endsWith('.md'));
-  if (ruleFiles.length === 0) {
-    log.info({ workspace, target }, 'No rule files found in .department/rules/');
-    return { synced };
-  }
-
-  if (adapter.supportsMultipleFiles) {
-    // Multi-file: symlink each rule file into target directory
-    const targetDir = adapter.rulesTarget(workspace) as string;
-    fs.mkdirSync(targetDir, { recursive: true });
-
-    for (const file of ruleFiles) {
-      const src = path.join(rulesDir, file);
-      const dst = path.join(targetDir, file);
-      safeSymlink(src, dst);
-      synced.push(dst);
-    }
-
-    // Also sync workflows if the IDE supports it
-    if (adapter.workflowsTarget) {
-      const wfDir = path.join(workspace, '.department', 'workflows');
-      if (fs.existsSync(wfDir)) {
-        const targetWfDir = adapter.workflowsTarget(workspace);
-        fs.mkdirSync(targetWfDir, { recursive: true });
-
-        for (const file of fs.readdirSync(wfDir).filter(f => f.endsWith('.md'))) {
-          const src = path.join(wfDir, file);
-          const dst = path.join(targetWfDir, file);
-          safeSymlink(src, dst);
-          synced.push(dst);
-        }
-      }
-    }
-  } else {
-    // Single-file: concatenate all rules + memory reference into one file
-    const targetFile = adapter.rulesTarget(workspace) as string;
-    const parts: string[] = [];
-
-    for (const file of ruleFiles) {
-      parts.push(fs.readFileSync(path.join(rulesDir, file), 'utf-8'));
-    }
-
-    // Append memory reference guidance
-    parts.push(buildMemoryReferenceSection(workspace));
-
-    // Append workflows if any
-    const wfDir = path.join(workspace, '.department', 'workflows');
-    if (fs.existsSync(wfDir)) {
-      const wfFiles = fs.readdirSync(wfDir).filter(f => f.endsWith('.md'));
-      for (const file of wfFiles) {
-        parts.push(`\n## Workflow: ${file.replace('.md', '')}\n\n` +
-          fs.readFileSync(path.join(wfDir, file), 'utf-8'));
-      }
-    }
-
-    fs.writeFileSync(targetFile, parts.join('\n\n---\n\n'), 'utf-8');
-    synced.push(targetFile);
-  }
-
-  log.info({ workspace, target, count: synced.length }, 'Rules synced to IDE');
-  return { synced };
+  return artifacts;
 }
 
-/** Sync to all supported IDE targets. */
-export function syncRulesToAllIDEs(workspace: string): { results: Record<IDETarget, string[]> } {
-  const results = {} as Record<IDETarget, string[]>;
-  for (const target of Object.keys(IDE_ADAPTERS) as IDETarget[]) {
-    const { synced } = syncRulesToIDE(workspace, target);
-    results[target] = synced;
+function collectWorkflowRefs(workspace: string): string[] {
+  const config = readDepartmentConfig(workspace);
+  const refs = new Set<string>();
+
+  for (const skill of config.skills ?? []) {
+    const workflowRef = skill.workflowRef?.trim();
+    if (workflowRef) {
+      refs.add(workflowRef.startsWith('/') ? workflowRef : `/${workflowRef}`);
+    }
   }
-  return { results };
+
+  for (const templateId of config.templateIds ?? []) {
+    for (const ref of getTemplateWorkflowRefs(templateId)) {
+      refs.add(ref);
+    }
+  }
+
+  return [...refs];
 }
 
-// ---------------------------------------------------------------------------
-// Memory reference builder
-// ---------------------------------------------------------------------------
+function collectWorkflowArtifacts(workspace: string): SyncArtifact[] {
+  return collectWorkflowRefs(workspace)
+    .map((ref) => getCanonicalWorkflow(ref))
+    .filter((workflow): workflow is NonNullable<ReturnType<typeof getCanonicalWorkflow>> => Boolean(workflow))
+    .map((workflow) => ({
+      name: workflow.name,
+      content: workflow.content || '',
+    }));
+}
 
 function buildMemoryReferenceSection(workspace: string): string {
   const memoryDir = path.join(workspace, '.department', 'memory');
   if (!fs.existsSync(memoryDir)) return '';
 
-  const memoryFiles = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md'));
-  if (memoryFiles.length === 0) return '';
-
-  const lines = [
-    '## Department Memory',
-    '',
-    'Before starting any task, check the following files for relevant context:',
-  ];
-
-  for (const file of memoryFiles) {
-    const name = file.replace('.md', '').replace(/-/g, ' ');
-    lines.push(`- \`.department/memory/${file}\` — ${capitalize(name)}`);
-  }
-
-  lines.push('', 'Only read the files relevant to the current task.');
-  return lines.join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function safeSymlink(src: string, dst: string): void {
-  try {
-    // Remove existing symlink or file
-    if (fs.existsSync(dst) || fs.lstatSync(dst).isSymbolicLink()) {
-      fs.unlinkSync(dst);
+  const sections: string[] = ['## Department Memory', '', 'Read relevant memory files before executing the task:'];
+  const walk = (dir: string, relative = '.department/memory') => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const rel = path.join(relative, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, rel);
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        sections.push(`- \`${rel}\``);
+      }
     }
-  } catch {
-    // File doesn't exist, which is fine
-  }
-  fs.symlinkSync(src, dst);
+  };
+
+  walk(memoryDir);
+  sections.push('', 'Only read the files relevant to the current task.');
+  return sections.join('\n');
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function ensureDir(dir: string): void {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function writeFile(filePath: string, content: string): void {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, content, 'utf-8');
+}
+
+function renderSingleFileInstructions(workspace: string): string {
+  const config = readDepartmentConfig(workspace);
+  const identity = buildDepartmentIdentityRule(config, workspace);
+  const localRules = readLocalDepartmentRules(workspace);
+  const workflows = collectWorkflowArtifacts(workspace);
+  const parts = [identity];
+
+  if (localRules.length > 0) {
+    parts.push('## Department Rules');
+    for (const rule of localRules) {
+      parts.push(`### ${rule.name}`, rule.content.trim());
+    }
+  }
+
+  const memorySection = buildMemoryReferenceSection(workspace);
+  if (memorySection) {
+    parts.push(memorySection);
+  }
+
+  if (workflows.length > 0) {
+    parts.push('## Department Workflows');
+    parts.push('Use these workflows when appropriate for this department.');
+    for (const workflow of workflows) {
+      parts.push(`### ${workflow.name}`, workflow.content.trim());
+    }
+  }
+
+  return parts.join('\n\n');
+}
+
+function syncAntigravity(workspace: string): string[] {
+  const rulesDir = IDE_ADAPTERS.antigravity.rulesTarget(workspace);
+  const workflowsDir = IDE_ADAPTERS.antigravity.workflowsTarget!(workspace);
+  const synced: string[] = [];
+
+  ensureDir(rulesDir);
+  ensureDir(workflowsDir);
+
+  const config = readDepartmentConfig(workspace);
+  const identity = buildDepartmentIdentityRule(config, workspace);
+  const identityPath = path.join(rulesDir, 'department-identity.md');
+  writeFile(identityPath, identity);
+  synced.push(identityPath);
+
+  for (const rule of readLocalDepartmentRules(workspace)) {
+    const target = path.join(rulesDir, `${rule.name}.md`);
+    writeFile(target, rule.content);
+    synced.push(target);
+  }
+
+  for (const workflow of collectWorkflowArtifacts(workspace)) {
+    const target = path.join(workflowsDir, `${workflow.name}.md`);
+    writeFile(target, workflow.content);
+    synced.push(target);
+  }
+
+  return synced;
+}
+
+export function syncRulesToIDE(workspace: string, target: IDETarget): { synced: string[] } {
+  const adapter = IDE_ADAPTERS[target];
+  if (adapter.supportsMultipleFiles) {
+    const synced = syncAntigravity(workspace);
+    log.info({ workspace, target, count: synced.length }, 'Department assets synced to IDE mirror');
+    return { synced };
+  }
+
+  const targetFile = adapter.rulesTarget(workspace);
+  writeFile(targetFile, renderSingleFileInstructions(workspace));
+  log.info({ workspace, target }, 'Department assets synced to single-file IDE target');
+  return { synced: [targetFile] };
+}
+
+export function syncRulesToAllIDEs(workspace: string): { results: Record<IDETarget, string[]> } {
+  const results = {} as Record<IDETarget, string[]>;
+  for (const target of Object.keys(IDE_ADAPTERS) as IDETarget[]) {
+    results[target] = syncRulesToIDE(workspace, target).synced;
+  }
+  return { results };
 }

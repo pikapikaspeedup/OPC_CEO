@@ -274,6 +274,24 @@ describe('scanArtifactManifest', () => {
       expect(item.sourceRunId).toBe('run-5');
     }
   });
+
+  it('scans prompt root artifacts and ignores envelope files', () => {
+    fs.writeFileSync(path.join(tmpDir, 'native-codex-ai-bigevent-draft.md'), '# Draft');
+    fs.writeFileSync(path.join(tmpDir, 'daily-events-report.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'daily-events-verification.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'result.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'result-envelope.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'task-envelope.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'artifacts.manifest.json'), '{}');
+
+    const manifest = scanArtifactManifest('run-6', undefined, tmpDir, { kind: 'prompt' });
+    expect(manifest.items.map(item => item.path).sort()).toEqual([
+      'daily-events-report.json',
+      'daily-events-verification.json',
+      'native-codex-ai-bigevent-draft.md',
+    ]);
+    expect(manifest.items.every(item => item.kind.startsWith('prompt.'))).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

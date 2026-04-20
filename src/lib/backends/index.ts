@@ -18,6 +18,18 @@ export type {
   StartedAgentEvent,
 } from './types';
 
+export type {
+  AgentBackendDiagnosticsExtension,
+  AgentBackendRuntimeResolverExtension,
+  AgentBackendSessionMetadataExtension,
+  GetRecentStepsOptions,
+} from './extensions';
+export {
+  getBackendDiagnosticsExtension,
+  getBackendRuntimeResolverExtension,
+  getBackendSessionMetadataExtension,
+} from './extensions';
+
 export {
   clearAgentBackends,
   getAgentBackend,
@@ -46,9 +58,13 @@ export { consumeAgentSession } from './session-consumer';
 
 export {
   AntigravityAgentBackend,
+  ClaudeCodeAgentBackend,
+  ClaudeEngineAgentBackend,
   CodexAgentBackend,
   ensureBuiltInAgentBackends,
 } from './builtin-backends';
+
+export type { AntigravityRuntimeConnection } from './antigravity-runtime-resolver';
 
 export type { BackendMemoryHook } from './memory-hooks';
 export {

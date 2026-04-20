@@ -14,6 +14,11 @@ interface KnowledgeItem {
   references: Array<{ type: string; value: string }>;
   timestamps: { created: string; modified: string; accessed: string };
   artifactFiles: string[];
+  workspaceUri?: string;
+  category?: string;
+  status?: string;
+  usageCount?: number;
+  lastAccessedAt?: string;
 }
 
 function listArtifactFiles(artifactsDir: string, base = ''): string[] {
@@ -31,8 +36,12 @@ function listArtifactFiles(artifactsDir: string, base = ''): string[] {
   return files;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const workspaceFilter = url.searchParams.get('workspace') || undefined;
+    const categoryFilter = url.searchParams.get('category') || undefined;
+    const limit = Number(url.searchParams.get('limit') || 0);
     const entries = readdirSync(KNOWLEDGE_DIR, { withFileTypes: true });
     const items: KnowledgeItem[] = [];
 
@@ -63,6 +72,11 @@ export async function GET() {
         references: meta.references || [],
         timestamps,
         artifactFiles,
+        workspaceUri: typeof meta.workspaceUri === 'string' ? meta.workspaceUri : undefined,
+        category: typeof meta.category === 'string' ? meta.category : undefined,
+        status: typeof meta.status === 'string' ? meta.status : undefined,
+        usageCount: typeof meta.usageCount === 'number' ? meta.usageCount : undefined,
+        lastAccessedAt: typeof meta.lastAccessedAt === 'string' ? meta.lastAccessedAt : undefined,
       });
     }
 
@@ -73,8 +87,14 @@ export async function GET() {
       return tb - ta;
     });
 
-    return NextResponse.json(items);
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const filtered = items.filter((item) => {
+      if (workspaceFilter && item.workspaceUri !== workspaceFilter) return false;
+      if (categoryFilter && item.category !== categoryFilter) return false;
+      return true;
+    });
+
+    return NextResponse.json(limit > 0 ? filtered.slice(0, limit) : filtered);
+  } catch (e: unknown) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

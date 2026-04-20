@@ -1,7 +1,7 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 function getFolderName(workspaceUri: string): string {
   const clean = workspaceUri.replace('file://', '').replace(/\/$/, '');
@@ -41,10 +41,10 @@ export async function closeAntigravityWindow(workspaceUri: string): Promise<bool
   `;
 
   try {
-    const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+    const { stdout } = await execFileAsync('osascript', ['-e', script]);
     return stdout.trim() === 'true';
   } catch (e) {
-    console.error(`❌ Failed to close window for ${folderName}:`, e);
+    console.error(`Failed to close window for ${folderName}:`, e);
     return false;
   }
 }
@@ -80,10 +80,10 @@ export async function minimizeAntigravityWindow(workspaceUri: string): Promise<b
   `;
 
   try {
-    const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+    const { stdout } = await execFileAsync('osascript', ['-e', script]);
     return stdout.trim() === 'true';
   } catch (e) {
-    console.error(`❌ Failed to minimize window for ${folderName}:`, e);
+    console.error(`Failed to minimize window for ${folderName}:`, e);
     return false;
   }
 }

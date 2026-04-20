@@ -1,23 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getProject } from '@/lib/agents/project-registry';
 import { randomUUID } from 'crypto';
+import {
+  listDeliverableRecordsByProject,
+  syncProjectRunArtifactsToDeliverables,
+  upsertDeliverableRecord,
+} from '@/lib/storage/gateway-db';
 
 export const dynamic = 'force-dynamic';
-
-// In-memory store for deliverables (Phase 3 — upgrade to disk persistence later)
-const deliverables = new Map<string, Array<{
-  id: string;
-  projectId: string;
-  stageId: string;
-  type: 'document' | 'code' | 'data' | 'review';
-  title: string;
-  artifactPath?: string;
-  createdAt: string;
-  quality: {
-    reviewDecision?: 'approved' | 'revise' | 'rejected';
-    reviewedAt?: string;
-  };
-}>>();
 
 // GET /api/projects/[id]/deliverables
 export async function GET(
@@ -30,7 +20,8 @@ export async function GET(
     return NextResponse.json({ error: 'Project not found' }, { status: 404 });
   }
 
-  return NextResponse.json(deliverables.get(id) || []);
+  syncProjectRunArtifactsToDeliverables(id);
+  return NextResponse.json(listDeliverableRecordsByProject(id));
 }
 
 // POST /api/projects/[id]/deliverables
@@ -66,11 +57,7 @@ export async function POST(
     createdAt: new Date().toISOString(),
     quality: {},
   };
-
-  if (!deliverables.has(id)) {
-    deliverables.set(id, []);
-  }
-  deliverables.get(id)!.push(deliverable);
+  upsertDeliverableRecord(deliverable);
 
   return NextResponse.json(deliverable, { status: 201 });
 }

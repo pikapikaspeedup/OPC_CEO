@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { appendRunHistoryEntry } from '../agents/run-history';
 import { createLogger } from '../logger';
 import { CodexMCPClient } from '../bridge/codex-adapter';
 import type {
@@ -24,6 +25,14 @@ const log = createLogger('CodexExecutor');
 // ---------------------------------------------------------------------------
 
 const clients = new Map<string, CodexMCPClient>();
+const globalForCodexConversations = globalThis as unknown as {
+  __AG_CODEX_CONVERSATIONS__?: Map<string, Array<{ role: 'user' | 'assistant'; content: string }>>;
+};
+const conversations = globalForCodexConversations.__AG_CODEX_CONVERSATIONS__ || new Map<string, Array<{ role: 'user' | 'assistant'; content: string }>>();
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForCodexConversations.__AG_CODEX_CONVERSATIONS__ = conversations;
+}
 
 async function getClient(workspace: string): Promise<CodexMCPClient> {
   let client = clients.get(workspace);
@@ -103,6 +112,26 @@ export class CodexExecutor implements TaskExecutor {
     // Track thread → workspace for appendMessage/cancel
     if (result.threadId) {
       threadWorkspaces.set(result.threadId, opts.workspace);
+      conversations.set(result.threadId, [
+        { role: 'user', content: opts.prompt },
+        { role: 'assistant', content: result.content },
+      ]);
+    }
+    if (opts.runId) {
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: result.threadId || `codex-${Date.now()}`,
+        eventType: 'conversation.message.user',
+        details: { content: opts.prompt },
+      });
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: result.threadId || `codex-${Date.now()}`,
+        eventType: 'conversation.message.assistant',
+        details: { content: result.content },
+      });
     }
 
     // Detect changed files by scanning artifact directory
@@ -128,6 +157,26 @@ export class CodexExecutor implements TaskExecutor {
 
     const client = await getClient(workspace);
     const result = await client.reply(handle, opts.prompt);
+    const history = conversations.get(handle) || [];
+    history.push({ role: 'user', content: opts.prompt });
+    history.push({ role: 'assistant', content: result.content });
+    conversations.set(handle, history);
+    if (opts.runId) {
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: handle,
+        eventType: 'conversation.message.user',
+        details: { content: opts.prompt },
+      });
+      appendRunHistoryEntry({
+        runId: opts.runId,
+        provider: this.providerId,
+        sessionHandle: handle,
+        eventType: 'conversation.message.assistant',
+        details: { content: result.content },
+      });
+    }
 
     return {
       handle: result.threadId || handle,
@@ -154,4 +203,8 @@ export class CodexExecutor implements TaskExecutor {
       supportsStepWatch: false,
     };
   }
+}
+
+export function getCodexConversation(handle: string): Array<{ role: 'user' | 'assistant'; content: string }> | null {
+  return conversations.get(handle) || null;
 }

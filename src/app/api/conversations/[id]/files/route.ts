@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getOwnerConnection } from '@/lib/bridge/gateway';
+import { getOwnerConnection, resolveConversationRecord } from '@/lib/bridge/gateway';
+import { inferLocalProviderFromConversation } from '@/lib/local-provider-conversations';
 import { createLogger } from '@/lib/logger';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export const dynamic = 'force-dynamic';
 
@@ -12,20 +14,38 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params;
   const url = new URL(req.url);
   const q = url.searchParams.get('q') || '';
-  
-  const conn = getOwnerConnection(id);
   const maxResults = 25;
+  const conversationRecord = resolveConversationRecord(id);
+  const localProvider = inferLocalProviderFromConversation(id, conversationRecord?.provider);
+  const conn = localProvider ? null : await getOwnerConnection(id);
+  const backingRun = findRunRecordByConversationRef({
+    sessionHandles: [id, conversationRecord?.sessionHandle].filter(Boolean) as string[],
+    conversationIds: [id, conversationRecord?.id].filter(Boolean) as string[],
+  });
 
-  let workspacePath = conn?.workspace?.replace(/^file:\/\//, '') || process.cwd();
+  const workspacePath = conversationRecord?.workspace?.replace(/^file:\/\//, '')
+    || conn?.workspace?.replace(/^file:\/\//, '')
+    || backingRun?.workspace.replace(/^file:\/\//, '')
+    || process.cwd();
   
   try {
-    // using fd if available, else fallback to find.
-    // fd is significantly faster.
-    const findCmd = `find "${workspacePath}" -type d \\( -name "node_modules" -o -name ".git" -o -name ".next" -o -name "dist" -o -name "out" \\) -prune -o -type f -iname "*${q}*" -print`;
+    // Sanitize query to prevent injection — only allow alphanumeric, dots, dashes, underscores
+    const safeQ = q.replace(/[^a-zA-Z0-9._\-]/g, '');
     
-    // Mac also supports fd, but we'll stick to 'find' as it's built-in.
-    
-    const { stdout } = await execAsync(findCmd);
+    // Use execFile with args array to prevent shell injection
+    const { stdout } = await execFileAsync('find', [
+      workspacePath,
+      '-type', 'd', '(',
+      '-name', 'node_modules', '-o',
+      '-name', '.git', '-o',
+      '-name', '.next', '-o',
+      '-name', 'dist', '-o',
+      '-name', 'out',
+      ')', '-prune', '-o',
+      '-type', 'f',
+      '-iname', `*${safeQ}*`,
+      '-print'
+    ]);
     const lines = stdout.split('\n').filter(Boolean).slice(0, maxResults);
     
     const files = lines.map(f => {
@@ -42,9 +62,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     });
     
     return NextResponse.json({ files });
-  } catch (e: any) {
+  } catch (error: unknown) {
     const log = createLogger('FileSearch');
-    log.warn({ err: e.message }, 'Error running find command');
-    return NextResponse.json({ files: [], error: e.message });
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn({ err: message }, 'Error running find command');
+    return NextResponse.json({ files: [], error: message });
   }
 }

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, Send, Terminal, MessageSquare } from 'lucide-react';
+import { Loader2, Send, Terminal } from 'lucide-react';
 
 type Mode = 'exec' | 'session';
 
@@ -12,6 +12,7 @@ interface SessionMessage {
 }
 
 export default function CodexWidget() {
+  const sessionModeAvailable = false;
   const [mode, setMode] = useState<Mode>('exec');
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -22,6 +23,8 @@ export default function CodexWidget() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
 
+  const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'Unknown error';
+
   const handleExec = async () => {
     if (!prompt.trim() || loading) return;
     setLoading(true);
@@ -30,8 +33,8 @@ export default function CodexWidget() {
     try {
       const result = await api.codexExec({ prompt: prompt.trim() });
       setOutput(result.output);
-    } catch (err: any) {
-      setError(err.message || 'Codex 执行失败');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Codex 执行失败');
     } finally {
       setLoading(false);
     }
@@ -56,8 +59,8 @@ export default function CodexWidget() {
         const result = await api.codexReply(threadId, userPrompt);
         setMessages([...newMessages, { role: 'assistant', content: result.content }]);
       }
-    } catch (err: any) {
-      setError(err.message || 'Codex 会话失败');
+    } catch (error: unknown) {
+      setError(getErrorMessage(error) || 'Codex 会话失败');
     } finally {
       setLoading(false);
     }
@@ -86,13 +89,25 @@ export default function CodexWidget() {
             单次执行
           </button>
           <button
-            className={`px-2 py-0.5 text-[10px] rounded-md transition-colors ${mode === 'session' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'}`}
-            onClick={() => { setMode('session'); setOutput(null); }}
+            className={`px-2 py-0.5 text-[10px] rounded-md transition-colors ${mode === 'session' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'} ${!sessionModeAvailable ? 'cursor-not-allowed opacity-40' : ''}`}
+            onClick={() => {
+              if (!sessionModeAvailable) return;
+              setMode('session');
+              setOutput(null);
+            }}
+            disabled={!sessionModeAvailable}
+            title={sessionModeAvailable ? undefined : '旧 codex MCP session 兼容层暂不可用，避免前端命中 500'}
           >
             多轮对话
           </button>
         </div>
       </div>
+
+      {!sessionModeAvailable ? (
+        <div className="rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-[11px] leading-5 text-amber-100/80">
+          多轮会话已暂时关闭。当前主系统请使用 Native Codex 的 `CEO Office` / `Conversations` 对话壳；这里保留单次执行入口。
+        </div>
+      ) : null}
 
       {/* Session messages */}
       {mode === 'session' && messages.length > 0 && (

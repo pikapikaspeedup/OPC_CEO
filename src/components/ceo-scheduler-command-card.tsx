@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ArrowUpRight, CalendarClock, CheckCircle2, Loader2, Sparkles, Zap } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, Loader2, Sparkles, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { api, type CEOCommandResult } from '@/lib/api';
@@ -14,6 +14,7 @@ interface CEOSchedulerCommandCardProps {
   onScheduled?: () => void;
   onOpenScheduler?: () => void;
   onRunDispatched?: (runId: string) => void;
+  onProjectCreated?: (projectId: string) => void;
 }
 
 function formatNextRun(nextRunAt?: string | null): string {
@@ -28,6 +29,7 @@ export default function CEOSchedulerCommandCard({
   onScheduled,
   onOpenScheduler,
   onRunDispatched,
+  onProjectCreated,
 }: CEOSchedulerCommandCardProps) {
   const [command, setCommand] = useState('');
   const [loading, setLoading] = useState(false);
@@ -66,7 +68,10 @@ export default function CEOSchedulerCommandCard({
       if (response.success && response.action === 'create_scheduler_job') {
         onScheduled?.();
       }
-      if (response.success && response.action === 'dispatch_prompt' && response.runId) {
+      if (response.success && response.projectId) {
+        onProjectCreated?.(response.projectId);
+      }
+      if (response.success && response.runId) {
         onRunDispatched?.(response.runId);
       }
     } catch (err: unknown) {
@@ -102,7 +107,7 @@ export default function CEOSchedulerCommandCard({
             CEO 指令中心
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-white/50">
-            直接说业务意图——即时执行或创建定时任务。例如"让市场部分析竞品动态"或"每天 9 点让市场部生成日报"。
+            直接说业务意图，支持即时执行或创建定时任务。例如“让市场部分析竞品动态”或“每天 9 点让市场部生成日报”。
           </p>
         </div>
         <Button variant="outline" size="sm" className="h-8 shrink-0 text-xs" onClick={onOpenScheduler}>
@@ -162,6 +167,14 @@ export default function CEOSchedulerCommandCard({
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/45">
               <span className="rounded-full bg-orange-500/15 text-orange-300 px-2 py-1">⚡ Prompt Run</span>
               <span className="rounded-full bg-white/[0.05] px-2 py-1">Run: {result.runId.slice(0, 8)}</span>
+            </div>
+          ) : result.action === 'create_project' && result.projectId ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/45">
+              <span className="rounded-full bg-sky-500/15 text-sky-300 px-2 py-1">📦 Ad-hoc Project</span>
+              <span className="rounded-full bg-white/[0.05] px-2 py-1">Project: {result.projectId.slice(0, 8)}</span>
+              {result.runId ? (
+                <span className="rounded-full bg-white/[0.05] px-2 py-1">Run: {result.runId.slice(0, 8)}</span>
+              ) : null}
             </div>
           ) : result.jobId ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/45">

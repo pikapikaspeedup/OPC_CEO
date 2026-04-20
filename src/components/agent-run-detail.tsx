@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { renderMarkdown } from '@/lib/render-markdown';
+import { useRunStream } from '@/hooks/use-run-stream';
 import {
   AlertCircle,
   Ban,
@@ -20,7 +21,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { AgentRun, ModelConfig } from '@/lib/types';
+import { api } from '@/lib/api';
+import type { AgentRun, ModelConfig, RunConversationFE } from '@/lib/types';
 import { getModelLabel } from '@/lib/model-labels';
 import { formatDateTime } from '@/lib/i18n/formatting';
 import { getAgentRunDuration, getAgentRunTimeAgo, getAgentRunWorkspaceName, isAgentRunActive } from '@/lib/agent-run-utils';
@@ -101,9 +103,11 @@ interface AgentRunDetailProps {
   models: ModelConfig[];
   onCancel: (runId: string) => void;
   onIntervene?: (runId: string, action: 'nudge' | 'retry' | 'restart_role' | 'cancel' | 'evaluate') => void;
+  onEvaluateRun?: (runId: string) => Promise<void>;
   onOpenConversation?: (id: string, title: string) => void;
   onOpenChatTab?: (id: string, title: string) => void;
   renderChat?: () => React.ReactNode;
+  executiveMode?: boolean;
 }
 
 export default function AgentRunDetail({
@@ -112,14 +116,28 @@ export default function AgentRunDetail({
   models,
   onCancel,
   onIntervene,
+  onEvaluateRun,
   onOpenConversation,
   onOpenChatTab,
   renderChat,
+  executiveMode = false,
 }: AgentRunDetailProps) {
   const { locale, t } = useI18n();
   const [tab, setTab] = useState<'result' | 'files' | 'review' | 'envelope' | 'trace' | 'chat'>('result');
   const [interveneLoading, setInterveneLoading] = useState(false);
   const [interveneError, setInterveneError] = useState<string | null>(null);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [showConversationPanel, setShowConversationPanel] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationData, setConversationData] = useState<RunConversationFE | null>(null);
+  const [conversationRunId, setConversationRunId] = useState<string | null>(null);
+  const hasConversationLink = !!(run?.childConversationId || run?.sessionProvenance?.handle);
+
+  const isRunActive = run ? ['queued', 'starting', 'running'].includes(run.status) : false;
+  const { text: streamingText, isStreaming } = useRunStream({
+    runId: run?.runId,
+    enabled: isRunActive,
+  });
 
   if (loading && !run) {
     return (
@@ -157,12 +175,17 @@ export default function AgentRunDetail({
   const blockers = run.result?.blockers || [];
   const needsReview = run.result?.needsReview || [];
   const active = isAgentRunActive(run.status);
-  
+
   const isPromptRun = run.executorKind === 'prompt';
   const isStaleActive = run.status === 'running' && !!run?.liveState?.staleSince;
   const canRestartRole = !isPromptRun && (isStaleActive || run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled');
   const canRetry = !isPromptRun && (run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled');
   const canCancel = active || run.status === 'blocked';
+  const canDirectEvaluate = !!onEvaluateRun && !onIntervene;
+  const outputArtifacts = run.resultEnvelope?.outputArtifacts || [];
+  const verificationPassed = run.verificationPassed ?? run.resultEnvelope?.verificationPassed;
+  const verificationKnown = typeof verificationPassed === 'boolean';
+  const hasAttention = blockers.length > 0 || needsReview.length > 0 || run.status === 'failed' || run.status === 'blocked' || verificationPassed === false;
 
   const handleInterveneClick = async (action: 'nudge' | 'retry' | 'restart_role' | 'cancel' | 'evaluate') => {
     if (!onIntervene || !run.runId) return;
@@ -176,23 +199,123 @@ export default function AgentRunDetail({
     setInterveneLoading(false);
   };
 
+  const handleDirectEvaluate = async () => {
+    if (!onEvaluateRun || !run.runId) return;
+    setInterveneLoading(true);
+    setInterveneError(null);
+    try {
+      await onEvaluateRun(run.runId);
+    } catch (e: unknown) {
+      setInterveneError(e instanceof Error ? e.message : 'Evaluation failed');
+    }
+    setInterveneLoading(false);
+  };
+
+  const handleToggleConversationPanel = async () => {
+    if (!showConversationPanel) {
+      const needsFreshLoad = conversationRunId !== run.runId || !conversationData;
+      if (needsFreshLoad) {
+        setConversationLoading(true);
+        setConversationRunId(run.runId);
+        setConversationData(null);
+        try {
+          const data = await api.agentRunConversation(run.runId);
+          setConversationData(data);
+        } catch (err: unknown) {
+          setConversationData({
+            kind: 'unavailable',
+            provider: run.provider,
+            reason: err instanceof Error ? err.message : '当前无法读取 AI 对话。',
+          });
+        } finally {
+          setConversationLoading(false);
+        }
+      }
+      setShowConversationPanel(true);
+      return;
+    }
+
+    setShowConversationPanel(false);
+  };
+
+  const resolveConversationTarget = async (): Promise<{ id: string; title: string } | null> => {
+    if (!run) return null;
+    if (run.childConversationId) {
+      return {
+        id: run.childConversationId,
+        title: run.prompt,
+      };
+    }
+
+    const data = conversationRunId === run.runId && conversationData
+      ? conversationData
+      : await api.agentRunConversation(run.runId);
+
+    if (conversationRunId !== run.runId || !conversationData) {
+      setConversationRunId(run.runId);
+      setConversationData(data);
+    }
+
+    if (data.kind === 'conversation') {
+      return {
+        id: data.conversationId,
+        title: data.title,
+      };
+    }
+
+    if (data.kind === 'transcript' && data.viewerConversationId) {
+      return {
+        id: data.viewerConversationId,
+        title: data.viewerTitle || run.prompt,
+      };
+    }
+
+    return null;
+  };
+
+  const handleOpenConversation = async (titleOverride?: string) => {
+    if (!onOpenConversation) return;
+    const target = await resolveConversationTarget();
+    if (!target) return;
+    onOpenConversation(target.id, titleOverride || target.title);
+  };
+
+  const handleOpenChatTab = async (titleOverride?: string) => {
+    if (!onOpenChatTab) return;
+    const target = await resolveConversationTarget();
+    if (!target) return;
+    onOpenChatTab(target.id, titleOverride || target.title);
+  };
+
   return (
     <Pane tone="strong" className="p-6 md:p-8">
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start">
           <div className="min-w-0 flex-1">
             <PaneHeader
-              eyebrow={t('agent.selectedRun')}
+              eyebrow={executiveMode ? '结果检查' : t('agent.selectedRun')}
               title={<span className="line-clamp-3">{run.prompt}</span>}
               meta={(
                 <>
                   <StatusChip tone={status.tone}>{statusLabel}</StatusChip>
-                  {run.executorKind === 'prompt' && <StatusChip tone="info">Prompt</StatusChip>}
-                  {run.reviewOutcome && <ReviewOutcomeBadge outcome={run.reviewOutcome} />}
-                  <StatusChip>{workspaceName}</StatusChip>
-                  <StatusChip>{modelLabel}</StatusChip>
+                  {verificationKnown && (
+                    <StatusChip tone={verificationPassed ? 'success' : 'warning'}>
+                      {verificationPassed ? '已通过校验' : '需要校验'}
+                    </StatusChip>
+                  )}
+                  {!executiveMode && run.executorKind === 'prompt' && <StatusChip tone="info">Prompt</StatusChip>}
+                  {!executiveMode && run.executionProfileSummary && <StatusChip tone="info">{run.executionProfileSummary.label}</StatusChip>}
+                  {!executiveMode && run.reviewOutcome && <ReviewOutcomeBadge outcome={run.reviewOutcome} />}
+                  {!executiveMode && run.provider && <StatusChip tone="info">{run.provider}</StatusChip>}
+                  {!executiveMode && <StatusChip>{workspaceName}</StatusChip>}
+                  {!executiveMode && <StatusChip>{modelLabel}</StatusChip>}
                   <StatusChip>{getAgentRunTimeAgo(run.createdAt, locale)}</StatusChip>
                   {duration && <StatusChip>{t('agent.duration', { value: duration })}</StatusChip>}
+                  {!executiveMode && run.tokenUsage && (
+                    <StatusChip>
+                      {`${(run.tokenUsage.totalTokens / 1000).toFixed(1)}k tokens`}
+                    </StatusChip>
+                  )}
                 </>
               )}
               actions={(
@@ -258,7 +381,7 @@ export default function AgentRunDetail({
                 {t('agent.cancelRun')}
               </Button>
             )}
-            {onIntervene && (
+            {onIntervene && (!executiveMode || hasAttention) && (
               <Button
                 variant="outline"
                 className="h-11 rounded-[18px] border-purple-400/18 bg-purple-400/10 text-purple-100 hover:border-purple-400/30 hover:bg-purple-400/14 hover:text-white disabled:opacity-50"
@@ -269,16 +392,35 @@ export default function AgentRunDetail({
                 {t('agent.evaluate', { defaultValue: 'AI Diagnose' })}
               </Button>
             )}
-            {run.childConversationId && onOpenConversation && (
+            {canDirectEvaluate && (!executiveMode || hasAttention) && (
+              <Button
+                variant="outline"
+                className="h-11 rounded-[18px] border-purple-400/18 bg-purple-400/10 text-purple-100 hover:border-purple-400/30 hover:bg-purple-400/14 hover:text-white disabled:opacity-50"
+                onClick={handleDirectEvaluate}
+                disabled={interveneLoading}
+              >
+                {interveneLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+                {t('agent.evaluate', { defaultValue: 'AI Diagnose' })}
+              </Button>
+            )}
+            {hasConversationLink && onOpenConversation && !executiveMode && (
               <Button
                 variant="outline"
                 className="h-11 rounded-[18px] border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
-                onClick={() => onOpenConversation(run.childConversationId!, run.prompt)}
+                onClick={() => { void handleOpenConversation(run.prompt); }}
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 {t('agent.openConversation')}
               </Button>
             )}
+            <Button
+              variant="outline"
+              className="h-11 rounded-[18px] border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+              onClick={handleToggleConversationPanel}
+            >
+              <ExternalLink className="mr-2 h-4 w-4" />
+              {showConversationPanel ? '收起 AI 对话' : '查看 AI 对话'}
+            </Button>
           </div>
         </div>
 
@@ -294,22 +436,76 @@ export default function AgentRunDetail({
           </div>
         )}
 
+        {showConversationPanel && (
+          <SurfaceCard title="AI 对话">
+            {conversationLoading ? (
+              <div className="flex items-center gap-2 text-sm text-[var(--app-text-soft)]">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>正在加载 AI 对话…</span>
+              </div>
+            ) : conversationData?.kind === 'conversation' ? (
+              <div className="space-y-3">
+                <div className="text-sm leading-7 text-[var(--app-text-soft)]">
+                  当前 provider 将 AI 对话保存在独立 conversation 中。
+                </div>
+                {onOpenConversation ? (
+                  <Button
+                    variant="outline"
+                    className="h-10 rounded-[16px] border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+                    onClick={() => onOpenConversation(conversationData.conversationId, conversationData.title)}
+                  >
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    打开完整 AI 对话
+                  </Button>
+                ) : (
+                  <div className="text-sm text-[var(--app-text-soft)]">当前页面未挂接 conversation viewer。</div>
+                )}
+              </div>
+            ) : conversationData?.kind === 'transcript' ? (
+              <div className="space-y-3">
+                {conversationData.messages.map((message, index) => (
+                  <div
+                    key={`${message.role}-${index}`}
+                    className={cn(
+                      'rounded-[18px] border px-4 py-3',
+                      message.role === 'user'
+                        ? 'border-sky-400/18 bg-sky-400/10'
+                        : 'border-white/8 bg-white/[0.03]',
+                    )}
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
+                      {message.role === 'user' ? 'User' : 'Assistant'}
+                    </div>
+                    <div className="mt-2 whitespace-pre-wrap text-sm leading-7 text-[var(--app-text-soft)]">
+                      {message.content}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm leading-7 text-[var(--app-text-soft)]">
+                {conversationData?.reason || '当前没有可展示的 AI 对话内容。'}
+              </div>
+            )}
+          </SurfaceCard>
+        )}
+
         <InspectorTabs
           value={tab}
           onValueChange={(value) => {
             const newTab = value as typeof tab;
             setTab(newTab);
-            if (newTab === 'chat' && run.childConversationId && onOpenChatTab) {
-              onOpenChatTab(run.childConversationId, run.prompt);
+            if (newTab === 'chat' && hasConversationLink && onOpenChatTab) {
+              void handleOpenChatTab(run.prompt);
             }
           }}
           tabs={[
             { value: 'result', label: t('agent.result') },
-            { value: 'files', label: `${t('agent.files')} ${changedFiles.length ? `(${changedFiles.length})` : ''}`.trim() },
-            { value: 'review', label: `${t('agent.review')} ${(needsReview.length + blockers.length) ? `(${needsReview.length + blockers.length})` : ''}`.trim() },
-            ...((run.taskEnvelope || run.resultEnvelope) ? [{ value: 'envelope' as const, label: `Envelope ${run.resultEnvelope?.outputArtifacts?.length ? `(${run.resultEnvelope.outputArtifacts.length})` : ''}`.trim() }] : []),
-            { value: 'trace', label: t('agent.trace') },
-            ...(run.childConversationId ? [{ value: 'chat' as const, label: t('shell.conversations', { defaultValue: 'Conversation' }) }] : []),
+            { value: 'files', label: `${executiveMode ? '交付物' : t('agent.files')} ${changedFiles.length ? `(${changedFiles.length})` : ''}`.trim() },
+            ...(!executiveMode ? [{ value: 'review' as const, label: `${t('agent.review')} ${(needsReview.length + blockers.length) ? `(${needsReview.length + blockers.length})` : ''}`.trim() }] : []),
+            ...(!executiveMode && (run.taskEnvelope || run.resultEnvelope) ? [{ value: 'envelope' as const, label: `Envelope ${run.resultEnvelope?.outputArtifacts?.length ? `(${run.resultEnvelope.outputArtifacts.length})` : ''}`.trim() }] : []),
+            ...(!executiveMode ? [{ value: 'trace' as const, label: t('agent.trace') }] : []),
+            ...(!executiveMode && hasConversationLink ? [{ value: 'chat' as const, label: t('shell.conversations', { defaultValue: 'Conversation' }) }] : []),
           ]}
         />
 
@@ -322,6 +518,17 @@ export default function AgentRunDetail({
                     className="chat-markdown text-[15px] leading-7 text-[color:var(--app-text-soft)]"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(summary) }}
                   />
+                ) : isStreaming && streamingText ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-xs text-sky-400">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <span>Streaming...</span>
+                    </div>
+                    <div
+                      className="chat-markdown text-[15px] leading-7 text-[color:var(--app-text-soft)]"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(streamingText) }}
+                    />
+                  </div>
                 ) : (
                   <div className="rounded-[20px] border border-dashed border-[var(--app-border-soft)] bg-black/10 px-4 py-6 text-sm leading-7 text-[color:var(--app-text-soft)]">
                     {active ? t('agent.stillRunning') : t('agent.noSummary')}
@@ -350,7 +557,7 @@ export default function AgentRunDetail({
               </SurfaceCard>
             )}
 
-            {tab === 'review' && (
+            {tab === 'review' && !executiveMode && (
               <div className="grid gap-5 lg:grid-cols-2">
                 <SurfaceCard title={t('agent.reviewQueue')}>
                   {needsReview.length > 0 ? (
@@ -382,7 +589,7 @@ export default function AgentRunDetail({
               </div>
             )}
 
-            {tab === 'envelope' && (
+            {tab === 'envelope' && !executiveMode && (
               <div className="space-y-5">
                 {run.taskEnvelope && (
                   <SurfaceCard title="Task Envelope">
@@ -520,16 +727,22 @@ export default function AgentRunDetail({
               </div>
             )}
 
-            {tab === 'trace' && (
+            {tab === 'trace' && !executiveMode && (
               <div className="space-y-5">
                 <SurfaceCard title={t('agent.traceInfo')}>
                   <div className="rounded-[20px] border border-[var(--app-border-soft)] bg-[var(--app-raised)]">
                     {[
                       [t('agent.runId'), run.runId.slice(0, 8)],
                       [t('sidebar.selectWorkspace'), workspaceName],
+                      ['Provider', run.provider || 'auto'],
                       [t('agent.model'), modelLabel],
                       [t('agent.created'), formatDateTime(run.createdAt, locale)],
                       [t('agent.finished'), formatDateTime(run.finishedAt, locale)],
+                      ...(run.tokenUsage ? [
+                        ['Input Tokens', run.tokenUsage.inputTokens.toLocaleString()],
+                        ['Output Tokens', run.tokenUsage.outputTokens.toLocaleString()],
+                        ['Total Tokens', run.tokenUsage.totalTokens.toLocaleString()],
+                      ] : []),
                     ]
                       .filter(([, value]) => value)
                       .map(([label, value]) => (
@@ -589,7 +802,7 @@ export default function AgentRunDetail({
               </div>
             )}
 
-            {tab === 'chat' && renderChat && (
+            {tab === 'chat' && !executiveMode && renderChat && (
               <div className="h-[600px] overflow-hidden rounded-[20px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(18,28,43,0.94)_0%,rgba(12,19,31,0.98)_100%)]">
                 {renderChat()}
               </div>
@@ -597,9 +810,135 @@ export default function AgentRunDetail({
           </div>
 
           <div className="space-y-5">
+            <SurfaceCard title={executiveMode ? '检查结论' : 'Completion Evidence'}>
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{executiveMode ? '当前状态' : 'Run Status'}</div>
+                    <div className="mt-1 text-sm font-medium text-[var(--app-text)]">{statusLabel}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{executiveMode ? '结果' : 'Result Status'}</div>
+                    <div className="mt-1 text-sm font-medium text-[var(--app-text)]">{run.result?.status || run.resultEnvelope?.status || 'pending'}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{executiveMode ? '交付物' : 'Artifacts'}</div>
+                    <div className="mt-1 text-sm font-medium text-[var(--app-text)]">{outputArtifacts.length}</div>
+                  </div>
+                  <div className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{executiveMode ? '关注项' : 'Attention'}</div>
+                    <div className="mt-1 text-sm font-medium text-[var(--app-text)]">
+                      {hasAttention ? `${blockers.length + needsReview.length || 1} item(s)` : 'No issue'}
+                    </div>
+                  </div>
+                </div>
 
+                {verificationKnown && (
+                  <div
+                    className={cn(
+                      'rounded-[18px] border px-4 py-3',
+                      verificationPassed
+                        ? 'border-emerald-400/18 bg-emerald-400/10 text-emerald-100'
+                        : 'border-amber-400/18 bg-amber-400/10 text-amber-100',
+                    )}
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">Verification</div>
+                    <div className="mt-1 text-sm font-medium">
+                      {verificationPassed ? 'Passed' : 'Needs attention'}
+                    </div>
+                    {(run.reportedEventDate || run.reportedEventCount !== undefined) && (
+                      <div className="mt-2 text-xs opacity-80">
+                        {run.reportedEventDate && <span>Date: {run.reportedEventDate}</span>}
+                        {run.reportedEventDate && run.reportedEventCount !== undefined && run.reportedEventCount !== null && <span> · </span>}
+                        {run.reportedEventCount !== undefined && run.reportedEventCount !== null && <span>Count: {run.reportedEventCount}</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
 
+                {!executiveMode && run.resolutionReason && (
+                  <div className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Resolution Reason</div>
+                    <div className="mt-1 text-sm leading-6 text-[var(--app-text-soft)]">{run.resolutionReason}</div>
+                  </div>
+                )}
+              </div>
+            </SurfaceCard>
 
+            {outputArtifacts.length > 0 && (
+              <SurfaceCard title={executiveMode ? '主要交付物' : 'Output Artifacts'}>
+                <div className="space-y-2">
+                  {outputArtifacts.slice(0, 6).map((art) => (
+                    <div key={art.id} className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                      <div className="text-sm text-[var(--app-text)] truncate">{art.title}</div>
+                      {!executiveMode && (
+                        <>
+                          <div className="mt-1 truncate font-mono text-[11px] text-[var(--app-text-muted)]">{art.path}</div>
+                          <div className="mt-2">
+                            <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[var(--app-text-soft)]">{art.kind}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </SurfaceCard>
+            )}
+
+            {(run.reportApiResponse || run.artifactManifestPath || run.provider || run.resolvedWorkflowRef) && (
+              <div className="rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)]/60 px-4 py-3">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left"
+                  onClick={() => setShowTechnicalDetails((prev) => !prev)}
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
+                    {executiveMode ? '技术细节（按需查看）' : 'Technical Details'}
+                  </div>
+                  <span className="text-xs text-[var(--app-text-soft)]">{showTechnicalDetails ? '收起' : '展开'}</span>
+                </button>
+                {showTechnicalDetails && (
+                  <div className="mt-3 space-y-3">
+                    {run.provider && (
+                      <div className="rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Provider</div>
+                        <div className="mt-1 text-sm text-[var(--app-text)]">{run.provider}</div>
+                      </div>
+                    )}
+                    {run.resolvedWorkflowRef && (
+                      <div className="rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Workflow</div>
+                        <div className="mt-1 break-all text-sm text-[var(--app-text)]">{run.resolvedWorkflowRef}</div>
+                      </div>
+                    )}
+                    {!executiveMode && (
+                      <>
+                        <div className="rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Workspace</div>
+                          <div className="mt-1 break-all text-sm text-[var(--app-text)]">{workspaceName}</div>
+                        </div>
+                        <div className="rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Model</div>
+                          <div className="mt-1 break-all text-sm text-[var(--app-text)]">{modelLabel}</div>
+                        </div>
+                      </>
+                    )}
+                    {run.reportApiResponse && (
+                      <div className="rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Report API</div>
+                        <div className="mt-1 break-all font-mono text-[11px] text-[var(--app-text-soft)]">{run.reportApiResponse}</div>
+                      </div>
+                    )}
+                    {run.artifactManifestPath && (
+                      <div className="rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Artifact Manifest</div>
+                        <div className="mt-1 break-all font-mono text-[11px] text-[var(--app-text-soft)]">{run.artifactManifestPath}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

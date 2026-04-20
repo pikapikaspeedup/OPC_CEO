@@ -2,10 +2,20 @@ import type { ProviderId } from '../providers';
 import type {
   ExecutionTarget,
   ExecutorKind,
+  PromptModeResolution,
   RunLiveState,
   TaskResult,
   TriggerContext,
 } from '../agents/group-types';
+import type { ExecutionProfile } from '../execution/contracts';
+import type {
+  DepartmentExecutionClass,
+  DepartmentPermissionMode,
+  DepartmentRequiredArtifact,
+  DepartmentRuntimeCapabilities,
+  DepartmentRuntimeContract,
+  DepartmentToolset,
+} from '../organization/contracts';
 
 export type MemoryEntryType = 'user' | 'feedback' | 'project' | 'reference';
 
@@ -31,12 +41,32 @@ export interface BackendRunMetadata {
   autoApprove?: boolean;
 }
 
+export interface BackendRunResolution {
+  resolvedWorkflowRef?: string;
+  resolvedSkillRefs?: string[];
+  resolutionReason?: string;
+  promptResolution?: PromptModeResolution;
+  requestedProvider?: ProviderId;
+  routedProvider?: ProviderId;
+  providerRoutingReason?: string;
+  requiredExecutionClass?: DepartmentExecutionClass;
+}
+
 export interface BackendRunConfig {
   runId: string;
   workspacePath: string;
   prompt: string;
   model?: string;
   artifactDir?: string;
+  runtimeContract?: DepartmentRuntimeContract;
+  executionProfile?: ExecutionProfile;
+  resolution?: BackendRunResolution;
+  toolset?: DepartmentToolset;
+  permissionMode?: DepartmentPermissionMode;
+  additionalWorkingDirectories?: string[];
+  readRoots?: string[];
+  allowedWriteRoots?: string[];
+  requiredArtifacts?: DepartmentRequiredArtifact[];
   parentConversationId?: string;
   executionTarget?: ExecutionTarget;
   triggerContext?: TriggerContext;
@@ -51,6 +81,7 @@ export interface AgentBackendCapabilities {
   emitsLiveState: boolean;
   emitsRawSteps: boolean;
   emitsStreamingText: boolean;
+  departmentRuntime?: DepartmentRuntimeCapabilities;
 }
 
 export interface AppendRunRequest {
@@ -105,6 +136,11 @@ export interface CompletedAgentEvent {
   result: TaskResult;
   rawSteps?: unknown[];
   finalText?: string;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
 }
 
 export interface FailedAgentEvent {

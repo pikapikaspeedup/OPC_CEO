@@ -1,7 +1,9 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import { existsSync } from 'fs';
+import { promisify } from 'util';
 import { createLogger } from '../logger';
 
+const execAsync = promisify(exec);
 const log = createLogger('Discovery');
 
 export interface LanguageServerInfo {
@@ -80,27 +82,44 @@ function decodeWorkspaceId(wsId: string): string | undefined {
   return 'file://' + resolvedPath.replace(/\/$/, '');
 }
 
+// In-flight promise to prevent concurrent discovery runs
+let _discoveryInFlight: Promise<LanguageServerInfo[]> | null = null;
+
 /**
  * Discover all running language_server instances with their ports and CSRF tokens.
  * Results are cached for 3 seconds to avoid expensive shell commands on every request.
+ * Now ASYNC to avoid blocking the event loop.
  */
-export function discoverLanguageServers(): LanguageServerInfo[] {
+export async function discoverLanguageServers(): Promise<LanguageServerInfo[]> {
   if (Date.now() - _cacheTime < CACHE_TTL_MS && _cachedServers.length > 0) {
     return _cachedServers;
   }
 
+  // Deduplicate concurrent calls
+  if (_discoveryInFlight) return _discoveryInFlight;
+
+  _discoveryInFlight = _discoverLanguageServersImpl();
+  try {
+    return await _discoveryInFlight;
+  } finally {
+    _discoveryInFlight = null;
+  }
+}
+
+async function _discoverLanguageServersImpl(): Promise<LanguageServerInfo[]> {
   const servers: LanguageServerInfo[] = [];
 
   try {
-    // Step 1: Get all language_server processes with their CSRF tokens + workspace
-    const psOutput = execSync('ps aux', { encoding: 'utf-8', timeout: 5000 });
-    const psLines = psOutput.split('\n').filter(l => l.includes('language_server') && l.includes('--csrf_token'));
+    // Step 1 & 2: Run ps and lsof in parallel (non-blocking)
+    const [psResult, lsofResult] = await Promise.all([
+      execAsync('ps aux', { encoding: 'utf-8', timeout: 5000 }).catch(() => ({ stdout: '' })),
+      execAsync('lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null', { encoding: 'utf-8', timeout: 10000 }).catch(() => ({ stdout: '' })),
+    ]);
 
-    // Step 2: Get all TCP LISTEN ports globally (once, not per-PID)
-    let lsofOutput = '';
-    try {
-      lsofOutput = execSync('lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null', { encoding: 'utf-8', timeout: 10000 });
-    } catch {}
+    const psOutput = psResult.stdout || '';
+    const lsofOutput = lsofResult.stdout || '';
+
+    const psLines = psOutput.split('\n').filter(l => l.includes('language_server') && l.includes('--csrf_token'));
 
     for (const line of psLines) {
       const pidMatch = line.match(/^\S+\s+(\d+)/);
@@ -126,7 +145,7 @@ export function discoverLanguageServers(): LanguageServerInfo[] {
 
       servers.push({ pid, port, csrf, workspace });
     }
-  } catch { /* ps failed */ }
+  } catch { /* discovery failed */ }
 
   if (servers.length !== _cachedServers.length || servers.some((s, i) => s.port !== _cachedServers[i]?.port)) {
     log.info({ count: servers.length, servers: servers.map(s => `pid=${s.pid} port=${s.port} ws="${s.workspace}"`).join(' | ') }, 'Servers discovered');
@@ -140,8 +159,8 @@ export function discoverLanguageServers(): LanguageServerInfo[] {
 /**
  * Get the first available language_server, or one matching a workspace path.
  */
-export function getLanguageServer(workspacePath?: string): LanguageServerInfo | null {
-  const servers = discoverLanguageServers();
+export async function getLanguageServer(workspacePath?: string): Promise<LanguageServerInfo | null> {
+  const servers = await discoverLanguageServers();
   if (servers.length === 0) return null;
 
   if (workspacePath) {

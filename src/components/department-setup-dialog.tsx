@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { NativeSelect } from '@/components/ui/native-select';
-import type { DepartmentConfig, DepartmentOKR, DepartmentRoster, TokenQuota, TemplateSummaryFE } from '@/lib/types';
+import type { DepartmentConfig, DepartmentOKR, DepartmentRoster, Skill, TokenQuota, TemplateSummaryFE, Workflow } from '@/lib/types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -112,6 +112,23 @@ function SpritePicker({ value, onChange }: { value: string; onChange: (v: string
   );
 }
 
+function normalizeWorkflowRef(workflowRef?: string): string {
+  const trimmed = workflowRef?.trim() || '';
+  if (!trimmed) return '';
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function splitSkillRefs(raw: string): string[] {
+  return raw
+    .split(',')
+    .map(ref => ref.trim())
+    .filter(Boolean);
+}
+
+function formatSkillRefs(skillRefs?: string[]): string {
+  return (skillRefs ?? []).join(', ');
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function DepartmentSetupDialog({
@@ -132,14 +149,35 @@ export default function DepartmentSetupDialog({
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>(initialConfig.templateIds ?? []);
   const [okr, setOkr] = useState<DepartmentOKR | null>(initialConfig.okr ?? null);
   const [roster, setRoster] = useState<DepartmentRoster[]>(initialConfig.roster ?? []);
+  const [skills, setSkills] = useState(initialConfig.skills ?? []);
   const [provider, setProvider] = useState<DepartmentConfig['provider']>(initialConfig.provider);
   const [tokenQuotaDaily, setTokenQuotaDaily] = useState<number>(initialConfig.tokenQuota?.daily ?? 0);
   const [tokenQuotaMonthly, setTokenQuotaMonthly] = useState<number>(initialConfig.tokenQuota?.monthly ?? 0);
   const [saving, setSaving] = useState(false);
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [canonicalWorkflows, setCanonicalWorkflows] = useState<Workflow[]>([]);
+  const [canonicalSkills, setCanonicalSkills] = useState<Skill[]>([]);
+  const workflowOptions = useMemo(
+    () => canonicalWorkflows.map(workflow => ({
+      value: `/${workflow.name}`,
+      label: `/${workflow.name}`,
+      description: workflow.description,
+    })),
+    [canonicalWorkflows],
+  );
+  const canonicalSkillRefs = useMemo(
+    () => canonicalSkills.map(skill => skill.name),
+    [canonicalSkills],
+  );
 
   const isCustomType = !PRESET_TYPES.some(p => p.value === type);
+  const skillSummary = useMemo(() => {
+    const total = skills.length;
+    const withWorkflow = skills.filter(skill => normalizeWorkflowRef(skill.workflowRef)).length;
+    const withFallback = skills.filter(skill => (skill.skillRefs ?? []).some(ref => ref.trim())).length;
+    return { total, withWorkflow, withFallback };
+  }, [skills]);
 
   // ── Derived: all roleIds from selected templates ────────────────────────
 
@@ -165,6 +203,7 @@ export default function DepartmentSetupDialog({
       setSelectedTemplateIds(initialConfig.templateIds ?? []);
       setOkr(initialConfig.okr ?? null);
       setRoster(initialConfig.roster ?? []);
+      setSkills(initialConfig.skills ?? []);
       setProvider(initialConfig.provider);
       setTokenQuotaDaily(initialConfig.tokenQuota?.daily ?? 0);
       setTokenQuotaMonthly(initialConfig.tokenQuota?.monthly ?? 0);
@@ -174,14 +213,17 @@ export default function DepartmentSetupDialog({
   // ── Load templates ─────────────────────────────────────────────────
 
   useEffect(() => {
-    if (open && templates.length === 0) {
+    if (open && (templates.length === 0 || canonicalWorkflows.length === 0 || canonicalSkills.length === 0)) {
       setTemplatesLoading(true);
-      api.pipelines()
-        .then(setTemplates)
+      Promise.all([
+        api.pipelines().then(setTemplates),
+        api.workflows().then(setCanonicalWorkflows).catch(() => {}),
+        api.skills().then(setCanonicalSkills).catch(() => {}),
+      ])
         .catch(() => {})
         .finally(() => setTemplatesLoading(false));
     }
-  }, [open, templates.length]);
+  }, [canonicalSkills.length, canonicalWorkflows.length, open, templates.length]);
 
   // ── Template toggle ────────────────────────────────────────────────
 
@@ -280,6 +322,43 @@ export default function DepartmentSetupDialog({
     return roster.find(r => r.rolePattern === roleId);
   }
 
+  function updateSkillAt(index: number, patch: Partial<DepartmentConfig['skills'][0]>) {
+    setSkills(prev => prev.map((skill, i) => (i === index ? { ...skill, ...patch } : skill)));
+  }
+
+  function toggleFallbackSkill(index: number, ref: string) {
+    const normalized = ref.trim();
+    if (!normalized) return;
+
+    setSkills(prev => prev.map((skill, i) => {
+      if (i !== index) return skill;
+      const nextRefs = new Set((skill.skillRefs ?? []).map(item => item.trim()).filter(Boolean));
+      if (nextRefs.has(normalized)) {
+        nextRefs.delete(normalized);
+      } else {
+        nextRefs.add(normalized);
+      }
+      return { ...skill, skillRefs: Array.from(nextRefs) };
+    }));
+  }
+
+  function addSkill() {
+    setSkills(prev => [
+      ...prev,
+      {
+        skillId: `skill_${Date.now()}`,
+        name: '',
+        category: 'operations',
+        workflowRef: undefined,
+        skillRefs: [],
+      },
+    ]);
+  }
+
+  function removeSkill(index: number) {
+    setSkills(prev => prev.filter((_, i) => i !== index));
+  }
+
   // ── Save ───────────────────────────────────────────────────────────────
 
   async function handleSave() {
@@ -303,7 +382,13 @@ export default function DepartmentSetupDialog({
         ...(resolvedIcon ? { typeIcon: resolvedIcon } : {}),
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(selectedTemplateIds.length > 0 ? { templateIds: selectedTemplateIds } : {}),
-        skills: initialConfig.skills,
+        skills: skills
+          .filter(skill => skill.name.trim())
+          .map(skill => ({
+            ...skill,
+            workflowRef: normalizeWorkflowRef(skill.workflowRef) || undefined,
+            skillRefs: Array.from(new Set((skill.skillRefs ?? []).flatMap(splitSkillRefs))).filter(Boolean),
+          })),
         okr: okr && okr.objectives.length > 0 ? okr : null,
         roster: roster.filter(r => r.rolePattern.trim() && (r.displayName.trim() || r.spriteType)),
         ...(provider ? { provider } : {}),
@@ -350,6 +435,9 @@ export default function DepartmentSetupDialog({
             <TabsTrigger value="basic" className="text-xs">基本信息</TabsTrigger>
             <TabsTrigger value="templates" className="text-xs">
               模板{selectedTemplateIds.length > 0 && ` (${selectedTemplateIds.length})`}
+            </TabsTrigger>
+            <TabsTrigger value="skills" className="text-xs">
+              技能{skills.length > 0 && ` (${skills.length})`}
             </TabsTrigger>
             <TabsTrigger value="roster" className="text-xs">花名册</TabsTrigger>
             <TabsTrigger value="okr" className="text-xs">OKR</TabsTrigger>
@@ -442,6 +530,13 @@ export default function DepartmentSetupDialog({
                 <option value="auto">自动选择</option>
                 <option value="antigravity">Antigravity (gRPC)</option>
                 <option value="codex">Codex (MCP)</option>
+                <option value="native-codex">Codex Native (OAuth)</option>
+                <option value="claude-code">Claude Code (CLI)</option>
+                <option value="claude-api">Claude API (直连)</option>
+                <option value="openai-api">OpenAI API</option>
+                <option value="gemini-api">Gemini API</option>
+                <option value="grok-api">Grok API</option>
+                <option value="custom">OpenAI Compatible / Custom</option>
               </NativeSelect>
               <p className="text-xs text-muted-foreground">
                 设置该部门 Agent 任务使用的 AI 服务商
@@ -489,6 +584,140 @@ export default function DepartmentSetupDialog({
                 设置为 0 表示不限制。超出配额后将触发审批。
               </p>
             </div>
+          </TabsContent>
+
+          {/* ── Skills Tab ─────────────────────────────────────────────── */}
+          <TabsContent value="skills" className="space-y-4 pt-4 pb-2 overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                部门 skill 是任务入口。优先绑定全局 workflow；没有 workflow 时再回退 skill refs。
+              </p>
+              <Button type="button" size="sm" variant="outline" onClick={addSkill}>
+                + 添加技能
+              </Button>
+            </div>
+
+            <div className="grid gap-2 rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground sm:grid-cols-3">
+              <div>技能数：<span className="text-foreground font-medium">{skillSummary.total}</span></div>
+              <div>绑定 Workflow：<span className="text-foreground font-medium">{skillSummary.withWorkflow}</span></div>
+              <div>Fallback 列表：<span className="text-foreground font-medium">{skillSummary.withFallback}</span></div>
+            </div>
+
+            {skills.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+                暂无技能定义。可以先保存部门，后续再补 skill → workflow 映射。
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {skills.map((skill, index) => (
+                  <div key={skill.skillId || `${skill.name}-${index}`} className="rounded-lg border border-border/60 p-4 bg-muted/20 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-foreground">技能 {index + 1}</div>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => removeSkill(index)}>
+                        删除
+                      </Button>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">技能名称</label>
+                        <Input
+                          value={skill.name}
+                          onChange={e => updateSkillAt(index, { name: e.target.value })}
+                          placeholder="如：日报总结"
+                          className="h-8"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">分类</label>
+                        <Input
+                          value={skill.category}
+                          onChange={e => updateSkillAt(index, { category: e.target.value })}
+                          placeholder="research / operations / engineering"
+                          className="h-8"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">优先 Workflow</label>
+                        <NativeSelect
+                          value={skill.workflowRef || ''}
+                          onChange={e => updateSkillAt(index, { workflowRef: e.target.value || undefined })}
+                          className="text-xs"
+                        >
+                          <option value="">未绑定</option>
+                          {workflowOptions.map(workflow => (
+                            <option key={workflow.value} value={workflow.value} title={workflow.description}>
+                              {workflow.label}
+                            </option>
+                          ))}
+                        </NativeSelect>
+                        <p className="text-[11px] text-muted-foreground">
+                          选择后会优先尝试该 workflow；留空则让 provider 根据上下文自行决定。
+                        </p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">Fallback Skills</label>
+                        <Input
+                          value={formatSkillRefs(skill.skillRefs)}
+                          onChange={e => updateSkillAt(index, {
+                            skillRefs: splitSkillRefs(e.target.value),
+                          })}
+                          placeholder={canonicalSkills.slice(0, 3).map(entry => entry.name).join(', ')}
+                          className="h-8"
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          支持 skill 名称或 skillId，逗号分隔。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-1.5">
+                        {canonicalSkillRefs.length > 0 ? canonicalSkillRefs.map(ref => {
+                          const selected = (skill.skillRefs ?? []).includes(ref);
+                          return (
+                            <button
+                              key={ref}
+                              type="button"
+                              onClick={() => toggleFallbackSkill(index, ref)}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors cursor-pointer ${
+                                selected
+                                  ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-300'
+                                  : 'border-border bg-background text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/40'
+                              }`}
+                              aria-pressed={selected}
+                              title={`切换 fallback: ${ref}`}
+                            >
+                              {ref}
+                            </button>
+                          );
+                        }) : (
+                          <span className="text-[11px] text-muted-foreground">
+                            暂无 canonical skills 可选，直接手动输入 fallback refs 即可。
+                          </span>
+                        )}
+                      </div>
+                      {(skill.skillRefs?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {skill.skillRefs?.map(ref => (
+                            <span
+                              key={ref}
+                              className="rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-white/60"
+                              title={ref}
+                            >
+                              {ref}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           {/* ── Templates Tab ─────────────────────────────────────────── */}

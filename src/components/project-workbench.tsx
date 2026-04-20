@@ -20,6 +20,7 @@ import ProjectOpsPanel from '@/components/project-ops-panel';
 import ProjectDagView from '@/components/project-dag-view';
 import DeliverablesPanel from '@/components/deliverables-panel';
 import PromptRunsSection from '@/components/prompt-runs-section';
+import AgentRunDetail from '@/components/agent-run-detail';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Layers, ArrowRight, Activity, List, Network, ShieldCheck, Package } from 'lucide-react';
 
@@ -42,7 +43,8 @@ export function resolveStageTitle(
 
 type SelectionTarget =
   | { type: 'stage'; stageIndex: number }
-  | { type: 'role'; stageIndex: number; roleKey: string };
+  | { type: 'role'; stageIndex: number; roleKey: string }
+  | { type: 'prompt-run'; runId: string };
 
 // ---------------------------------------------------------------------------
 // Props
@@ -80,7 +82,7 @@ export default function ProjectWorkbench({
   onNavigateToProject,
 }: ProjectWorkbenchProps) {
   const pipeline = project.pipelineState;
-  const stages = pipeline?.stages || [];
+  const stages = useMemo(() => pipeline?.stages ?? [], [pipeline?.stages]);
 
   // Determine if DAG tab should show (non-linear pipeline: fan-out, join, control-flow, or graphPipeline format)
   const showDagTab = useMemo(() => {
@@ -139,9 +141,25 @@ export default function ProjectWorkbench({
     [project.projectId],
   );
 
+  // Standalone prompt runs: prompt runs in this project that don't belong to any pipeline stage
+  const stageRunIds = useMemo(() => new Set(stages.map(s => s.runId).filter(Boolean)), [stages]);
+  const standalonePromptRuns = useMemo(
+    () => agentRuns.filter(
+      r => r.projectId === project.projectId && r.executorKind === 'prompt' && !stageRunIds.has(r.runId),
+    ),
+    [agentRuns, project.projectId, stageRunIds],
+  );
+
   // Resolve the run and role for the current selection
   const resolveSelection = () => {
-    if (!selection) return { selectedStage: null, selectedRun: null, selectedRole: null };
+    if (!selection) {
+      return { selectedStage: null, selectedRun: null, selectedRole: null, selectedPromptRun: null };
+    }
+
+    if (selection.type === 'prompt-run') {
+      const promptRun = standalonePromptRuns.find((run) => run.runId === selection.runId) || null;
+      return { selectedStage: null, selectedRun: promptRun, selectedRole: null, selectedPromptRun: promptRun };
+    }
 
     const stage = stages[selection.stageIndex] || null;
     const run = stage?.runId
@@ -152,13 +170,13 @@ export default function ProjectWorkbench({
       // Find the matching role by key
       const roleIndex = run.roles.findIndex((r, i) => makeRoleKey(r, i) === selection.roleKey);
       const role = roleIndex >= 0 ? run.roles[roleIndex] : null;
-      return { selectedStage: stage, selectedRun: run, selectedRole: role };
+      return { selectedStage: stage, selectedRun: run, selectedRole: role, selectedPromptRun: null };
     }
 
-    return { selectedStage: stage, selectedRun: run, selectedRole: null };
+    return { selectedStage: stage, selectedRun: run, selectedRole: null, selectedPromptRun: null };
   };
 
-  const { selectedStage, selectedRun, selectedRole } = resolveSelection();
+  const { selectedStage, selectedRun, selectedRole, selectedPromptRun } = resolveSelection();
 
   // Has something selected → show right panel
   const hasSelection = selection !== null;
@@ -199,12 +217,30 @@ export default function ProjectWorkbench({
     return { total: allRoles.length, working, completed, pending, awaitingReview };
   }, [stages, agentRuns]);
 
-  // Standalone prompt runs: prompt runs in this project that don't belong to any pipeline stage
-  const stageRunIds = useMemo(() => new Set(stages.map(s => s.runId).filter(Boolean)), [stages]);
-  const standalonePromptRuns = useMemo(
-    () => agentRuns.filter(r => r.executorKind === 'prompt' && !stageRunIds.has(r.runId)),
-    [agentRuns, stageRunIds],
-  );
+  const promptOnlyProject = totalCount === 0 && standalonePromptRuns.length > 0;
+  const primaryPromptRun = standalonePromptRuns[0] || null;
+  const useCompactPromptRail = standalonePromptRuns.length > 1;
+  const singlePromptOnlyFocused = promptOnlyProject && standalonePromptRuns.length === 1 && hasSelection && !!selectedPromptRun;
+
+  useEffect(() => {
+    if (!selection) return;
+
+    if (selection.type === 'stage' || selection.type === 'role') {
+      if (!stages[selection.stageIndex]) {
+        setSelection(null);
+      }
+      return;
+    }
+
+    if (selection.type === 'prompt-run' && !standalonePromptRuns.some((run) => run.runId === selection.runId)) {
+      setSelection(null);
+    }
+  }, [selection, stages, standalonePromptRuns]);
+
+  useEffect(() => {
+    if (selection || !promptOnlyProject || !primaryPromptRun) return;
+    setSelection({ type: 'prompt-run', runId: primaryPromptRun.runId });
+  }, [selection, promptOnlyProject, primaryPromptRun]);
 
   return (
     <Tabs defaultValue="pipeline">
@@ -310,92 +346,111 @@ export default function ProjectWorkbench({
           /* List view (stage cards) */
           <div className={cn(
             'grid gap-5',
-            hasSelection
-              ? 'xl:grid-cols-[500px_minmax(0,1fr)] 2xl:grid-cols-[540px_minmax(0,1fr)]'
-              : 'max-w-[600px]',
+            singlePromptOnlyFocused
+              ? 'max-w-[1200px]'
+              : hasSelection
+                ? 'xl:grid-cols-[300px_minmax(0,1fr)] 2xl:grid-cols-[320px_minmax(0,1fr)]'
+                : 'max-w-[600px]',
           )}>
-            <div className="space-y-4">
-              {/* Pipeline progress header */}
-              <div className="flex items-center gap-3 px-1">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/60">
-                  <Layers className="h-4 w-4" />
-                </div>
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
-                    Pipeline Stages
+            {!singlePromptOnlyFocused && (
+              <div className="space-y-4">
+                {!promptOnlyProject && (
+                  <div className="flex items-center gap-3 px-1">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/60">
+                      <Layers className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
+                        Pipeline Stages
+                      </div>
+                      <div className="text-[11px] text-white/30">
+                        {completedCount}/{totalCount} completed
+                      </div>
+                    </div>
+                    <div className="ml-auto flex items-center gap-2">
+                      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/8">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400 transition-all duration-500"
+                          style={{ width: totalCount > 0 ? `${(completedCount / totalCount) * 100}%` : '0%' }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-[11px] text-white/30">
-                    {completedCount}/{totalCount} completed
-                  </div>
-                </div>
-                <div className="ml-auto flex items-center gap-2">
-                  <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/8">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400 transition-all duration-500"
-                      style={{ width: totalCount > 0 ? `${(completedCount / totalCount) * 100}%` : '0%' }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Stage cards */}
-              <div className="relative flex flex-col gap-2">
-                {stages.length > 1 && (
-                  <div className="absolute left-[23px] top-10 bottom-10 w-px bg-gradient-to-b from-white/12 via-white/6 to-transparent" />
                 )}
 
-                {stages.map((stage, index) => {
-                  const run = stage.runId
-                    ? agentRuns.find((r) => r.runId === stage.runId)
-                    : undefined;
+                {/* Stage cards */}
+                {stages.length > 0 && (
+                  <div className="relative flex flex-col gap-2">
+                    {stages.length > 1 && (
+                      <div className="absolute left-[23px] top-10 bottom-10 w-px bg-gradient-to-b from-white/12 via-white/6 to-transparent" />
+                    )}
 
-                  return (
-                    <div key={`${stage.stageId}-${stage.stageIndex}`} className="relative">
-                      {index > 0 && (
-                        <div className="flex justify-center -mt-1 mb-1">
-                          <ArrowRight className="h-3 w-3 text-white/15 rotate-90" />
+                    {stages.map((stage, index) => {
+                      const run = stage.runId
+                        ? agentRuns.find((r) => r.runId === stage.runId)
+                        : undefined;
+
+                      return (
+                        <div key={`${stage.stageId}-${stage.stageIndex}`} className="relative">
+                          {index > 0 && (
+                            <div className="flex justify-center -mt-1 mb-1">
+                              <ArrowRight className="h-3 w-3 text-white/15 rotate-90" />
+                            </div>
+                          )}
+                          <PipelineStageCard
+                            stage={stage}
+                            stageTitle={resolveStageTitle(stage.stageId, templateStages, stage.title)}
+                            isSelected={selection?.type === 'stage' && selection.stageIndex === index}
+                            isCurrentStage={pipeline?.activeStageIds?.includes(stage.stageId) || false}
+                            roles={run?.roles}
+                            selectedRoleKey={
+                              selection?.type === 'role' && selection.stageIndex === index
+                                ? selection.roleKey
+                                : null
+                            }
+                            onClick={() =>
+                              setSelection((prev) =>
+                                prev?.type === 'stage' && prev.stageIndex === index
+                                  ? null
+                                  : { type: 'stage', stageIndex: index },
+                              )
+                            }
+                            onSelectRole={(roleKey) =>
+                              setSelection((prev) =>
+                                prev?.type === 'role' && prev.stageIndex === index && prev.roleKey === roleKey
+                                  ? null
+                                  : { type: 'role', stageIndex: index, roleKey },
+                              )
+                            }
+                            onNavigateToProject={onNavigateToProject}
+                          />
                         </div>
-                      )}
-                      <PipelineStageCard
-                        stage={stage}
-                        stageTitle={resolveStageTitle(stage.stageId, templateStages, stage.title)}
-                        isSelected={selection?.stageIndex === index && selection.type === 'stage'}
-                        isCurrentStage={pipeline?.activeStageIds?.includes(stage.stageId) || false}
-                        roles={run?.roles}
-                        selectedRoleKey={
-                          selection?.stageIndex === index && selection.type === 'role'
-                            ? selection.roleKey
-                            : null
-                        }
-                        onClick={() =>
-                          setSelection((prev) =>
-                            prev?.type === 'stage' && prev.stageIndex === index
-                              ? null
-                              : { type: 'stage', stageIndex: index },
-                          )
-                        }
-                        onSelectRole={(roleKey) =>
-                          setSelection((prev) =>
-                            prev?.type === 'role' && prev.stageIndex === index && prev.roleKey === roleKey
-                              ? null
-                              : { type: 'role', stageIndex: index, roleKey },
-                          )
-                        }
-                        onNavigateToProject={onNavigateToProject}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })}
+                  </div>
+                )}
 
-              {/* Standalone Prompt Runs */}
-              {standalonePromptRuns.length > 0 && (
-                <PromptRunsSection
-                  runs={standalonePromptRuns}
-                  onCancel={onCancelRun}
-                />
-              )}
-            </div>
+                {/* Standalone Prompt Runs */}
+                {standalonePromptRuns.length > 0 && (
+                  <PromptRunsSection
+                    runs={standalonePromptRuns}
+                    onCancel={onCancelRun}
+                    selectedRunId={selection?.type === 'prompt-run' ? selection.runId : null}
+                    onSelectRun={(runId) => setSelection({ type: 'prompt-run', runId })}
+                    compactTimeline={useCompactPromptRail}
+                  />
+                )}
+
+                {stages.length === 0 && standalonePromptRuns.length === 0 && (
+                  <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
+                    <div className="text-sm font-medium text-white/70">No execution evidence yet</div>
+                    <div className="mt-2 text-[12px] leading-6 text-white/40">
+                      这个项目还没有 pipeline stage，也没有 prompt run。创建执行后，结果和产物会显示在这里。
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Right panel — stage detail / gate review */}
             {hasSelection && (
@@ -412,14 +467,23 @@ export default function ProjectWorkbench({
                     onEvaluateRun={onEvaluateRun}
                     onGateApprove={handleGateApprove}
                   />
+                ) : selection.type === 'prompt-run' && selectedPromptRun ? (
+                  <AgentRunDetail
+                    run={selectedPromptRun}
+                    models={models}
+                    onCancel={onCancelRun}
+                    onEvaluateRun={onEvaluateRun}
+                    onOpenConversation={onOpenConversation}
+                    executiveMode
+                  />
                 ) : selection.type === 'role' && selectedRun && selectedRole ? (
                   <RoleDetailPanel
                     role={selectedRole}
                     run={selectedRun}
                     stageTitle={resolveStageTitle(
-                      stages[selection.stageIndex]?.stageId || '',
+                      selection.type === 'role' ? (stages[selection.stageIndex]?.stageId || '') : '',
                       templateStages,
-                      stages[selection.stageIndex]?.title,
+                      selection.type === 'role' ? stages[selection.stageIndex]?.title : undefined,
                     )}
                     onOpenConversation={onOpenConversation}
                   />

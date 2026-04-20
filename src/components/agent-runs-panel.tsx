@@ -146,6 +146,13 @@ function RunItem({
                 Prompt
               </Badge>
             )}
+            {run.executionProfileSummary && (
+              <Badge variant="outline" className={cn(
+                compact ? 'text-[9px] h-4 px-1.5 border-indigo-500/30 text-indigo-500/80 bg-indigo-500/10' : 'h-6 rounded-full border-indigo-400/20 bg-indigo-400/10 px-2.5 text-[10px] text-indigo-300'
+              )}>
+                {run.executionProfileSummary.label}
+              </Badge>
+            )}
             {run.roles && run.roles.length > 1 && run.currentRound !== undefined && run.maxRounds !== undefined && (
               <Badge variant="outline" className={cn(
                 compact ? 'text-[9px] h-4 px-1.5 border-sky-500/30 text-sky-500/80 bg-sky-500/10' : 'h-6 rounded-full border-sky-400/20 bg-sky-400/10 px-2.5 text-[10px] text-sky-400'
@@ -446,9 +453,6 @@ export default function AgentRunsPanel({
           }
         })
         .catch(() => setApprovedProductRuns([]));
-    } else {
-      setApprovedProductRuns([]);
-      setSelectedSourceRunId('');
     }
   }, [selectedGroup, effectiveSelectedWs]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -597,12 +601,20 @@ export default function AgentRunsPanel({
         )}
 
         <div className={cn('space-y-3', isFullLayout && 'relative')}>
-          {runningWs.length === 0 && (
+          {workspaces.length === 0 && (
             <div className={cn(
               'rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
               isFullLayout ? 'rounded-2xl px-4 py-3 text-sm' : 'px-2 py-1.5 text-[11px]'
             )}>
-              {t('sidebar.workspaceNotRunning')}
+              暂无可选 workspace。请先在系统中注册至少一个 workspace。
+            </div>
+          )}
+          {selectedWorkspace && !selectedWorkspace.running && (
+            <div className={cn(
+              'rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-100/85',
+              isFullLayout ? 'rounded-2xl px-4 py-3 text-sm' : 'px-2 py-1.5 text-[11px]'
+            )}>
+              当前 workspace 未运行 Antigravity IDE。`antigravity` provider 可能失败，但云端 API provider 仍可直接 dispatch。
             </div>
           )}
 
@@ -616,10 +628,10 @@ export default function AgentRunsPanel({
                     <span className="truncate">{selectedWorkspaceName}</span>
                   </SelectTrigger>
                   <SelectContent>
-                    {runningWs.map(w => (
+                    {workspaces.map(w => (
                       <SelectItem key={w.uri} value={w.uri} className="text-sm">
                         <div className="flex items-center gap-1.5">
-                          <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          <div className={cn('h-1.5 w-1.5 rounded-full', w.running ? 'bg-emerald-500' : 'bg-white/25')} />
                           {w.name}
                         </div>
                       </SelectItem>
@@ -775,7 +787,7 @@ export default function AgentRunsPanel({
                 <Button
                   className="h-14 rounded-[18px] border-0 bg-[linear-gradient(135deg,#58f3d4,#33c2ff)] px-6 text-sm font-semibold text-slate-950 shadow-[0_20px_48px_rgba(10,154,190,0.24)] transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_56px_rgba(10,154,190,0.3)] lg:min-w-[220px]"
                   onClick={handleDispatch}
-                  disabled={dispatching || !prompt.trim() || !effectiveSelectedWs || runningWs.length === 0}
+                  disabled={dispatching || !prompt.trim() || !effectiveSelectedWs}
                 >
                   {dispatching ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -793,10 +805,10 @@ export default function AgentRunsPanel({
                   <SelectValue placeholder={t('sidebar.selectWorkspace')} />
                 </SelectTrigger>
                 <SelectContent>
-                  {runningWs.map(w => (
+                  {workspaces.map(w => (
                     <SelectItem key={w.uri} value={w.uri} className="text-[11px]">
                       <div className="flex items-center gap-1.5">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <div className={cn('w-1.5 h-1.5 rounded-full', w.running ? 'bg-emerald-500' : 'bg-white/25')} />
                         {w.name}
                       </div>
                     </SelectItem>
@@ -902,7 +914,7 @@ export default function AgentRunsPanel({
               <Button
                 className="h-8 w-full text-xs"
                 onClick={handleDispatch}
-                disabled={dispatching || !prompt.trim() || !effectiveSelectedWs || runningWs.length === 0}
+                disabled={dispatching || !prompt.trim() || !effectiveSelectedWs}
               >
                 {dispatching ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

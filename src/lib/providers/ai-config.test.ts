@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(false),
   readFileSync: vi.fn().mockReturnValue('{}'),
+  statSync: vi.fn().mockReturnValue({ mtimeMs: 1 }),
   writeFileSync: vi.fn(),
   mkdirSync: vi.fn(),
 }));
@@ -26,6 +27,7 @@ describe('AI Config — resolveProvider', () => {
   beforeEach(() => {
     resetAIConfigCache();
     vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 1 } as { mtimeMs: number });
   });
 
   // --- Default config ---
@@ -67,7 +69,7 @@ describe('AI Config — resolveProvider', () => {
   // --- Department override ---
 
   it('resolves department provider from .department/config.json', () => {
-    vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
       return typeof p === 'string' && p.includes('.department/config.json');
     });
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ provider: 'codex' }));
@@ -80,7 +82,7 @@ describe('AI Config — resolveProvider', () => {
   });
 
   it('scene override takes priority over department config', () => {
-    vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
       return typeof p === 'string' && p.includes('.department/config.json');
     });
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ provider: 'codex' }));
@@ -133,7 +135,7 @@ describe('AI Config — resolveProvider', () => {
   it('falls back to defaultProvider for unknown scene', () => {
     setAIConfig({ defaultProvider: 'codex' });
 
-    const result = resolveProvider('unknown-scene' as any);
+    const result = resolveProvider('unknown-scene' as Parameters<typeof resolveProvider>[0]);
     expect(result.provider).toBe('codex');
     expect(result.source).toBe('default');
   });
@@ -180,6 +182,7 @@ describe('AI Config — loadAIConfig', () => {
 
   it('loads config from file when it exists', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 10 } as { mtimeMs: number });
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
       defaultProvider: 'codex',
       defaultModel: 'gpt-4o',
@@ -191,15 +194,33 @@ describe('AI Config — loadAIConfig', () => {
   });
 
   it('caches config after first load', () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 10 } as { mtimeMs: number });
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      defaultProvider: 'antigravity',
+    }));
     loadAIConfig();
     loadAIConfig(); // second call should use cache
 
-    // existsSync called once for the config path
-    // (the first call triggers the load, second uses cache)
-    const calls = vi.mocked(fs.existsSync).mock.calls.filter(
+    const readCalls = vi.mocked(fs.readFileSync).mock.calls.filter(
       c => typeof c[0] === 'string' && c[0].includes('ai-config.json'),
     );
-    expect(calls.length).toBe(1);
+    expect(readCalls.length).toBe(1);
+  });
+
+  it('reloads config when file mtime changes', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.statSync)
+      .mockReturnValueOnce({ mtimeMs: 10 } as { mtimeMs: number })
+      .mockReturnValueOnce({ mtimeMs: 20 } as { mtimeMs: number });
+    vi.mocked(fs.readFileSync)
+      .mockReturnValueOnce(JSON.stringify({ defaultProvider: 'antigravity' }))
+      .mockReturnValueOnce(JSON.stringify({ defaultProvider: 'native-codex' }));
+
+    const first = loadAIConfig();
+    const second = loadAIConfig();
+
+    expect(first.defaultProvider).toBe('antigravity');
+    expect(second.defaultProvider).toBe('native-codex');
   });
 });

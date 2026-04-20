@@ -67,6 +67,7 @@ python3 scripts/call_workflow.py   # → creates conversation, runs /ai-topic-di
 | 🔀 **Smart Routing** | Routes each conversation to the correct workspace-matching server (not random) |
 | 📱 **Mobile-First** | Built with shadcn/ui + Tailwind CSS 4, responsive from phone to desktop |
 | 🎯 **Skill/Workflow Support** | `@skill-name` and `/workflow-name` autocomplete in the chat input |
+| 🔄 **Multi-Provider** | 4 execution engines: Antigravity gRPC / Codex MCP / Claude Code CLI / Claude API direct. Switch per department or scene |
 
 ---
 

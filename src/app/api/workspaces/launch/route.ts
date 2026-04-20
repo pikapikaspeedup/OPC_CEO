@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Launch');
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   log.info({ wsPath }, 'Opening workspace');
 
   try {
-    execSync(`"${ANTIGRAVITY_CLI}" --new-window "${wsPath}"`, {
+    spawnSync(ANTIGRAVITY_CLI, ['--new-window', wsPath], {
       timeout: 5000,
       stdio: 'ignore',
     });

@@ -2,6 +2,7 @@ import { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { useI18n } from '@/components/locale-provider';
 import type { Step, StepsData } from '@/lib/types';
+import { buildConversationErrorDisplay } from '@/lib/conversation-error';
 import { renderMarkdown } from '@/lib/render-markdown';
 import { cn } from '@/lib/utils';
 import {
@@ -422,12 +423,42 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
   }
 
   if (type === 'CORTEX_STEP_TYPE_ERROR_MESSAGE') {
-    const em = step.errorMessage || {};
+    const errorDisplay = buildConversationErrorDisplay(step.errorMessage);
     return (
       <div className={cn('my-4', TIMELINE_OFFSET)}>
-        <div className="inline-flex items-center gap-3 text-sm font-medium text-destructive bg-destructive/5 border border-destructive/20 rounded-full px-5 py-2.5">
-          <AlertTriangle className="w-4 h-4" />
-          <span className="truncate">{em.message || em.errorMessage || t('chat.errorOccurred')}</span>
+        <div className="max-w-[760px] rounded-[24px] border border-destructive/20 bg-destructive/[0.06] px-5 py-4 shadow-[0_12px_32px_rgba(220,38,38,0.08)]">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="min-w-0 flex-1 text-sm font-semibold leading-6 text-destructive">
+                  {errorDisplay.title || t('chat.errorOccurred')}
+                </p>
+                {errorDisplay.code && (
+                  <span className="rounded-full border border-destructive/20 bg-background/70 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-destructive/80">
+                    {t('chat.errorCode', { code: errorDisplay.code })}
+                  </span>
+                )}
+              </div>
+              {errorDisplay.summary && (
+                <p className="text-sm leading-6 text-destructive/80">
+                  {errorDisplay.summary}
+                </p>
+              )}
+              {errorDisplay.technicalDetails && (
+                <details className="rounded-2xl border border-destructive/15 bg-background/50 px-4 py-3">
+                  <summary className="cursor-pointer select-none text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
+                    {t('chat.errorDetails')}
+                  </summary>
+                  <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
+                    {errorDisplay.technicalDetails}
+                  </pre>
+                </details>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );

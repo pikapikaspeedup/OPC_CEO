@@ -6,11 +6,18 @@
 
 - 🐱 每次对话开始必须先称呼"魔力猫"
 - 💪 想尽一切办法完成任务，不找借口、不打折扣
-- 📝 **每次完成任务后，必须更新 `docs/PROJECT_PROGRESS.md`**
+- 📝 **只有在功能/代码修改已完成、已测试验证、可验收时，才更新 `docs/PROJECT_PROGRESS.md`**
 - 📖 **每次开始新任务前，必须先阅读 `docs/PROJECT_PROGRESS.md`**
 - 每次阅读文件要1000 行左右，提高代码阅读效率。 
 - 你要积极使用 subagent，确保能更快的完成任务。
-- 研究类的文档，你需要写在本地，而不金金是PROJECT_PROGRESS.md
+- 研究类、讨论类、约束类文档，写在本地 `docs/design/` 或 `docs/research/`，**不要写进 `PROJECT_PROGRESS.md`**
+- 🌐 **浏览器自动化/截图优先使用 `bb-browser`，不要优先使用 Playwright**
+  - 只要任务属于页面访问、交互、抓取、截图、DOM 检查、浏览器态验证，默认先用 `bb-browser`
+  - **只有以下情况才允许回退到 Playwright**：
+    1. 用户明确要求 Playwright
+    2. `bb-browser` 在当前环境不可用
+    3. 任务明确依赖 Playwright 特性（如 `@playwright/test` 测试套件、特定设备仿真、项目已有 Playwright 测试基建必须复用）
+  - 如果用了 Playwright，必须在汇报里说明为什么没有用 `bb-browser`
 
 ### 🚨 端到端完成任务交付（强制要求）
 
@@ -57,13 +64,34 @@
 
 ### 任务完成后
 - [ ] 有实际测试输出作为证据
-- [ ] **更新 `docs/PROJECT_PROGRESS.md` 进度文档**
+- [ ] **仅在代码/配置/数据修改已完成且验证通过后，更新 `docs/PROJECT_PROGRESS.md`**
 - [ ] 确认以上全部完成后，再汇报
 
 ## 六、文档同步规则（强制）
 
 ### 原则
 > **代码改了 → 文档必须改。不是"之后再补"，是当场改。**
+
+### `PROJECT_PROGRESS.md` 使用边界（强制）
+
+`docs/PROJECT_PROGRESS.md` 只用于记录：
+
+1. 已完成并通过验证的实现
+2. 已完成并有验收证据的修复
+3. 已落地的系统行为变化
+
+不要写入：
+
+1. 纯讨论
+2. 方案推演
+3. 约束说明
+4. 研究笔记
+5. 尚未落地、尚未验收的设计结论
+
+这些内容应写到：
+
+1. `docs/design/`
+2. `docs/research/`
 
 ### 代码变更 → 文档动作
 

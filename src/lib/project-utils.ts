@@ -1,4 +1,4 @@
-import { getRun } from '@/lib/agents/run-registry';
+import type { AgentRunState } from '@/lib/agents/group-types';
 
 /**
  * Shared project-normalization helpers — used by both /api/projects and /api/projects/[id].
@@ -25,7 +25,9 @@ export function looksLikeCompletionText(text?: string): boolean {
   return !!text && /(?:^|[\s])(?:completed?|done|finished|ready)(?:$|[\s])|完成/.test(text);
 }
 
-export function deriveRunFailureReason(run: ReturnType<typeof getRun>): string | undefined {
+export type ProjectRunLookup = (runId: string) => AgentRunState | null | undefined;
+
+export function deriveRunFailureReason(run: AgentRunState | null | undefined): string | undefined {
   if (!run) return undefined;
   if (run.lastError) return run.lastError;
   if (run.result?.blockers?.length) return run.result.blockers[0];
@@ -46,7 +48,10 @@ export function deriveRunFailureReason(run: ReturnType<typeof getRun>): string |
  * normalizeProject — enrich a project with derived runIds, childProjectIds,
  * and stage error messages resolved from the run registry.
  */
-export function normalizeProject<T extends { runIds: string[]; pipelineState?: { stages: Array<{ runId?: string; status: string; lastError?: string; branches?: Array<{ subProjectId?: string }> }> } }>(project: T): T {
+export function normalizeProject<T extends { runIds: string[]; pipelineState?: { stages: Array<{ runId?: string; status: string; lastError?: string; branches?: Array<{ subProjectId?: string }> }> } }>(
+  project: T,
+  options?: { getRunById?: ProjectRunLookup },
+): T {
   const canonicalRunIds = new Set(project.runIds);
   const childProjectIds = new Set<string>();
   for (const stage of project.pipelineState?.stages || []) {
@@ -57,12 +62,12 @@ export function normalizeProject<T extends { runIds: string[]; pipelineState?: {
   }
 
   const normalizedPipelineState = project.pipelineState
-    ? {
+      ? {
         ...project.pipelineState,
         stages: project.pipelineState.stages.map(stage => {
           const shouldDeriveError = stage.status === 'failed' || stage.status === 'blocked' || stage.status === 'cancelled';
           if (stage.lastError || !stage.runId || !shouldDeriveError) return stage;
-          const derivedError = deriveRunFailureReason(getRun(stage.runId));
+          const derivedError = deriveRunFailureReason(options?.getRunById?.(stage.runId));
           return derivedError ? { ...stage, lastError: derivedError } : stage;
         }),
       }

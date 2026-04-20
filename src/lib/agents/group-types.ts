@@ -6,12 +6,44 @@
  * V2.5: adds execution mode routing, source contract, delivery capability.
  */
 
+import type { ProviderId } from '../providers/types';
+
 // ---------------------------------------------------------------------------
 // Group Definition
 // ---------------------------------------------------------------------------
 
 export type ReviewDecision = 'approved' | 'revise' | 'rejected';
 export type ReviewOutcome = 'approved' | 'rejected' | 'revise-exhausted';
+
+// ---------------------------------------------------------------------------
+// Prompt Mode Resolution
+// ---------------------------------------------------------------------------
+
+export interface PromptResolutionEvidence {
+  requestedWorkflowRefs: string[];
+  requestedSkillHints: string[];
+  matchedWorkflowRefs: string[];
+  matchedSkillRefs: string[];
+}
+
+export interface PromptWorkflowSuggestion {
+  shouldCreateWorkflow: true;
+  source: 'skill' | 'prompt';
+  title: string;
+  reason: string;
+  recommendedScope: 'department';
+  evidence: PromptResolutionEvidence;
+}
+
+export interface PromptModeResolution {
+  mode: 'workflow' | 'skill' | 'prompt';
+  requestedWorkflowRefs: string[];
+  requestedSkillHints: string[];
+  matchedWorkflowRefs: string[];
+  matchedSkillRefs: string[];
+  resolutionReason: string;
+  workflowSuggestion?: PromptWorkflowSuggestion;
+}
 
 // ---------------------------------------------------------------------------
 // V2.5: Execution Mode & Source Contract
@@ -112,6 +144,11 @@ export interface TaskResult {
   blockers: string[];
   needsReview: string[];
   decision?: string; // Optional reviewer decision (approved, revise, rejected)
+  promptResolution?: PromptModeResolution;
+  reportedEventDate?: string;
+  reportedEventCount?: number;
+  verificationPassed?: boolean;
+  reportApiResponse?: string;
 }
 
 export interface RoleReadEvidence {
@@ -218,6 +255,9 @@ export interface TriggerContext {
 export interface TaskEnvelope {
   templateId?: string;
   executionTarget?: ExecutionTarget;
+  executionProfile?: unknown;
+  departmentRuntimeContract?: unknown;
+  runtimeContract?: unknown;
   runId?: string;                    // runtime-assigned, caller should not provide
   taskId?: string;                   // V2.5: active for delivery work packages
   goal: string;
@@ -244,6 +284,11 @@ export interface ResultEnvelope {
   risks?: string[];
   openQuestions?: string[];
   nextAction?: string;
+  promptResolution?: PromptModeResolution;
+  reportedEventDate?: string;
+  reportedEventCount?: number;
+  verificationPassed?: boolean;
+  reportApiResponse?: string;
 }
 
 export interface ArtifactManifest {
@@ -268,6 +313,35 @@ export interface RunLiveState {
   lastStepType?: string;
   /** ISO timestamp when stale was first detected (undefined = healthy) */
   staleSince?: string;
+}
+
+// ---------------------------------------------------------------------------
+// V6: Session Provenance — tracks where execution sessions come from
+// ---------------------------------------------------------------------------
+
+export interface SessionProvenance {
+  /** Current or last session handle (cascade ID, thread ID, etc.) */
+  handle: string;
+  /** Which backend produced this session */
+  backendId: ProviderId;
+  /** How the handle was obtained */
+  handleKind: 'started' | 'attached' | 'resumed';
+  /** Workspace path at session creation time */
+  workspacePath: string;
+  /** Model used (frozen at session start) */
+  model?: string;
+  /** Where the provider decision came from */
+  resolutionSource?: 'scene' | 'department' | 'layer' | 'default';
+  /** How this session was initiated */
+  createdVia?: 'dispatch' | 'nudge' | 'restart' | 'evaluate' | 'pipeline';
+  /** Previous handle that this session supersedes */
+  supersedesHandle?: string;
+  /** When provenance was first recorded */
+  recordedAt: string;
+  /** Claude Code specific: transcript path for resume */
+  transcriptPath?: string;
+  /** Claude Code specific: project path */
+  projectPath?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +389,23 @@ export interface AgentRunState {
   pipelineId?: string;
   pipelineStageId?: string;
   pipelineStageIndex?: number;
+  // V6: Session Provenance
+  sessionProvenance?: SessionProvenance;
+  // V6.1: Provider & Usage tracking
+  provider?: string;
+  resolvedWorkflowRef?: string;
+  resolvedSkillRefs?: string[];
+  resolutionReason?: string;
+  promptResolution?: PromptModeResolution;
+  reportedEventDate?: string;
+  reportedEventCount?: number;
+  verificationPassed?: boolean;
+  reportApiResponse?: string;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

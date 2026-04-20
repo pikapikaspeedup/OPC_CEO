@@ -1,0 +1,54 @@
+{
+  "templateId": "design-review-template",
+  "executionTarget": {
+    "kind": "template",
+    "templateId": "design-review-template",
+    "stageId": "ux-review"
+  },
+  "runId": "a61b8557-b222-4ff7-842f-bfd18b79768d",
+  "status": "failed",
+  "summary": "Imported run",
+  "outputArtifacts": [
+    {
+      "id": "94333916-515c-47f4-bea1-2e3127b1f200",
+      "kind": "product.audit-report",
+      "title": "Audit Report",
+      "path": "specs/audit-report.md",
+      "format": "md",
+      "sourceRunId": "a61b8557-b222-4ff7-842f-bfd18b79768d"
+    },
+    {
+      "id": "b8fca4e5-0f5c-4ce5-9847-afd5a704fb8d",
+      "kind": "product.interaction-proposals",
+      "title": "Interaction Proposals",
+      "path": "specs/interaction-proposals.md",
+      "format": "md",
+      "sourceRunId": "a61b8557-b222-4ff7-842f-bfd18b79768d"
+    },
+    {
+      "id": "1b139ef3-c748-4e1f-b03c-c3e5673c9751",
+      "kind": "product.priority-matrix",
+      "title": "Priority Matrix",
+      "path": "specs/priority-matrix.md",
+      "format": "md",
+      "sourceRunId": "a61b8557-b222-4ff7-842f-bfd18b79768d"
+    },
+    {
+      "id": "9c9a032d-bab3-4bf6-b1d6-e8d73e199bf8",
+      "kind": "review.result-round-1",
+      "title": "Result Round 1",
+      "path": "review/result-round-1.json",
+      "format": "json",
+      "sourceRunId": "a61b8557-b222-4ff7-842f-bfd18b79768d"
+    },
+    {
+      "id": "e4a7f1fc-489d-4346-bdd0-f3ddf311241f",
+      "kind": "review.review-round-1",
+      "title": "Review Round 1",
+      "path": "review/review-round-1.md",
+      "format": "md",
+      "sourceRunId": "a61b8557-b222-4ff7-842f-bfd18b79768d"
+    }
+  ],
+  "risks": []
+}

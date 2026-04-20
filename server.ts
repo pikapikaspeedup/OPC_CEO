@@ -25,15 +25,87 @@ const app = next({ dev, hostname, port, turbopack: false });
 const handle = app.getRequestHandler();
 
 // Lazy-loaded bridge modules (loaded on first WS connection, not at startup)
+type GatewayModule = typeof import('./src/lib/bridge/gateway');
+type GrpcModule = typeof import('./src/lib/bridge/grpc');
+type StreamStep = {
+  type?: string;
+  taskBoundary?: {
+    mode?: string;
+    taskName?: string;
+    taskStatus?: string;
+    taskSummary?: string;
+  };
+} & Record<string, unknown>;
+
 let bridgeLoaded = false;
-let gateway: any = null;
-let grpc: any = null;
+let gateway: GatewayModule | null = null;
+let grpc: GrpcModule | null = null;
 
 async function ensureBridge() {
   if (!bridgeLoaded) {
     gateway = await import('./src/lib/bridge/gateway');
     grpc = await import('./src/lib/bridge/grpc');
     bridgeLoaded = true;
+  }
+}
+
+function getBridgeModules(): { gateway: GatewayModule; grpc: GrpcModule } {
+  if (!gateway || !grpc) {
+    throw new Error('Bridge modules have not been loaded');
+  }
+  return { gateway, grpc };
+}
+
+async function warmBackgroundServices(port: number): Promise<void> {
+  try {
+    const { initializeScheduler } = await import('./src/lib/agents/scheduler');
+    initializeScheduler();
+  } catch (err: unknown) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Scheduler initialization failed');
+  }
+
+  try {
+    const { initializeFanOutController } = await import('./src/lib/agents/fan-out-controller');
+    initializeFanOutController();
+  } catch {
+    // Fan-out controller is optional during early startup or before V4.1 files exist.
+  }
+
+  try {
+    const { initApprovalTriggers } = await import('./src/lib/agents/approval-triggers');
+    initApprovalTriggers();
+  } catch {
+    // Approval triggers are optional.
+  }
+
+  try {
+    const { loadPersistedRequests } = await import('./src/lib/approval/request-store');
+    loadPersistedRequests();
+  } catch {
+    // Approval request persistence is optional during early startup.
+  }
+
+  try {
+    const { ensureCEOEventConsumer } = await import('./src/lib/organization/ceo-event-consumer');
+    ensureCEOEventConsumer();
+  } catch {
+    // CEO event consumer is optional during early startup.
+  }
+
+  try {
+    const tunnel = await import('./src/lib/bridge/tunnel');
+    const config = tunnel.loadTunnelConfig();
+    if (config?.autoStart && config.tunnelName) {
+      log.info({ tunnelName: config.tunnelName }, '🌐 Auto-starting tunnel...');
+      const result = await tunnel.startTunnel(port);
+      if (result.success) {
+        log.info({ url: result.url }, '🌐 Tunnel active');
+      } else {
+        log.warn({ error: result.error }, '🌐 Tunnel failed');
+      }
+    }
+  } catch (err: unknown) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, '🌐 Tunnel auto-start skipped');
   }
 }
 
@@ -59,6 +131,28 @@ app.prepare().then(() => {
   // --- WebSocket Server ---
   const wss = new WebSocketServer({ noServer: true });
 
+  // --- WebSocket Ping/Pong Keepalive ---
+  // Prevents NAT/firewall timeout from silently killing idle connections
+  const WS_PING_INTERVAL_MS = 25_000; // 25 seconds (below typical 30-60s NAT timeout)
+  const wsAliveMap = new WeakMap<WebSocket, boolean>();
+
+  const pingInterval = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (wsAliveMap.get(ws) === false) {
+        // No pong received since last ping — connection is dead
+        log.debug('WS keepalive: terminating dead connection');
+        ws.terminate();
+        continue;
+      }
+      wsAliveMap.set(ws, false);
+      ws.ping();
+    }
+  }, WS_PING_INTERVAL_MS);
+
+  wss.on('close', () => {
+    clearInterval(pingInterval);
+  });
+
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = parse(req.url || '', true);
     if (pathname === '/ws') {
@@ -70,20 +164,24 @@ app.prepare().then(() => {
   });
 
   wss.on('connection', (ws: WebSocket) => {
-    const activeStreams = new Map<string, { abort: () => void; fullSteps: any[] }>();
+    wsAliveMap.set(ws, true);
+    ws.on('pong', () => { wsAliveMap.set(ws, true); });
+
+    const activeStreams = new Map<string, { abort: () => void; fullSteps: StreamStep[] }>();
 
     function startStreamForId(cascadeId: string, conn: { port: number; csrf: string }) {
+      const { grpc: grpcModule, gateway: gatewayModule } = getBridgeModules();
       // Clean up existing stream for this ID if any
       const existing = activeStreams.get(cascadeId);
       if (existing) { existing.abort(); activeStreams.delete(cascadeId); }
 
-      let fullSteps: any[] = [];
+      let fullSteps: StreamStep[] = [];
 
-      const abort = grpc.streamAgentState(
+      const abort = grpcModule.streamAgentState(
         conn.port,
         conn.csrf,
         cascadeId,
-        (update: any) => {
+        (update: { mainTrajectoryUpdate?: { stepsUpdate?: { steps?: StreamStep[]; indices?: number[]; totalLength?: number } }; status?: string }) => {
           const stepsUpdate = update?.mainTrajectoryUpdate?.stepsUpdate;
           const status = update?.status || '';
           const isActive = status !== 'CASCADE_RUN_STATUS_IDLE';
@@ -116,8 +214,8 @@ app.prepare().then(() => {
           setTimeout(async () => {
             if (ws.readyState === ws.OPEN) {
               await ensureBridge();
-              await gateway.refreshOwnerMap();
-              const newOwner = gateway.getOwnerConnection(cascadeId);
+              await gatewayModule.refreshOwnerMap();
+              const newOwner = await gatewayModule.getOwnerConnection(cascadeId);
               if (newOwner) {
                 log.info({ cascadeId: cascadeId.slice(0,8), port: newOwner.port }, 'Stream reconnected');
                 startStreamForId(cascadeId, newOwner);
@@ -133,7 +231,12 @@ app.prepare().then(() => {
     ws.on('message', async (raw: Buffer) => {
       try {
         await ensureBridge();
-        const msg = JSON.parse(raw.toString());
+        const { gateway: gatewayModule } = getBridgeModules();
+        const msg = JSON.parse(raw.toString()) as {
+          type?: string;
+          cascadeId?: string;
+          cascadeIds?: string[];
+        };
 
         // Single subscribe (backward compatible — clears all previous streams)
         if (msg.type === 'subscribe' && msg.cascadeId) {
@@ -142,11 +245,11 @@ app.prepare().then(() => {
           for (const [, s] of activeStreams) s.abort();
           activeStreams.clear();
 
-          if (!gateway.convOwnerMap.has(cascadeId) || Date.now() - gateway.ownerMapAge > 30_000) {
-            await gateway.refreshOwnerMap();
+          if (!gatewayModule.convOwnerMap.has(cascadeId) || Date.now() - gatewayModule.ownerMapAge > 30_000) {
+            await gatewayModule.refreshOwnerMap();
           }
 
-          const owner = gateway.getOwnerConnection(cascadeId);
+          const owner = await gatewayModule.getOwnerConnection(cascadeId);
           if (!owner) {
             ws.send(JSON.stringify({ type: 'error', message: 'No server found for this conversation' }));
             return;
@@ -157,12 +260,12 @@ app.prepare().then(() => {
 
         // Multi-subscribe (add streams without clearing existing)
         if (msg.type === 'multi-subscribe' && Array.isArray(msg.cascadeIds)) {
-          if (Date.now() - gateway.ownerMapAge > 30_000) {
-            await gateway.refreshOwnerMap();
+          if (Date.now() - gatewayModule.ownerMapAge > 30_000) {
+            await gatewayModule.refreshOwnerMap();
           }
           for (const cascadeId of msg.cascadeIds) {
             if (activeStreams.has(cascadeId)) continue; // already streaming
-            const owner = gateway.getOwnerConnection(cascadeId);
+            const owner = await gatewayModule.getOwnerConnection(cascadeId);
             if (owner) {
               log.info({ cascadeId: cascadeId.slice(0,8), port: owner.port }, 'Multi-subscribe');
               startStreamForId(cascadeId, owner);
@@ -191,44 +294,7 @@ app.prepare().then(() => {
   server.listen(port, hostname, async () => {
     log.info({ hostname, port }, '🚀 Antigravity Gateway running');
     log.info('Single-port mode: Next.js + API + WebSocket');
-
-    try {
-      const { initializeScheduler } = await import('./src/lib/agents/scheduler');
-      initializeScheduler();
-    } catch (err: any) {
-      log.warn({ err: err.message }, 'Scheduler initialization failed');
-    }
-
-    try {
-      const { initializeFanOutController } = await import('./src/lib/agents/fan-out-controller');
-      initializeFanOutController();
-    } catch {
-      // Fan-out controller is optional during early startup or before V4.1 files exist.
-    }
-
-    try {
-      const { initApprovalTriggers } = await import('./src/lib/agents/approval-triggers');
-      initApprovalTriggers();
-    } catch {
-      // Approval triggers are optional.
-    }
-
-    // --- Auto-start Cloudflare Tunnel ---
-    try {
-      const tunnel = await import('./src/lib/bridge/tunnel');
-      const config = tunnel.loadTunnelConfig();
-      if (config?.autoStart && config.tunnelName) {
-        log.info({ tunnelName: config.tunnelName }, '🌐 Auto-starting tunnel...');
-        const result = await tunnel.startTunnel(port);
-        if (result.success) {
-          log.info({ url: result.url }, '🌐 Tunnel active');
-        } else {
-          log.warn({ error: result.error }, '🌐 Tunnel failed');
-        }
-      }
-    } catch (err: any) {
-      log.warn({ err: err.message }, '🌐 Tunnel auto-start skipped');
-    }
+    void warmBackgroundServices(port);
   });
 
   // Clean up tunnel on exit

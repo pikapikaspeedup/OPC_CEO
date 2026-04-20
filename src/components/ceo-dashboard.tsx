@@ -10,7 +10,15 @@ import AuditLogWidget from '@/components/audit-log-widget';
 import DepartmentComparisonWidget from '@/components/department-comparison-widget';
 import CEOSchedulerCommandCard from '@/components/ceo-scheduler-command-card';
 import { api, type AuditEvent, type SchedulerJobResponse } from '@/lib/api';
-import type { Workspace, Project, DepartmentConfig, DailyDigestFE } from '@/lib/types';
+import type {
+  Workspace,
+  Project,
+  DepartmentConfig,
+  DailyDigestFE,
+  CEORoutineSummaryFE,
+  ManagementOverviewFE,
+  EvolutionProposalFE,
+} from '@/lib/types';
 
 interface CEODashboardProps {
   workspaces: Workspace[];
@@ -20,22 +28,28 @@ interface CEODashboardProps {
   onDepartmentSaved?: (uri: string, config: DepartmentConfig) => void;
   onNavigateToProject?: (projectId: string) => void;
   onOpenScheduler?: () => void;
+  onProjectCreated?: (projectId: string) => void;
 }
 
 export default function CEODashboard({
   workspaces,
   projects,
   departments,
-  onSelectDepartment,
   onDepartmentSaved,
   onNavigateToProject,
   onOpenScheduler,
+  onProjectCreated,
 }: CEODashboardProps) {
   const [digests, setDigests] = useState<DailyDigestFE[]>([]);
   const [digestPeriod, setDigestPeriod] = useState<'day' | 'week' | 'month'>('day');
   const [schedulerJobs, setSchedulerJobs] = useState<SchedulerJobResponse[]>([]);
   const [schedulerAuditEvents, setSchedulerAuditEvents] = useState<AuditEvent[]>([]);
   const [schedulerLoading, setSchedulerLoading] = useState(true);
+  const [ceoRoutine, setCeoRoutine] = useState<CEORoutineSummaryFE | null>(null);
+  const [managementOverview, setManagementOverview] = useState<ManagementOverviewFE | null>(null);
+  const [evolutionProposals, setEvolutionProposals] = useState<EvolutionProposalFE[]>([]);
+  const [evolutionLoading, setEvolutionLoading] = useState(true);
+  const [evolutionBusyId, setEvolutionBusyId] = useState<string | null>(null);
 
   // Load digests for all workspaces (supports day/week/month period)
   const wsKey = useMemo(() => workspaces.map(w => w.uri).join(','), [workspaces]);
@@ -86,6 +100,81 @@ export default function CEODashboard({
     };
   }, [refreshSchedulerData]);
 
+  const enabledJobCount = schedulerJobs.filter((job) => job.enabled).length;
+  const failedSchedulerCount = schedulerAuditEvents.filter((event) => event.kind === 'scheduler:failed').length;
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.ceoRoutine().catch(() => null),
+      api.managementOverview().catch(() => null),
+    ]).then(([routine, overview]) => {
+      if (cancelled) return;
+      setCeoRoutine(routine as CEORoutineSummaryFE | null);
+      setManagementOverview(overview as ManagementOverviewFE | null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projects.length, workspaces.length, enabledJobCount, failedSchedulerCount]);
+
+  const refreshEvolutionData = useCallback(async () => {
+    setEvolutionLoading(true);
+    try {
+      const result = await api.evolutionProposals();
+      setEvolutionProposals(result.proposals || []);
+    } catch {
+      setEvolutionProposals([]);
+    } finally {
+      setEvolutionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshEvolutionData();
+  }, [refreshEvolutionData]);
+
+  const handleGenerateEvolution = useCallback(async () => {
+    setEvolutionBusyId('__generate__');
+    try {
+      await api.generateEvolutionProposals();
+      await refreshEvolutionData();
+    } finally {
+      setEvolutionBusyId(null);
+    }
+  }, [refreshEvolutionData]);
+
+  const handleEvaluateProposal = useCallback(async (proposalId: string) => {
+    setEvolutionBusyId(proposalId);
+    try {
+      await api.evaluateEvolutionProposal(proposalId);
+      await refreshEvolutionData();
+    } finally {
+      setEvolutionBusyId(null);
+    }
+  }, [refreshEvolutionData]);
+
+  const handlePublishProposal = useCallback(async (proposalId: string) => {
+    setEvolutionBusyId(proposalId);
+    try {
+      await api.publishEvolutionProposal(proposalId);
+      await refreshEvolutionData();
+    } finally {
+      setEvolutionBusyId(null);
+    }
+  }, [refreshEvolutionData]);
+
+  const handleObserveProposal = useCallback(async (proposalId: string) => {
+    setEvolutionBusyId(proposalId);
+    try {
+      await api.observeEvolutionProposal(proposalId);
+      await refreshEvolutionData();
+    } finally {
+      setEvolutionBusyId(null);
+    }
+  }, [refreshEvolutionData]);
+
   const recentJobs = useMemo(() => {
     const getSortKey = (job: SchedulerJobResponse) => job.nextRunAt || job.lastRunAt || '';
     return [...schedulerJobs]
@@ -98,16 +187,6 @@ export default function CEODashboard({
       .slice(0, 5);
   }, [schedulerJobs]);
 
-  const enabledJobCount = useMemo(
-    () => schedulerJobs.filter(job => job.enabled).length,
-    [schedulerJobs],
-  );
-
-  const failedSchedulerCount = useMemo(
-    () => schedulerAuditEvents.filter((event) => event.kind === 'scheduler:failed').length,
-    [schedulerAuditEvents],
-  );
-
   const [setupWorkspaceUri, setSetupWorkspaceUri] = useState<string | null>(null);
   const [drillDownUri, setDrillDownUri] = useState<string | null>(null);
   const setupWs = setupWorkspaceUri ? workspaces.find(w => w.uri === setupWorkspaceUri) : null;
@@ -115,6 +194,196 @@ export default function CEODashboard({
 
   return (
     <div className="space-y-6">
+      {(managementOverview || ceoRoutine) && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-widest text-white/40">Active Projects</div>
+            <div className="mt-2 text-2xl font-bold text-white">{managementOverview?.activeProjects ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-widest text-white/40">Pending Approvals</div>
+            <div className="mt-2 text-2xl font-bold text-amber-300">{managementOverview?.pendingApprovals ?? ceoRoutine?.pendingApprovals ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-widest text-white/40">Active Schedulers</div>
+            <div className="mt-2 text-2xl font-bold text-sky-300">{managementOverview?.activeSchedulers ?? ceoRoutine?.activeSchedulers ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-widest text-white/40">Recent Knowledge</div>
+            <div className="mt-2 text-2xl font-bold text-emerald-300">{managementOverview?.recentKnowledge ?? ceoRoutine?.recentKnowledge ?? 0}</div>
+          </div>
+        </div>
+      )}
+
+      {managementOverview && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4 space-y-2">
+            <h3 className="text-sm font-semibold text-white/70">OKR Progress</h3>
+            <div className="text-3xl font-bold text-white">
+              {managementOverview.okrProgress !== null
+                ? `${Math.round(managementOverview.okrProgress * 100)}%`
+                : '—'}
+            </div>
+            <p className="text-xs text-white/45">组织级关键结果平均进度</p>
+          </div>
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4 space-y-2">
+            <h3 className="text-sm font-semibold text-white/70">Risk Dashboard</h3>
+            {managementOverview.risks.length > 0 ? (
+              <div className="space-y-2">
+                {managementOverview.risks.slice(0, 4).map((risk, index) => (
+                  <div key={`${risk.title}-${index}`} className="rounded-lg border border-white/6 bg-white/[0.02] px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-medium text-white/85">{risk.title}</div>
+                      <div className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px]',
+                        risk.level === 'critical' ? 'bg-red-500/10 text-red-300' :
+                        risk.level === 'warning' ? 'bg-amber-500/10 text-amber-300' :
+                        'bg-white/10 text-white/60',
+                      )}>
+                        {risk.level}
+                      </div>
+                    </div>
+                    {risk.description ? (
+                      <div className="mt-1 text-[11px] text-white/45">{risk.description}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-white/45">暂无高优风险</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {ceoRoutine && ceoRoutine.highlights.length > 0 && (
+        <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4 space-y-2">
+          <h3 className="text-sm font-semibold text-white/70">CEO Routine Summary</h3>
+          <p className="text-sm text-white/70">{ceoRoutine.overview}</p>
+          <div className="space-y-1">
+            {ceoRoutine.highlights.slice(0, 4).map((highlight, index) => (
+              <div key={index} className="text-xs text-white/50">
+                • {highlight}
+              </div>
+            ))}
+          </div>
+          {ceoRoutine.reminders.length > 0 && (
+            <div className="pt-2 border-t border-white/5">
+              <div className="text-[11px] uppercase tracking-widest text-white/35 mb-1">Reminders</div>
+              <div className="space-y-1">
+                {ceoRoutine.reminders.slice(0, 3).map((item, index) => (
+                  <div key={index} className="text-xs text-white/50">• {item}</div>
+                ))}
+              </div>
+            </div>
+          )}
+          {ceoRoutine.escalations.length > 0 && (
+            <div className="pt-2 border-t border-white/5">
+              <div className="text-[11px] uppercase tracking-widest text-red-300/50 mb-1">Escalations</div>
+              <div className="space-y-1">
+                {ceoRoutine.escalations.slice(0, 3).map((item, index) => (
+                  <div key={index} className="text-xs text-red-200/70">• {item}</div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-white/70">Evolution Pipeline</h3>
+            <p className="text-xs text-white/40">Proposal → evaluate → approval → publish → observe</p>
+          </div>
+          <button
+            className="rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition-colors hover:bg-sky-500/15 disabled:opacity-40"
+            onClick={() => void handleGenerateEvolution()}
+            disabled={evolutionBusyId === '__generate__'}
+          >
+            Generate Proposals
+          </button>
+        </div>
+
+        {evolutionLoading ? (
+          <div className="text-xs text-white/45">Loading evolution proposals…</div>
+        ) : evolutionProposals.length > 0 ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {evolutionProposals.slice(0, 6).map((proposal) => (
+              <div key={proposal.id} className="rounded-lg border border-white/6 bg-white/[0.02] p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-white/85">{proposal.title}</div>
+                    <div className="mt-1 text-[11px] text-white/45">{proposal.targetRef}</div>
+                  </div>
+                  <div className={cn(
+                    'rounded-full px-2 py-0.5 text-[10px]',
+                    proposal.status === 'published' ? 'bg-emerald-500/10 text-emerald-300' :
+                    proposal.status === 'pending-approval' ? 'bg-amber-500/10 text-amber-300' :
+                    proposal.status === 'rejected' ? 'bg-red-500/10 text-red-300' :
+                    proposal.status === 'evaluated' ? 'bg-sky-500/10 text-sky-300' :
+                    'bg-white/10 text-white/60',
+                  )}>
+                    {proposal.status}
+                  </div>
+                </div>
+
+                <div className="text-xs leading-5 text-white/55">{proposal.rationale}</div>
+
+                {proposal.evaluation && (
+                  <div className="rounded-md border border-white/6 bg-white/[0.02] px-3 py-2 text-[11px] text-white/50">
+                    Eval: {proposal.evaluation.summary}
+                  </div>
+                )}
+
+                {proposal.rollout && (
+                  <div className="rounded-md border border-white/6 bg-white/[0.02] px-3 py-2 text-[11px] text-white/50">
+                    Observe: {proposal.rollout.summary}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {proposal.status === 'draft' && (
+                    <button
+                      className="rounded-lg border border-white/10 px-2.5 py-1 text-[11px] text-white/70 transition-colors hover:bg-white/10 disabled:opacity-40"
+                      onClick={() => void handleEvaluateProposal(proposal.id)}
+                      disabled={evolutionBusyId === proposal.id}
+                    >
+                      Evaluate
+                    </button>
+                  )}
+                  {proposal.status === 'evaluated' && (
+                    <button
+                      className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200 transition-colors hover:bg-amber-500/15 disabled:opacity-40"
+                      onClick={() => void handlePublishProposal(proposal.id)}
+                      disabled={evolutionBusyId === proposal.id}
+                    >
+                      Request Publish
+                    </button>
+                  )}
+                  {proposal.status === 'published' && (
+                    <button
+                      className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:opacity-40"
+                      onClick={() => void handleObserveProposal(proposal.id)}
+                      disabled={evolutionBusyId === proposal.id}
+                    >
+                      Refresh Observe
+                    </button>
+                  )}
+                  {proposal.status === 'pending-approval' && proposal.approvalRequestId && (
+                    <div className="text-[11px] text-white/45">
+                      Awaiting approval #{proposal.approvalRequestId.slice(0, 8)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-white/45">暂无 evolution proposals，可从 knowledge proposal 或重复 prompt 执行自动生成。</div>
+        )}
+      </div>
+
       {/* ══════ OVERVIEW: Department Grid ══════ */}
 
       {/* Department Grid */}
@@ -220,6 +489,7 @@ export default function CEODashboard({
           void refreshSchedulerData();
         }}
         onOpenScheduler={onOpenScheduler}
+        onProjectCreated={(projectId) => onProjectCreated?.(projectId)}
       />
 
       {/* Recent completions (G5) */}

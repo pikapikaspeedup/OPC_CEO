@@ -14,6 +14,46 @@ import { getEnabledChannels } from './channels';
 
 const log = createLogger('Dispatcher');
 
+async function executeCustomCallback(request: ApprovalRequest): Promise<void> {
+  const callback = request.response?.action === 'approved'
+    ? request.onApproved
+    : request.response?.action === 'rejected'
+      ? request.onRejected
+      : request.onFeedback;
+
+  if (!callback) return;
+
+  if (callback.type !== 'custom') {
+    log.info({
+      requestId: request.id,
+      callbackType: callback.type,
+    }, 'Approval callback recorded without runtime executor');
+    return;
+  }
+
+  const action = typeof callback.payload.action === 'string' ? callback.payload.action : '';
+  if (action === 'publish-evolution-proposal' && typeof callback.payload.proposalId === 'string') {
+    const { publishEvolutionProposal } = await import('../evolution/publisher');
+    await Promise.resolve(publishEvolutionProposal(callback.payload.proposalId));
+    return;
+  }
+
+  if (action === 'reject-evolution-proposal' && typeof callback.payload.proposalId === 'string') {
+    const { rejectEvolutionProposal } = await import('../evolution/publisher');
+    await Promise.resolve(rejectEvolutionProposal(
+      callback.payload.proposalId,
+      request.response?.message,
+    ));
+    return;
+  }
+
+  log.warn({
+    requestId: request.id,
+    callbackType: callback.type,
+    action,
+  }, 'Unsupported approval callback action');
+}
+
 /**
  * Dispatch notifications for a new or updated approval request.
  *
@@ -87,30 +127,5 @@ export async function dispatchFeedbackNotification(request: ApprovalRequest): Pr
     workspace: request.workspace,
   }, 'Feedback notification dispatched (placeholder)');
 
-  // TODO: Implement based on callback type
-  // - 'update_quota': update DepartmentConfig.tokenQuota
-  // - 'resume_run': resume a paused run
-  // - 'notify_agent': send message to agent
-  // - 'custom': execute custom callback payload
-
-  const callback = request.response.action === 'approved'
-    ? request.onApproved
-    : request.response.action === 'rejected'
-      ? request.onRejected
-      : request.onFeedback;
-
-  if (callback) {
-    log.info({
-      requestId: request.id,
-      callbackType: callback.type,
-    }, 'Executing approval callback (placeholder)');
-
-    // TODO: Implement callback execution
-    // switch (callback.type) {
-    //   case 'update_quota': await updateTokenQuota(callback.payload); break;
-    //   case 'resume_run':   await resumeRun(callback.payload); break;
-    //   case 'notify_agent': await notifyAgent(callback.payload); break;
-    //   case 'custom':       await executeCustomCallback(callback.payload); break;
-    // }
-  }
+  await executeCustomCallback(request);
 }
