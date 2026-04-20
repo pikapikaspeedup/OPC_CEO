@@ -1,11 +1,11 @@
 /**
  * Unified Gateway data root path.
- * 
+ *
  * All registries (projects, runs, conversations) and global assets
  * are stored under this directory. Supports AG_GATEWAY_HOME env override.
- * 
- * On first run, assets (templates, workflows, review-policies) are synced
- * from the repo's .agents/ directory to the global assets directory.
+ *
+ * Heavy filesystem work must be opt-in. Call initializeGatewayHome() from
+ * process startup code instead of relying on import-time side effects.
  */
 
 import { homedir } from 'os';
@@ -15,10 +15,6 @@ import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync, cpSync } fr
 const DEFAULT_HOME = path.join(homedir(), '.gemini', 'antigravity', 'gateway');
 
 export const GATEWAY_HOME = process.env.AG_GATEWAY_HOME || DEFAULT_HOME;
-
-if (!existsSync(GATEWAY_HOME)) {
-  mkdirSync(GATEWAY_HOME, { recursive: true });
-}
 
 // Legacy registry files.
 // Runtime persistence now lives in storage.sqlite; these are kept only so the
@@ -52,12 +48,19 @@ function syncDirIfMissing(src: string, dest: string): void {
   }
 }
 
+export function ensureGatewayHome(): void {
+  if (!existsSync(GATEWAY_HOME)) {
+    mkdirSync(GATEWAY_HOME, { recursive: true });
+  }
+}
+
 /**
  * Sync repo assets to global directory on startup.
  * Repo-owned assets are refreshed on every startup; legacy home assets only
  * fill gaps when canonical targets are missing.
  */
-function syncAssetsToGlobal(): void {
+export function syncAssetsToGlobal(): void {
+  ensureGatewayHome();
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
   syncFlatRepoDir(path.join(repoRoot, '.agents', 'assets', 'templates'), path.join(GLOBAL_ASSETS_DIR, 'templates'), '.json');
   syncFlatRepoDir(path.join(repoRoot, '.agents', 'assets', 'review-policies'), path.join(GLOBAL_ASSETS_DIR, 'review-policies'), '.json');
@@ -109,4 +112,14 @@ function syncAssetsToGlobal(): void {
   }
 }
 
-syncAssetsToGlobal();
+let initialized = false;
+let assetsSynced = false;
+
+export function initializeGatewayHome(options: { syncAssets?: boolean } = {}): void {
+  ensureGatewayHome();
+  if (options.syncAssets && !assetsSynced) {
+    syncAssetsToGlobal();
+    assetsSynced = true;
+  }
+  initialized = true;
+}

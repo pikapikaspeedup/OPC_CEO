@@ -11,6 +11,12 @@ import { discoverLanguageServers, getLanguageServer } from './discovery';
 import { getApiKey } from './statedb';
 import * as grpc from './grpc';
 import { createLogger } from '../logger';
+import {
+  getConversationOwnerCacheRecord,
+  pruneConversationOwnerCacheRecords,
+  upsertConversationOwnerCacheRecord,
+  upsertConversationProjection,
+} from '../storage/gateway-db';
 
 const log = createLogger('Gateway');
 
@@ -62,10 +68,33 @@ export let ownerMapAge = 0;
 export const preRegisteredOwners = new Map<string, OwnerInfo & { registeredAt: number }>();
 const PRE_REG_TTL_MS = 60_000;
 
+function persistOwnerCache(cascadeId: string, owner: OwnerInfo, ttlMs: number): void {
+  const now = new Date();
+  upsertConversationOwnerCacheRecord({
+    conversationId: cascadeId,
+    backendId: `language-server:${owner.port}`,
+    ownerKind: 'language-server',
+    endpoint: `127.0.0.1:${owner.port}`,
+    workspace: owner.workspace,
+    stepCount: owner.stepCount,
+    lastSeenAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+    payload: {
+      port: owner.port,
+      csrf: owner.csrf,
+      apiKey: owner.apiKey,
+      stepCount: owner.stepCount,
+      workspace: owner.workspace,
+    },
+  });
+}
+
 /** Pre-register a conversation owner immediately after creation */
 export function preRegisterOwner(cascadeId: string, info: OwnerInfo) {
   preRegisteredOwners.set(cascadeId, { ...info, registeredAt: Date.now() });
   convOwnerMap.set(cascadeId, info);
+  ownerMapAge = Date.now();
+  persistOwnerCache(cascadeId, info, PRE_REG_TTL_MS);
   log.info({ cascadeId: cascadeId.slice(0,8), port: info.port }, 'Pre-registered owner');
 }
 
@@ -80,10 +109,27 @@ export async function getOwnerConnection(cascadeId: string) {
   // 2. Check pre-registered owners (survives refresh cycles)
   const preReg = preRegisteredOwners.get(cascadeId);
   if (preReg && Date.now() - preReg.registeredAt < PRE_REG_TTL_MS) {
+    ownerMapAge = Date.now();
     log.debug({ cascadeId: cascadeId.slice(0,8), port: preReg.port, source: 'pre-reg', ageSec: Math.round((Date.now() - preReg.registeredAt)/1000) }, 'Owner lookup');
     return preReg;
   }
-  // 3. Fallback
+  // 3. Check persisted owner cache populated by the projection worker.
+  const cached = getConversationOwnerCacheRecord(cascadeId);
+  const payload = cached?.payload || {};
+  if (cached && typeof payload.port === 'number' && typeof payload.csrf === 'string' && typeof payload.apiKey === 'string') {
+    const cachedOwner: OwnerInfo = {
+      port: payload.port,
+      csrf: payload.csrf,
+      apiKey: payload.apiKey,
+      stepCount: typeof payload.stepCount === 'number' ? payload.stepCount : cached.stepCount,
+      workspace: typeof payload.workspace === 'string' ? payload.workspace : cached.workspace,
+    };
+    convOwnerMap.set(cascadeId, cachedOwner);
+    ownerMapAge = Date.now();
+    log.debug({ cascadeId: cascadeId.slice(0,8), port: cachedOwner.port, source: 'sqlite-cache' }, 'Owner lookup');
+    return cachedOwner;
+  }
+  // 4. Fallback
   const conns = await getAllConnections();
   log.debug({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length, source: 'fallback' }, 'Owner lookup fallback');
   return conns.length > 0 ? conns[0] : null;
@@ -116,12 +162,23 @@ export async function refreshOwnerMap() {
 
       for (const [id, info] of Object.entries(summaries) as [string, any][]) {
         const steps = info.stepCount || 0;
+        const summary = typeof info.summary === 'string' ? info.summary : '';
         const convWorkspaces: string[] = (info.workspaces || [])
           .map((w: any) => w.workspaceFolderAbsoluteUri || '')
           .filter(Boolean);
-          
-        const ownerWorkspace = convWorkspaces[0]?.replace('file://', '');
+
+        const ownerWorkspace = convWorkspaces[0] || '';
         const ownerEntry: OwnerInfo = { port: conn.port, csrf: conn.csrf, apiKey: conn.apiKey, stepCount: steps, workspace: ownerWorkspace };
+
+        upsertConversationProjection({
+          id,
+          title: summary,
+          workspace: ownerWorkspace,
+          stepCount: steps,
+          updatedAt: new Date().toISOString(),
+          lastActivityAt: new Date().toISOString(),
+          sourceKind: 'antigravity-live',
+        });
 
         const matched = serverWs && convWorkspaces.some(ws => serverWs.includes(ws) || ws.includes(serverWs));
         if (matched) {
@@ -168,6 +225,10 @@ export async function refreshOwnerMap() {
   }
 
   ownerMapAge = Date.now();
+  pruneConversationOwnerCacheRecords();
+  for (const [id, owner] of convOwnerMap.entries()) {
+    persistOwnerCache(id, owner, 90_000);
+  }
   log.info({ total: convOwnerMap.size, preRegPending: preRegisteredOwners.size }, 'OwnerMap rebuilt');
 
   for (const id of allIds) {

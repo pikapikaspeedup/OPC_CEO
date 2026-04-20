@@ -6,7 +6,7 @@ import { AssetLoader } from './asset-loader';
 import { createLogger } from '../logger';
 import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { resolveStageId } from './pipeline/pipeline-graph';
-import { listProjectRecords, upsertProjectRecord } from '../storage/gateway-db';
+import { deleteProjectRecord, listProjectRecords, upsertProjectRecord } from '../storage/gateway-db';
 
 const log = createLogger('ProjectRegistry');
 
@@ -16,42 +16,42 @@ const log = createLogger('ProjectRegistry');
 
 const globalForProjects = globalThis as unknown as {
   __PROJECT_REGISTRY_MAP?: Map<string, ProjectDefinition>;
+  __PROJECT_REGISTRY_INITIALIZED__?: boolean;
 };
 
 const projects = globalForProjects.__PROJECT_REGISTRY_MAP || new Map<string, ProjectDefinition>();
+let initialized = globalForProjects.__PROJECT_REGISTRY_INITIALIZED__ || false;
 if (process.env.NODE_ENV !== 'production') {
   globalForProjects.__PROJECT_REGISTRY_MAP = projects;
+  globalForProjects.__PROJECT_REGISTRY_INITIALIZED__ = initialized;
 }
 
-function saveToDisk(): void {
+function writeProjectMirror(project: ProjectDefinition, options: { ensureDir?: boolean } = {}): void {
+  if (!project.workspace) return;
+  const projectDir = path.join(project.workspace.replace(/^file:\/\//, ''), ARTIFACT_ROOT_DIR, 'projects', project.projectId);
+  if (options.ensureDir && !existsSync(projectDir)) {
+    mkdirSync(projectDir, { recursive: true });
+  }
+  if (existsSync(projectDir)) {
+    writeFileSync(path.join(projectDir, 'project.json'), JSON.stringify(project, null, 2), 'utf-8');
+  }
+}
+
+function persistProject(project: ProjectDefinition, options: { writeMirror?: boolean; ensureMirrorDir?: boolean } = {}): void {
   try {
-    const entries = Array.from(projects.values());
-    for (const project of entries) {
-      upsertProjectRecord(project);
+    upsertProjectRecord(project);
+    if (options.writeMirror) {
+      writeProjectMirror(project, { ensureDir: options.ensureMirrorDir });
     }
-
-    // V3.6 Fix (E4): Synchronize per-project `project.json`
-    for (const project of entries) {
-      if (project.workspace) {
-        const projectDir = path.join(project.workspace.replace(/^file:\/\//, ''), ARTIFACT_ROOT_DIR, 'projects', project.projectId);
-        if (existsSync(projectDir)) {
-          writeFileSync(path.join(projectDir, 'project.json'), JSON.stringify(project, null, 2), 'utf-8');
-        }
-      }
-    }
-
-    log.debug({ count: entries.length }, 'Projects persisted');
+    log.debug({ projectId: project.projectId }, 'Project persisted');
   } catch (err: any) {
-    log.error({ err: err.message }, 'Failed to persist projects');
+    log.error({ err: err.message, projectId: project.projectId }, 'Failed to persist project');
   }
 }
 
 function loadFromDisk(): void {
   try {
-    // If the Map is already populated, this is an HMR reload, not a cold start.
-    // Skip loading from disk to preserve actual running states.
-    if (projects.size > 0 && process.env.NODE_ENV !== 'production') {
-      log.debug('Projects map already populated in Memory (HMR skipped disk load)');
+    if (initialized) {
       return;
     }
 
@@ -81,13 +81,23 @@ function loadFromDisk(): void {
       }
       projects.set(entry.projectId, entry);
     }
+    initialized = true;
+    globalForProjects.__PROJECT_REGISTRY_INITIALIZED__ = true;
     log.info({ total: entries.length, skippedLegacy }, 'Projects loaded from disk');
   } catch (err: any) {
     log.warn({ err: err.message }, 'Failed to load projects from disk');
   }
 }
 
-loadFromDisk();
+export function initializeProjectRegistry(): void {
+  loadFromDisk();
+}
+
+function ensureProjectRegistryInitialized(): void {
+  if (!initialized) {
+    loadFromDisk();
+  }
+}
 
 export function createProject(input: {
   name: string;
@@ -101,6 +111,7 @@ export function createProject(input: {
   skillHint?: string;
   priority?: 'urgent' | 'high' | 'normal' | 'low';
 }): ProjectDefinition {
+  ensureProjectRegistryInitialized();
   const projectId = randomUUID();
   const project: ProjectDefinition = {
     projectId,
@@ -129,35 +140,37 @@ export function createProject(input: {
     mkdirSync(runsDir, { recursive: true });
   }
 
-  writeFileSync(path.join(projectDir, 'project.json'), JSON.stringify(project, null, 2), 'utf-8');
-
   projects.set(projectId, project);
-  saveToDisk();
+  persistProject(project, { writeMirror: true, ensureMirrorDir: true });
   log.info({ projectId, name: project.name }, 'Project created');
   return project;
 }
 
 export function getProject(projectId: string): ProjectDefinition | null {
+  ensureProjectRegistryInitialized();
   return projects.get(projectId) ?? null;
 }
 
 export function listProjects(): ProjectDefinition[] {
+  ensureProjectRegistryInitialized();
   return Array.from(projects.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 export function updateProject(projectId: string, updates: Partial<ProjectDefinition>): ProjectDefinition | null {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project) return null;
 
   Object.assign(project, updates);
   project.updatedAt = new Date().toISOString();
 
-  saveToDisk();
+  persistProject(project, { writeMirror: true });
   log.debug({ projectId }, 'Project updated');
   return project;
 }
 
 export function deleteProject(projectId: string): boolean {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project) return false;
 
@@ -176,20 +189,21 @@ export function deleteProject(projectId: string): boolean {
 
   const deleted = projects.delete(projectId);
   if (deleted) {
-    saveToDisk();
+    deleteProjectRecord(projectId);
     log.info({ projectId }, 'Project deleted');
   }
   return deleted;
 }
 
 export function addRunToProject(projectId: string, runId: string): void {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project) return;
 
   if (!project.runIds.includes(runId)) {
     project.runIds.push(runId);
     project.updatedAt = new Date().toISOString();
-    saveToDisk();
+    persistProject(project, { writeMirror: true });
     log.debug({ projectId, runId }, 'Run added to project');
   }
 }
@@ -208,6 +222,7 @@ export function initializePipelineState(
   templateId: string,
   templateOverrides?: Record<string, unknown>,
 ): ProjectPipelineState | null {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project) return null;
 
@@ -257,7 +272,7 @@ export function initializePipelineState(
   project.pipelineState = pipelineState;
   project.status = 'active';
   project.updatedAt = new Date().toISOString();
-  saveToDisk();
+  persistProject(project, { writeMirror: true });
   log.info({ projectId, templateId, stageCount: stages.length, hasOverrides: !!templateOverrides }, 'Pipeline state initialized');
   return pipelineState;
 }
@@ -323,6 +338,7 @@ export function updatePipelineStageByStageId(
   stageId: string,
   updates: Partial<PipelineStageProgress>,
 ): void {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
 
@@ -332,7 +348,7 @@ export function updatePipelineStageByStageId(
   Object.assign(stage, updates);
   recomputePipelineState(project);
   project.updatedAt = new Date().toISOString();
-  saveToDisk();
+  persistProject(project, { writeMirror: true });
   log.debug({ projectId, stageId, stageStatus: stage.status }, 'Pipeline stage updated');
 }
 
@@ -341,6 +357,7 @@ export function updatePipelineStage(
   stageIndex: number,
   updates: Partial<PipelineStageProgress>,
 ): void {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
   const stage = project.pipelineState.stages[stageIndex];
@@ -354,6 +371,7 @@ export function updateBranchProgress(
   branchIndex: number,
   updates: Partial<BranchProgress>,
 ): void {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
   const stage = project.pipelineState.stages.find(item => item.stageId === stageId);
@@ -382,7 +400,7 @@ export function updateBranchProgress(
 
   recomputePipelineState(project);
   project.updatedAt = new Date().toISOString();
-  saveToDisk();
+  persistProject(project, { writeMirror: true });
   log.debug({ projectId, stageId, branchIndex }, 'Branch progress updated');
 }
 
@@ -392,6 +410,7 @@ export function updateBranchProgress(
  * canonical run has stopped making progress.
  */
 export function getFirstActionableStage(projectId: string): PipelineStageProgress | null {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project?.pipelineState) return null;
 
@@ -417,6 +436,7 @@ export function getFirstActionableStage(projectId: string): PipelineStageProgres
  * Called by: API dispatch and runtime auto-trigger.
  */
 export function trackStageDispatch(projectId: string, stageIdentifier: string | number, runId: string): void {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
   const stage = getStageByIdentifier(project, stageIdentifier);
@@ -430,7 +450,7 @@ export function trackStageDispatch(projectId: string, stageIdentifier: string | 
 
   recomputePipelineState(project);
   project.updatedAt = new Date().toISOString();
-  saveToDisk();
+  persistProject(project, { writeMirror: true });
   log.info({ projectId, stageId: stage.stageId, runId: runId.slice(0, 8), attempts: stage.attempts }, 'Pipeline stage dispatch tracked');
 }
 
@@ -440,6 +460,7 @@ export function trackStageDispatch(projectId: string, stageIdentifier: string | 
  * Use this for nudge/retry where the stage status is already being managed asynchronously.
  */
 export function incrementStageAttempts(projectId: string, stageIdentifier: string | number): void {
+  ensureProjectRegistryInitialized();
   const project = projects.get(projectId);
   if (!project?.pipelineState) return;
   const stage = getStageByIdentifier(project, stageIdentifier);
@@ -447,6 +468,6 @@ export function incrementStageAttempts(projectId: string, stageIdentifier: strin
 
   stage.attempts = (stage.attempts || 0) + 1;
   project.updatedAt = new Date().toISOString();
-  saveToDisk();
+  persistProject(project, { writeMirror: true });
   log.debug({ projectId, stageId: stage.stageId, attempts: stage.attempts }, 'Stage attempts incremented');
 }

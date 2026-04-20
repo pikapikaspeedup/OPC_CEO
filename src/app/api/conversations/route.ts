@@ -1,22 +1,15 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import path from 'path';
-import { readdirSync, statSync } from 'fs';
-import { homedir } from 'os';
 import { execSync } from 'child_process';
-import {
-  getAllConnections, getConversations, addLocalConversation,
-  refreshOwnerMap, convOwnerMap, preRegisterOwner, getApiKey,
-  discoverLanguageServers, getLanguageServer, generatePlaygroundName,
-  PLAYGROUND_DIR_PATH, grpc,
-} from '@/lib/bridge/gateway';
 import { mkdirSync } from 'fs';
 import { resolveProvider } from '@/lib/providers';
 import {
   buildLocalProviderConversationId,
   isSupportedLocalProvider,
 } from '@/lib/local-provider-conversations';
-import { listChildConversationIdsFromRuns } from '@/lib/storage/gateway-db';
+import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
+import { listConversationProjections } from '@/lib/storage/gateway-db';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,132 +25,57 @@ const PROVIDER_TITLES: Record<string, string> = {
   custom: 'Custom API',
 };
 
-const CONVERSATIONS_DIR = path.join(homedir(), '.gemini/antigravity/conversations');
-
-interface ConvCache { id: string; title: string; workspace: string; mtime: number; steps: number; }
-interface TrajectorySummary {
-  summary?: string;
-  workspaces?: Array<{ workspaceFolderAbsoluteUri?: string }>;
-  stepCount?: number;
-}
-
-let convCache: ConvCache[] = [];
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 // GET /api/conversations — list conversations
 export async function GET(req: Request) {
-  // Optional workspace filter: ?workspace=file:///path/to/dir
   const url = new URL(req.url);
   const filterWorkspace = url.searchParams.get('workspace') || '';
+  const pagination = parsePaginationSearchParams(url.searchParams, {
+    defaultPageSize: 100,
+    maxPageSize: 200,
+  });
+  const pagedConversations = paginateArray(
+    listConversationProjections(
+      filterWorkspace ? { workspace: filterWorkspace } : undefined,
+    ),
+    pagination,
+  );
+  const conversations = pagedConversations.items.map((conversation) => ({
+    id: conversation.id,
+    title: conversation.title || `Conversation ${conversation.id.slice(0, 8)}`,
+    workspace: conversation.workspace || '',
+    mtime: conversation.mtimeMs
+      ?? (conversation.lastActivityAt
+        ? new Date(conversation.lastActivityAt).getTime()
+        : conversation.updatedAt
+          ? new Date(conversation.updatedAt).getTime()
+          : 0),
+    steps: conversation.stepCount || 0,
+  }));
 
-  try {
-    const files = readdirSync(CONVERSATIONS_DIR)
-      .filter(f => f.endsWith('.pb'))
-      .map(f => {
-        const id = f.replace('.pb', '');
-        const stat = statSync(path.join(CONVERSATIONS_DIR, f));
-        return { id, mtime: stat.mtimeMs, size: stat.size };
-      })
-      .sort((a, b) => b.mtime - a.mtime);
-
-    await refreshOwnerMap();
-
-    const allConversations = getConversations();
-    const sqliteMap = new Map<string, (typeof allConversations)[number]>();
-    allConversations.forEach((conversation) => sqliteMap.set(conversation.id, conversation));
-
-    const oldCacheMap = new Map<string, ConvCache>();
-    convCache.forEach(c => oldCacheMap.set(c.id, c));
-
-    const conns = await getAllConnections();
-    const serverTrajectories = new Map<string, Map<string, TrajectorySummary>>();
-    for (const conn of conns) {
-      try {
-        const data = await grpc.getAllCascadeTrajectories(conn.port, conn.csrf);
-        const summaries = data?.trajectorySummaries || {};
-        serverTrajectories.set(String(conn.port), new Map(Object.entries(summaries)));
-      } catch { }
-    }
-
-    // Get hidden child conversation IDs from run registry
-    const hiddenChildIds = new Set(listChildConversationIdsFromRuns());
-
-    const results: ConvCache[] = [];
-    const seenIds = new Set<string>();
-
-    for (const file of files) {
-      // Filter out hidden child conversations
-      if (hiddenChildIds.has(file.id)) continue;
-
-      let title = '';
-      let workspace = '';
-      let steps = 0;
-
-      const owner = convOwnerMap.get(file.id);
-      if (owner) {
-        const ownerTraj = serverTrajectories.get(String(owner.port));
-        const live = ownerTraj?.get(file.id);
-        if (live) {
-          title = live.summary || '';
-          const liveWorkspaces = live.workspaces || [];
-          if (liveWorkspaces.length > 0) {
-            workspace = liveWorkspaces[0].workspaceFolderAbsoluteUri || '';
-          }
-          steps = live.stepCount || 0;
-        }
-      }
-
-      if (!title) {
-        const lc = oldCacheMap.get(file.id);
-        if (lc?.title) { title = lc.title; workspace = workspace || lc.workspace; steps = Math.max(steps, lc.steps); }
-      }
-
-      const sqliteEntry = sqliteMap.get(file.id);
-      if (!title && sqliteEntry?.title && sqliteEntry.title !== 'Untitled') {
-        title = sqliteEntry.title; workspace = workspace || sqliteEntry.workspace || '';
-        steps = Math.max(steps, sqliteEntry.stepCount || 0);
-      }
-
-      workspace = workspace || sqliteEntry?.workspace || '';
-      results.push({ id: file.id, title: title || `Conversation ${file.id.slice(0, 8)}`, workspace, mtime: file.mtime, steps });
-      seenIds.add(file.id);
-    }
-
-    for (const conversation of allConversations) {
-      if (hiddenChildIds.has(conversation.id) || seenIds.has(conversation.id)) continue;
-      results.push({
-        id: conversation.id,
-        title: conversation.title || `Conversation ${conversation.id.slice(0, 8)}`,
-        workspace: conversation.workspace || '',
-        mtime: conversation.createdAt ? new Date(conversation.createdAt).getTime() : 0,
-        steps: conversation.stepCount || 0,
-      });
-    }
-
-    results.sort((a, b) => b.mtime - a.mtime);
-    convCache = results;
-
-    // Apply workspace filter if provided
-    const filtered = filterWorkspace
-      ? results.filter(c => {
-          if (!c.workspace) return false;
-          // Match if either is a prefix of the other (vault may be nested in workspace or vice versa)
-          return c.workspace.startsWith(filterWorkspace) || filterWorkspace.startsWith(c.workspace);
-        })
-      : results;
-
-    return NextResponse.json(filtered);
-  } catch {
-    const conversations = getConversations();
-    return NextResponse.json(conversations);
-  }
+  return NextResponse.json({
+    ...pagedConversations,
+    items: conversations,
+  });
 }
 
 // POST /api/conversations — create new conversation
 export async function POST(req: Request) {
+  const gateway = await import('@/lib/bridge/gateway');
+  const {
+    addLocalConversation,
+    preRegisterOwner,
+    getApiKey,
+    discoverLanguageServers,
+    getLanguageServer,
+    generatePlaygroundName,
+    PLAYGROUND_DIR_PATH,
+    grpc,
+  } = gateway;
+
   let workspace = 'playground';
   try {
     const body = await req.json();

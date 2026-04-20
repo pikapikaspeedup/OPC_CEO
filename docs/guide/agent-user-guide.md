@@ -400,11 +400,16 @@ Body: {
 ### 4.3 查看 Run / 项目
 
 ```bash
-GET /api/agent-runs                        # 所有 Run 列表
+GET /api/agent-runs?page=1&pageSize=50    # Run 列表（分页 list view）
 GET /api/agent-runs/:id                    # Run 详情
-GET /api/projects                          # 所有项目
+GET /api/projects?page=1&pageSize=100     # 项目列表（分页）
 GET /api/projects/:id                      # 项目详情（含 pipelineState、runs）
 ```
+
+说明：
+
+- `GET /api/agent-runs` / `GET /api/projects` / `GET /api/conversations` / `GET /api/scheduler/jobs` 等列表接口现在统一返回 `{ items, page, pageSize, total, hasMore }`。
+- `GET /api/agent-runs` 只保留列表视图字段；完整 `taskEnvelope / resultEnvelope / review` 细节请走 `GET /api/agent-runs/:id`。
 
 ### 4.4 Pipeline 控制
 
@@ -1404,7 +1409,7 @@ demolong/projects/<projectId>/runs/<runId>/
 
 ### Q: 所有相关的数据存放位置在哪里？
 当前版本：
-- **主数据**：记录在全局目录 `~/.gemini/antigravity/gateway/storage.sqlite` 中，包含 `projects / runs / conversation_sessions / scheduled_jobs / deliverables`。
+- **主数据**：记录在全局目录 `~/.gemini/antigravity/gateway/storage.sqlite` 中，包含 `projects / runs / conversations / run_conversation_links / conversation_visibility / conversation_owner_cache / scheduled_jobs / deliverables`。
 - **Run 级执行历史**：每次执行都有一份 `~/.gemini/antigravity/gateway/runs/{runId}/run-history.jsonl`，统一记录 provider session、消息、步骤、结果、交付物和校验事件。
 - **运行时数据与产物目录**：项目内由 Runtime 管理至 `demolong/runs/<runId>/` 或 `demolong/projects/<projectId>/runs/<runId>/` 下。
 - **Prompt/指令工作流存储**：全局存储在 `~/.gemini/antigravity/gateway/assets/workflows/` 下，跨项目共享。
@@ -1413,6 +1418,7 @@ demolong/projects/<projectId>/runs/<runId>/
 - **审查策略**：`~/.gemini/antigravity/gateway/assets/review-policies/*.json`。
 - **Checkpoint 数据**：`~/.gemini/antigravity/gateway/projects/{projectId}/checkpoints/` 目录下。
 - **执行日志**：`~/.gemini/antigravity/gateway/projects/{projectId}/journal.jsonl`。
+- **Antigravity 外部状态导入源**：`~/.gemini/antigravity/conversations/*.pb`、`~/.gemini/antigravity/brain/*` 与 IDE 的 `state.vscdb` 仅作为后台 importer 输入，API 热路径不再直接扫描这些文件。
 - **旧 JSON registry 备份**：迁移后保留在 `~/.gemini/antigravity/gateway/legacy-backup/<timestamp>/`，运行时不再读写。
 
 ### Q: 为什么有些历史 Run 只能看到 transcript，不是完整过程？

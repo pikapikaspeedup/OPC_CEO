@@ -548,7 +548,7 @@ stateDiagram-v2
 │   ├── templates/             # Pipeline 模板 JSON
 │   ├── workflows/             # 全局 Workflow .md（跨项目共享）
 │   └── review-policies/       # 审阅策略 JSON
-├── storage.sqlite             # 主数据库（projects / runs / sessions / jobs / deliverables）
+├── storage.sqlite             # 主数据库（projects / runs / conversations / links / visibility / jobs / deliverables）
 ├── runs/{runId}/
 │   └── run-history.jsonl      # Run 级统一执行历史
 ├── projects/{projectId}/
@@ -560,7 +560,7 @@ stateDiagram-v2
 
 {workspace}/demolong/
 ├── projects/{projectId}/
-│   ├── project.json           # 项目详情
+│   ├── project.json           # 项目输出镜像（SQLite 仍是主真相源）
 │   └── runs/{runId}/          # 按 Run 存储产出
 └── runs/{runId}/              # 独立 Run（无 Project）产出
 ```
@@ -574,6 +574,8 @@ stateDiagram-v2
 | `src/lib/agents/project-events.ts` | 项目事件总线（`stage:failed` 等） |
 | `src/lib/agents/project-diagnostics.ts` | 项目健康诊断 |
 | `src/lib/agents/project-reconciler.ts` | 项目状态修复 |
+| `src/lib/bridge/conversation-importer.ts` | `.pb / brain / state.vscdb / live trajectory` 导入 SQLite conversation projection |
+| `src/lib/bridge/worker-entry.ts` | Bridge/importer worker 启动入口 |
 | `src/lib/agents/dag-compiler.ts` | Pipeline → DagIR 编译器 |
 | `src/lib/agents/dag-ir-types.ts` | DagIR 中间表示类型 |
 | `src/lib/agents/dag-runtime.ts` | DagIR 运行时执行器 |
@@ -852,7 +854,7 @@ interface TaskExecutor {
 
 **重要边界**
 
-- `storage.sqlite` 是结构化主数据真相源。
+- `storage.sqlite` 是结构化主数据真相源；`conversations / run_conversation_links / conversation_visibility / conversation_owner_cache` 共同承担 conversation 读模型。
 - `run-history.jsonl` 是 run 级执行历史真相源。
 - `Project journal.jsonl` 仍保留，但只承担 project 级 control-flow，不承担完整 conversation 语义。
 - **只有 cutover 后的新 run 保证完整 provider 过程历史。** cutover 前的老 run 经过迁移后可见，但不保证恢复出完整 step-by-step 过程。
@@ -1501,7 +1503,7 @@ flowchart TB
 
 | 路径 | 方法 | 模块 | 说明 |
 |---|---|---|---|
-| `/api/conversations` | GET / POST | Conversation | 列表 / 创建对话；本地 provider 返回 `local-*` conversation |
+| `/api/conversations` | GET / POST | Conversation | 列表 / 创建对话；GET 支持 `page/pageSize` 并返回分页 envelope；本地 provider 返回 `local-*` conversation |
 | `/api/conversations/{id}/send` | POST | Conversation | 发送消息（支持 `@file` 附件；本地 provider 走 Gateway executor / transcript store）|
 | `/api/conversations/{id}/cancel` | POST | Conversation | 取消生成 |
 | `/api/conversations/{id}/steps` | GET | Conversation | 获取步骤历史（gRPC checkpoint、本地 transcript 文件或 API-backed transcript store） |
@@ -1509,20 +1511,20 @@ flowchart TB
 | `/api/conversations/{id}/revert` | POST | Conversation | 回退到指定步骤 |
 | `/api/conversations/{id}/revert-preview` | GET | Conversation | 回退预览 ⚠️ *后端未实现* |
 | `/api/conversations/{id}/files` | GET | Conversation | 对话关联的文件列表 |
-| `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run |
+| `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run；GET 改为分页 list view，重字段留在 `/api/agent-runs/{id}` |
 | `/api/agent-runs/{id}` | GET / DELETE | Agent | 详情 / 取消 Run |
 | `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate；prompt-mode 支持 cancel/evaluate) |
 | `/api/scope-check` | POST | Agent | 写入范围校验 |
-| `/api/projects` | GET / POST | Project | 列表 / 创建项目 |
+| `/api/projects` | GET / POST | Project | 列表 / 创建项目；GET 支持 `page/pageSize` 分页 envelope |
 | `/api/projects/{id}` | GET / PATCH / DELETE | Project | 项目 CRUD |
 | `/api/projects/{id}/resume` | POST | Project | 恢复阻塞 Pipeline |
 | `/api/projects/{id}/diagnostics` | GET | Project | 项目健康诊断 |
 | `/api/projects/{id}/reconcile` | POST | Project | 项目状态修复 |
 | `/api/projects/{id}/graph` | GET | Project | 项目 DAG IR 表示 |
 | `/api/projects/{id}/gate/{nodeId}/approve` | POST | Project (V5.2) | Gate 节点审批 |
-| `/api/projects/{id}/checkpoints` | GET | Project (V5.2) | Checkpoint 列表 |
+| `/api/projects/{id}/checkpoints` | GET | Project (V5.2) | Checkpoint 列表（分页） |
 | `/api/projects/{id}/checkpoints/{cpId}/restore` | POST | Project (V5.2) | 从 Checkpoint 恢复 |
-| `/api/projects/{id}/journal` | GET | Project (V5.2) | 执行日志查询 |
+| `/api/projects/{id}/journal` | GET | Project (V5.2) | 执行日志查询（分页；兼容 `limit -> pageSize`） |
 | `/api/projects/{id}/replay` | POST | Project (V5.2) | Checkpoint 回放 |
 | `/api/pipelines` | GET | Pipeline | 列出 Pipeline 模板 |
 | `/api/pipelines/{id}` | GET / PUT / DELETE | Pipeline | 模板 CRUD |
@@ -1535,7 +1537,7 @@ flowchart TB
 | `/api/pipelines/subgraphs` | GET | Pipeline (V5.4) | 子图列表 |
 | `/api/pipelines/policies` | GET | Pipeline (V5.4) | 资源策略列表 |
 | `/api/pipelines/policies/check` | POST | Pipeline (V5.4) | 配额检查 |
-| `/api/operations/audit` | GET | Operations | 审计日志 |
+| `/api/operations/audit` | GET | Operations | 审计日志（分页；兼容 `limit -> pageSize`） |
 | `/api/models` | GET | Core | 可用模型 + 配额（有 gRPC 时合并 Antigravity 模型；无 gRPC 时返回 provider-aware fallback） |
 | `/api/agent-runs` | POST | Agent | 支持 `executionProfile` 分流到 `workflow-run / dag-orchestration`，并可附带 `departmentRuntimeContract/runtimeContract` 透传到 backend |
 | `/api/servers` | GET | Core | 已发现的 Language Server |
@@ -1580,10 +1582,10 @@ flowchart TB
 | `/api/departments/digest` | GET | Departments | 部门摘要 |
 | `/api/departments/quota` | GET | Departments | 部门配额 |
 | `/api/departments/memory` | GET / POST | Departments | 部门记忆 |
-| `/api/scheduler/jobs` | GET | Scheduler | 定时任务列表 |
+| `/api/scheduler/jobs` | GET | Scheduler | 定时任务列表（分页） |
 | `/api/scheduler/jobs/{id}` | GET / PATCH / DELETE | Scheduler | 任务 CRUD |
 | `/api/scheduler/jobs/{id}/trigger` | POST | Scheduler | 手动触发任务 |
-| `/api/projects/{id}/deliverables` | GET / POST | Project | SQLite-backed 交付物管理（含 run output 自动同步） |
+| `/api/projects/{id}/deliverables` | GET / POST | Project | SQLite-backed 交付物管理（GET 分页；含 run output 自动同步） |
 | `/api/logs` | GET | Core | 日志查看 |
 | `/api/workflows/{name}` | GET | Workflow | 单个工作流详情 |
 | `/api/scheduler` | GET | Scheduler | 调度器状态 |
@@ -1599,7 +1601,7 @@ flowchart TB
 | **后端** | Node.js + tsx + 自定义 HTTP Server + WebSocket |
 | **协议** | gRPC-Web Connect (protobuf envelope) / REST / WebSocket / MCP (stdio) |
 | **日志** | pino 结构化日志 + pino-roll 日志轮转 |
-| **持久化** | JSON 文件 + .pb protobuf (StateDB / SQLite) |
+| **持久化** | SQLite projection/store + JSONL + 外部只读 `.pb` / `brain` / StateDB importer |
 | **隧道** | Cloudflare Tunnel (远程访问) |
 | **构建** | TypeScript 5 + tsx (开发) + next build (生产) |
 | **测试** | Playwright (E2E 截图) |

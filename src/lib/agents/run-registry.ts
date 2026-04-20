@@ -30,26 +30,26 @@ const log = createLogger('RunRegistry');
 
 const globalForRegistry = globalThis as unknown as {
   __AGENT_RUNS_REGISTRY_MAP?: Map<string, AgentRunState>;
+  __AGENT_RUNS_REGISTRY_INITIALIZED__?: boolean;
 };
 
 const runs = globalForRegistry.__AGENT_RUNS_REGISTRY_MAP || new Map<string, AgentRunState>();
+let initialized = globalForRegistry.__AGENT_RUNS_REGISTRY_INITIALIZED__ || false;
 if (process.env.NODE_ENV !== 'production') {
   globalForRegistry.__AGENT_RUNS_REGISTRY_MAP = runs;
+  globalForRegistry.__AGENT_RUNS_REGISTRY_INITIALIZED__ = initialized;
 }
 
 // ---------------------------------------------------------------------------
 // Persistence helpers
 // ---------------------------------------------------------------------------
 
-function saveToDisk(): void {
+function persistRun(run: AgentRunState): void {
   try {
-    const entries = Array.from(runs.values());
-    for (const run of entries) {
-      upsertRunRecord(run);
-    }
-    log.debug({ count: entries.length }, 'Runs persisted');
+    upsertRunRecord(run);
+    log.debug({ runId: run.runId.slice(0, 8) }, 'Run persisted');
   } catch (err: any) {
-    log.error({ err: err.message }, 'Failed to persist runs');
+    log.error({ err: err.message, runId: run.runId.slice(0, 8) }, 'Failed to persist run');
   }
 }
 
@@ -128,10 +128,7 @@ export function recoverInterruptedRun(entry: AgentRunState, force = false): bool
 
 function loadFromDisk(): void {
   try {
-    // If the Map is already populated, this is an HMR reload, not a cold start.
-    // Skip loading from disk to preserve actual running states and avoid fake failures.
-    if (runs.size > 0 && process.env.NODE_ENV !== 'production') {
-      log.debug('Runs map already populated in Memory (HMR skipped disk load)');
+    if (initialized) {
       return;
     }
 
@@ -154,6 +151,7 @@ function loadFromDisk(): void {
       delete normalizedEntry.groupId;
       // In-progress runs that survived a true process restart.
       // Try to recover from completed artifacts, otherwise mark failed.
+      let needsPersist = false;
       if (!TERMINAL_STATUSES.has(normalizedEntry.status)) {
         if (recoverInterruptedRun(normalizedEntry)) {
           autoRecovered++;
@@ -163,12 +161,18 @@ function loadFromDisk(): void {
           normalizedEntry.finishedAt = new Date().toISOString();
         }
         recovered++;
+        needsPersist = true;
       }
       runs.set(normalizedEntry.runId, normalizedEntry);
+      if (needsPersist) {
+        persistRun(normalizedEntry);
+      }
       if (normalizedEntry.resultEnvelope?.outputArtifacts?.length) {
         syncRunArtifactsToDeliverables(normalizedEntry);
       }
     }
+    initialized = true;
+    globalForRegistry.__AGENT_RUNS_REGISTRY_INITIALIZED__ = true;
     log.info({ total: entries.length, recovered, autoRecovered, skippedLegacy }, 'Runs loaded from disk');
 
     // Post-load: sync any auto-recovered runs to their project pipeline
@@ -182,8 +186,15 @@ function loadFromDisk(): void {
   }
 }
 
-// Load on module init (only takes effect on true cold start)
-loadFromDisk();
+export function initializeRunRegistry(): void {
+  loadFromDisk();
+}
+
+function ensureRunRegistryInitialized(): void {
+  if (!initialized) {
+    loadFromDisk();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -214,6 +225,7 @@ export function createRun(input: {
   resolutionReason?: string;
   promptResolution?: AgentRunState['promptResolution'];
 }): AgentRunState {
+  ensureRunRegistryInitialized();
   const run: AgentRunState = {
     runId: randomUUID(),
     projectId: input.projectId,
@@ -247,7 +259,7 @@ export function createRun(input: {
     run.taskEnvelope.runId = run.runId;
   }
   runs.set(run.runId, run);
-  saveToDisk();
+  persistRun(run);
   appendRunHistoryEntry({
     runId: run.runId,
     provider: run.provider,
@@ -272,6 +284,7 @@ export function updateRun(
   runId: string,
   updates: Partial<Omit<AgentRunState, 'runId' | 'stageId' | 'workspace' | 'prompt' | 'createdAt'>>,
 ): AgentRunState | null {
+  ensureRunRegistryInitialized();
   const run = runs.get(runId);
   if (!run) return null;
 
@@ -292,7 +305,7 @@ export function updateRun(
     run.finishedAt = undefined;
   }
 
-  saveToDisk();
+  persistRun(run);
   log.debug({ runId: runId.slice(0, 8), status: run.status }, 'Run updated');
 
   if (run.resultEnvelope?.outputArtifacts?.length) {
@@ -458,10 +471,12 @@ function syncRunStatusToProject(run: AgentRunState): void {
 }
 
 export function getRun(runId: string): AgentRunState | null {
+  ensureRunRegistryInitialized();
   return runs.get(runId) ?? null;
 }
 
 export function listRuns(filter?: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string; executorKind?: string; schedulerJobId?: string }): AgentRunState[] {
+  ensureRunRegistryInitialized();
   let all = Array.from(runs.values());
   if (filter?.status) {
     all = all.filter(r => r.status === filter.status);
@@ -491,6 +506,7 @@ export function listRuns(filter?: { status?: RunStatus; stageId?: string; review
  * Used by the conversation filter to hide child conversations.
  */
 export function getChildConversationIds(): Set<string> {
+  ensureRunRegistryInitialized();
   const ids = new Set<string>();
   for (const run of runs.values()) {
     if (run.childConversationId) {

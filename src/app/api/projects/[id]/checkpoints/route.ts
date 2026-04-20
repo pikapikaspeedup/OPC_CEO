@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { listCheckpoints, createCheckpoint } from '@/lib/agents/checkpoint-manager';
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
 import { getProject } from '@/lib/agents/project-registry';
+import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,7 +10,7 @@ export const dynamic = 'force-dynamic';
  * GET /api/projects/[id]/checkpoints — list all checkpoints for a project.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -19,8 +20,13 @@ export async function GET(
     return NextResponse.json({ error: 'Project not found' }, { status: 404 });
   }
 
-  const checkpoints = listCheckpoints(id);
-  return NextResponse.json({ checkpoints });
+  const { searchParams } = new URL(request.url);
+  const pagination = parsePaginationSearchParams(searchParams, {
+    defaultPageSize: 50,
+    maxPageSize: 100,
+  });
+  const checkpoints = [...listCheckpoints(id)].reverse();
+  return NextResponse.json(paginateArray(checkpoints, pagination));
 }
 
 /**

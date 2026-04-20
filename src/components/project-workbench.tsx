@@ -96,12 +96,14 @@ export default function ProjectWorkbench({
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [resumeLoadingStage, setResumeLoadingStage] = useState<string | null>(null);
   const [resumeErrors, setResumeErrors] = useState<Record<string, string>>({});
+  const [selectedRunDetail, setSelectedRunDetail] = useState<AgentRun | null>(null);
 
   // Reset selection when project changes
   useEffect(() => {
     setSelection(null);
     setResumeLoadingStage(null);
     setResumeErrors({});
+    setSelectedRunDetail(null);
   }, [project.projectId]);
 
   // Handle resume with loading + error
@@ -177,6 +179,22 @@ export default function ProjectWorkbench({
   };
 
   const { selectedStage, selectedRun, selectedRole, selectedPromptRun } = resolveSelection();
+  const selectedRunId = useMemo(() => {
+    if (selection?.type === 'prompt-run') {
+      return selectedPromptRun?.runId || null;
+    }
+    return selectedRun?.runId || null;
+  }, [selection, selectedPromptRun, selectedRun]);
+  const resolvedSelectedRun = useMemo(() => {
+    const fallback = selectedPromptRun || selectedRun || null;
+    if (!fallback || !selectedRunId) {
+      return fallback;
+    }
+    if (!selectedRunDetail || selectedRunDetail.runId !== selectedRunId) {
+      return fallback;
+    }
+    return { ...fallback, ...selectedRunDetail };
+  }, [selectedPromptRun, selectedRun, selectedRunDetail, selectedRunId]);
 
   // Has something selected → show right panel
   const hasSelection = selection !== null;
@@ -241,6 +259,37 @@ export default function ProjectWorkbench({
     if (selection || !promptOnlyProject || !primaryPromptRun) return;
     setSelection({ type: 'prompt-run', runId: primaryPromptRun.runId });
   }, [selection, promptOnlyProject, primaryPromptRun]);
+
+  useEffect(() => {
+    if (!selectedRunId) {
+      setSelectedRunDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadRunDetail = async () => {
+      try {
+        const detail = await api.agentRun(selectedRunId);
+        if (!cancelled) {
+          setSelectedRunDetail(detail);
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedRunDetail(null);
+        }
+      }
+    };
+
+    void loadRunDetail();
+    const interval = setInterval(() => {
+      void loadRunDetail();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedRunId]);
 
   return (
     <Tabs defaultValue="pipeline">
@@ -459,7 +508,7 @@ export default function ProjectWorkbench({
                   <StageDetailPanel
                     stage={selectedStage}
                     stageTitle={resolveStageTitle(selectedStage.stageId, templateStages, selectedStage.title)}
-                    run={selectedRun}
+                    run={resolvedSelectedRun}
                     onResume={handleResume}
                     resumeLoading={resumeLoadingStage === selectedStage.stageId}
                     resumeError={resumeErrors[selectedStage.stageId] || null}
@@ -467,19 +516,19 @@ export default function ProjectWorkbench({
                     onEvaluateRun={onEvaluateRun}
                     onGateApprove={handleGateApprove}
                   />
-                ) : selection.type === 'prompt-run' && selectedPromptRun ? (
+                ) : selection.type === 'prompt-run' && resolvedSelectedRun ? (
                   <AgentRunDetail
-                    run={selectedPromptRun}
+                    run={resolvedSelectedRun}
                     models={models}
                     onCancel={onCancelRun}
                     onEvaluateRun={onEvaluateRun}
                     onOpenConversation={onOpenConversation}
                     executiveMode
                   />
-                ) : selection.type === 'role' && selectedRun && selectedRole ? (
+                ) : selection.type === 'role' && resolvedSelectedRun && selectedRole ? (
                   <RoleDetailPanel
                     role={selectedRole}
-                    run={selectedRun}
+                    run={resolvedSelectedRun}
                     stageTitle={resolveStageTitle(
                       selection.type === 'role' ? (stages[selection.stageIndex]?.stageId || '') : '',
                       templateStages,

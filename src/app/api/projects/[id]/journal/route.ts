@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { queryJournal, getNodeJournal } from '@/lib/agents/execution-journal';
+import { queryJournal, type JournalEventType } from '@/lib/agents/execution-journal';
 import { getProject } from '@/lib/agents/project-registry';
+import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,7 @@ export const dynamic = 'force-dynamic';
  * Query params:
  *   nodeId  — filter by node ID
  *   type    — filter by event type (e.g. 'gate:decided', 'loop:iteration')
- *   limit   — max entries to return (default 100)
+ *   limit   — legacy alias for pageSize
  */
 export async function GET(
   request: Request,
@@ -25,22 +26,26 @@ export async function GET(
   }
 
   const url = new URL(request.url);
+  const pagination = parsePaginationSearchParams(url.searchParams, {
+    defaultPageSize: 100,
+    maxPageSize: 200,
+    legacyPageSizeKeys: ['limit'],
+  });
   const nodeId = url.searchParams.get('nodeId');
   const type = url.searchParams.get('type');
-  const limitStr = url.searchParams.get('limit');
-  const limit = limitStr ? Math.min(Math.max(parseInt(limitStr, 10) || 100, 1), 1000) : 100;
 
   let entries;
   if (nodeId) {
-    entries = getNodeJournal(id, nodeId);
+    entries = queryJournal(id, {
+      nodeId,
+      limit: Number.MAX_SAFE_INTEGER,
+    });
   } else {
     entries = queryJournal(id, {
-      ...(type ? { eventType: type as any } : {}),
+      ...(type ? { eventType: type as JournalEventType } : {}),
+      limit: Number.MAX_SAFE_INTEGER,
     });
   }
 
-  // Apply limit (most recent entries)
-  const sliced = entries.slice(-limit);
-
-  return NextResponse.json({ entries: sliced, total: entries.length });
+  return NextResponse.json(paginateArray([...entries].reverse(), pagination));
 }

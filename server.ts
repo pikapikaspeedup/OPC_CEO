@@ -8,18 +8,25 @@
  * in time, causing lock conflicts and restart loops.
  * Use dynamic import() instead so tsx watch only watches this file.
  */
+import { spawn, type ChildProcess } from 'child_process';
 import { createServer } from 'http';
+import { createRequire } from 'module';
+import path from 'path';
 import next from 'next';
-import { parse } from 'url';
+import { fileURLToPath, parse } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createLogger } from './src/lib/logger';
 import { mergeStepsUpdate, extractLastTaskBoundary } from './src/lib/agents/step-merger';
+import { initializeGatewayHome } from './src/lib/agents/gateway-home';
 
 const log = createLogger('Server');
+const require = createRequire(import.meta.url);
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000');
+
+initializeGatewayHome({ syncAssets: true });
 
 const app = next({ dev, hostname, port, turbopack: false });
 const handle = app.getRequestHandler();
@@ -40,6 +47,8 @@ type StreamStep = {
 let bridgeLoaded = false;
 let gateway: GatewayModule | null = null;
 let grpc: GrpcModule | null = null;
+let bridgeWorkerProcess: ChildProcess | null = null;
+let shuttingDown = false;
 
 async function ensureBridge() {
   if (!bridgeLoaded) {
@@ -56,7 +65,16 @@ function getBridgeModules(): { gateway: GatewayModule; grpc: GrpcModule } {
   return { gateway, grpc };
 }
 
-async function warmBackgroundServices(port: number): Promise<void> {
+async function warmBackgroundServices(): Promise<void> {
+  try {
+    const { initializeRunRegistry } = await import('./src/lib/agents/run-registry');
+    const { initializeProjectRegistry } = await import('./src/lib/agents/project-registry');
+    initializeRunRegistry();
+    initializeProjectRegistry();
+  } catch (err: unknown) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Registry initialization failed');
+  }
+
   try {
     const { initializeScheduler } = await import('./src/lib/agents/scheduler');
     initializeScheduler();
@@ -91,22 +109,36 @@ async function warmBackgroundServices(port: number): Promise<void> {
   } catch {
     // CEO event consumer is optional during early startup.
   }
+}
 
-  try {
-    const tunnel = await import('./src/lib/bridge/tunnel');
-    const config = tunnel.loadTunnelConfig();
-    if (config?.autoStart && config.tunnelName) {
-      log.info({ tunnelName: config.tunnelName }, '🌐 Auto-starting tunnel...');
-      const result = await tunnel.startTunnel(port);
-      if (result.success) {
-        log.info({ url: result.url }, '🌐 Tunnel active');
-      } else {
-        log.warn({ error: result.error }, '🌐 Tunnel failed');
-      }
-    }
-  } catch (err: unknown) {
-    log.warn({ err: err instanceof Error ? err.message : String(err) }, '🌐 Tunnel auto-start skipped');
+function launchBridgeWorker(port: number): void {
+  if (process.env.AG_DISABLE_BRIDGE_WORKER === '1') {
+    log.info('Bridge worker disabled via AG_DISABLE_BRIDGE_WORKER');
+    return;
   }
+
+  const tsxPackagePath = require.resolve('tsx/package.json');
+  const tsxCliPath = path.join(path.dirname(tsxPackagePath), 'dist', 'cli.mjs');
+  const workerEntry = fileURLToPath(new URL('./src/lib/bridge/worker-entry.ts', import.meta.url));
+  bridgeWorkerProcess = spawn(
+    process.execPath,
+    [tsxCliPath, workerEntry],
+    {
+      env: {
+        ...process.env,
+        PORT: String(port),
+      },
+      stdio: 'inherit',
+    },
+  );
+
+  bridgeWorkerProcess.on('exit', (code, signal) => {
+    log.warn({ code, signal }, 'Bridge worker exited');
+    bridgeWorkerProcess = null;
+    if (!shuttingDown) {
+      setTimeout(() => launchBridgeWorker(port), 2_000);
+    }
+  });
 }
 
 app.prepare().then(() => {
@@ -294,15 +326,13 @@ app.prepare().then(() => {
   server.listen(port, hostname, async () => {
     log.info({ hostname, port }, '🚀 Antigravity Gateway running');
     log.info('Single-port mode: Next.js + API + WebSocket');
-    void warmBackgroundServices(port);
+    launchBridgeWorker(port);
+    void warmBackgroundServices();
   });
 
-  // Clean up tunnel on exit
-  const cleanup = async () => {
-    try {
-      const tunnel = await import('./src/lib/bridge/tunnel');
-      tunnel.stopTunnel();
-    } catch {}
+  const cleanup = () => {
+    shuttingDown = true;
+    bridgeWorkerProcess?.kill('SIGTERM');
     process.exit(0);
   };
   process.on('SIGINT', cleanup);

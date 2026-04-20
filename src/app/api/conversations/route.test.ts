@@ -47,10 +47,15 @@ vi.mock('@/lib/logger', () => ({
   }),
 }));
 
+vi.mock('@/lib/storage/gateway-db', () => ({
+  listConversationProjections: vi.fn(() => []),
+}));
+
 import { addLocalConversation, getLanguageServer } from '@/lib/bridge/gateway';
+import { listConversationProjections } from '@/lib/storage/gateway-db';
 import { resolveProvider } from '@/lib/providers';
 import { buildLocalProviderConversationId } from '@/lib/local-provider-conversations';
-import { POST } from './route';
+import { GET, POST } from './route';
 
 function makeRequest(workspace: string) {
   return new Request('http://localhost/api/conversations', {
@@ -65,6 +70,45 @@ describe('POST /api/conversations', () => {
     vi.mocked(addLocalConversation).mockClear();
     vi.mocked(getLanguageServer).mockClear();
     vi.mocked(resolveProvider).mockReset();
+    vi.mocked(listConversationProjections).mockReset();
+  });
+
+  it('reads conversation lists from the SQLite projection', async () => {
+    vi.mocked(listConversationProjections).mockReturnValue([
+      {
+        id: 'cascade-1',
+        title: 'Conversation One',
+        workspace: 'file:///tmp/workspace',
+        stepCount: 12,
+        createdAt: '2026-04-20T10:00:00.000Z',
+        updatedAt: '2026-04-20T10:05:00.000Z',
+        lastActivityAt: '2026-04-20T10:06:00.000Z',
+        visibility: 'visible',
+        sourceKind: 'antigravity-live',
+        isLocalOnly: false,
+        mtimeMs: 123456,
+      },
+    ] as never);
+
+    const res = await GET(new Request('http://localhost/api/conversations?workspace=file:///tmp/workspace'));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      items: [
+        {
+          id: 'cascade-1',
+          title: 'Conversation One',
+          workspace: 'file:///tmp/workspace',
+          mtime: 123456,
+          steps: 12,
+        },
+      ],
+      page: 1,
+      pageSize: 100,
+      total: 1,
+      hasMore: false,
+    });
+    expect(vi.mocked(listConversationProjections)).toHaveBeenCalledWith({ workspace: 'file:///tmp/workspace' });
   });
 
   it('creates local native-codex conversations without requiring IDE routing', async () => {

@@ -1,3 +1,160 @@
+## 任务：完成 localhost:3000 control-plane convergence 全阶段开发与验收
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-20
+
+### 本轮目标
+
+基于 `docs/design/localhost-3000-control-plane-convergence-plan-2026-04-20.md`，一次性完成：
+
+1. `conversation` 读路径收口到 SQLite projection
+2. run/project registry 去顶层副作用并改为增量持久化
+3. `.pb / brain / state.vscdb / live trajectory` 正式化为 importer
+4. 在不影响原生 Antigravity IDE 正常运行的前提下，把 bridge/importer 从 Web 请求线程剥离
+
+### 本轮实施
+
+#### 1. Phase 1：`/api/conversations` 改成 projection-first
+
+已完成：
+
+1. `src/lib/storage/gateway-db.ts`
+   - 新增 `conversations`
+   - 新增 `run_conversation_links`
+   - 新增 `conversation_visibility`
+   - 新增 `conversation_owner_cache`
+2. `runs` 热字段前置：
+   - `updated_at`
+   - `session_handle`
+   - `child_conversation_id`
+   - `review_outcome`
+   - `scheduler_job_id`
+3. `projects` 热字段前置：
+   - `template_id`
+   - `pipeline_status`
+4. `findRunRecordByConversationRef()` 改为优先走 `run_conversation_links`
+5. `listChildConversationIdsFromRuns()` 改为直接读 `conversation_visibility`
+6. `src/app/api/conversations/route.ts` 的 `GET` 已改为只查 `listConversationProjections()`
+
+结果：
+
+1. 请求热路径不再同步扫描 `.pb`
+2. 不再同步扫描 `brain`
+3. 不再同步 shell/python 解 `trajectorySummaries`
+4. 不再同步扫 `runs.payload_json`
+
+#### 2. Phase 2：registry 去副作用 + 增量持久化
+
+已完成：
+
+1. `src/lib/agents/run-registry.ts`
+   - 删除模块顶层 `loadFromDisk()`
+   - 新增 `initializeRunRegistry()`
+   - public API 改为懒初始化保护
+   - `saveToDisk()` 改为单条 `persistRun()`
+2. `src/lib/agents/project-registry.ts`
+   - 删除模块顶层 `loadFromDisk()`
+   - 新增 `initializeProjectRegistry()`
+   - `saveToDisk()` 改为单条 `persistProject()`
+   - `project.json` 降级为输出镜像，SQLite 仍是主真相源
+3. `server.ts`
+   - 启动期显式初始化 run/project registry
+
+结果：
+
+1. import registry 不再触发整库恢复
+2. 单条 run/project 更新不再全表 upsert
+3. `project.json` 不再承担主同步职责
+
+#### 3. Phase 3：bridge/importer 正式化
+
+已完成：
+
+1. 新增 `src/lib/bridge/conversation-importer.ts`
+2. importer 后台读取：
+   - `~/.gemini/antigravity/conversations/*.pb`
+   - `~/.gemini/antigravity/brain/*`
+   - IDE `state.vscdb` 中的 `trajectorySummaries`
+   - live `getAllCascadeTrajectories()`
+3. `src/lib/bridge/statedb.ts`
+   - `getConversations()` 改为直接读 SQLite projection
+   - 删除请求期的 `.pb / brain / protobuf` 聚合逻辑
+4. `src/lib/bridge/gateway.ts`
+   - owner lookup 支持 SQLite owner cache
+   - `refreshOwnerMap()` 会把 live owner 与 conversation overlay 写回 projection/cache
+
+结果：
+
+1. 外部 Antigravity 状态已经从 API 热路径退回成 importer 输入源
+2. provider-specific 文件结构不再直接泄漏到 conversations list route
+
+#### 4. Phase 4：worker 拆分
+
+已完成的安全拆分：
+
+1. 新增 `src/lib/bridge/worker-entry.ts`
+2. `server.ts` 显式启动独立 bridge worker
+3. worker 负责：
+   - gateway assets 显式初始化
+   - conversation projection importer
+   - owner cache refresh
+   - tunnel auto-start
+4. `gateway-home.ts` 移除顶层 asset sync 副作用，改为 `initializeGatewayHome()`
+
+保留在 Web/API 主进程的模块：
+
+1. `scheduler`
+2. `fan-out-controller`
+3. `approval-triggers`
+4. `ceo-event-consumer`
+
+原因：
+
+1. 这些模块当前仍依赖进程内 project event bus
+2. 本轮优先保持现有 Antigravity / OPC 语义稳定，不做高风险事件总线跨进程改造
+
+### 与原生 Antigravity IDE 的兼容约束
+
+本轮确认仍然满足：
+
+1. **没有写入 `state.vscdb`**
+2. **没有写入或删除 IDE 自己的 `.pb` / `brain` 文件**
+3. `startCascade / send / cancel / updateConversationAnnotations` 原路径语义保持不变
+
+### 本轮测试与验收
+
+已执行：
+
+1. `npm test -- src/app/api/conversations/route.test.ts src/lib/storage/gateway-db.test.ts src/lib/agents/run-registry.test.ts 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/send/route.test.ts'`
+   - `16` 项全部通过
+2. `npm test -- src/lib/agents/scheduler.test.ts`
+   - `13` 项全部通过
+3. `npm test -- src/lib/agents/project-reconciler.test.ts`
+   - `13` 项全部通过
+4. `npm run build`
+   - 通过
+5. `npm test`
+   - 已执行
+   - 全仓当前仍有 `7` 个失败文件、`23` 个失败用例
+   - 本轮观察到的失败集中在：
+     - `src/lib/agents/risk-assessor.test.ts`
+     - `src/lib/agents/generation-context.test.ts`
+     - `src/lib/agents/subgraph.test.ts`
+     - `src/lib/agents/pipeline/graph-pipeline-converter.test.ts`
+     - `src/lib/claude-engine/engine/__tests__/transcript-store.test.ts`
+     - `src/lib/agents/department-sync.test.ts`
+     - `src/lib/backends/intervention-contract.test.ts`
+   - 这些失败点都不在本轮变更文件集合内，属于仓库当前已有红测，不是本轮 conversations/control-plane convergence 改动新引入的回归
+
+### 本轮结果
+
+本轮完成后：
+
+1. `/api/conversations` 已从 request-time federation 改为 projection query
+2. run/project registry 已移除 import-time load + full-table save
+3. bridge/importer 已正式化，并放入独立 worker
+4. 现有改动不需要侵入原生 Antigravity IDE 内部存储
+
 ## 任务：审计清掉 5s scheduler jobs 后，3000 开发态还剩哪些真慢点
 
 **状态**: ✅ 已完成
@@ -2706,6 +2863,247 @@ npm test -- src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/
 
 **状态**: ✅ 已完成
 **日期**: 2026-04-19
+
+## 任务：把当前工作区提交并同步到 private，移除本地 origin 以避免误操作
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-20
+
+### 本轮操作
+
+1. 基于当前 `main` 工作区状态统一提交本轮未提交改动
+2. 将提交推送到 `private/main`
+3. 删除本地 `origin` remote，避免后续误 push 到开源仓库
+
+### 结果
+
+1. 当前默认上游继续保持在 `private/main`
+2. 本地只保留 `private` remote
+3. 后续普通 `git push` / `git pull` 不会再误指向开源仓库
+
+## 任务：统一列表 API 分页并收掉 `/api/agent-runs` 33.8MB 大响应体
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-20
+
+### 本轮目标
+
+用户要求一次性完成两件事：
+
+1. 修复所有应该有分页、但仍以“全量列表”方式暴露的接口设计
+2. 重新清理列表返回里的无效 / 重复 / 不该出现在 list view 的字段
+
+### 本轮根因结论
+
+本轮确认当前体系里的真正问题不是某一个 SQL 慢，而是**列表接口 contract 设计错误**：
+
+1. 多个 GET list route 缺少统一分页语义
+2. `/api/agent-runs` 把完整 `AgentRunState` 当列表项返回，导致 list / detail 完全混层
+3. run list 同时返回：
+   - `result.summary`
+   - `resultEnvelope.summary`
+   - 顶层 `prompt`
+   - `taskEnvelope.goal`
+   - 顶层 `promptResolution`
+   - `result.promptResolution`
+   - `resultEnvelope.promptResolution`
+4. 这使 `/api/agent-runs` 在真实库里直接膨胀到约 `33.8MB`
+5. 项目详情页又依赖“全局 run 全量列表”来补 run 上下文，导致单个项目查看也被全库 run 体积绑架
+
+### 本轮实施
+
+#### 1. 建立统一分页协议
+
+新增：
+
+1. `src/lib/types.ts`
+   - `PaginationQueryFE`
+   - `PaginatedResponse<T>`
+2. `src/lib/pagination.ts`
+   - `parsePaginationSearchParams()`
+   - `paginateArray()`
+   - `buildPaginatedResponse()`
+
+统一协议：
+
+```json
+{
+  "items": [],
+  "page": 1,
+  "pageSize": 100,
+  "total": 154,
+  "hasMore": false
+}
+```
+
+#### 2. 所有关键 list route 补齐分页
+
+已改造：
+
+1. `src/app/api/conversations/route.ts`
+2. `src/app/api/projects/route.ts`
+3. `src/app/api/agent-runs/route.ts`
+4. `src/app/api/scheduler/jobs/route.ts`
+5. `src/app/api/operations/audit/route.ts`
+6. `src/app/api/projects/[id]/journal/route.ts`
+7. `src/app/api/projects/[id]/checkpoints/route.ts`
+8. `src/app/api/projects/[id]/deliverables/route.ts`
+
+其中：
+
+1. `journal` / `audit` 仍兼容旧 `limit` 参数
+2. 但底层语义已统一为 `pageSize`
+
+#### 3. `/api/agent-runs` 改成真正的 list view
+
+本轮把 `/api/agent-runs` 的 GET 从“完整详情导出”改成“分页列表视图”：
+
+保留：
+
+1. run 基础元信息
+2. `result.summary / changedFiles / blockers / needsReview`
+3. 轻量 `resultEnvelope`
+   - `status`
+   - `summary`
+   - `decision`
+   - `outputArtifacts`
+4. `roles`
+5. `reviewOutcome`
+6. `executionProfileSummary`
+7. 轻量 `sessionProvenance`
+8. `supervisorReviews / supervisorSummary`
+
+移出 list view：
+
+1. `taskEnvelope`
+2. 顶层 `promptResolution`
+3. `result.promptResolution`
+4. `resultEnvelope.promptResolution`
+5. 完整 `sessionProvenance` 重字段
+6. 其他只在 detail 面板使用的 envelope / provenance 冗余字段
+
+完整细节仍保留在：
+
+1. `GET /api/agent-runs/:id`
+
+#### 4. 前端调用方显式改成分页读取
+
+已改：
+
+1. `src/lib/api.ts`
+   - 所有对应 wrapper 改为消费分页 envelope
+   - 新增 `agentRunsByFilterAll()`
+2. `src/components/projects-panel.tsx`
+   - 选中项目后按 `projectId` 拉该项目 run 列表
+   - 不再依赖全局 run 全量缓存
+3. `src/components/project-workbench.tsx`
+   - 选中具体 run 后再走 `GET /api/agent-runs/:id` 拉 detail
+   - 列表 view 与 detail view 彻底拆开
+
+#### 5. 顺手修掉 dev server bridge worker 启动路径问题
+
+已修：
+
+1. `server.ts`
+   - bridge worker 不再 `require.resolve('tsx/dist/cli.mjs')`
+   - 改为从 `tsx/package.json` 反解 `dist/cli.mjs`
+
+结果：
+
+1. dev server 下 bridge worker 已能正常起起来
+2. 真实 3000 开发态压测不再被 worker 启动失败污染
+
+### 验证
+
+#### 自动化测试
+
+通过：
+
+```bash
+npm test -- src/app/api/agent-runs/route.test.ts src/app/api/conversations/route.test.ts src/lib/storage/gateway-db.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `19 tests passed`
+
+覆盖：
+
+1. `/api/agent-runs` 过滤 + 分页 + list field slimming
+2. `/api/conversations` projection-first + 分页 envelope
+3. SQLite run filter count / pagination
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/lib/types.ts src/lib/pagination.ts src/lib/storage/gateway-db.ts src/lib/storage/gateway-db.test.ts src/app/api/agent-runs/route.ts src/app/api/agent-runs/route.test.ts src/app/api/conversations/route.ts src/app/api/conversations/route.test.ts src/app/api/projects/route.ts 'src/app/api/projects/[id]/journal/route.ts' 'src/app/api/projects/[id]/checkpoints/route.ts' 'src/app/api/projects/[id]/deliverables/route.ts' src/app/api/operations/audit/route.ts src/app/api/scheduler/jobs/route.ts src/lib/api.ts src/components/projects-panel.tsx src/components/project-workbench.tsx server.ts
+```
+
+#### build
+
+通过：
+
+```bash
+npm run build
+```
+
+说明：
+
+1. build 通过
+2. 仍观察到一个已有 Turbopack warning，来自 `run-registry.ts` 的动态路径扫描，不是本轮分页改造新引入的问题
+
+### 本轮真实开发态实测
+
+实测时间：`2026-04-20 18:39` 左右
+
+#### 1. `/api/agent-runs?pageSize=100`
+
+结果：
+
+1. 首次请求：`0.232978s`
+2. 热态请求：`0.042643s`
+3. 响应体：约 `201071 bytes`（热态约 `190109 bytes`）
+4. 返回：`100 items / total 4197 / hasMore=true`
+
+对比修复前：
+
+1. 同接口实测响应体约 `33.8MB`
+2. 现在默认第一页已收敛到约 `0.19MB`
+
+#### 2. `/api/projects?pageSize=200`
+
+结果：
+
+1. 首次请求：`0.237517s`
+2. 热态请求：`0.050407s`
+3. 响应体：约 `384738 bytes`
+4. 返回：`154 items / total 154 / hasMore=false`
+
+#### 3. `/api/conversations?pageSize=200`
+
+结果：
+
+1. 首次请求：`0.134343s`
+2. 热态请求：`0.059143s`
+3. 响应体：约 `58076 bytes`
+4. 返回：`200 items / total 253 / hasMore=true`
+
+### 本轮收口判断
+
+本轮完成后：
+
+1. 关键列表接口已统一进入分页 contract
+2. `/api/agent-runs` 不再以 full-detail export 方式污染热路径
+3. 项目详情页不再依赖“全局 run 全量缓存”
+4. 默认 UI 热路径已经不可能再打出 `33.8MB` 的 `/api/agent-runs` 响应
+
+剩余注意点：
+
+1. 旧的 list 调用若仍手工直连 REST，需要按新分页 envelope 读取 `items`
+2. 若未来某些页面确实要遍历全部列表，应显式翻页，不应再回退到单次全量 GET
 
 ### 背景
 

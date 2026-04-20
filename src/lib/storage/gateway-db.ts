@@ -19,8 +19,30 @@ export interface LocalConversationRecord {
   sessionHandle?: string;
 }
 
+export interface ConversationProjectionRecord extends LocalConversationRecord {
+  updatedAt: string;
+  lastActivityAt?: string;
+  visibility: 'visible' | 'hidden';
+  sourceKind: string;
+  primaryRunId?: string;
+  isLocalOnly: boolean;
+  mtimeMs?: number;
+}
+
+export interface ConversationOwnerCacheRecord {
+  conversationId: string;
+  backendId: string;
+  ownerKind: string;
+  endpoint: string;
+  workspace?: string;
+  stepCount: number;
+  lastSeenAt: string;
+  expiresAt?: string;
+  payload: Record<string, unknown>;
+}
+
 const DB_FILE = path.join(GATEWAY_HOME, 'storage.sqlite');
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export interface RunRecordFilter {
   status?: RunStatus;
@@ -31,9 +53,65 @@ export interface RunRecordFilter {
   schedulerJobId?: string;
 }
 
+export interface DbPaginationWindow {
+  limit: number;
+  offset: number;
+}
+
 const globalForGatewayDb = globalThis as unknown as {
   __AG_GATEWAY_DB__?: Database.Database;
 };
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function ensureColumn(db: Database.Database, table: string, column: string, definition: string): void {
+  if (!hasColumn(db, table, column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  }
+}
+
+function encodeConversationOwnerCache(record: ConversationOwnerCacheRecord): string {
+  return JSON.stringify(record.payload || {});
+}
+
+function decodeConversationOwnerCache(row: {
+  conversation_id: string;
+  backend_id: string;
+  owner_kind: string;
+  endpoint: string;
+  workspace: string | null;
+  step_count: number;
+  last_seen_at: string;
+  expires_at: string | null;
+  payload_json: string;
+}): ConversationOwnerCacheRecord {
+  return {
+    conversationId: row.conversation_id,
+    backendId: row.backend_id,
+    ownerKind: row.owner_kind,
+    endpoint: row.endpoint,
+    workspace: row.workspace || undefined,
+    stepCount: row.step_count,
+    lastSeenAt: row.last_seen_at,
+    expiresAt: row.expires_at || undefined,
+    payload: row.payload_json ? JSON.parse(row.payload_json) as Record<string, unknown> : {},
+  };
+}
+
+function readConversationProjectionRow(row: {
+  payload_json: string;
+  visibility?: string | null;
+}): ConversationProjectionRecord {
+  const parsed = JSON.parse(row.payload_json) as ConversationProjectionRecord;
+  return {
+    ...parsed,
+    visibility: (row.visibility as ConversationProjectionRecord['visibility']) || parsed.visibility || 'visible',
+    isLocalOnly: Boolean(parsed.isLocalOnly),
+  };
+}
 
 function initSchema(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
@@ -92,6 +170,72 @@ function initSchema(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_conversation_sessions_workspace ON conversation_sessions(workspace);
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      conversation_id TEXT PRIMARY KEY,
+      provider TEXT,
+      workspace TEXT,
+      title TEXT NOT NULL,
+      step_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT,
+      updated_at TEXT NOT NULL,
+      last_activity_at TEXT,
+      visibility TEXT NOT NULL DEFAULT 'visible',
+      source_kind TEXT NOT NULL,
+      session_handle TEXT,
+      primary_run_id TEXT,
+      is_local_only INTEGER NOT NULL DEFAULT 0,
+      mtime_ms INTEGER,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace);
+    CREATE INDEX IF NOT EXISTS idx_conversations_visibility ON conversations(visibility);
+    CREATE INDEX IF NOT EXISTS idx_conversations_last_activity_at ON conversations(last_activity_at);
+    CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_conversations_session_handle ON conversations(session_handle);
+    CREATE INDEX IF NOT EXISTS idx_conversations_primary_run_id ON conversations(primary_run_id);
+
+    CREATE TABLE IF NOT EXISTS run_conversation_links (
+      link_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      conversation_id TEXT,
+      session_handle TEXT,
+      relation_kind TEXT NOT NULL,
+      role_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_conversation_links_run_id ON run_conversation_links(run_id);
+    CREATE INDEX IF NOT EXISTS idx_run_conversation_links_conversation_id ON run_conversation_links(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_run_conversation_links_session_handle ON run_conversation_links(session_handle);
+    CREATE INDEX IF NOT EXISTS idx_run_conversation_links_relation_kind ON run_conversation_links(relation_kind);
+
+    CREATE TABLE IF NOT EXISTS conversation_visibility (
+      conversation_id TEXT PRIMARY KEY,
+      is_hidden INTEGER NOT NULL DEFAULT 0,
+      hidden_reason TEXT,
+      source_run_id TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversation_visibility_hidden ON conversation_visibility(is_hidden);
+    CREATE INDEX IF NOT EXISTS idx_conversation_visibility_source_run_id ON conversation_visibility(source_run_id);
+
+    CREATE TABLE IF NOT EXISTS conversation_owner_cache (
+      conversation_id TEXT PRIMARY KEY,
+      backend_id TEXT NOT NULL,
+      owner_kind TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      workspace TEXT,
+      step_count INTEGER NOT NULL DEFAULT 0,
+      last_seen_at TEXT NOT NULL,
+      expires_at TEXT,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversation_owner_cache_expires_at ON conversation_owner_cache(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_conversation_owner_cache_last_seen_at ON conversation_owner_cache(last_seen_at);
 
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       job_id TEXT PRIMARY KEY,
@@ -157,6 +301,151 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_updated_at ON evolution_proposals(updated_at);
   `);
 
+  ensureColumn(db, 'runs', 'updated_at', 'updated_at TEXT');
+  ensureColumn(db, 'runs', 'session_handle', 'session_handle TEXT');
+  ensureColumn(db, 'runs', 'child_conversation_id', 'child_conversation_id TEXT');
+  ensureColumn(db, 'runs', 'review_outcome', 'review_outcome TEXT');
+  ensureColumn(db, 'runs', 'scheduler_job_id', 'scheduler_job_id TEXT');
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_runs_updated_at ON runs(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_runs_session_handle ON runs(session_handle);
+    CREATE INDEX IF NOT EXISTS idx_runs_child_conversation_id ON runs(child_conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_review_outcome ON runs(review_outcome);
+    CREATE INDEX IF NOT EXISTS idx_runs_scheduler_job_id ON runs(scheduler_job_id);
+  `);
+
+  ensureColumn(db, 'projects', 'template_id', 'template_id TEXT');
+  ensureColumn(db, 'projects', 'pipeline_status', 'pipeline_status TEXT');
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_projects_template_id ON projects(template_id);
+    CREATE INDEX IF NOT EXISTS idx_projects_pipeline_status ON projects(pipeline_status);
+  `);
+
+  db.exec(`
+    UPDATE runs
+    SET
+      updated_at = COALESCE(updated_at, finished_at, started_at, created_at),
+      session_handle = COALESCE(session_handle, json_extract(payload_json, '$.sessionProvenance.handle')),
+      child_conversation_id = COALESCE(child_conversation_id, json_extract(payload_json, '$.childConversationId')),
+      review_outcome = COALESCE(review_outcome, json_extract(payload_json, '$.reviewOutcome')),
+      scheduler_job_id = COALESCE(scheduler_job_id, json_extract(payload_json, '$.triggerContext.schedulerJobId'))
+  `);
+
+  db.exec(`
+    UPDATE projects
+    SET
+      template_id = COALESCE(template_id, json_extract(payload_json, '$.templateId'), json_extract(payload_json, '$.pipelineState.templateId')),
+      pipeline_status = COALESCE(pipeline_status, json_extract(payload_json, '$.pipelineState.status'))
+  `);
+
+  db.exec(`
+    INSERT OR IGNORE INTO conversations(
+      conversation_id, provider, workspace, title, step_count, created_at,
+      updated_at, last_activity_at, visibility, source_kind, session_handle,
+      primary_run_id, is_local_only, mtime_ms, payload_json
+    )
+    SELECT
+      conversation_id,
+      json_extract(payload_json, '$.provider'),
+      workspace,
+      title,
+      step_count,
+      created_at,
+      COALESCE(created_at, datetime('now')),
+      created_at,
+      'visible',
+      CASE
+        WHEN json_extract(payload_json, '$.provider') IS NOT NULL THEN 'local-provider'
+        ELSE 'local-cache'
+      END,
+      json_extract(payload_json, '$.sessionHandle'),
+      NULL,
+      CASE
+        WHEN json_extract(payload_json, '$.provider') IS NOT NULL THEN 1
+        ELSE 0
+      END,
+      NULL,
+      json_object(
+        'id', conversation_id,
+        'title', title,
+        'workspace', COALESCE(workspace, ''),
+        'stepCount', step_count,
+        'createdAt', created_at,
+        'provider', json_extract(payload_json, '$.provider'),
+        'sessionHandle', json_extract(payload_json, '$.sessionHandle'),
+        'updatedAt', COALESCE(created_at, datetime('now')),
+        'lastActivityAt', created_at,
+        'visibility', 'visible',
+        'sourceKind', CASE
+          WHEN json_extract(payload_json, '$.provider') IS NOT NULL THEN 'local-provider'
+          ELSE 'local-cache'
+        END,
+        'isLocalOnly', CASE
+          WHEN json_extract(payload_json, '$.provider') IS NOT NULL THEN 1
+          ELSE 0
+        END
+      )
+    FROM conversation_sessions
+  `);
+
+  db.exec(`DELETE FROM run_conversation_links`);
+  db.exec(`
+    INSERT OR REPLACE INTO run_conversation_links(link_id, run_id, conversation_id, session_handle, relation_kind, role_id, created_at)
+    SELECT
+      run_id || ':child:' || child_conversation_id,
+      run_id,
+      child_conversation_id,
+      session_handle,
+      'child',
+      NULL,
+      created_at
+    FROM runs
+    WHERE child_conversation_id IS NOT NULL
+  `);
+  db.exec(`
+    INSERT OR REPLACE INTO run_conversation_links(link_id, run_id, conversation_id, session_handle, relation_kind, role_id, created_at)
+    SELECT
+      run_id || ':session:' || session_handle,
+      run_id,
+      NULL,
+      session_handle,
+      'session-handle',
+      NULL,
+      created_at
+    FROM runs
+    WHERE session_handle IS NOT NULL
+  `);
+  db.exec(`
+    INSERT OR REPLACE INTO run_conversation_links(link_id, run_id, conversation_id, session_handle, relation_kind, role_id, created_at)
+    SELECT
+      runs.run_id || ':role:' || COALESCE(json_extract(role.value, '$.roleId'), 'unknown') || ':' || json_extract(role.value, '$.childConversationId'),
+      runs.run_id,
+      json_extract(role.value, '$.childConversationId'),
+      runs.session_handle,
+      'role',
+      json_extract(role.value, '$.roleId'),
+      runs.created_at
+    FROM runs, json_each(runs.payload_json, '$.roles') AS role
+    WHERE json_extract(role.value, '$.childConversationId') IS NOT NULL
+  `);
+
+  const visibilityUpdatedAt = new Date().toISOString();
+  db.prepare(`DELETE FROM conversation_visibility WHERE hidden_reason = 'run-link'`).run();
+  db.prepare(`
+    INSERT OR REPLACE INTO conversation_visibility(conversation_id, is_hidden, hidden_reason, source_run_id, updated_at)
+    SELECT
+      conversation_id,
+      1,
+      'run-link',
+      MIN(run_id),
+      ?
+    FROM run_conversation_links
+    WHERE relation_kind IN ('child', 'role') AND conversation_id IS NOT NULL
+    GROUP BY conversation_id
+  `).run(visibilityUpdatedAt);
+
   db.prepare(`
     INSERT INTO storage_meta(key, value)
     VALUES ('schema_version', ?)
@@ -182,14 +471,16 @@ export function getGatewayDb(): Database.Database {
 export function upsertProjectRecord(project: ProjectDefinition): void {
   const db = getGatewayDb();
   db.prepare(`
-    INSERT INTO projects(project_id, workspace, status, parent_project_id, created_at, updated_at, payload_json)
-    VALUES (@project_id, @workspace, @status, @parent_project_id, @created_at, @updated_at, @payload_json)
+    INSERT INTO projects(project_id, workspace, status, parent_project_id, created_at, updated_at, template_id, pipeline_status, payload_json)
+    VALUES (@project_id, @workspace, @status, @parent_project_id, @created_at, @updated_at, @template_id, @pipeline_status, @payload_json)
     ON CONFLICT(project_id) DO UPDATE SET
       workspace = excluded.workspace,
       status = excluded.status,
       parent_project_id = excluded.parent_project_id,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at,
+      template_id = excluded.template_id,
+      pipeline_status = excluded.pipeline_status,
       payload_json = excluded.payload_json
   `).run({
     project_id: project.projectId,
@@ -198,8 +489,15 @@ export function upsertProjectRecord(project: ProjectDefinition): void {
     parent_project_id: project.parentProjectId || null,
     created_at: project.createdAt,
     updated_at: project.updatedAt,
+    template_id: project.templateId || project.pipelineState?.templateId || null,
+    pipeline_status: project.pipelineState?.status || null,
     payload_json: JSON.stringify(project),
   });
+}
+
+export function deleteProjectRecord(projectId: string): void {
+  const db = getGatewayDb();
+  db.prepare(`DELETE FROM projects WHERE project_id = ?`).run(projectId);
 }
 
 export function listProjectRecords(): ProjectDefinition[] {
@@ -227,14 +525,17 @@ export function getProjectRecord(projectId: string): ProjectDefinition | null {
 
 export function upsertRunRecord(run: AgentRunState): void {
   const db = getGatewayDb();
+  const updatedAt = run.finishedAt || run.startedAt || new Date().toISOString();
   db.prepare(`
     INSERT INTO runs(
       run_id, project_id, workspace, stage_id, pipeline_stage_id, pipeline_stage_index,
-      status, provider, executor_kind, created_at, started_at, finished_at, payload_json
+      status, provider, executor_kind, created_at, started_at, finished_at,
+      updated_at, session_handle, child_conversation_id, review_outcome, scheduler_job_id, payload_json
     )
     VALUES (
       @run_id, @project_id, @workspace, @stage_id, @pipeline_stage_id, @pipeline_stage_index,
-      @status, @provider, @executor_kind, @created_at, @started_at, @finished_at, @payload_json
+      @status, @provider, @executor_kind, @created_at, @started_at, @finished_at,
+      @updated_at, @session_handle, @child_conversation_id, @review_outcome, @scheduler_job_id, @payload_json
     )
     ON CONFLICT(run_id) DO UPDATE SET
       project_id = excluded.project_id,
@@ -248,6 +549,11 @@ export function upsertRunRecord(run: AgentRunState): void {
       created_at = excluded.created_at,
       started_at = excluded.started_at,
       finished_at = excluded.finished_at,
+      updated_at = excluded.updated_at,
+      session_handle = excluded.session_handle,
+      child_conversation_id = excluded.child_conversation_id,
+      review_outcome = excluded.review_outcome,
+      scheduler_job_id = excluded.scheduler_job_id,
       payload_json = excluded.payload_json
   `).run({
     run_id: run.runId,
@@ -262,8 +568,78 @@ export function upsertRunRecord(run: AgentRunState): void {
     created_at: run.createdAt,
     started_at: run.startedAt || null,
     finished_at: run.finishedAt || null,
+    updated_at: updatedAt,
+    session_handle: run.sessionProvenance?.handle || null,
+    child_conversation_id: run.childConversationId || null,
+    review_outcome: run.reviewOutcome || null,
+    scheduler_job_id: run.triggerContext?.schedulerJobId || null,
     payload_json: JSON.stringify(run),
   });
+
+  const linkInsert = db.prepare(`
+    INSERT OR REPLACE INTO run_conversation_links(link_id, run_id, conversation_id, session_handle, relation_kind, role_id, created_at)
+    VALUES (@link_id, @run_id, @conversation_id, @session_handle, @relation_kind, @role_id, @created_at)
+  `);
+  const clearLinks = db.prepare(`DELETE FROM run_conversation_links WHERE run_id = ?`);
+  clearLinks.run(run.runId);
+
+  const createdAt = run.createdAt;
+  const sessionHandle = run.sessionProvenance?.handle || null;
+  const addLink = (input: {
+    conversationId?: string | null;
+    sessionHandle?: string | null;
+    relationKind: string;
+    roleId?: string | null;
+  }) => {
+    if (!input.conversationId && !input.sessionHandle) {
+      return;
+    }
+    const linkId = [
+      run.runId,
+      input.relationKind,
+      input.roleId || '',
+      input.conversationId || '',
+      input.sessionHandle || '',
+    ].join(':');
+    linkInsert.run({
+      link_id: linkId,
+      run_id: run.runId,
+      conversation_id: input.conversationId || null,
+      session_handle: input.sessionHandle || null,
+      relation_kind: input.relationKind,
+      role_id: input.roleId || null,
+      created_at: createdAt,
+    });
+  };
+
+  addLink({ conversationId: run.activeConversationId || null, sessionHandle, relationKind: 'primary' });
+  addLink({ conversationId: run.childConversationId || null, sessionHandle, relationKind: 'child' });
+  addLink({ sessionHandle, relationKind: 'session-handle' });
+  if (run.supervisorConversationId) {
+    addLink({ conversationId: run.supervisorConversationId, sessionHandle, relationKind: 'supervisor' });
+  }
+  for (const role of run.roles || []) {
+    addLink({
+      conversationId: role.childConversationId || null,
+      sessionHandle,
+      relationKind: 'role',
+      roleId: role.roleId,
+    });
+  }
+
+  db.prepare(`DELETE FROM conversation_visibility WHERE hidden_reason = 'run-link'`).run();
+  db.prepare(`
+    INSERT OR REPLACE INTO conversation_visibility(conversation_id, is_hidden, hidden_reason, source_run_id, updated_at)
+    SELECT
+      conversation_id,
+      1,
+      'run-link',
+      MIN(run_id),
+      ?
+    FROM run_conversation_links
+    WHERE relation_kind IN ('child', 'role') AND conversation_id IS NOT NULL
+    GROUP BY conversation_id
+  `).run(new Date().toISOString());
 }
 
 export function listRunRecords(): AgentRunState[] {
@@ -305,8 +681,10 @@ export function listRunRecordsByIds(runIds: string[]): AgentRunState[] {
   return rows.map((row) => JSON.parse(row.payload_json) as AgentRunState);
 }
 
-export function listRunRecordsByFilter(filter?: RunRecordFilter): AgentRunState[] {
-  const db = getGatewayDb();
+function buildRunRecordFilterClause(filter?: RunRecordFilter): {
+  whereSql: string;
+  params: unknown[];
+} {
   const where: string[] = [];
   const params: unknown[] = [];
 
@@ -321,7 +699,7 @@ export function listRunRecordsByFilter(filter?: RunRecordFilter): AgentRunState[
   }
 
   if (filter?.reviewOutcome) {
-    where.push(`json_extract(payload_json, '$.reviewOutcome') = ?`);
+    where.push('review_outcome = ?');
     params.push(filter.reviewOutcome);
   }
 
@@ -336,16 +714,44 @@ export function listRunRecordsByFilter(filter?: RunRecordFilter): AgentRunState[
   }
 
   if (filter?.schedulerJobId) {
-    where.push(`json_extract(payload_json, '$.triggerContext.schedulerJobId') = ?`);
+    where.push('scheduler_job_id = ?');
     params.push(filter.schedulerJobId);
   }
+
+  return {
+    whereSql: where.length > 0 ? `WHERE ${where.join(' AND ')}` : '',
+    params,
+  };
+}
+
+export function countRunRecordsByFilter(filter?: RunRecordFilter): number {
+  const db = getGatewayDb();
+  const { whereSql, params } = buildRunRecordFilterClause(filter);
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM runs
+    ${whereSql}
+  `).get(...params) as { count: number } | undefined;
+
+  return row?.count || 0;
+}
+
+export function listRunRecordsByFilter(
+  filter?: RunRecordFilter,
+  pagination?: DbPaginationWindow,
+): AgentRunState[] {
+  const db = getGatewayDb();
+  const { whereSql, params } = buildRunRecordFilterClause(filter);
+  const paginationSql = pagination ? ' LIMIT ? OFFSET ?' : '';
+  const paginationParams = pagination ? [pagination.limit, pagination.offset] : [];
 
   const rows = db.prepare(`
     SELECT payload_json
     FROM runs
-    ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+    ${whereSql}
     ORDER BY datetime(created_at) DESC
-  `).all(...params) as Array<{ payload_json: string }>;
+    ${paginationSql}
+  `).all(...params, ...paginationParams) as Array<{ payload_json: string }>;
 
   return rows.map((row) => JSON.parse(row.payload_json) as AgentRunState);
 }
@@ -383,34 +789,51 @@ export function findRunRecordByConversationRef(input: {
   const where: string[] = [];
   const params: string[] = [];
 
+  if (conversationIds.length > 0) {
+    const { clause, params: conversationParams } = buildInClause(conversationIds);
+    where.push(`run_conversation_links.conversation_id IN (${clause})`);
+    params.push(...conversationParams);
+  }
+
   if (sessionHandles.length > 0) {
     const { clause, params: handleParams } = buildInClause(sessionHandles);
-    where.push(`json_extract(payload_json, '$.sessionProvenance.handle') IN (${clause})`);
+    where.push(`run_conversation_links.session_handle IN (${clause})`);
     params.push(...handleParams);
   }
 
+  const linkRow = db.prepare(`
+    SELECT runs.payload_json
+    FROM run_conversation_links
+    JOIN runs ON runs.run_id = run_conversation_links.run_id
+    WHERE ${where.join(' OR ')}
+    ORDER BY datetime(runs.created_at) DESC
+    LIMIT 1
+  `).get(...params) as { payload_json: string } | undefined;
+
+  if (linkRow) {
+    return JSON.parse(linkRow.payload_json) as AgentRunState;
+  }
+
+  const legacyWhere: string[] = [];
+  const legacyParams: string[] = [];
+  if (sessionHandles.length > 0) {
+    const { clause, params: handleParams } = buildInClause(sessionHandles);
+    legacyWhere.push(`session_handle IN (${clause})`);
+    legacyParams.push(...handleParams);
+  }
   if (conversationIds.length > 0) {
     const { clause, params: conversationParams } = buildInClause(conversationIds);
-    where.push(`json_extract(payload_json, '$.childConversationId') IN (${clause})`);
-    params.push(...conversationParams);
-
-    where.push(`
-      EXISTS (
-        SELECT 1
-        FROM json_each(runs.payload_json, '$.roles') AS role
-        WHERE json_extract(role.value, '$.childConversationId') IN (${clause})
-      )
-    `);
-    params.push(...conversationParams);
+    legacyWhere.push(`child_conversation_id IN (${clause})`);
+    legacyParams.push(...conversationParams);
   }
 
   const row = db.prepare(`
     SELECT payload_json
     FROM runs
-    WHERE ${where.join(' OR ')}
+    WHERE ${legacyWhere.join(' OR ')}
     ORDER BY datetime(created_at) DESC
     LIMIT 1
-  `).get(...params) as { payload_json: string } | undefined;
+  `).get(...legacyParams) as { payload_json: string } | undefined;
 
   return row ? (JSON.parse(row.payload_json) as AgentRunState) : null;
 }
@@ -418,23 +841,118 @@ export function findRunRecordByConversationRef(input: {
 export function listChildConversationIdsFromRuns(): string[] {
   const db = getGatewayDb();
   const rows = db.prepare(`
-    SELECT child_id
-    FROM (
-      SELECT json_extract(payload_json, '$.childConversationId') AS child_id
-      FROM runs
-      WHERE json_extract(payload_json, '$.childConversationId') IS NOT NULL
-
-      UNION
-
-      SELECT json_extract(role.value, '$.childConversationId') AS child_id
-      FROM runs, json_each(runs.payload_json, '$.roles') AS role
-      WHERE json_extract(role.value, '$.childConversationId') IS NOT NULL
-    )
+    SELECT conversation_id AS child_id
+    FROM conversation_visibility
+    WHERE is_hidden = 1
   `).all() as Array<{ child_id: string | null }>;
 
   return rows
     .map((row) => row.child_id)
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+function normalizeConversationProjectionInput(
+  input: Partial<ConversationProjectionRecord> & Pick<ConversationProjectionRecord, 'id'>,
+  existing?: ConversationProjectionRecord | null,
+): ConversationProjectionRecord {
+  const now = new Date().toISOString();
+  const mergedStepCount = Math.max(input.stepCount ?? 0, existing?.stepCount ?? 0);
+  const createdAt = input.createdAt ?? existing?.createdAt;
+  const updatedAt = input.updatedAt || existing?.updatedAt || now;
+  const lastActivityAt = input.lastActivityAt
+    || existing?.lastActivityAt
+    || updatedAt
+    || createdAt;
+  const sessionHandle = input.sessionHandle !== undefined
+    ? input.sessionHandle
+    : existing?.sessionHandle;
+  const provider = input.provider !== undefined
+    ? input.provider
+    : existing?.provider;
+
+  return {
+    id: input.id,
+    title: input.title || existing?.title || `Conversation ${input.id.slice(0, 8)}`,
+    workspace: input.workspace !== undefined ? input.workspace : (existing?.workspace || ''),
+    stepCount: mergedStepCount,
+    createdAt,
+    provider,
+    sessionHandle,
+    updatedAt,
+    lastActivityAt,
+    visibility: input.visibility || existing?.visibility || 'visible',
+    sourceKind: input.sourceKind || existing?.sourceKind || 'unknown',
+    primaryRunId: input.primaryRunId !== undefined ? input.primaryRunId : existing?.primaryRunId,
+    isLocalOnly: input.isLocalOnly ?? existing?.isLocalOnly ?? false,
+    mtimeMs: input.mtimeMs ?? existing?.mtimeMs,
+  };
+}
+
+export function upsertConversationProjection(
+  input: Partial<ConversationProjectionRecord> & Pick<ConversationProjectionRecord, 'id'>,
+): ConversationProjectionRecord {
+  const db = getGatewayDb();
+  const existing = getConversationProjectionById(input.id);
+  const next = normalizeConversationProjectionInput(input, existing);
+  const visibility = db.prepare(`
+    SELECT is_hidden
+    FROM conversation_visibility
+    WHERE conversation_id = ?
+    LIMIT 1
+  `).get(next.id) as { is_hidden: number } | undefined;
+  const effectiveVisibility: ConversationProjectionRecord['visibility'] =
+    visibility?.is_hidden ? 'hidden' : next.visibility;
+
+  const payload = {
+    ...next,
+    visibility: effectiveVisibility,
+  };
+
+  db.prepare(`
+    INSERT INTO conversations(
+      conversation_id, provider, workspace, title, step_count, created_at,
+      updated_at, last_activity_at, visibility, source_kind, session_handle,
+      primary_run_id, is_local_only, mtime_ms, payload_json
+    )
+    VALUES (
+      @conversation_id, @provider, @workspace, @title, @step_count, @created_at,
+      @updated_at, @last_activity_at, @visibility, @source_kind, @session_handle,
+      @primary_run_id, @is_local_only, @mtime_ms, @payload_json
+    )
+    ON CONFLICT(conversation_id) DO UPDATE SET
+      provider = excluded.provider,
+      workspace = excluded.workspace,
+      title = excluded.title,
+      step_count = excluded.step_count,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      last_activity_at = excluded.last_activity_at,
+      visibility = excluded.visibility,
+      source_kind = excluded.source_kind,
+      session_handle = excluded.session_handle,
+      primary_run_id = excluded.primary_run_id,
+      is_local_only = excluded.is_local_only,
+      mtime_ms = excluded.mtime_ms,
+      payload_json = excluded.payload_json
+  `).run({
+    conversation_id: payload.id,
+    provider: payload.provider || null,
+    workspace: payload.workspace || null,
+    title: payload.title,
+    step_count: payload.stepCount,
+    created_at: payload.createdAt || null,
+    updated_at: payload.updatedAt,
+    last_activity_at: payload.lastActivityAt || null,
+    visibility: payload.visibility,
+    source_kind: payload.sourceKind,
+    session_handle: payload.sessionHandle || null,
+    primary_run_id: payload.primaryRunId || null,
+    is_local_only: payload.isLocalOnly ? 1 : 0,
+    mtime_ms: payload.mtimeMs ?? null,
+    payload_json: JSON.stringify(payload),
+  });
+
+  return payload;
 }
 
 export function upsertConversationRecord(record: LocalConversationRecord): void {
@@ -456,42 +974,169 @@ export function upsertConversationRecord(record: LocalConversationRecord): void 
     created_at: record.createdAt || null,
     payload_json: JSON.stringify(record),
   });
+
+  upsertConversationProjection({
+    id: record.id,
+    title: record.title,
+    workspace: record.workspace,
+    stepCount: record.stepCount,
+    createdAt: record.createdAt,
+    provider: record.provider,
+    sessionHandle: record.sessionHandle,
+    updatedAt: new Date().toISOString(),
+    lastActivityAt: record.createdAt || new Date().toISOString(),
+    sourceKind: record.provider ? 'local-provider' : 'local-cache',
+    isLocalOnly: Boolean(record.provider),
+  });
 }
 
 export function listConversationRecords(): LocalConversationRecord[] {
-  const db = getGatewayDb();
-  const rows = db.prepare(`
-    SELECT payload_json
-    FROM conversation_sessions
-    ORDER BY datetime(COALESCE(created_at, '1970-01-01T00:00:00.000Z')) DESC
-  `).all() as Array<{ payload_json: string }>;
-
-  return rows.map((row) => JSON.parse(row.payload_json) as LocalConversationRecord);
+  return listConversationProjections().map((record) => ({
+    id: record.id,
+    title: record.title,
+    workspace: record.workspace,
+    stepCount: record.stepCount,
+    createdAt: record.createdAt,
+    provider: record.provider,
+    sessionHandle: record.sessionHandle,
+  }));
 }
 
 export function getConversationRecordById(conversationId: string): LocalConversationRecord | null {
-  const db = getGatewayDb();
-  const row = db.prepare(`
-    SELECT payload_json
-    FROM conversation_sessions
-    WHERE conversation_id = ?
-    LIMIT 1
-  `).get(conversationId) as { payload_json: string } | undefined;
-
-  return row ? (JSON.parse(row.payload_json) as LocalConversationRecord) : null;
+  const record = getConversationProjectionById(conversationId);
+  if (!record) return null;
+  return {
+    id: record.id,
+    title: record.title,
+    workspace: record.workspace,
+    stepCount: record.stepCount,
+    createdAt: record.createdAt,
+    provider: record.provider,
+    sessionHandle: record.sessionHandle,
+  };
 }
 
 export function findConversationRecordBySessionHandle(sessionHandle: string): LocalConversationRecord | null {
   const db = getGatewayDb();
   const row = db.prepare(`
-    SELECT payload_json
-    FROM conversation_sessions
-    WHERE json_extract(payload_json, '$.sessionHandle') = ?
-    ORDER BY datetime(COALESCE(created_at, '1970-01-01T00:00:00.000Z')) DESC
+    SELECT payload_json, visibility
+    FROM conversations
+    WHERE session_handle = ?
+    ORDER BY datetime(COALESCE(last_activity_at, updated_at, created_at, '1970-01-01T00:00:00.000Z')) DESC
     LIMIT 1
-  `).get(sessionHandle) as { payload_json: string } | undefined;
+  `).get(sessionHandle) as { payload_json: string; visibility?: string | null } | undefined;
 
-  return row ? (JSON.parse(row.payload_json) as LocalConversationRecord) : null;
+  if (!row) return null;
+  const parsed = readConversationProjectionRow(row);
+  return {
+    id: parsed.id,
+    title: parsed.title,
+    workspace: parsed.workspace,
+    stepCount: parsed.stepCount,
+    createdAt: parsed.createdAt,
+    provider: parsed.provider,
+    sessionHandle: parsed.sessionHandle,
+  };
+}
+
+export function getConversationProjectionById(conversationId: string): ConversationProjectionRecord | null {
+  const db = getGatewayDb();
+  const row = db.prepare(`
+    SELECT conversations.payload_json, conversation_visibility.is_hidden
+    FROM conversations
+    LEFT JOIN conversation_visibility ON conversation_visibility.conversation_id = conversations.conversation_id
+    WHERE conversations.conversation_id = ?
+    LIMIT 1
+  `).get(conversationId) as { payload_json: string; is_hidden?: number } | undefined;
+
+  if (!row) return null;
+  const parsed = readConversationProjectionRow({ payload_json: row.payload_json });
+  return {
+    ...parsed,
+    visibility: row.is_hidden ? 'hidden' : parsed.visibility,
+  };
+}
+
+export function listConversationProjections(input?: {
+  workspace?: string;
+  includeHidden?: boolean;
+}): ConversationProjectionRecord[] {
+  const db = getGatewayDb();
+  const rows = db.prepare(`
+    SELECT conversations.payload_json, conversation_visibility.is_hidden
+    FROM conversations
+    LEFT JOIN conversation_visibility ON conversation_visibility.conversation_id = conversations.conversation_id
+    ORDER BY datetime(COALESCE(conversations.last_activity_at, conversations.updated_at, conversations.created_at, '1970-01-01T00:00:00.000Z')) DESC
+  `).all() as Array<{ payload_json: string; is_hidden?: number }>;
+
+  return rows
+    .map((row) => {
+      const parsed = readConversationProjectionRow({ payload_json: row.payload_json });
+      return {
+        ...parsed,
+        visibility: row.is_hidden ? 'hidden' : parsed.visibility,
+      };
+    })
+    .filter((record) => input?.includeHidden ? true : record.visibility !== 'hidden')
+    .filter((record) => {
+      if (!input?.workspace) return true;
+      if (!record.workspace) return false;
+      return record.workspace.startsWith(input.workspace) || input.workspace.startsWith(record.workspace);
+    });
+}
+
+export function upsertConversationOwnerCacheRecord(record: ConversationOwnerCacheRecord): void {
+  const db = getGatewayDb();
+  db.prepare(`
+    INSERT INTO conversation_owner_cache(
+      conversation_id, backend_id, owner_kind, endpoint, workspace,
+      step_count, last_seen_at, expires_at, payload_json
+    )
+    VALUES (
+      @conversation_id, @backend_id, @owner_kind, @endpoint, @workspace,
+      @step_count, @last_seen_at, @expires_at, @payload_json
+    )
+    ON CONFLICT(conversation_id) DO UPDATE SET
+      backend_id = excluded.backend_id,
+      owner_kind = excluded.owner_kind,
+      endpoint = excluded.endpoint,
+      workspace = excluded.workspace,
+      step_count = excluded.step_count,
+      last_seen_at = excluded.last_seen_at,
+      expires_at = excluded.expires_at,
+      payload_json = excluded.payload_json
+  `).run({
+    conversation_id: record.conversationId,
+    backend_id: record.backendId,
+    owner_kind: record.ownerKind,
+    endpoint: record.endpoint,
+    workspace: record.workspace || null,
+    step_count: record.stepCount,
+    last_seen_at: record.lastSeenAt,
+    expires_at: record.expiresAt || null,
+    payload_json: encodeConversationOwnerCache(record),
+  });
+}
+
+export function getConversationOwnerCacheRecord(conversationId: string): ConversationOwnerCacheRecord | null {
+  const db = getGatewayDb();
+  const row = db.prepare(`
+    SELECT conversation_id, backend_id, owner_kind, endpoint, workspace, step_count, last_seen_at, expires_at, payload_json
+    FROM conversation_owner_cache
+    WHERE conversation_id = ?
+      AND (expires_at IS NULL OR datetime(expires_at) >= datetime('now'))
+    LIMIT 1
+  `).get(conversationId) as Parameters<typeof decodeConversationOwnerCache>[0] | undefined;
+
+  return row ? decodeConversationOwnerCache(row) : null;
+}
+
+export function pruneConversationOwnerCacheRecords(): void {
+  const db = getGatewayDb();
+  db.prepare(`
+    DELETE FROM conversation_owner_cache
+    WHERE expires_at IS NOT NULL AND datetime(expires_at) < datetime('now')
+  `).run();
 }
 
 export function upsertScheduledJobRecord(job: ScheduledJob): void {

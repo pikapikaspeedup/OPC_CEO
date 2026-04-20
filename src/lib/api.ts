@@ -13,6 +13,8 @@ import type {
   ApprovalRequestFE,
   ApprovalSummaryFE,
   EvolutionProposalFE,
+  PaginatedResponse,
+  PaginationQueryFE,
 } from './types';
 
 // V4.3 Operations & Observability types
@@ -226,13 +228,57 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+function appendPaginationParams(
+  searchParams: URLSearchParams,
+  pagination?: PaginationQueryFE,
+): void {
+  if (pagination?.page) {
+    searchParams.set('page', String(pagination.page));
+  }
+  if (pagination?.pageSize) {
+    searchParams.set('pageSize', String(pagination.pageSize));
+  }
+}
+
+async function fetchPaginatedJson<T>(url: string, init?: RequestInit): Promise<PaginatedResponse<T>> {
+  return fetchJson<PaginatedResponse<T>>(url, init);
+}
+
+async function fetchAllPaginated<T>(
+  buildUrl: (page: number) => string,
+): Promise<T[]> {
+  const items: T[] = [];
+  let page = 1;
+
+  for (;;) {
+    const response = await fetchPaginatedJson<T>(buildUrl(page));
+    items.push(...(response.items || []));
+    if (!response.hasMore) {
+      break;
+    }
+    page += 1;
+  }
+
+  return items;
+}
+
 export const api = {
   me: () => fetchJson<UserInfo>('/api/me'),
   models: () => fetchJson<ModelsResponse>('/api/models'),
   aiConfig: () => fetchJson<{ defaultProvider: string; layers?: Record<string, { provider?: string }> }>('/api/ai-config'),
   servers: () => fetchJson<Server[]>('/api/servers'),
   workspaces: () => fetchJson<WorkspacesResponse>('/api/workspaces'),
-  conversations: () => fetchJson<Conversation[]>('/api/conversations'),
+  conversations: async (params?: { workspace?: string } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.workspace) search.set('workspace', params.workspace);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 200,
+    });
+    const qs = search.toString();
+    const result = await fetchPaginatedJson<Conversation>(`/api/conversations${qs ? `?${qs}` : ''}`);
+    return result.items ?? [];
+  },
   conversationSteps: (id: string) => fetchJson<StepsData>(`/api/conversations/${id}/steps`),
   skills: () => fetchJson<Skill[]>('/api/skills'),
   discoveredSkills: () => fetchJson<Skill[]>('/api/skills/discovered'),
@@ -405,8 +451,18 @@ export const api = {
   },
 
   // OPC: Deliverables
-  getDeliverables: (projectId: string) =>
-    fetchJson<Deliverable[]>(`/api/projects/${encodeURIComponent(projectId)}/deliverables`),
+  getDeliverables: async (projectId: string, pagination?: PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    appendPaginationParams(search, {
+      page: pagination?.page,
+      pageSize: pagination?.pageSize ?? 200,
+    });
+    const qs = search.toString();
+    const result = await fetchPaginatedJson<Deliverable>(
+      `/api/projects/${encodeURIComponent(projectId)}/deliverables${qs ? `?${qs}` : ''}`,
+    );
+    return result.items ?? [];
+  },
   createDeliverable: (projectId: string, data: { stageId: string; type: string; title: string; artifactPath?: string }) =>
     fetchJson<Deliverable>(`/api/projects/${encodeURIComponent(projectId)}/deliverables`, {
       method: 'POST',
@@ -462,9 +518,31 @@ export const api = {
     ),
 
   // Agent Runs & Projects
-  projects: () => fetchJson<Project[]>('/api/projects'),
-  agentRuns: (status?: string) => fetchJson<AgentRun[]>(`/api/agent-runs${status ? `?status=${status}` : ''}`),
-  agentRunsByFilter: (filter: { stageId?: string; status?: string; reviewOutcome?: string; schedulerJobId?: string; projectId?: string; executorKind?: string }) => {
+  projects: async (pagination?: PaginationQueryFE) => {
+    const params = new URLSearchParams();
+    appendPaginationParams(params, {
+      page: pagination?.page,
+      pageSize: pagination?.pageSize ?? 200,
+    });
+    const qs = params.toString();
+    const result = await fetchPaginatedJson<Project>(`/api/projects${qs ? `?${qs}` : ''}`);
+    return result.items ?? [];
+  },
+  agentRuns: async (status?: string, pagination?: PaginationQueryFE) => {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    appendPaginationParams(params, {
+      page: pagination?.page,
+      pageSize: pagination?.pageSize ?? 100,
+    });
+    const qs = params.toString();
+    const result = await fetchPaginatedJson<AgentRun>(`/api/agent-runs${qs ? `?${qs}` : ''}`);
+    return result.items ?? [];
+  },
+  agentRunsByFilter: async (
+    filter: { stageId?: string; status?: string; reviewOutcome?: string; schedulerJobId?: string; projectId?: string; executorKind?: string },
+    pagination?: PaginationQueryFE,
+  ) => {
     const params = new URLSearchParams();
     if (filter.stageId) params.set('stageId', filter.stageId);
     if (filter.status) params.set('status', filter.status);
@@ -472,7 +550,29 @@ export const api = {
     if (filter.schedulerJobId) params.set('schedulerJobId', filter.schedulerJobId);
     if (filter.projectId) params.set('projectId', filter.projectId);
     if (filter.executorKind) params.set('executorKind', filter.executorKind);
-    return fetchJson<AgentRun[]>(`/api/agent-runs?${params.toString()}`);
+    appendPaginationParams(params, {
+      page: pagination?.page,
+      pageSize: pagination?.pageSize ?? 100,
+    });
+    const result = await fetchPaginatedJson<AgentRun>(`/api/agent-runs?${params.toString()}`);
+    return result.items ?? [];
+  },
+  agentRunsByFilterAll: async (
+    filter: { stageId?: string; status?: string; reviewOutcome?: string; schedulerJobId?: string; projectId?: string; executorKind?: string },
+    pagination?: Omit<PaginationQueryFE, 'page'>,
+  ) => {
+    const pageSize = pagination?.pageSize ?? 100;
+    return fetchAllPaginated<AgentRun>((page) => {
+      const params = new URLSearchParams();
+      if (filter.stageId) params.set('stageId', filter.stageId);
+      if (filter.status) params.set('status', filter.status);
+      if (filter.reviewOutcome) params.set('reviewOutcome', filter.reviewOutcome);
+      if (filter.schedulerJobId) params.set('schedulerJobId', filter.schedulerJobId);
+      if (filter.projectId) params.set('projectId', filter.projectId);
+      if (filter.executorKind) params.set('executorKind', filter.executorKind);
+      appendPaginationParams(params, { page, pageSize });
+      return `/api/agent-runs?${params.toString()}`;
+    });
   },
   agentRun: (id: string) => fetchJson<AgentRun>(`/api/agent-runs/${id}`),
   agentRunConversation: (id: string) => fetchJson<import('./types').RunConversationFE>(`/api/agent-runs/${id}/conversation`),
@@ -634,18 +734,30 @@ export const api = {
       body: JSON.stringify({ dryRun }),
     }),
 
-  auditEvents: async (params?: { kind?: string; projectId?: string; since?: string; until?: string; limit?: number }) => {
+  auditEvents: async (params?: { kind?: string; projectId?: string; since?: string; until?: string; limit?: number; page?: number }) => {
     const searchParams = new URLSearchParams();
     if (params?.kind) searchParams.set('kind', params.kind);
     if (params?.projectId) searchParams.set('projectId', params.projectId);
     if (params?.since) searchParams.set('since', params.since);
     if (params?.until) searchParams.set('until', params.until);
-    if (params?.limit) searchParams.set('limit', String(params.limit));
-    const result = await fetchJson<{ events: AuditEvent[]; total: number }>(`/api/operations/audit?${searchParams.toString()}`);
-    return result.events ?? [];
+    appendPaginationParams(searchParams, {
+      page: params?.page,
+      pageSize: params?.limit ?? 100,
+    });
+    const result = await fetchPaginatedJson<AuditEvent>(`/api/operations/audit?${searchParams.toString()}`);
+    return result.items ?? [];
   },
 
-  schedulerJobs: () => fetchJson<SchedulerJobResponse[]>('/api/scheduler/jobs'),
+  schedulerJobs: async (pagination?: PaginationQueryFE) => {
+    const searchParams = new URLSearchParams();
+    appendPaginationParams(searchParams, {
+      page: pagination?.page,
+      pageSize: pagination?.pageSize ?? 100,
+    });
+    const qs = searchParams.toString();
+    const result = await fetchPaginatedJson<SchedulerJobResponse>(`/api/scheduler/jobs${qs ? `?${qs}` : ''}`);
+    return result.items ?? [];
+  },
 
   createSchedulerJob: (data: {
     name: string;
@@ -732,22 +844,46 @@ export const api = {
     }),
 
   // V5.2: Execution Journal
-  queryJournal: (projectId: string, params?: { nodeId?: string; type?: string; limit?: number }) => {
+  queryJournal: async (projectId: string, params?: { nodeId?: string; type?: string; limit?: number; page?: number }) => {
     const sp = new URLSearchParams();
     if (params?.nodeId) sp.set('nodeId', params.nodeId);
     if (params?.type) sp.set('type', params.type);
-    if (params?.limit) sp.set('limit', String(params.limit));
+    appendPaginationParams(sp, {
+      page: params?.page,
+      pageSize: params?.limit ?? 100,
+    });
     const qs = sp.toString();
-    return fetchJson<{ entries: JournalEntryFE[]; total: number }>(
+    const result = await fetchPaginatedJson<JournalEntryFE>(
       `/api/projects/${encodeURIComponent(projectId)}/journal${qs ? `?${qs}` : ''}`,
     );
+    return {
+      entries: result.items ?? [],
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      hasMore: result.hasMore,
+    };
   },
 
   // V5.2: Checkpoint management
-  listCheckpoints: (projectId: string) =>
-    fetchJson<{ checkpoints: CheckpointFE[] }>(
-      `/api/projects/${encodeURIComponent(projectId)}/checkpoints`,
-    ),
+  listCheckpoints: async (projectId: string, pagination?: PaginationQueryFE) => {
+    const sp = new URLSearchParams();
+    appendPaginationParams(sp, {
+      page: pagination?.page,
+      pageSize: pagination?.pageSize ?? 100,
+    });
+    const qs = sp.toString();
+    const result = await fetchPaginatedJson<CheckpointFE>(
+      `/api/projects/${encodeURIComponent(projectId)}/checkpoints${qs ? `?${qs}` : ''}`,
+    );
+    return {
+      checkpoints: result.items ?? [],
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      hasMore: result.hasMore,
+    };
+  },
 
   createCheckpoint: (projectId: string, nodeId?: string) =>
     fetchJson<CheckpointFE>(`/api/projects/${encodeURIComponent(projectId)}/checkpoints`, {

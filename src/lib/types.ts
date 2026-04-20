@@ -60,6 +60,19 @@ export interface WorkspacesResponse {
   playgrounds: string[];
 }
 
+export interface PaginationQueryFE {
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // OPC: Department (Workspace 增强)
 // ---------------------------------------------------------------------------

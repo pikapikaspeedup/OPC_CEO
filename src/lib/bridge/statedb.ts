@@ -1,12 +1,13 @@
-import { execSync, spawnSync } from 'child_process';
+import { execSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { homedir } from 'os';
 import path from 'path';
 import {
   findConversationRecordBySessionHandle as findStoredConversationRecordBySessionHandle,
+  getConversationProjectionById,
   getConversationRecordById as getStoredConversationRecordById,
+  listConversationProjections,
   LocalConversationRecord,
-  listConversationRecords,
   upsertConversationRecord,
 } from '../storage/gateway-db';
 
@@ -15,7 +16,6 @@ const STATE_DB_PATH = path.join(
   'Library/Application Support/Antigravity/User/globalStorage/state.vscdb'
 );
 
-const BRAIN_DIR = path.join(homedir(), '.gemini/antigravity/brain');
 export interface ConversationInfo extends LocalConversationRecord {
   id: string;
   title: string;
@@ -24,26 +24,14 @@ export interface ConversationInfo extends LocalConversationRecord {
   createdAt?: string;
 }
 
-// --- Local conversation cache ---
-function readLocalCache(): ConversationInfo[] {
-  return listConversationRecords();
-}
-
-function writeLocalCache(convs: ConversationInfo[]) {
-  for (const conv of convs) {
-    upsertConversationRecord(conv);
-  }
-}
-
 export function addLocalConversation(
   id: string,
   workspace: string,
   title: string = 'New conversation',
   extras: Partial<LocalConversationRecord> = {},
 ) {
-  const cache = readLocalCache();
-  if (cache.some(c => c.id === id)) return;
-  cache.unshift({
+  if (getConversationRecord(id)) return;
+  upsertConversationRecord({
     id,
     title,
     workspace,
@@ -51,20 +39,20 @@ export function addLocalConversation(
     createdAt: new Date().toISOString(),
     ...extras,
   });
-  writeLocalCache(cache);
 }
 
 export function updateLocalConversationTitle(id: string, title: string) {
-  const cache = readLocalCache();
-  const conv = cache.find(c => c.id === id);
+  const conv = getConversationRecord(id);
   if (conv) {
-    conv.title = title;
-    writeLocalCache(cache);
+    upsertConversationRecord({
+      ...conv,
+      title,
+    });
   }
 }
 
 export function getConversationRecord(id: string): ConversationInfo | null {
-  return getStoredConversationRecordById(id);
+  return getConversationProjectionById(id) ?? getStoredConversationRecordById(id);
 }
 
 export function findConversationRecordBySessionHandle(sessionHandle: string): ConversationInfo | null {
@@ -119,8 +107,7 @@ export function ensureConversationRecordForSession(input: {
 }
 
 export function updateLocalConversation(id: string, patch: Partial<LocalConversationRecord>): ConversationInfo | null {
-  const cache = readLocalCache();
-  const existing = cache.find((conv) => conv.id === id);
+  const existing = getConversationRecord(id);
   if (!existing) return null;
 
   const next: ConversationInfo = {
@@ -187,190 +174,14 @@ export function getPlaygrounds(): string[] {
   } catch { return []; }
 }
 
-/**
- * Get comprehensive conversation list by merging (priority order):
- * 1. Conversation .pb files (~/.gemini/antigravity/conversations/) — ALWAYS current, primary IDs
- * 2. SQLite trajectorySummaries — for titles + workspace metadata
- * 3. Brain directory scan — for task.md/walkthrough.md titles
- * 4. Local cache — for newly created conversations
- */
 export function getConversations(): ConversationInfo[] {
-  const convMap = new Map<string, ConversationInfo>();
-
-  // Step 1: Scan .pb conversation files (primary source — always up-to-date)
-  const CONV_DIR = path.join(homedir(), '.gemini/antigravity/conversations');
-  try {
-    // Get all .pb files sorted by modification time (newest first)
-    const output = execSync(`ls -1t "${CONV_DIR}" 2>/dev/null`, {
-      encoding: 'utf-8', timeout: 5000
-    });
-    const files = output.trim().split('\n').filter(f => f.endsWith('.pb'));
-    for (const file of files) {
-      const id = file.replace('.pb', '');
-      if (id && id.includes('-') && id.length > 30) {
-        convMap.set(id, {
-          id,
-          title: '', // Will be enriched below
-          workspace: '',
-          stepCount: 0,
-        });
-      }
-    }
-  } catch {}
-
-  // Step 2: Enrich with SQLite protobuf data (titles + workspace)
-  const protoConvs = getConversationsFromProtobuf();
-  for (const pc of protoConvs) {
-    const existing = convMap.get(pc.id);
-    if (existing) {
-      // Enrich existing .pb entry with title/workspace from SQLite
-      if (pc.title) existing.title = pc.title;
-      if (pc.workspace) existing.workspace = pc.workspace;
-      if (pc.stepCount) existing.stepCount = pc.stepCount;
-    } else {
-      // Conversation in SQLite but not in .pb dir (shouldn't happen, but include it)
-      convMap.set(pc.id, pc);
-    }
-  }
-
-  // Step 3: Merge local cache (newly created conversations or renamed ones)
-  const localConvs = readLocalCache();
-  for (const lc of localConvs) {
-    const existing = convMap.get(lc.id);
-    if (existing) {
-      if (lc.title) existing.title = lc.title; // Local title overrides SQLite
-      if (lc.workspace) existing.workspace = lc.workspace;
-    } else {
-      convMap.set(lc.id, lc);
-    }
-  }
-
-  // Step 4: Scan brain directory for titles (task.md / walkthrough.md)
-  try {
-    const output = execSync(`ls -1t "${BRAIN_DIR}" 2>/dev/null`, {
-      encoding: 'utf-8', timeout: 5000
-    });
-    const dirs = output.trim().split('\n').filter(d =>
-      d && d.includes('-') && d.length > 30 && d !== 'tempmediaStorage'
-    );
-
-    for (const dir of dirs) {
-      const existing = convMap.get(dir);
-      if (existing && !existing.title) {
-        // Try to get title from brain artifacts
-        try {
-          const taskMd = execSync(`head -3 "${path.join(BRAIN_DIR, dir, 'task.md')}" 2>/dev/null`, {
-            encoding: 'utf-8', timeout: 1000
-          }).trim();
-          existing.title = taskMd.replace(/^#\s*/, '').split('\n')[0].trim();
-        } catch {
-          try {
-            const wt = execSync(`head -3 "${path.join(BRAIN_DIR, dir, 'walkthrough.md')}" 2>/dev/null`, {
-              encoding: 'utf-8', timeout: 1000
-            }).trim();
-            existing.title = wt.replace(/^#\s*/, '').split('\n')[0].trim();
-          } catch {}
-        }
-      } else if (!existing) {
-        // Conversation exists in brain but not in .pb dir
-        let title = '';
-        try {
-          const taskMd = execSync(`head -3 "${path.join(BRAIN_DIR, dir, 'task.md')}" 2>/dev/null`, {
-            encoding: 'utf-8', timeout: 1000
-          }).trim();
-          title = taskMd.replace(/^#\s*/, '').split('\n')[0].trim();
-        } catch {
-          try {
-            const wt = execSync(`head -3 "${path.join(BRAIN_DIR, dir, 'walkthrough.md')}" 2>/dev/null`, {
-              encoding: 'utf-8', timeout: 1000
-            }).trim();
-            title = wt.replace(/^#\s*/, '').split('\n')[0].trim();
-          } catch {}
-        }
-        convMap.set(dir, { id: dir, title: title || '', workspace: '', stepCount: 0 });
-      }
-    }
-  } catch {}
-
-  // Step 5: Generate fallback titles for any without one
-  for (const [id, conv] of convMap) {
-    if (!conv.title) {
-      conv.title = `Conversation ${id.slice(0, 8)}`;
-    }
-  }
-
-  return Array.from(convMap.values());
-}
-
-function getConversationsFromProtobuf(): Array<{ id: string; title: string; workspace: string; stepCount: number }> {
-  try {
-    const script = `
-import sqlite3, base64, json, os
-import blackboxprotobuf
-
-db = sqlite3.connect(os.path.expanduser("~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb"))
-raw = db.execute("SELECT value FROM ItemTable WHERE key='antigravityUnifiedStateSync.trajectorySummaries';").fetchone()
-if not raw or not raw[0]:
-    print("[]")
-    exit()
-
-decoded = base64.b64decode(raw[0])
-msg, _ = blackboxprotobuf.decode_message(decoded)
-trajectories = msg.get("1", [])
-if not isinstance(trajectories, list):
-    trajectories = [trajectories]
-
-result = []
-for t in trajectories:
-    cid = t.get("1", b"")
-    if isinstance(cid, bytes): cid = cid.decode()
-    else: cid = str(cid)
-
-    title = ""
-    workspace = ""
-    step_count = 0
-
-    inner = t.get("2", {})
-    inner_b64 = inner.get("1", b"")
-    if isinstance(inner_b64, bytes): inner_b64 = inner_b64.decode()
-
-    try:
-        ib = base64.b64decode(inner_b64)
-        im, _ = blackboxprotobuf.decode_message(ib)
-        rt = im.get("1", b"")
-        if isinstance(rt, bytes): title = rt.decode('utf-8', errors='replace')
-        else: title = str(rt)
-        sc = im.get("2", 0)
-        if isinstance(sc, (int, float)): step_count = int(sc)
-        ws9 = im.get("9", {})
-        ws17 = im.get("17", {})
-        if isinstance(ws9, dict):
-            w = ws9.get("1", b"")
-            if isinstance(w, bytes): workspace = w.decode('utf-8', errors='replace')
-            elif isinstance(w, dict):
-                ww = w.get("1", b"")
-                if isinstance(ww, bytes): workspace = ww.decode('utf-8', errors='replace')
-        if not workspace and isinstance(ws17, dict):
-            w = ws17.get("7", b"")
-            if isinstance(w, bytes): workspace = w.decode('utf-8', errors='replace')
-            elif isinstance(w, str): workspace = w
-            if not workspace:
-                w1 = ws17.get("1", {})
-                if isinstance(w1, dict):
-                    ww = w1.get("1", b"")
-                    if isinstance(ww, bytes): workspace = ww.decode('utf-8', errors='replace')
-    except:
-        pass
-    result.append({"id": cid, "title": title, "workspace": workspace, "stepCount": step_count})
-db.close()
-print(json.dumps(result, ensure_ascii=False))
-`;
-    const output = spawnSync('python3', ['-c', script], {
-      encoding: 'utf-8',
-      timeout: 15000
-    }).stdout;
-    return JSON.parse(output.trim());
-  } catch {
-    return [];
-  }
+  return listConversationProjections().map((record) => ({
+    id: record.id,
+    title: record.title,
+    workspace: record.workspace,
+    stepCount: record.stepCount,
+    createdAt: record.createdAt,
+    provider: record.provider,
+    sessionHandle: record.sessionHandle,
+  }));
 }

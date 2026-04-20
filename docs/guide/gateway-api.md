@@ -74,9 +74,13 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ## 核心对话接口
 
+> 列表分页约定（2026-04-20）:
+> `GET /api/conversations`、`GET /api/projects`、`GET /api/agent-runs`、`GET /api/scheduler/jobs`、`GET /api/projects/:id/checkpoints`、`GET /api/projects/:id/journal`、`GET /api/projects/:id/deliverables`、`GET /api/operations/audit` 统一支持 `page/pageSize`，响应统一为 `{ items, page, pageSize, total, hasMore }`。
+> `journal` / `audit` 的旧 `limit` 仍可用，但已被视为 `pageSize` 别名。
+
 ### `GET /api/conversations` — 列出所有对话
 
-**功能**: 从 `.pb` 文件扫描 + gRPC 实时查询 + SQLite / 本地缓存兜底，合并返回所有已知对话。
+**功能**: 从 SQLite conversation projection 返回所有已知对话；请求热路径不再同步扫描 `.pb / brain / trajectory`。
 
 > 当 workspace provider 命中本地 provider 轨道时，对话可能只存在于 Gateway 本地缓存，不会落 `.pb`。当前该轨道包括：
 >
@@ -93,18 +97,26 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `workspace` | `string` | 可选。按 workspace `file://` URI 过滤对话（前缀匹配） |
+| `page` | `number` | 可选。页码，默认 `1` |
+| `pageSize` | `number` | 可选。每页条数 |
 
 **Response** `200 OK`:
 ```json
-[
-  {
-    "id": "7e95db6b-5b5d-4035-a387-d9fd1d882fdb",
-    "title": "Documenting External APIs",
-    "workspace": "file:///Applications/Antigravity.app/Contents/Resources/app",
-    "mtime": 1773872543459.765,
-    "steps": 515
-  }
-]
+{
+  "items": [
+    {
+      "id": "7e95db6b-5b5d-4035-a387-d9fd1d882fdb",
+      "title": "Documenting External APIs",
+      "workspace": "file:///Applications/Antigravity.app/Contents/Resources/app",
+      "mtime": 1773872543459.765,
+      "steps": 515
+    }
+  ],
+  "page": 1,
+  "pageSize": 100,
+  "total": 253,
+  "hasMore": true
+}
 ```
 
 | 字段 | 类型 | 说明 |

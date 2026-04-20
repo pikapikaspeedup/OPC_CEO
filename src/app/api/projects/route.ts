@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 import { getErrorMessage, normalizeProject } from '@/lib/project-utils';
 import { listProjectRecords, listRunRecordsByIds } from '@/lib/storage/gateway-db';
 
@@ -21,10 +22,16 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const pagination = parsePaginationSearchParams(searchParams, {
+    defaultPageSize: 100,
+    maxPageSize: 200,
+  });
   const projects = listProjectRecords();
+  const pagedProjects = paginateArray(projects, pagination);
   const runIdsNeedingLookup = Array.from(new Set(
-    projects.flatMap((project) =>
+    pagedProjects.items.flatMap((project) =>
       (project.pipelineState?.stages || [])
         .filter((stage) => !stage.lastError && !!stage.runId && ['failed', 'blocked', 'cancelled'].includes(stage.status))
         .map((stage) => stage.runId!)
@@ -33,9 +40,12 @@ export async function GET() {
   const runs = listRunRecordsByIds(runIdsNeedingLookup);
   const runMap = new Map(runs.map((run) => [run.runId, run]));
 
-  const normalizedProjects = projects.map((project) => normalizeProject(project, {
+  const normalizedProjects = pagedProjects.items.map((project) => normalizeProject(project, {
     getRunById: (runId) => runMap.get(runId),
   }));
 
-  return NextResponse.json(normalizedProjects);
+  return NextResponse.json({
+    ...pagedProjects,
+    items: normalizedProjects,
+  });
 }

@@ -6,12 +6,13 @@ import {
   syncProjectRunArtifactsToDeliverables,
   upsertDeliverableRecord,
 } from '@/lib/storage/gateway-db';
+import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/projects/[id]/deliverables
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -21,7 +22,12 @@ export async function GET(
   }
 
   syncProjectRunArtifactsToDeliverables(id);
-  return NextResponse.json(listDeliverableRecordsByProject(id));
+  const { searchParams } = new URL(req.url);
+  const pagination = parsePaginationSearchParams(searchParams, {
+    defaultPageSize: 50,
+    maxPageSize: 200,
+  });
+  return NextResponse.json(paginateArray(listDeliverableRecordsByProject(id), pagination));
 }
 
 // POST /api/projects/[id]/deliverables

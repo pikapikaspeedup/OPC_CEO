@@ -196,6 +196,8 @@ export default function ProjectsPanel({
   const [convertMessage, setConvertMessage] = useState<string | null>(null);
   const [schedulerJobs, setSchedulerJobs] = useState<SchedulerJobResponse[]>([]);
   const [schedulerLoading, setSchedulerLoading] = useState(true);
+  const [detailRuns, setDetailRuns] = useState<AgentRun[]>([]);
+  const [detailRunsProjectId, setDetailRunsProjectId] = useState<string | null>(null);
 
   const fetchSchedulerJobs = useCallback(async () => {
     setSchedulerLoading(true);
@@ -335,6 +337,13 @@ export default function ProjectsPanel({
     return null;
   }, [selectedProjectId, projects]);
 
+  const detailFocusProjectId = useMemo(() => {
+    if (!detailProject) return null;
+    const children = childProjectsByParent.get(detailProject.projectId) || [];
+    const activeChildId = children.find((project) => project.projectId === selectedProjectId)?.projectId || null;
+    return activeChildId || detailProject.projectId;
+  }, [childProjectsByParent, detailProject, selectedProjectId]);
+
   // OPC Phase 3: CEO events (hooks must be at component top level)
   const allStages = useMemo(() =>
     projects.flatMap(p => p.pipelineState?.stages || []),
@@ -355,6 +364,40 @@ export default function ProjectsPanel({
   useEffect(() => {
     setShowDeptContext(false);
   }, [detailProject?.projectId, selectedProjectId]);
+
+  useEffect(() => {
+    if (!detailFocusProjectId) {
+      setDetailRuns([]);
+      setDetailRunsProjectId(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadRuns = async () => {
+      try {
+        const runs = await api.agentRunsByFilterAll({ projectId: detailFocusProjectId }, { pageSize: 100 });
+        if (!cancelled) {
+          setDetailRunsProjectId(detailFocusProjectId);
+          setDetailRuns(runs);
+        }
+      } catch {
+        if (!cancelled) {
+          setDetailRunsProjectId(detailFocusProjectId);
+          setDetailRuns([]);
+        }
+      }
+    };
+
+    void loadRuns();
+    const interval = setInterval(() => {
+      void loadRuns();
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [detailFocusProjectId]);
 
   const handleCreate = async () => {
     setIsSubmitting(true);
@@ -521,8 +564,10 @@ export default function ProjectsPanel({
           const viewProject = activeChildId
             ? children.find(c => c.projectId === activeChildId) || project
             : project;
-          const viewProjectRuns = agentRuns
-            .filter((run) => run.projectId === viewProject.projectId)
+          const viewProjectRunsSource = detailRunsProjectId === viewProject.projectId
+            ? detailRuns
+            : agentRuns.filter((run) => run.projectId === viewProject.projectId);
+          const viewProjectRuns = [...viewProjectRunsSource]
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
           const latestProjectRun = viewProjectRuns[0] || null;
           const hasProjectPromptRuns = viewProjectRuns.some((run) => run.executorKind === 'prompt');

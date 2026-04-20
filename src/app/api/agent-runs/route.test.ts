@@ -25,6 +25,7 @@ vi.mock('@/lib/agents/prompt-executor', () => ({
 }));
 
 vi.mock('@/lib/storage/gateway-db', () => ({
+  countRunRecordsByFilter: vi.fn(() => 0),
   listRunRecordsByFilter: vi.fn(() => []),
 }));
 
@@ -39,7 +40,7 @@ vi.mock('@/lib/logger', () => ({
 
 import { executeDispatch } from '@/lib/agents/dispatch-service';
 import { executePrompt } from '@/lib/agents/prompt-executor';
-import { listRunRecordsByFilter } from '@/lib/storage/gateway-db';
+import { countRunRecordsByFilter, listRunRecordsByFilter } from '@/lib/storage/gateway-db';
 import { GET, POST } from './route';
 
 function makeRequest(body: Record<string, unknown>) {
@@ -54,6 +55,7 @@ describe('POST /api/agent-runs', () => {
   beforeEach(() => {
     vi.mocked(executeDispatch).mockClear();
     vi.mocked(executePrompt).mockClear();
+    vi.mocked(countRunRecordsByFilter).mockClear();
     vi.mocked(listRunRecordsByFilter).mockClear();
   });
 
@@ -297,6 +299,115 @@ describe('GET /api/agent-runs', () => {
     const req = new Request('http://localhost/api/agent-runs?schedulerJobId=job-1');
     await GET(req);
 
-    expect(vi.mocked(listRunRecordsByFilter)).toHaveBeenCalledWith({ schedulerJobId: 'job-1' });
+    expect(vi.mocked(countRunRecordsByFilter)).toHaveBeenCalledWith({ schedulerJobId: 'job-1' });
+    expect(vi.mocked(listRunRecordsByFilter)).toHaveBeenCalledWith(
+      { schedulerJobId: 'job-1' },
+      { limit: 50, offset: 0 },
+    );
+  });
+
+  it('returns paginated list items without heavyweight detail envelopes', async () => {
+    vi.mocked(countRunRecordsByFilter).mockReturnValue(1);
+    vi.mocked(listRunRecordsByFilter).mockReturnValue([
+      {
+        runId: 'run-1',
+        stageId: 'product-spec',
+        pipelineStageId: 'product-spec',
+        workspace: 'file:///tmp/workspace',
+        prompt: 'Write a product spec',
+        status: 'completed',
+        createdAt: '2026-04-20T10:00:00.000Z',
+        taskEnvelope: {
+          goal: 'Write a product spec',
+          successCriteria: ['complete'],
+        },
+        promptResolution: {
+          mode: 'workflow',
+          requestedWorkflowRefs: [],
+          requestedSkillHints: [],
+          matchedWorkflowRefs: ['/product/spec'],
+          matchedSkillRefs: [],
+          resolutionReason: 'matched workflow',
+        },
+        result: {
+          status: 'completed',
+          summary: 'Spec created',
+          changedFiles: ['docs/spec.md'],
+          blockers: [],
+          needsReview: [],
+          promptResolution: {
+            mode: 'workflow',
+            requestedWorkflowRefs: [],
+            requestedSkillHints: [],
+            matchedWorkflowRefs: ['/product/spec'],
+            matchedSkillRefs: [],
+            resolutionReason: 'matched workflow',
+          },
+        },
+        resultEnvelope: {
+          runId: 'run-1',
+          status: 'completed',
+          summary: 'Spec created',
+          outputArtifacts: [],
+          promptResolution: {
+            mode: 'workflow',
+            requestedWorkflowRefs: [],
+            requestedSkillHints: [],
+            matchedWorkflowRefs: ['/product/spec'],
+            matchedSkillRefs: [],
+            resolutionReason: 'matched workflow',
+          },
+        },
+        sessionProvenance: {
+          handle: 'session-1',
+          backendId: 'native-codex',
+          handleKind: 'started',
+          workspacePath: '/tmp/workspace',
+          recordedAt: '2026-04-20T10:00:00.000Z',
+          transcriptPath: '/tmp/transcript.jsonl',
+        },
+      } as never,
+    ]);
+
+    const res = await GET(new Request('http://localhost/api/agent-runs?pageSize=1'));
+    const payload = await res.json();
+
+    expect(payload).toEqual({
+      items: [
+        {
+          runId: 'run-1',
+          stageId: 'product-spec',
+          pipelineStageId: 'product-spec',
+          status: 'completed',
+          workspace: 'file:///tmp/workspace',
+          prompt: 'Write a product spec',
+          createdAt: '2026-04-20T10:00:00.000Z',
+          result: {
+            status: 'completed',
+            summary: 'Spec created',
+            changedFiles: ['docs/spec.md'],
+            blockers: [],
+            needsReview: [],
+          },
+          resultEnvelope: {
+            runId: 'run-1',
+            status: 'completed',
+            summary: 'Spec created',
+            outputArtifacts: [],
+          },
+          sessionProvenance: {
+            handle: 'session-1',
+            backendId: 'native-codex',
+            handleKind: 'started',
+            workspacePath: '/tmp/workspace',
+            recordedAt: '2026-04-20T10:00:00.000Z',
+          },
+        },
+      ],
+      page: 1,
+      pageSize: 1,
+      total: 1,
+      hasMore: false,
+    });
   });
 });

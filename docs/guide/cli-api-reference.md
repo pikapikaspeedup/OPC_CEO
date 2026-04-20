@@ -9,6 +9,10 @@ The API runs on port 3000 by default.
 > Persisted templates are inline-only (`pipeline[]` / `graphPipeline.nodes[]` carry execution config directly).
 > `groupId`, `/api/agent-groups`, and scheduler `dispatch-group` are removed from the public contract.
 
+> List pagination contract (2026-04-20):
+> `GET /api/conversations`, `GET /api/projects`, `GET /api/agent-runs`, `GET /api/scheduler/jobs`, `GET /api/projects/:id/checkpoints`, `GET /api/projects/:id/journal`, `GET /api/projects/:id/deliverables`, `GET /api/operations/audit` 统一支持 `page` / `pageSize`，并返回 `{ items, page, pageSize, total, hasMore }`。
+> `journal` / `audit` 仍兼容旧 `limit` 参数，但语义已收口为 `pageSize`。
+
 ## API Endpoints
 
 ### Conversation Shell Compatibility
@@ -76,7 +80,18 @@ The API runs on port 3000 by default.
 
 #### List Projects
 - **URL:** `GET /api/projects`
-- **Response:** `200 OK` Array of Project objects.
+- **Query Parameters (Optional):**
+  - `page` / `pageSize`: 分页参数
+- **Response:** `200 OK`
+  ```json
+  {
+    "items": [{ "projectId": "proj-1234", "name": "Tetris Game" }],
+    "page": 1,
+    "pageSize": 100,
+    "total": 154,
+    "hasMore": false
+  }
+  ```
 
 #### Get Project Details
 - **URL:** `GET /api/projects/:id`
@@ -221,7 +236,35 @@ The API runs on port 3000 by default.
   - `stageId`: Filter by stage (`product-spec`, `planning`, etc.)
   - `projectId`: Filter by project association
   - `reviewOutcome`: Filter by outcome (`approved`, `rejected`, etc.)
-- **Response:** `200 OK` Array of `AgentRunState` objects.
+  - `schedulerJobId`: Filter by scheduler source
+  - `executorKind`: Filter by `prompt` / `template`
+  - `page` / `pageSize`: 分页参数
+- **Response:** `200 OK`
+  ```json
+  {
+    "items": [
+      {
+        "runId": "run-5678",
+        "stageId": "product-spec",
+        "status": "completed",
+        "prompt": "输出产品规格草案",
+        "result": {
+          "status": "completed",
+          "summary": "...",
+          "changedFiles": []
+        }
+      }
+    ],
+    "page": 1,
+    "pageSize": 50,
+    "total": 4197,
+    "hasMore": true
+  }
+  ```
+- **Notes:**
+  - 列表接口现在只返回 list view 所需字段。
+  - `taskEnvelope`、顶层 `promptResolution`、完整 `sessionProvenance` 等重字段不再出现在列表里。
+  - 如需完整 envelope / artifact / review 细节，请读取 `GET /api/agent-runs/:id`。
 
 #### Get Run Details
 - **URL:** `GET /api/agent-runs/:id`
@@ -596,7 +639,9 @@ The API runs on port 3000 by default.
 
 #### List Deliverables
 - **URL:** `GET /api/projects/:id/deliverables`
-- **Response:** `200 OK` Array of deliverable objects.
+- **Query Parameters (Optional):**
+  - `page` / `pageSize`: 分页参数
+- **Response:** `200 OK` Paginated deliverable envelope.
 - **Notes:**
   - 读路径已经切到 SQLite 主库。
   - 返回值同时包含手工 deliverables 与由 run `outputArtifacts` 自动同步出来的交付物。
@@ -614,7 +659,10 @@ The API runs on port 3000 by default.
 
 #### Audit Log
 - **URL:** `GET /api/operations/audit`
-- **Description:** 获取系统审计事件日志。
+- **Query Parameters (Optional):**
+  - `kind` / `projectId` / `since` / `until`
+  - `page` / `pageSize`
+- **Description:** 获取系统审计事件日志（分页 envelope）。
 
 #### System Logs
 - **URL:** `GET /api/logs`
