@@ -41,8 +41,23 @@ export interface ConversationOwnerCacheRecord {
   payload: Record<string, unknown>;
 }
 
+export type WorkspaceCatalogSourceKind = 'manual-import' | 'antigravity-recent' | 'ceo-bootstrap';
+export type WorkspaceCatalogStatus = 'active' | 'hidden' | 'archived';
+
+export interface WorkspaceCatalogRecord {
+  workspaceUri: string;
+  workspacePath: string;
+  displayName: string;
+  workspaceKind: 'folder' | 'workspace';
+  sourceKind: WorkspaceCatalogSourceKind;
+  status: WorkspaceCatalogStatus;
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt?: string;
+}
+
 const DB_FILE = path.join(GATEWAY_HOME, 'storage.sqlite');
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface RunRecordFilter {
   status?: RunStatus;
@@ -111,6 +126,12 @@ function readConversationProjectionRow(row: {
     visibility: (row.visibility as ConversationProjectionRecord['visibility']) || parsed.visibility || 'visible',
     isLocalOnly: Boolean(parsed.isLocalOnly),
   };
+}
+
+function decodeWorkspaceCatalogRow(row: {
+  payload_json: string;
+}): WorkspaceCatalogRecord {
+  return JSON.parse(row.payload_json) as WorkspaceCatalogRecord;
 }
 
 function initSchema(db: Database.Database): void {
@@ -299,6 +320,23 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_status ON evolution_proposals(status);
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_target_name ON evolution_proposals(target_name);
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_updated_at ON evolution_proposals(updated_at);
+
+    CREATE TABLE IF NOT EXISTS workspace_catalog (
+      workspace_uri TEXT PRIMARY KEY,
+      workspace_path TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      workspace_kind TEXT NOT NULL DEFAULT 'folder',
+      source_kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workspace_catalog_status ON workspace_catalog(status);
+    CREATE INDEX IF NOT EXISTS idx_workspace_catalog_updated_at ON workspace_catalog(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_workspace_catalog_source_kind ON workspace_catalog(source_kind);
   `);
 
   ensureColumn(db, 'runs', 'updated_at', 'updated_at TEXT');
@@ -1169,6 +1207,93 @@ export function listScheduledJobRecords(): ScheduledJob[] {
   `).all() as Array<{ payload_json: string }>;
 
   return rows.map((row) => JSON.parse(row.payload_json) as ScheduledJob);
+}
+
+function normalizeWorkspaceCatalogRecord(
+  input: WorkspaceCatalogRecord,
+  existing?: WorkspaceCatalogRecord | null,
+): WorkspaceCatalogRecord {
+  return {
+    workspaceUri: input.workspaceUri,
+    workspacePath: input.workspacePath,
+    displayName: input.displayName,
+    workspaceKind: input.workspaceKind,
+    sourceKind: input.sourceKind,
+    status: input.status,
+    createdAt: existing?.createdAt || input.createdAt,
+    updatedAt: input.updatedAt,
+    lastSeenAt: input.lastSeenAt ?? existing?.lastSeenAt,
+  };
+}
+
+export function upsertWorkspaceCatalogRecord(input: WorkspaceCatalogRecord): WorkspaceCatalogRecord {
+  const db = getGatewayDb();
+  const existing = getWorkspaceCatalogRecordByUri(input.workspaceUri);
+  const record = normalizeWorkspaceCatalogRecord(input, existing);
+
+  db.prepare(`
+    INSERT INTO workspace_catalog(
+      workspace_uri, workspace_path, display_name, workspace_kind,
+      source_kind, status, created_at, updated_at, last_seen_at, payload_json
+    )
+    VALUES (
+      @workspace_uri, @workspace_path, @display_name, @workspace_kind,
+      @source_kind, @status, @created_at, @updated_at, @last_seen_at, @payload_json
+    )
+    ON CONFLICT(workspace_uri) DO UPDATE SET
+      workspace_path = excluded.workspace_path,
+      display_name = excluded.display_name,
+      workspace_kind = excluded.workspace_kind,
+      source_kind = excluded.source_kind,
+      status = excluded.status,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      last_seen_at = excluded.last_seen_at,
+      payload_json = excluded.payload_json
+  `).run({
+    workspace_uri: record.workspaceUri,
+    workspace_path: record.workspacePath,
+    display_name: record.displayName,
+    workspace_kind: record.workspaceKind,
+    source_kind: record.sourceKind,
+    status: record.status,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
+    last_seen_at: record.lastSeenAt || null,
+    payload_json: JSON.stringify(record),
+  });
+
+  return record;
+}
+
+export function getWorkspaceCatalogRecordByUri(workspaceUri: string): WorkspaceCatalogRecord | null {
+  const db = getGatewayDb();
+  const row = db.prepare(`
+    SELECT payload_json
+    FROM workspace_catalog
+    WHERE workspace_uri = ?
+    LIMIT 1
+  `).get(workspaceUri) as { payload_json: string } | undefined;
+
+  return row ? decodeWorkspaceCatalogRow(row) : null;
+}
+
+export function listWorkspaceCatalogRecords(input?: {
+  statuses?: WorkspaceCatalogStatus[];
+}): WorkspaceCatalogRecord[] {
+  const db = getGatewayDb();
+  const statuses = input?.statuses?.length ? Array.from(new Set(input.statuses)) : [];
+  const whereSql = statuses.length > 0
+    ? `WHERE status IN (${statuses.map(() => '?').join(', ')})`
+    : '';
+  const rows = db.prepare(`
+    SELECT payload_json
+    FROM workspace_catalog
+    ${whereSql}
+    ORDER BY datetime(updated_at) DESC, display_name COLLATE NOCASE ASC
+  `).all(...statuses) as Array<{ payload_json: string }>;
+
+  return rows.map(decodeWorkspaceCatalogRow);
 }
 
 export function getGatewayDbPath(): string {

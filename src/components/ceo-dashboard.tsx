@@ -26,6 +26,7 @@ interface CEODashboardProps {
   departments: Map<string, DepartmentConfig>;
   onSelectDepartment: (workspaceUri: string) => void;
   onDepartmentSaved?: (uri: string, config: DepartmentConfig) => void;
+  onRefresh?: () => void;
   onNavigateToProject?: (projectId: string) => void;
   onOpenScheduler?: () => void;
   onProjectCreated?: (projectId: string) => void;
@@ -36,6 +37,7 @@ export default function CEODashboard({
   projects,
   departments,
   onDepartmentSaved,
+  onRefresh,
   onNavigateToProject,
   onOpenScheduler,
   onProjectCreated,
@@ -189,7 +191,18 @@ export default function CEODashboard({
 
   const [setupWorkspaceUri, setSetupWorkspaceUri] = useState<string | null>(null);
   const [drillDownUri, setDrillDownUri] = useState<string | null>(null);
-  const setupWs = setupWorkspaceUri ? workspaces.find(w => w.uri === setupWorkspaceUri) : null;
+  const [extraWorkspaces, setExtraWorkspaces] = useState<Workspace[]>([]);
+  const allWorkspaces = useMemo(() => {
+    const merged = new Map<string, Workspace>();
+    for (const workspace of workspaces) {
+      merged.set(workspace.uri, workspace);
+    }
+    for (const workspace of extraWorkspaces) {
+      merged.set(workspace.uri, workspace);
+    }
+    return [...merged.values()];
+  }, [extraWorkspaces, workspaces]);
+  const setupWs = setupWorkspaceUri ? allWorkspaces.find(w => w.uri === setupWorkspaceUri) : null;
   const setupDept = setupWorkspaceUri ? (departments.get(setupWorkspaceUri) ?? { name: setupWs?.name ?? '', type: 'build' as const, skills: [], okr: null }) : null;
 
   return (
@@ -395,21 +408,30 @@ export default function CEODashboard({
           <div className="flex items-center gap-2">
             <button
               className="text-xs text-sky-400/70 hover:text-sky-400 transition-colors"
-              onClick={() => {
+              onClick={async () => {
                 const wsPath = prompt('输入新部门的工作区路径（如 /Users/xxx/my-project）');
                 if (!wsPath?.trim()) return;
-                api.launchWorkspace(wsPath.trim()).then(() => {
-                  // Workspace will appear after polling
-                }).catch(() => alert('启动失败，请检查路径'));
+                try {
+                  const result = await api.importWorkspace(wsPath.trim());
+                  setExtraWorkspaces(prev => {
+                    const merged = new Map(prev.map((workspace) => [workspace.uri, workspace]));
+                    merged.set(result.workspace.uri, result.workspace);
+                    return [...merged.values()];
+                  });
+                  setSetupWorkspaceUri(result.workspace.uri);
+                  onRefresh?.();
+                } catch {
+                  alert('导入失败，请检查路径');
+                }
               }}
             >
               + 添加部门
             </button>
-            <span className="text-xs text-[var(--app-text-muted)]">{workspaces.length} 部门</span>
+            <span className="text-xs text-[var(--app-text-muted)]">{allWorkspaces.length} 部门</span>
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {workspaces.map(ws => {
+          {allWorkspaces.map(ws => {
             const dept = departments.get(ws.uri);
             const deptType = dept?.type || 'build';
             const typeIcon = dept?.typeIcon || (deptType === 'ceo' ? '👔' : deptType === 'research' ? '🔬' : deptType === 'operations' ? '📡' : '🏗️');
@@ -476,13 +498,13 @@ export default function CEODashboard({
 
       {/* Cross-department comparison (P3-B3) */}
       <DepartmentComparisonWidget
-        workspaces={workspaces}
+        workspaces={allWorkspaces}
         projects={projects}
         departments={departments}
       />
 
       <CEOSchedulerCommandCard
-        workspaces={workspaces}
+        workspaces={allWorkspaces}
         projects={projects}
         departments={departments}
         onScheduled={() => {
@@ -549,7 +571,7 @@ export default function CEODashboard({
 
       {/* Department Detail Drawer (SimCity drill-down) */}
       {drillDownUri && (() => {
-        const ddWs = workspaces.find(w => w.uri === drillDownUri);
+        const ddWs = allWorkspaces.find(w => w.uri === drillDownUri);
         const ddConfig = departments.get(drillDownUri) ?? { name: ddWs?.name ?? '', type: 'build' as const, skills: [], okr: null };
         const ddProjects = projects.filter(p => p.workspace === drillDownUri);
         return ddWs ? (

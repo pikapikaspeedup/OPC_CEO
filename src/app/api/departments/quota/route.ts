@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getWorkspaces } from '@/lib/bridge/gateway';
 import { getQuotaSummary } from '@/lib/approval/token-quota';
+import { getKnownWorkspace } from '@/lib/workspace-catalog';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,13 +14,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Missing workspace' }, { status: 400 });
   }
 
-  const uri = workspace.replace(/^file:\/\//, '');
-  const registered = getWorkspaces() as Array<{ uri: string }>;
-  const isKnown = registered.some(w => w.uri.replace(/^file:\/\//, '') === uri);
-  if (!isKnown) {
+  const knownWorkspace = getKnownWorkspace(workspace);
+  if (!knownWorkspace) {
     return NextResponse.json({ error: 'Unknown workspace' }, { status: 403 });
   }
 
-  const summary = getQuotaSummary(uri);
-  return NextResponse.json({ workspace: uri, quota: summary });
+  const summary = getQuotaSummary(knownWorkspace.path);
+  return NextResponse.json({ workspace: knownWorkspace.uri, quota: summary });
 }

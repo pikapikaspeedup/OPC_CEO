@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { reconcileProject } from '@/lib/agents/project-reconciler';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,6 +11,10 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(request);
+  }
+
   const { id } = await params;
 
   let dryRun = true;

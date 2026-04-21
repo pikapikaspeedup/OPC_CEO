@@ -1,15 +1,9 @@
 import { NextResponse } from 'next/server';
 import path from 'path';
-import { getWorkspaces } from '@/lib/bridge/gateway';
 import { getProjectsByWorkspace, getJournalEntriesForDate, templateSummary } from '@/lib/agents/digest-helpers';
-import { getQuotaSummary } from '@/lib/approval/token-quota';
+import { getKnownWorkspace } from '@/lib/workspace-catalog';
 
 export const dynamic = 'force-dynamic';
-
-function isRegisteredWorkspace(uri: string): boolean {
-  const registered = getWorkspaces() as Array<{ uri: string }>;
-  return registered.some(w => w.uri.replace(/^file:\/\//, '') === uri);
-}
 
 function isToday(isoDate: string | undefined, date: string): boolean {
   if (!isoDate) return false;
@@ -37,8 +31,8 @@ export async function GET(req: Request) {
   const workspace = url.searchParams.get('workspace');
   if (!workspace) return NextResponse.json({ error: 'Missing workspace' }, { status: 400 });
 
-  const uri = workspace.replace(/^file:\/\//, '');
-  if (!isRegisteredWorkspace(uri)) return NextResponse.json({ error: 'Unknown workspace' }, { status: 403 });
+  const knownWorkspace = getKnownWorkspace(workspace);
+  if (!knownWorkspace) return NextResponse.json({ error: 'Unknown workspace' }, { status: 403 });
 
   const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
   const period = url.searchParams.get('period') || 'day';
@@ -108,7 +102,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     workspaceUri: workspace,
-    departmentName: path.basename(uri),
+    departmentName: path.basename(knownWorkspace.path),
     date,
     period,
     summary,

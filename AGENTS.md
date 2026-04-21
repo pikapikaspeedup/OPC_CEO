@@ -10,6 +10,8 @@
 - 📖 **每次开始新任务前，必须先阅读 `docs/PROJECT_PROGRESS.md`**
 - 每次阅读文件要1000 行左右，提高代码阅读效率。 
 - 你要积极使用 subagent，确保能更快的完成任务。
+- 验收时不要同时拉多套本地服务；先考虑 scheduler / worker 的副作用，避免后台放大 CPU。
+- 任务结束前必须回收自己拉起的 dev/start/watch/worker 进程，并确认端口已释放。
 - 研究类、讨论类、约束类文档，写在本地 `docs/design/` 或 `docs/research/`，**不要写进 `PROJECT_PROGRESS.md`**
 - 🌐 **浏览器自动化/截图优先使用 `bb-browser`，不要优先使用 Playwright**
   - 只要任务属于页面访问、交互、抓取、截图、DOM 检查、浏览器态验证，默认先用 `bb-browser`

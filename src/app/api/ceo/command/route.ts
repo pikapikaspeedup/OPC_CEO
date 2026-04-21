@@ -1,23 +1,25 @@
 import { NextResponse } from 'next/server';
 import { processCEOCommand } from '@/lib/agents/ceo-agent';
-import { getWorkspaces } from '@/lib/bridge/gateway';
 import type { DepartmentConfig } from '@/lib/types';
 import { readFile, access } from 'fs/promises';
 import { constants } from 'fs';
 import path from 'path';
+import { listKnownWorkspaces } from '@/lib/workspace-catalog';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Load department configs for all registered workspaces (async).
+ * Load department configs for all known workspaces (async).
  */
 async function loadDepartments(): Promise<Map<string, DepartmentConfig>> {
-  const workspaces = getWorkspaces() as Array<{ uri: string }>;
+  const workspaces = listKnownWorkspaces().map((workspace) => ({
+    uri: workspace.uri,
+    path: workspace.path,
+  }));
   const departments = new Map<string, DepartmentConfig>();
 
   await Promise.all(workspaces.map(async (ws) => {
-    const fsPath = ws.uri.replace(/^file:\/\//, '');
-    const configPath = path.join(fsPath, '.department', 'config.json');
+    const configPath = path.join(ws.path, '.department', 'config.json');
     try {
       await access(configPath, constants.R_OK);
       const raw = await readFile(configPath, 'utf-8');
@@ -26,7 +28,7 @@ async function loadDepartments(): Promise<Map<string, DepartmentConfig>> {
     } catch {
       // No config or invalid — use default
       departments.set(ws.uri, {
-        name: path.basename(fsPath),
+        name: path.basename(ws.path),
         type: 'build',
         skills: [],
         okr: null,

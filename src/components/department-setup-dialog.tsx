@@ -153,7 +153,7 @@ export default function DepartmentSetupDialog({
   const [provider, setProvider] = useState<DepartmentConfig['provider']>(initialConfig.provider);
   const [tokenQuotaDaily, setTokenQuotaDaily] = useState<number>(initialConfig.tokenQuota?.daily ?? 0);
   const [tokenQuotaMonthly, setTokenQuotaMonthly] = useState<number>(initialConfig.tokenQuota?.monthly ?? 0);
-  const [saving, setSaving] = useState(false);
+  const [savingMode, setSavingMode] = useState<'save' | 'save-and-sync' | null>(null);
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [canonicalWorkflows, setCanonicalWorkflows] = useState<Workflow[]>([]);
@@ -361,8 +361,8 @@ export default function DepartmentSetupDialog({
 
   // ── Save ───────────────────────────────────────────────────────────────
 
-  async function handleSave() {
-    setSaving(true);
+  async function handleSave(options: { syncAfterSave?: boolean } = {}) {
+    setSavingMode(options.syncAfterSave ? 'save-and-sync' : 'save');
     try {
       const resolvedType = isCustomType ? customType.trim() || 'build' : type;
       const resolvedIcon = typeIcon.trim() || PRESET_TYPES.find(p => p.value === resolvedType)?.icon || '';
@@ -398,16 +398,17 @@ export default function DepartmentSetupDialog({
         ...(initialConfig.roomBg ? { roomBg: initialConfig.roomBg } : {}),
       };
       await api.updateDepartment(workspaceUri, config);
-      // Auto-sync rules after saving so they take effect immediately
-      try {
-        await api.syncDepartment(workspaceUri);
-      } catch {
-        // Sync failure is non-fatal — config is already saved
+      if (options.syncAfterSave) {
+        try {
+          await api.syncDepartment(workspaceUri);
+        } catch {
+          // Config is already saved even if sync fails.
+        }
       }
       onSaved(config);
       onOpenChange(false);
     } finally {
-      setSaving(false);
+      setSavingMode(null);
     }
   }
 
@@ -977,9 +978,19 @@ export default function DepartmentSetupDialog({
           <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button onClick={handleSave} disabled={saving} size="sm">
-            {saving ? '保存中…' : '保存配置'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => handleSave({ syncAfterSave: true })}
+              disabled={savingMode !== null}
+              size="sm"
+            >
+              {savingMode === 'save-and-sync' ? '同步中…' : '保存并同步'}
+            </Button>
+            <Button onClick={() => handleSave()} disabled={savingMode !== null} size="sm">
+              {savingMode === 'save' ? '保存中…' : '仅保存配置'}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

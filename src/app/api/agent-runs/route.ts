@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
 import type { TaskEnvelope } from '@/lib/agents/group-types';
-import type { DepartmentRuntimeContract } from '@/lib/organization/contracts';
 import type { RunStatus } from '@/lib/agents/group-types';
 import { createLogger } from '@/lib/logger';
 import {
   type ExecutionProfile,
   deriveExecutionProfileFromRun,
   isExecutionProfile,
-  normalizeExecutionProfileForTarget,
   summarizeExecutionProfile,
 } from '@/lib/execution';
 import { buildPaginatedResponse, parsePaginationSearchParams } from '@/lib/pagination';
@@ -22,43 +20,17 @@ import type {
   SessionProvenance,
   TaskResult,
 } from '@/lib/agents/group-types';
+import {
+  proxyToControlPlane,
+  proxyToRuntime,
+  shouldProxyControlPlaneRequest,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
+import { handleRuntimeAgentRunDispatch } from '@/server/runtime/agent-runs-dispatch';
 
 export const dynamic = 'force-dynamic';
 
 const log = createLogger('AgentRuns');
-
-type RuntimeTaskEnvelopeCarrier = {
-  executionProfile?: ExecutionProfile;
-  departmentRuntimeContract?: DepartmentRuntimeContract & Record<string, unknown>;
-};
-
-function coerceDepartmentRuntimeContract(
-  value: unknown,
-): (DepartmentRuntimeContract & Record<string, unknown>) | undefined {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-  return { ...(value as Record<string, unknown>) } as DepartmentRuntimeContract & Record<string, unknown>;
-}
-
-function buildTaskEnvelopeWithRuntimeCarrier(
-  taskEnvelope: unknown,
-  carrier: RuntimeTaskEnvelopeCarrier,
-): Partial<TaskEnvelope> | undefined {
-  const base = taskEnvelope && typeof taskEnvelope === 'object'
-    ? { ...(taskEnvelope as Partial<TaskEnvelope>) }
-    : {};
-  const next = base as Partial<TaskEnvelope> & RuntimeTaskEnvelopeCarrier;
-
-  if (carrier.executionProfile) {
-    next.executionProfile = carrier.executionProfile;
-  }
-  if (carrier.departmentRuntimeContract) {
-    next.departmentRuntimeContract = carrier.departmentRuntimeContract;
-  }
-
-  return Object.keys(next).length > 0 ? next : undefined;
-}
 
 function getStoredExecutionProfile(run: {
   taskEnvelope?: TaskEnvelope;
@@ -188,86 +160,26 @@ function toRunListItem(
 
 // POST /api/agent-runs — dispatch a new run
 export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const executionProfile = isExecutionProfile(body.executionProfile) ? body.executionProfile : undefined;
-    const departmentRuntimeContract = coerceDepartmentRuntimeContract(
-      body.departmentRuntimeContract ?? body.runtimeContract,
-    );
-    const taskEnvelope = buildTaskEnvelopeWithRuntimeCarrier(body.taskEnvelope, {
-      executionProfile,
-      departmentRuntimeContract,
-    });
-    const executionProfileTarget = executionProfile ? normalizeExecutionProfileForTarget(executionProfile) : undefined;
-    const templateTarget = body.executionTarget?.kind === 'template'
-      ? body.executionTarget
-      : undefined;
-
-    const executionTarget = executionProfileTarget
-      || body.executionTarget
-      || (body.templateId || body.pipelineId
-        ? {
-            kind: 'template',
-            templateId: body.templateId || body.pipelineId,
-            ...(body.stageId || body.pipelineStageId
-              ? { stageId: body.stageId || body.pipelineStageId }
-              : {}),
-          }
-        : undefined);
-
-    if (executionTarget?.kind === 'prompt') {
-      const { executePrompt } = await import('@/lib/agents/prompt-executor');
-      const result = await executePrompt({
-        workspace: body.workspace,
-        prompt: body.prompt,
-        model: body.model,
-        parentConversationId: body.parentConversationId,
-        taskEnvelope,
-        sourceRunIds: body.sourceRunIds,
-        projectId: body.projectId,
-        executionTarget,
-        triggerContext: body.triggerContext,
-      });
-
-      return NextResponse.json({ runId: result.runId, status: 'starting' }, { status: 201 });
-    }
-
-    if (executionTarget?.kind && executionTarget.kind !== 'template') {
-      return NextResponse.json({ error: `Unsupported execution target: ${executionTarget.kind}` }, { status: 400 });
-    }
-
-    const { executeDispatch } = await import('@/lib/agents/dispatch-service');
-    const result = await executeDispatch({
-      workspace: body.workspace,
-      prompt: body.prompt,
-      model: body.model,
-      parentConversationId: body.parentConversationId,
-      taskEnvelope,
-      sourceRunIds: body.sourceRunIds,
-      projectId: body.projectId,
-      pipelineId: body.pipelineId,
-      templateId: body.templateId || templateTarget?.templateId || (executionTarget?.kind === 'template' ? executionTarget.templateId : undefined),
-      stageId: body.stageId || templateTarget?.stageId || (executionTarget?.kind === 'template' ? executionTarget.stageId : undefined),
-      pipelineStageId: body.pipelineStageId,
-      pipelineStageIndex: body.pipelineStageIndex,
-      templateOverrides: body.templateOverrides,
-      conversationMode: body.conversationMode,
-      provider: body.provider,
-      triggerContext: body.triggerContext,
-    });
-
-    return NextResponse.json({ runId: result.runId, status: 'starting' }, { status: 201 });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Dispatch failed';
-    const statusCode = typeof err === 'object'
-      && err
-      && 'statusCode' in err
-      && typeof (err as { statusCode?: unknown }).statusCode === 'number'
-      ? (err as { statusCode: number }).statusCode
-      : 500;
-    log.error({ err: message }, 'Dispatch failed');
-    return NextResponse.json({ error: message }, { status: statusCode });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
   }
+
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req, '/internal/runtime/agent-runs');
+  }
+
+  const response = await handleRuntimeAgentRunDispatch(req);
+  if (!response.ok) {
+    let message = 'Dispatch failed';
+    try {
+      const payload = await response.clone().json() as { error?: string };
+      message = payload.error || message;
+    } catch {
+      // ignore JSON parsing failures
+    }
+    log.error({ err: message, status: response.status }, 'Dispatch failed');
+  }
+  return response;
 }
 
 // GET /api/agent-runs — list runs with optional filters

@@ -9,6 +9,10 @@ import {
   readTranscriptFromRunHistory,
 } from '@/lib/run-conversation-transcript';
 import { getRunRecord } from '@/lib/storage/gateway-db';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +41,10 @@ function readAssistantDraftFromArtifacts(run: AgentRunState | null): string | nu
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(_req);
+  }
+
   const { id } = await params;
   const run = getRunRecord(id);
   if (!run) {

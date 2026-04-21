@@ -17,6 +17,7 @@ import SettingsPanel, { type SettingsFocusTarget, type SettingsTabId } from '@/c
 import SchedulerPanel from '@/components/scheduler-panel';
 import TunnelStatusWidget from '@/components/tunnel-status-widget';
 import AssetsManager from '@/components/assets-manager';
+import HomeOverview from '@/components/home-overview';
 import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
 import NotificationIndicators from '@/components/notification-indicators';
@@ -29,14 +30,21 @@ import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
 import { Download, Menu, PanelLeftOpen, Settings2, Terminal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  countConfiguredDepartments,
+  getAgentStateRefreshMs,
+  shouldShowShellSidebar,
+  type AppShellUtilityPanel,
+} from '@/lib/home-shell';
 import { buildWorkspaceOptions } from '@/lib/workspace-options';
 import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
 import { AppShell } from '@/components/ui/app-shell';
 import { cn } from '@/lib/utils';
 
-type UtilityPanel = 'settings' | null;
+type UtilityPanel = AppShellUtilityPanel;
 type ConversationScope = 'ceo' | 'conversations' | null;
 type UrlNavigationMode = 'push' | 'replace';
+const CEO_WORKSPACE_URI = 'file:///Users/darrel/.gemini/antigravity/ceo-workspace';
 
 type SettingsPanelRequest = {
   tab: SettingsTabId;
@@ -74,7 +82,7 @@ export default function Home() {
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mainMenuOpen, setMainMenuOpen] = useState(false);
-  const [sidebarSection, setSidebarSection] = useState<PrimarySection>('projects');
+  const [sidebarSection, setSidebarSection] = useState<PrimarySection>('overview');
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel>(null);
   const [settingsPanelRequest, setSettingsPanelRequest] = useState<SettingsPanelRequest>({
     tab: 'provider',
@@ -111,7 +119,6 @@ export default function Home() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null);
-  const [agentRunsLoading, setAgentRunsLoading] = useState(true);
   const [agentServers, setAgentServers] = useState<Server[]>([]);
   const [agentWorkspacesRaw, setAgentWorkspacesRaw] = useState<Workspace[]>([]);
   const [hiddenWorkspaces, setHiddenWorkspaces] = useState<string[]>([]);
@@ -125,10 +132,13 @@ export default function Home() {
   const apiLoadedRef = useRef(false);
   const agentStateLoadedRef = useRef(false);
   const nextUrlNavigationModeRef = useRef<UrlNavigationMode>('replace');
+  const templatesLoadedRef = useRef(false);
+  const chatAssetsLoadedRef = useRef(false);
+  const operationsAssetsLoadedRef = useRef(false);
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
   const [recentAuditEvents, setRecentAuditEvents] = useState<AuditEvent[]>([]);
 
-  useEffect(() => {
+  const loadModels = useCallback(async () => {
     api.models().then(data => {
       if (data.clientModelConfigs?.length) {
         const sortedModels = [...data.clientModelConfigs].sort((a, b) => {
@@ -143,18 +153,73 @@ export default function Home() {
         setCurrentModel(exists ? defaultModel : 'MODEL_AUTO');
       }
     }).catch(() => { });
-
-    // Load pipeline templates once on mount
-    api.pipelines().then(setTemplates).catch(() => { });
-
-    // Load skills, workflows, rules
-    api.skills().then(setSkills).catch(() => { });
-    api.discoveredSkills().then(setDiscoveredSkills).catch(() => { });
-    api.workflows().then(setWorkflows).catch(() => { });
-    api.discoveredWorkflows().then(setDiscoveredWorkflows).catch(() => { });
-    api.rules().then(setRules).catch(() => { });
-    api.discoveredRules().then(setDiscoveredRules).catch(() => { });
   }, []);
+
+  const loadTemplates = useCallback(async (force = false) => {
+    if (templatesLoadedRef.current && !force) return;
+    try {
+      const data = await api.pipelines();
+      setTemplates(data);
+      templatesLoadedRef.current = true;
+    } catch {
+      /* silent */
+    }
+  }, []);
+
+  const loadChatAssets = useCallback(async (force = false) => {
+    if (chatAssetsLoadedRef.current && !force) return;
+    try {
+      const [nextSkills, nextWorkflows] = await Promise.all([
+        api.skills(),
+        api.workflows(),
+      ]);
+      setSkills(nextSkills);
+      setWorkflows(nextWorkflows);
+      chatAssetsLoadedRef.current = true;
+    } catch {
+      /* silent */
+    }
+  }, []);
+
+  const loadOperationsAssets = useCallback(async (force = false) => {
+    if (operationsAssetsLoadedRef.current && !force) return;
+    try {
+      const [nextSkills, nextWorkflows, nextRules, nextDiscoveredSkills, nextDiscoveredWorkflows, nextDiscoveredRules] = await Promise.all([
+        api.skills(),
+        api.workflows(),
+        api.rules(),
+        api.discoveredSkills(),
+        api.discoveredWorkflows(),
+        api.discoveredRules(),
+      ]);
+      setSkills(nextSkills);
+      setWorkflows(nextWorkflows);
+      setRules(nextRules);
+      setDiscoveredSkills(nextDiscoveredSkills);
+      setDiscoveredWorkflows(nextDiscoveredWorkflows);
+      setDiscoveredRules(nextDiscoveredRules);
+      chatAssetsLoadedRef.current = true;
+      operationsAssetsLoadedRef.current = true;
+    } catch {
+      /* silent */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels]);
+
+  useEffect(() => {
+    if (sidebarSection === 'projects' || sidebarSection === 'ceo') {
+      void loadTemplates();
+    }
+    if (sidebarSection === 'ceo' || sidebarSection === 'conversations') {
+      void loadChatAssets();
+    }
+    if (sidebarSection === 'operations') {
+      void loadOperationsAssets();
+    }
+  }, [loadChatAssets, loadOperationsAssets, loadTemplates, sidebarSection]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -209,10 +274,6 @@ export default function Home() {
   }, []);
 
   const loadAgentState = useCallback(async (preferredRunId?: string | null) => {
-    if (!agentStateLoadedRef.current) {
-      setAgentRunsLoading(true);
-    }
-
     try {
       const [fetchedProjects, runs, servers, workspaces, hidden] = await Promise.all([
         api.projects().catch(() => [] as Project[]),
@@ -236,19 +297,22 @@ export default function Home() {
       setAgentServers([]);
       setAgentWorkspacesRaw([]);
       setHiddenWorkspaces([]);
-    } finally {
-      agentStateLoadedRef.current = true;
-      setAgentRunsLoading(false);
     }
+    agentStateLoadedRef.current = true;
   }, []);
+
+  const agentStatePollMs = useMemo(
+    () => getAgentStateRefreshMs(sidebarSection, utilityPanel),
+    [sidebarSection, utilityPanel],
+  );
 
   useEffect(() => {
     void loadAgentState();
     const timer = setInterval(() => {
       void loadAgentState(selectedAgentRunId);
-    }, 5000);
+    }, agentStatePollMs);
     return () => clearInterval(timer);
-  }, [loadAgentState, selectedAgentRunId]);
+  }, [agentStatePollMs, loadAgentState, selectedAgentRunId]);
 
   const loadSteps = useCallback(async (id: string) => {
     setLoading(true);
@@ -418,22 +482,31 @@ export default function Home() {
     }
   };
 
+  const handleCreateCeoConversation = useCallback(async (mode: UrlNavigationMode = 'push') => {
+    try {
+      const response = await api.createConversation(CEO_WORKSPACE_URI);
+      if (response.error) {
+        alert(response.error);
+        return;
+      }
+      if (response.cascadeId) {
+        handleSelect(response.cascadeId, 'CEO Office', 'ceo', mode);
+      }
+    } catch (error: unknown) {
+      alert('Failed: ' + (error instanceof Error ? error.message : 'unknown'));
+    }
+  }, [handleSelect]);
+
   useEffect(() => {
     if (sidebarSection === 'ceo') {
       api.conversations().then(data => {
-         const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace');
+         const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === CEO_WORKSPACE_URI);
          if (!isCurrentlyCeo) {
-           const ceoConv = data.find(c => c.workspace === 'file:///Users/darrel/.gemini/antigravity/ceo-workspace');
+           const ceoConv = data.find(c => c.workspace === CEO_WORKSPACE_URI);
            if (ceoConv) {
              handleSelect(ceoConv.id, 'CEO Office', 'ceo', 'replace');
            } else {
-             api.createConversation('file:///Users/darrel/.gemini/antigravity/ceo-workspace')
-               .then(res => {
-                 if (res.cascadeId) {
-                   handleSelect(res.cascadeId, 'CEO Office', 'ceo', 'replace');
-                 }
-               })
-               .catch(() => {});
+             syncConversationSelection(null, null, 'ceo');
            }
          }
       }).catch(() => {});
@@ -506,15 +579,6 @@ export default function Home() {
       await loadAgentState(runId);
     } catch {
       /* silent */
-    }
-  }, [loadAgentState]);
-
-  const handleInterveneAgentRun = useCallback(async (runId: string, action: 'nudge' | 'retry' | 'restart_role' | 'cancel' | 'evaluate') => {
-    try {
-      await api.interveneRun(runId, { action });
-      await loadAgentState(runId);
-    } catch (err: unknown) {
-      throw err;
     }
   }, [loadAgentState]);
 
@@ -674,19 +738,20 @@ export default function Home() {
   }, [currentUrlState, urlStateReady]);
 
   const isRunning = isActive;
-  const agentWorkspaces = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces)
-    .filter(workspace => (workspace.running || workspace.uri.includes('ceo-workspace')) && !workspace.hidden)
+  const workspaceOptions = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces);
+  const departmentWorkspaces = workspaceOptions
+    .filter(workspace => !workspace.hidden)
     .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
 
   // OPC Phase 3: load department configs for all workspaces
   const [departmentsMap, setDepartmentsMap] = useState<Map<string, DepartmentConfig>>(new Map());
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-  const wsKey = useMemo(() => agentWorkspaces.map(w => w.uri).join(','), [agentWorkspaces]);
+  const wsKey = useMemo(() => departmentWorkspaces.map(w => w.uri).join(','), [departmentWorkspaces]);
   useEffect(() => {
-    if (!agentWorkspaces.length) return;
+    if (!departmentWorkspaces.length) return;
     Promise.all(
-      agentWorkspaces.map(ws =>
+      departmentWorkspaces.map(ws =>
         api.getDepartment(ws.uri)
           .then(config => [ws.uri, config] as const)
           .catch(() => [ws.uri, null] as const),
@@ -700,10 +765,24 @@ export default function Home() {
     });
   }, [wsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const configuredDepartmentCount = useMemo(
+    () => countConfiguredDepartments(departmentWorkspaces, departmentsMap),
+    [departmentWorkspaces, departmentsMap],
+  );
   const isOpcUnconfigured = useMemo(() => {
-    if (!departmentsMap.size) return false;
-    return [...departmentsMap.values()].every(d => d.type === 'build' && !d.okr);
-  }, [departmentsMap]);
+    if (!departmentWorkspaces.length) return false;
+    return configuredDepartmentCount < departmentWorkspaces.length;
+  }, [configuredDepartmentCount, departmentWorkspaces.length]);
+
+  const openOnboardingJourney = useCallback(() => {
+    activateSection('projects');
+    setOnboardingDismissed(false);
+    setOnboardingOpen(true);
+  }, [activateSection]);
+  const headerSignalPollMs = useMemo(
+    () => (utilityPanel === 'settings' || sidebarSection === 'overview' || sidebarSection === 'knowledge' ? 15_000 : 8_000),
+    [sidebarSection, utilityPanel],
+  );
 
   // Poll pending approval count for header badge
   useEffect(() => {
@@ -714,9 +793,9 @@ export default function Home() {
         .catch(() => { });
     };
     poll();
-    const interval = setInterval(poll, 8000);
+    const interval = setInterval(poll, headerSignalPollMs);
     return () => { cancelled = true; clearInterval(interval); };
-  }, []);
+  }, [headerSignalPollMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -726,12 +805,12 @@ export default function Home() {
         .catch(() => { if (!cancelled) setRecentAuditEvents([]); });
     };
     poll();
-    const interval = setInterval(poll, 8000);
+    const interval = setInterval(poll, headerSignalPollMs);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [headerSignalPollMs]);
 
   // CEO events derived from projects
   const ceoEvents = useMemo(() => {
@@ -745,7 +824,12 @@ export default function Home() {
     [agentRuns],
   );
   const selectedProject = projects.find(project => project.projectId === selectedProjectId) || null;
+  const showShellSidebar = useMemo(
+    () => shouldShowShellSidebar(sidebarSection, utilityPanel),
+    [sidebarSection, utilityPanel],
+  );
   const primaryNavItems: Array<{ value: PrimarySection; label: string; description: string }> = [
+    { value: 'overview', label: 'Home', description: 'Entry routing, setup status, and continue-work shortcuts.' },
     { value: 'ceo', label: 'CEO Office', description: 'Executive chat, decisions, and company-level control.' },
     { value: 'projects', label: 'OPC', description: 'Departments, project workbench, and company execution overview.' },
     { value: 'conversations', label: t('shell.chats'), description: 'Workspace conversations grouped by active threads.' },
@@ -759,6 +843,8 @@ export default function Home() {
 
   const currentViewTitle = utilityPanel === 'settings'
     ? 'Settings'
+    : sidebarSection === 'overview'
+      ? 'Company Home'
     : sidebarSection === 'projects'
       ? (selectedProject?.name || 'OPC')
       : sidebarSection === 'knowledge'
@@ -770,7 +856,9 @@ export default function Home() {
             : 'Operations';
 
   const currentViewCaption = utilityPanel === 'settings'
-    ? 'Provider, API key, MCP, and scene configuration.'
+    ? 'CEO profile, provider, API key, MCP, and scene configuration.'
+    : sidebarSection === 'overview'
+      ? 'Start from setup status, continue-work shortcuts, and explicit section entry points.'
     : sidebarSection === 'projects'
       ? (selectedProject ? `Project workbench · ${selectedProject.status}` : 'Company operations and project context.')
       : sidebarSection === 'knowledge'
@@ -784,7 +872,7 @@ export default function Home() {
   return (
     <>
       <AppShell
-        sidebar={utilityPanel === 'settings' ? null : (
+        sidebar={showShellSidebar ? (
           <Sidebar
             activeId={activeId}
             onSelect={handleSelect}
@@ -800,14 +888,14 @@ export default function Home() {
             onSelectProject={navigateToProject}
             onOpenOpsAsset={openOpsAsset}
           />
-        )}
+        ) : null}
         header={(
           <header className="relative z-20 flex h-16 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.90)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.82)] md:px-5">
             <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setMainMenuOpen(true)}>
                 <Menu className="h-4 w-4" />
               </Button>
-              {utilityPanel !== 'settings' ? (
+              {showShellSidebar ? (
                 <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setSidebarOpen(true)}>
                   <PanelLeftOpen className="h-4 w-4" />
                 </Button>
@@ -928,6 +1016,18 @@ export default function Home() {
               </div>
             </ScrollArea>
           </div>
+        ) : sidebarSection === 'overview' ? (
+          <HomeOverview
+            projects={projects}
+            agentRuns={agentRuns}
+            pendingApprovals={pendingApprovals}
+            totalDepartmentCount={departmentWorkspaces.length}
+            configuredDepartmentCount={configuredDepartmentCount}
+            onOpenSection={(section) => activateSection(section)}
+            onOpenProject={(projectId) => navigateToProject(projectId)}
+            onOpenSetup={openOnboardingJourney}
+            onOpenSettings={() => openSettingsPanel()}
+          />
         ) : sidebarSection === 'projects' ? (
           <div className="agent-stage relative flex-1 overflow-hidden">
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-30" />
@@ -942,11 +1042,11 @@ export default function Home() {
                           <span className="text-sm font-semibold text-white">欢迎使用 AI 公司管理系统</span>
                         </div>
                         <p className="text-xs text-white/50">
-                          检测到 {departmentsMap.size} 个工作区尚未配置部门信息。配置后 CEO Agent 可以智能派发任务。
+                          检测到 {Math.max(departmentWorkspaces.length - configuredDepartmentCount, 0)} 个工作区尚未配置部门信息。配置后 CEO Agent 可以智能派发任务。
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <Button size="sm" onClick={() => setOnboardingOpen(true)}>
+                        <Button size="sm" onClick={openOnboardingJourney}>
                           🚀 开始配置
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => setOnboardingDismissed(true)}>
@@ -956,8 +1056,23 @@ export default function Home() {
                     </div>
                   </div>
                 )}
+                {isOpcUnconfigured && onboardingDismissed ? (
+                  <div className="rounded-xl border border-white/8 bg-white/[0.03] px-5 py-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-white">部门初始化仍未完成</div>
+                        <div className="mt-1 text-xs leading-6 text-white/50">
+                          当前已配置 {configuredDepartmentCount} / {departmentWorkspaces.length} 个部门。首页和 OPC 现在都保留了常驻回流入口。
+                        </div>
+                      </div>
+                      <Button variant="outline" onClick={openOnboardingJourney} className="border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.08] hover:text-white">
+                        继续完成设置
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 <OnboardingWizard
-                  workspaces={agentWorkspaces}
+                  workspaces={departmentWorkspaces}
                   departments={departmentsMap}
                   open={onboardingOpen}
                   onOpenChange={setOnboardingOpen}
@@ -969,7 +1084,7 @@ export default function Home() {
                 <ProjectsPanel
                   projects={projects}
                   agentRuns={agentRuns}
-                  workspaces={agentWorkspaces}
+                  workspaces={departmentWorkspaces}
                   selectedProjectId={selectedProjectId}
                   departments={departmentsMap}
                   onSelectProject={navigateToProject}
@@ -1008,7 +1123,7 @@ export default function Home() {
                 />
 
                 {/* Department Memory — knowledge deposited by agent runs */}
-                <DepartmentMemoryPanel workspaces={agentWorkspaces} />
+                <DepartmentMemoryPanel workspaces={departmentWorkspaces} />
               </div>
             </ScrollArea>
           </div>
@@ -1046,7 +1161,7 @@ export default function Home() {
                 <SchedulerPanel />
                 <AnalyticsDashboard />
                 <div className="grid gap-4 md:grid-cols-2">
-                  <TokenQuotaWidget workspaces={agentWorkspaces} />
+                  <TokenQuotaWidget workspaces={departmentWorkspaces} />
                   <McpStatusWidget />
                 </div>
                 <TunnelStatusWidget />
@@ -1062,12 +1177,7 @@ export default function Home() {
                   requestedItemName={opsAssetRequest.itemName}
                   requestToken={opsAssetRequest.nonce}
                   onRefresh={() => {
-                    api.skills().then(setSkills).catch(() => {});
-                    api.discoveredSkills().then(setDiscoveredSkills).catch(() => {});
-                    api.workflows().then(setWorkflows).catch(() => {});
-                    api.discoveredWorkflows().then(setDiscoveredWorkflows).catch(() => {});
-                    api.rules().then(setRules).catch(() => {});
-                    api.discoveredRules().then(setDiscoveredRules).catch(() => {});
+                    void loadOperationsAssets(true);
                   }}
                 />
               </div>
@@ -1080,14 +1190,38 @@ export default function Home() {
               {/* Left Chat Window */}
               <div className="chat-stage-panel relative flex-1 min-w-0 flex flex-col overflow-hidden rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(9,17,27,0.4)_0%,rgba(9,17,27,0.7)_100%)] shadow-2xl">
                 <div className="chat-stage-content relative min-h-0 flex-1">
-                  <Chat
-                    steps={steps}
-                    loading={loading}
-                    currentModel={currentModel}
-                    onProceed={handleProceed}
-                    onRevert={allowInlineRevert ? handleRevert : undefined}
-                    isActive={isActive}
-                  />
+                  {activeId ? (
+                    <Chat
+                      steps={steps}
+                      loading={loading}
+                      currentModel={currentModel}
+                      onProceed={handleProceed}
+                      onRevert={allowInlineRevert ? handleRevert : undefined}
+                      isActive={isActive}
+                    />
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                      <div className="max-w-md rounded-[28px] border border-white/10 bg-white/[0.03] px-6 py-6 shadow-[0_18px_50px_rgba(0,0,0,0.2)]">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">CEO Office</div>
+                        <div className="mt-3 text-xl font-semibold text-white">显式创建 CEO 会话，不再在切页时自动建对象。</div>
+                        <div className="mt-3 text-sm leading-7 text-white/55">
+                          如果你要开始 CEO 对话，请主动创建；右侧管理面板仍然可以继续看项目、模板和 Prompt 资产。
+                        </div>
+                        <div className="mt-5 flex justify-center gap-2">
+                          <Button onClick={() => void handleCreateCeoConversation('replace')} className="rounded-full">
+                            创建 CEO 对话
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => openSettingsPanel({ tab: 'profile' })}
+                            className="rounded-full border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.08] hover:text-white"
+                          >
+                            打开 Profile 偏好
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {activeId ? (
                   <div className="shrink-0 border-t border-white/6 px-4 pb-4 pt-3 bg-black/20">
@@ -1113,7 +1247,7 @@ export default function Home() {
               {/* Right Configuration Panel */}
               <div className="w-full h-1/2 md:h-full md:w-[520px] lg:w-[580px] shrink-0 border border-white/10 bg-[linear-gradient(180deg,rgba(18,24,36,0.6)_0%,rgba(9,17,27,0.8)_100%)] rounded-[32px] overflow-hidden flex flex-col shadow-2xl">
                  <CeoOfficeSettings
-                   workspaces={agentWorkspaces}
+                   workspaces={departmentWorkspaces}
                    projects={projects}
                    departments={departmentsMap}
                    templates={templates}
@@ -1124,6 +1258,9 @@ export default function Home() {
                    onNavigateToProject={navigateToProject}
                    onOpenScheduler={() => {
                      activateSection('operations');
+                   }}
+                   onOpenProfileSettings={() => {
+                     openSettingsPanel({ tab: 'profile' });
                    }}
                    onRefresh={() => loadAgentState(selectedAgentRunId)}
                  />

@@ -203,7 +203,11 @@ export interface CEOCommandResult {
   suggestions?: CEOSuggestion[];
 }
 
-const API = typeof window !== 'undefined' ? window.location.origin : '';
+const API = (
+  process.env.NEXT_PUBLIC_API_BASE_URL
+  || process.env.AG_PUBLIC_API_BASE_URL
+  || (typeof window !== 'undefined' ? window.location.origin : '')
+);
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${url}`, init);
@@ -363,6 +367,13 @@ export const api = {
       body: JSON.stringify({ workspace }),
     }),
 
+  importWorkspace: (workspace: string) =>
+    fetchJson<{ ok: boolean; workspace: { name: string; uri: string } }>('/api/workspaces/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace }),
+    }),
+
   closeWorkspace: (workspace: string) =>
     fetchJson<{ ok: boolean; error?: string }>('/api/workspaces/close', {
       method: 'POST',
@@ -381,7 +392,7 @@ export const api = {
   getDepartment: (workspaceUri: string) =>
     fetchJson<DepartmentConfig>(`/api/departments?workspace=${encodeURIComponent(workspaceUri)}`),
   updateDepartment: (workspaceUri: string, config: DepartmentConfig) =>
-    fetchJson<{ ok: boolean }>(`/api/departments?workspace=${encodeURIComponent(workspaceUri)}`, {
+    fetchJson<{ ok: boolean; syncPending?: boolean }>(`/api/departments?workspace=${encodeURIComponent(workspaceUri)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),

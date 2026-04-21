@@ -1,17 +1,15 @@
 import { NextResponse } from 'next/server';
-import { getWorkspaces, getPlaygrounds, discoverLanguageServers } from '@/lib/bridge/gateway';
-import { ensureCEOWorkspaceOpen } from '@/lib/agents/ceo-environment';
+import { getPlaygrounds } from '@/lib/bridge/gateway';
+import { listKnownWorkspaces } from '@/lib/workspace-catalog';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const workspaces = getWorkspaces();
+  const workspaces = listKnownWorkspaces().map((workspace) => ({
+    name: workspace.name,
+    uri: workspace.uri,
+  }));
   const playgrounds = getPlaygrounds();
-
-  // Ensure the CEO workspace is opened in Antigravity on first load
-  const servers = await discoverLanguageServers();
-  const runningWs = servers.map(s => s.workspace).filter(Boolean) as string[];
-  ensureCEOWorkspaceOpen(runningWs);
 
   return NextResponse.json({ workspaces, playgrounds });
 }

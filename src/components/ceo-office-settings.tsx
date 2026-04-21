@@ -20,6 +20,7 @@ interface CeoOfficeSettingsProps {
   onDepartmentSaved?: (uri: string, config: DepartmentConfig) => void;
   onNavigateToProject?: (projectId: string) => void;
   onOpenScheduler?: () => void;
+  onOpenProfileSettings?: () => void;
   onRefresh?: () => void;
 }
 
@@ -31,6 +32,7 @@ export default function CeoOfficeSettings({
   onDepartmentSaved,
   onNavigateToProject,
   onOpenScheduler,
+  onOpenProfileSettings,
   onRefresh,
 }: CeoOfficeSettingsProps) {
   const { t } = useI18n();
@@ -123,7 +125,7 @@ export default function CeoOfficeSettings({
             </TabsTrigger>
             <TabsTrigger value="config" className="flex-1 text-xs gap-1">
               <Settings className="h-3 w-3" />
-              配置
+              Prompt 资产
             </TabsTrigger>
           </TabsList>
         </div>
@@ -138,6 +140,7 @@ export default function CeoOfficeSettings({
                 departments={departments}
                 onSelectDepartment={() => {}}
                 onDepartmentSaved={onDepartmentSaved}
+                onRefresh={onRefresh}
                 onNavigateToProject={onNavigateToProject}
                 onOpenScheduler={onOpenScheduler}
               />
@@ -265,10 +268,28 @@ export default function CeoOfficeSettings({
         {/* ── Config Tab (original Persona / Playbook) ── */}
         <TabsContent value="config" className="flex-1 min-h-0 overflow-hidden data-[state=active]:flex flex-col m-0">
           <Tabs defaultValue="identity" className="flex-1 flex flex-col min-h-0">
-            <div className="px-4 pt-3 shrink-0">
+            <div className="px-4 pt-3 shrink-0 space-y-3">
+              <div className="rounded-2xl border border-sky-400/15 bg-sky-400/[0.06] px-4 py-3">
+                <div className="text-sm font-semibold text-white">这里是 Prompt 资产，不是结构化 CEO Profile</div>
+                <div className="mt-1 text-xs leading-6 text-white/60">
+                  Persona / Playbook 继续保留为 prompt 文档编辑；用户偏好、关注重点、风险取向等结构化配置，已经迁到 `Settings &gt; Profile 偏好`。
+                </div>
+                {onOpenProfileSettings ? (
+                  <div className="mt-3">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={onOpenProfileSettings}
+                      className="border-white/10 bg-white/[0.04] text-white/80 hover:bg-white/[0.08] hover:text-white"
+                    >
+                      打开 Profile 偏好
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
               <TabsList className="w-full bg-white/[0.03] border border-white/5">
-                <TabsTrigger value="identity" className="flex-1 text-xs">Persona</TabsTrigger>
-                <TabsTrigger value="playbook" className="flex-1 text-xs">Playbook</TabsTrigger>
+                <TabsTrigger value="identity" className="flex-1 text-xs">Persona Prompt</TabsTrigger>
+                <TabsTrigger value="playbook" className="flex-1 text-xs">Playbook Prompt</TabsTrigger>
               </TabsList>
             </div>
 

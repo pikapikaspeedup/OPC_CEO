@@ -29,10 +29,12 @@ import {
   Cpu,
   Network,
   ServerCog,
+  UserRound,
   Wand2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import CcConnectTab from '@/components/cc-connect-tab';
+import CEOProfileSettingsTab from '@/components/ceo-profile-settings-tab';
 import type { AIProviderConfig, AILayer, ProviderId, SceneProviderConfig } from '@/lib/providers/types';
 import {
   PROVIDER_LABELS,
@@ -55,7 +57,7 @@ const LAYER_LABELS: Record<AILayer, string> = {
   utility: 'Utility',
 };
 
-export type SettingsTabId = 'provider' | 'api-keys' | 'scenes' | 'mcp' | 'messaging';
+export type SettingsTabId = 'profile' | 'provider' | 'api-keys' | 'scenes' | 'mcp' | 'messaging';
 export type SettingsFocusTarget = 'third-party-provider' | null;
 
 type ThirdPartyProviderPresetId = 'deepseek' | 'groq' | 'ollama' | 'openai-compatible' | 'custom';
@@ -153,6 +155,7 @@ const THIRD_PARTY_PRESETS: ThirdPartyPreset[] = [
 ];
 
 const SETTINGS_TABS: Array<{ value: SettingsTabId; label: string; icon: React.ReactNode }> = [
+  { value: 'profile', label: 'Profile 偏好', icon: <UserRound className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'provider', label: 'Provider 配置', icon: <Layers className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'api-keys', label: 'API Keys', icon: <Key className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'scenes', label: 'Scene 覆盖', icon: <Map className="mr-1.5 h-3.5 w-3.5" /> },
@@ -2088,7 +2091,7 @@ export default function SettingsPanel({
         </div>
         <div>
           <div className="text-sm font-semibold text-white">Settings</div>
-          <div className="text-[11px] text-white/40">第三方 Provider 接入 · AI Provider 配置 · API Key 管理</div>
+          <div className="text-[11px] text-white/40">CEO Profile · 第三方 Provider 接入 · API Key 管理</div>
         </div>
       </div>
 
@@ -2123,6 +2126,9 @@ export default function SettingsPanel({
             </TabsList>
           </div>
 
+          <TabsContent value="profile" className="p-6">
+            <CEOProfileSettingsTab />
+          </TabsContent>
           <TabsContent value="provider" className="p-6">
             <ProviderConfigTab
               initialConfig={config}

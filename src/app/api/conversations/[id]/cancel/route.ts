@@ -2,10 +2,18 @@ import { NextResponse } from 'next/server';
 import { getOwnerConnection, grpc, resolveConversationRecord } from '@/lib/bridge/gateway';
 import { inferLocalProviderFromConversation } from '@/lib/local-provider-conversations';
 import { cancelApiConversationRequest, isApiConversationProvider } from '@/lib/api-provider-conversations';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(_req);
+  }
+
   const { id: cascadeId } = await params;
   const conversationRecord = resolveConversationRecord(cascadeId);
   const localProvider = inferLocalProviderFromConversation(cascadeId, conversationRecord?.provider);

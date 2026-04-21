@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { restoreFromCheckpoint } from '@/lib/agents/checkpoint-manager';
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
 import { getProject, updateProject } from '@/lib/agents/project-registry';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +17,10 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string; checkpointId: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(_request);
+  }
+
   const { id, checkpointId } = await params;
 
   const project = getProject(id);

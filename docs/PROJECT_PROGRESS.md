@@ -1,3 +1,303 @@
+## 任务：首页壳层优化 Phase 1：引入真实 Home、按 section 惰性加载、去掉 CEO 自动建会话
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-21
+
+### 本轮目标
+
+基于 `docs/research/homepage-user-journey-audit-2026-04-20.md` 的结论，先落首页第一阶段收口，而不是继续做零散修补：
+
+1. 给 `/` 一个真正的首页落点
+2. 收掉首页默认侧栏和默认 `OPC` 落点
+3. 把首页/侧栏的全量预加载改成按 section 惰性加载
+4. 去掉进入 `CEO Office` 时的隐式会话创建
+5. 把部门 setup 的回流入口常驻化
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/home-shell.ts`
+   - 新增首页壳层策略函数：
+     - `getAgentStateRefreshMs()`
+     - `getSidebarLoadPlan()`
+     - `getSidebarPollMs()`
+     - `shouldShowShellSidebar()`
+     - `countConfiguredDepartments()`
+2. `src/lib/app-url-state.ts`
+   - 默认 section 从 `projects` 改为 `overview`
+   - `overview` 进入 URL 状态模型
+3. `src/components/home-overview.tsx`
+   - 新增真实首页视图：
+     - 入口分流卡片
+     - setup status
+     - continue-work 列表
+     - Settings 明确入口
+4. `src/app/page.tsx`
+   - 一级导航新增 `Home`
+   - `overview / settings` 默认不挂 sidebar
+   - `templates / chat assets / ops assets` 改为按 section 惰性加载
+   - `agentState / header signals` 改为按 section 使用不同刷新频率
+   - `CEO Office` 只自动选择已有会话，不再自动创建新会话
+   - 当不存在 CEO conversation 时，渲染显式 CTA 空态
+   - `Projects` 中增加 setup 回流卡片，即使用户点过“稍后”也能继续回流
+5. `src/components/sidebar.tsx`
+   - 侧栏读取改成 section-aware：
+     - `projects` 只取 runtime/workspace
+     - `conversations` 取 conversations + runtime
+     - `ceo` 只取 CEO history 所需 conversations
+     - `knowledge` 只取 knowledge items
+     - `operations` 取 ops assets + runtime
+
+### 本轮设计文档
+
+新增：
+
+1. `docs/design/homepage-overview-shell-optimization-2026-04-21.md`
+
+### 本轮验证
+
+#### 自动化测试
+
+通过：
+
+```bash
+npm test -- src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `2 files passed`
+2. `13 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建期间仍会看到 `src/lib/agents/run-registry.ts` 的 Turbopack broad pattern warning
+2. 该 warning 为既有问题，不是本轮首页优化引入的回归
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/sidebar.tsx src/components/home-overview.tsx src/lib/home-shell.ts src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+#### 页面级验收
+
+已完成本地启动与页面验证：
+
+1. 启动：
+
+```bash
+PORT=3200 AG_DISABLE_BRIDGE_WORKER=1 npm run start
+```
+
+2. 健康检查：
+
+```bash
+curl -I -s http://127.0.0.1:3200/
+```
+
+结果：
+
+1. 返回 `HTTP/1.1 200 OK`
+
+3. 页面级行为检查：
+
+由于当前机器上的 `bb-browser` 没有可用 page target，按约束回退到 Playwright 进行本地页面验收。
+
+已确认：
+
+1. `/` 默认显示 `Company Home`
+2. 首页出现 `首页先做入口分流，不再直接充当超级工作台。`
+3. 首页存在显式 `Settings` 入口卡片
+4. 打开 `/?section=ceo` 后：
+   - `CEO 管理中心` 可正常出现
+   - 没有触发新的 `POST /api/conversations`
+
+### 验收备注
+
+本轮额外观察到一个已有噪音点：
+
+1. `npm run start` 即使禁用了 `bridge worker`，仍会初始化 `scheduler / registry`
+2. 启动日志量很大，且会带来后台恢复开销
+
+这说明首页壳层收口已经开始见效，但 `server.ts` 的后台初始化隔离仍需后续阶段继续处理
+
+## 任务：收紧 Agent 验收期后台进程纪律，并删除残留 5s interval job
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-20
+
+### 本轮实施
+
+已完成：
+
+1. `AGENTS.md`
+   - 新增两条运行纪律：
+     - 验收时不要同时拉多套本地服务，先考虑 `scheduler / worker` 的副作用
+     - 任务结束前必须回收自己拉起的 `dev/start/watch/worker` 进程，并确认端口释放
+2. 真实库 `~/.gemini/antigravity/gateway/storage.sqlite`
+   - 删除残留启用中的 `5s interval job`
+   - `job_id = e850b2e8-c619-442c-b1da-35e49b27732c`
+   - 名称：`市场部 Prompt 任务 · 每隔5秒`
+
+### 本轮验证
+
+已确认：
+
+1. `select count(*) from scheduled_jobs where job_id='e850b2e8-c619-442c-b1da-35e49b27732c';`
+   - 结果：`0`
+2. `select count(*) from scheduled_jobs where enabled=1;`
+   - 结果：`21`
+   - 比删除前少 `1`
+3. 当前无我本轮残留的仓库本地 `tsx/server.ts` 进程
+
+## 任务：补齐前端 CEO Profile 用户旅程
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-20
+
+### 本轮目标
+
+用户要求对“前端用户配置”做整体验证与补齐，而不是继续停留在后端已有接口层。
+
+本轮目标是一次性补齐：
+
+1. `Settings` 中缺失的结构化 `CEO Profile` 入口
+2. `CEO Office` 中 `Persona / Playbook` 被误解为“用户配置”的认知断点
+3. `tab=profile` 的 URL 深链能力
+4. `ceo/profile` 与 `ceo/profile/feedback` 的前端读写闭环
+
+### 本轮实施
+
+#### 1. 新增 `Settings > Profile 偏好`
+
+已完成：
+
+1. 新增 `src/components/ceo-profile-settings-tab.tsx`
+2. 接入：
+   - `GET /api/ceo/profile`
+   - `PATCH /api/ceo/profile`
+   - `POST /api/ceo/profile/feedback`
+3. 前端可直接编辑并保存：
+   - `identity.name`
+   - `identity.tone`
+   - `priorities`
+   - `activeFocus`
+   - `communicationStyle.verbosity`
+   - `communicationStyle.escalationStyle`
+   - `riskTolerance`
+   - `reviewPreference`
+4. 新增 feedback signal 录入区块，并回显最近反馈
+
+结果：
+
+1. 结构化 `CEOProfile` 不再只存在于 `ceo-profile.json`
+2. 用户终于可以在前端看见、编辑并确认保存结果
+
+#### 2. 修正 CEO Office 的旅程断点
+
+已完成：
+
+1. `src/components/ceo-office-settings.tsx`
+   - 把原 `配置` tab 明确改名为 `Prompt 资产`
+   - 增加提示文案，明确说明这里不是结构化 CEO Profile
+   - 增加 `打开 Profile 偏好` 按钮
+2. `src/app/page.tsx`
+   - 将该按钮接到 `openSettingsPanel({ tab: 'profile' })`
+
+结果：
+
+1. `Persona / Playbook` 和结构化偏好不再混为一谈
+2. 用户可从 `CEO Office` 直接跳到正确的配置入口
+
+#### 3. 补齐 URL 深链
+
+已完成：
+
+1. `src/lib/app-url-state.ts`
+   - 新增 `profile` settings tab
+2. `src/lib/app-url-state.test.ts`
+   - 新增 `tab=profile` 解析用例
+
+结果：
+
+1. `/?section=...&panel=settings&tab=profile` 现在是稳定可用的入口
+
+### 本轮设计文档
+
+新增：
+
+1. `docs/design/frontend-ceo-profile-journey-2026-04-20.md`
+
+内容包括：
+
+1. 当前用户旅程
+2. 旅程断点
+3. 补齐原则
+4. 补齐后的目标旅程
+
+### 本轮验证
+
+#### 自动化测试
+
+通过：
+
+```bash
+npm test -- src/lib/app-url-state.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `9 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+#### 页面级验收
+
+已完成浏览器实测：
+
+1. 使用 `bb-browser` 打开：
+   - `http://localhost:3200/?section=projects&panel=settings&tab=profile`
+2. 确认页面出现：
+   - `Profile 偏好`
+   - `CEO Profile Journey`
+   - `Structured Preferences`
+   - `Feedback Signals`
+3. 使用 `bb-browser` 打开：
+   - `http://localhost:3200/?section=ceo`
+4. 确认 `Prompt 资产` 页出现提示：
+   - `这里是 Prompt 资产，不是结构化 CEO Profile`
+5. 确认 `打开 Profile 偏好` 按钮会把 URL 切到：
+   - `panel=settings&tab=profile`
+   并能继续加载新的 profile 配置页
+
+#### 验收备注
+
+本轮在 `npm run dev` 环境里观察到一个已有问题：
+
+1. Next dev 请求期会报：
+   - `Can't resolve 'tailwindcss' in '/Users/darrel/Documents'`
+
+该问题导致 dev 页面请求卡住，但它不是本轮 `CEO Profile` 旅程补齐引入的回归。
+
 ## 任务：完成 localhost:3000 control-plane convergence 全阶段开发与验收
 
 **状态**: ✅ 已完成
@@ -2863,6 +3163,159 @@ npm test -- src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/
 
 **状态**: ✅ 已完成
 **日期**: 2026-04-19
+
+## 任务：修复部门设置对 Antigravity 的强耦合
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-20
+
+### 本轮目标
+
+围绕“部门设置不能再强依赖 Antigravity recent / running workspace”完成一次控制面修复，要求：
+
+1. 不影响原生 Antigravity 的 Language Server / gRPC 主链
+2. Department 配置、Memory、Digest、Quota 不再直接以 Antigravity recent 作为唯一准入边界
+3. Department 保存与 IDE mirror 同步拆开
+4. 前端能先导入项目、先配 Department，再决定是否在 Antigravity 中打开
+
+### 本轮实施
+
+#### 1. 新增独立 Workspace Catalog
+
+已完成：
+
+1. `src/lib/storage/gateway-db.ts`
+   - 新增 `workspace_catalog` 表
+   - 新增：
+     - `upsertWorkspaceCatalogRecord()`
+     - `getWorkspaceCatalogRecordByUri()`
+     - `listWorkspaceCatalogRecords()`
+2. `src/lib/workspace-catalog.ts`
+   - 新增统一 workspace identity 处理：
+     - `normalizeWorkspaceIdentity()`
+     - `workspaceUriToPath()`
+     - `workspacePathToUri()`
+   - 新增 catalog 入口：
+     - `registerWorkspace()`
+     - `listKnownWorkspaces()`
+     - `getKnownWorkspace()`
+   - 目录来源拆成：
+     - `manual-import`
+     - `antigravity-recent`
+     - `ceo-bootstrap`
+
+结果：
+
+1. OPC 现在有了独立于 Antigravity recent 的 workspace 身份层
+2. Antigravity recent 退化成 catalog importer，而不再是 Department 唯一真相源
+
+#### 2. Department API 全部切到 Catalog 校验
+
+已完成：
+
+1. `src/app/api/departments/route.ts`
+   - 改为通过 `getKnownWorkspace()` 校验 workspace
+   - `PUT` 仅保存 `.department/config.json`
+   - 不再在保存时隐式 `syncRulesToAllIDEs()`
+2. `src/app/api/departments/sync/route.ts`
+   - 改为显式通过 catalog 定位 workspace
+   - 同步时对真实 workspace path 执行 IDE adapter
+3. `src/app/api/departments/memory/route.ts`
+4. `src/app/api/departments/digest/route.ts`
+5. `src/app/api/departments/quota/route.ts`
+   - 全部改为通过 catalog 识别部门 workspace，而不是 `getWorkspaces() + isRegisteredWorkspace()`
+6. `src/app/api/ceo/command/route.ts`
+   - CEO 加载部门清单改为走 catalog
+7. `src/lib/management/metrics.ts`
+   - 组织级 OKR 进度枚举改为走 catalog
+
+结果：
+
+1. Department 配置、记忆、摘要、配额、CEO 路由、管理指标不再直接依赖 Antigravity recent
+2. Antigravity runtime 仍可作为执行器存在，但不再决定 Department 是否存在
+
+#### 3. Workspace 导入与前端入口解耦
+
+已完成：
+
+1. 新增 `src/app/api/workspaces/import/route.ts`
+   - 只导入 workspace 到 OPC catalog
+   - 不启动 Antigravity
+2. `src/app/api/workspaces/route.ts`
+   - 改为返回 OPC catalog 的已知 workspaces
+   - 不再在读取列表时自动触发 `ensureCEOWorkspaceOpen()`
+3. `src/app/api/workspaces/launch/route.ts`
+   - 在启动 Antigravity 前先注册到 catalog
+4. `src/components/ceo-dashboard.tsx`
+   - “+ 添加部门”改为导入 workspace，而不是直接 launch Antigravity
+5. `src/app/page.tsx`
+   - 新增 `departmentWorkspaces`
+   - Department / CEO / Project / Memory / Quota 相关视图改为基于“已导入 workspace”
+   - 保留 `agentWorkspaces` 供运行态/聊天链路继续使用
+6. `src/lib/workspace-options.ts`
+   - 优先使用 API 返回的 workspace display name
+
+结果：
+
+1. 用户现在可以先导入项目、先配置 Department
+2. 不需要先让 Antigravity language_server 跑起来，部门设置入口也能出现
+
+#### 4. 保存配置与同步 IDE mirror 拆开
+
+已完成：
+
+1. `src/components/department-setup-dialog.tsx`
+   - 删除“保存后自动同步”的隐式副作用
+   - 改成两个显式动作：
+     - `仅保存配置`
+     - `保存并同步`
+2. `src/lib/api.ts`
+   - 新增 `importWorkspace()`
+   - `updateDepartment()` 响应口径增加 `syncPending`
+
+结果：
+
+1. `DepartmentConfig` 与 IDE 派生文件重新分层
+2. 不再每次改描述/OKR/Skill 都强制重写所有 IDE instructions
+
+### 与原生 Antigravity IDE 的兼容约束
+
+本轮确认仍然满足：
+
+1. **没有改动 `discoverLanguageServers()` / `getLanguageServer()` / `grpc.startCascade()` 主链**
+2. **没有改动 Antigravity CLI 启动 language_server 的基本逻辑**
+3. **没有写入或篡改 Antigravity 自己的 `state.vscdb` / `.pb` / `brain`**
+4. 选 `provider = antigravity` 时，执行阶段仍走原有 Antigravity runtime
+5. 其它 IDE / API provider 继续走各自既有 backend 路径
+
+### 本轮测试与验收
+
+已执行：
+
+1. `npm test -- src/lib/storage/gateway-db.test.ts src/lib/workspace-catalog.test.ts src/app/api/departments/route.test.ts src/app/api/workspaces/import/route.test.ts`
+   - `4 files passed`
+   - `9 tests passed`
+2. `npm run build`
+   - 通过
+   - 仅出现既有 Turbopack broad pattern warning，不是本轮回归
+
+### 文档同步
+
+已更新：
+
+1. `docs/guide/gateway-api.md`
+2. `docs/guide/cli-api-reference.md`
+3. `docs/design/ai-company-requirements-and-architecture-2026-04-19.md`
+4. `docs/research/department-settings-antigravity-decoupling-audit-2026-04-20.md`
+
+### 本轮结果
+
+本轮完成后：
+
+1. Department 设置不再强依赖 Antigravity recent / running workspace
+2. OPC 具备独立的 workspace catalog
+3. Department 保存和 IDE mirror 同步已拆开
+4. 原生 Antigravity 的 Language Server / gRPC 执行主链未被破坏
 
 ## 任务：把当前工作区提交并同步到 private，移除本地 origin 以避免误操作
 

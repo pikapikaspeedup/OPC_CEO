@@ -313,6 +313,28 @@
 4. **Memory / Knowledge / OKR 必须进入 runtime**
 5. **自治必须建立在治理与审计之上**
 
+### 4.1.1 Workspace Catalog 与 Runtime Presence 必须分层
+
+Department 的配置与治理边界不能直接绑定某个执行器当前是否在线。
+
+必须拆开三层：
+
+1. `Workspace Catalog`
+   - OPC 自己知道哪些 workspace 属于系统管理范围
+   - 可来自手动导入、Antigravity recent、CEO bootstrap
+2. `Runtime Presence`
+   - Antigravity language server / Claude Code / 其它 runtime 当前是否在线
+3. `Department Domain`
+   - `.department/config.json`
+   - `DepartmentContract`
+   - `DepartmentRuntimeContract`
+
+因此：
+
+1. Department 设置不应该要求 Antigravity runtime 先活着
+2. 选 `antigravity` provider 时，执行阶段仍然可以走原有 language server / gRPC 主链
+3. 选其它 IDE / API provider 时，应走对应 backend，而不是反向依赖 Antigravity catalog
+
 ---
 
 ## 4.2 五平面架构
@@ -820,4 +842,3 @@ flowchart LR
 一句话总结：
 
 > **先让系统学会沉淀和学习，再让 CEO 学会像你，再让界面真正像经营台。**
-

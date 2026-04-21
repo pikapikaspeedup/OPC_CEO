@@ -1162,11 +1162,13 @@ done
 
 **功能**: 获取指定 workspace 的部门配置。如果 `.department/config.json` 不存在，返回默认配置。
 
+> 自 2026-04-20 起，部门接口不再直接以 Antigravity 最近打开列表作为唯一准入边界，而是以 OPC 自己的 workspace catalog 为准。Antigravity recent 只作为 catalog 的导入源之一。
+
 **Query 参数**:
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `workspace` | `string` | 必填。workspace 绝对路径（不含 `file://` 前缀） |
+| `workspace` | `string` | 必填。workspace `file://` URI |
 
 **Response** `200 OK`:
 ```json
@@ -1186,28 +1188,57 @@ done
 | 状态码 | 条件 |
 |--------|------|
 | `400` | 缺少 `workspace` 参数 |
-| `403` | workspace 不在已注册列表中（防路径穿越） |
+| `403` | workspace 不在 OPC workspace catalog 中 |
 | `422` | `.department/config.json` 格式错误 |
 
 ### `PUT /api/departments` — 更新部门配置
 
 **功能**: 更新指定 workspace 的部门配置。如果 `.department/` 目录不存在，会自动创建。
 
+> `PUT /api/departments` 现在只负责保存 `workspace/.department/config.json`。
+> 不再隐式触发多 IDE 镜像同步；如需写入 `AGENTS.md` / `.agents/rules` / `CLAUDE.md` / `.cursorrules`，请显式调用 `POST /api/departments/sync`。
+
 **Query 参数**: 同 GET
 
 **Request Body**: 完整的 `DepartmentConfig` JSON 对象。
 
+**Response** `200 OK`:
+```json
+{ "ok": true, "syncPending": true }
+```
+
 ### `POST /api/departments/sync` — 同步部门状态
 
-**功能**: 触发部门状态同步（配置 → IDE 适配）。
+**功能**: 显式触发部门状态同步（配置 → IDE 适配）。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
+| `target` | `string` | 可选。`all` / `antigravity` / `codex` / `claude-code` / `cursor` |
 
 ### `GET /api/departments/digest` — 部门摘要
 
 **功能**: 获取部门的日报/周报摘要（已完成任务、进行中任务、阻塞项、Token 用量）。
 
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
+| `date` | `string` | 可选。`YYYY-MM-DD` |
+| `period` | `string` | 可选。`day` / `week` / `month` |
+
 ### `GET /api/departments/quota` — 配额查询
 
 **功能**: 获取部门当前 Token 配额和使用情况。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
 
 ### `GET /api/departments/memory` — 读取部门记忆
 
@@ -1227,6 +1258,14 @@ done
 - `/api/knowledge*` 负责结构化知识资产与镜像兼容视图。
 
 **功能**: 追加或更新部门记忆文件。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
+| `scope` | `string` | GET 可选。`department` / `organization` |
+| `category` | `string` | POST 必填。`knowledge` / `decisions` / `patterns` |
 
 ---
 
@@ -1415,7 +1454,18 @@ done
 
 ### `GET /api/workspaces` — 所有已知 Workspace
 
-**功能**: 从 SQLite `state.vscdb` 读取所有注册过的 workspace（含当前未运行的）。
+**功能**: 返回 OPC workspace catalog 中的所有已知 workspace。
+
+目录来源说明：
+
+1. 手动导入的项目
+2. Antigravity recent 列表导入的项目
+3. CEO bootstrap workspace
+
+因此：
+
+1. `GET /api/workspaces` 不再等价于“Antigravity 最近打开列表原样透传”
+2. 也不要求 workspace 当前正在运行 language_server
 
 **Response** `200 OK`:
 ```json
@@ -1443,6 +1493,8 @@ done
 ### `POST /api/workspaces/launch` — 启动 Workspace
 
 **功能**: 在 Antigravity IDE 中打开一个新的 workspace 窗口并启动其 language_server。
+
+调用时会先把目标 workspace 注册到 OPC workspace catalog，再执行 Antigravity CLI 打开动作。
 
 **Request Body**:
 
@@ -1544,6 +1596,35 @@ done
 
 ```json
 { "workspace": "file:///path/to/mytools" }
+```
+
+---
+
+### `POST /api/workspaces/import` — 导入 Workspace
+
+**功能**: 将一个本地目录注册到 OPC workspace catalog，**不会**启动 Antigravity，也**不会**启动 language_server。
+
+这条路由用于：
+
+1. 先导入项目
+2. 先配置 Department
+3. 后续再按需选择是否“在 Antigravity 中打开”
+
+**Request Body**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `workspace` | `string` | ✅ | 本地目录绝对路径，或 `file://` URI |
+
+**Response** `200 OK`:
+```json
+{
+  "ok": true,
+  "workspace": {
+    "name": "my-project",
+    "uri": "file:///path/to/my-project"
+  }
+}
 ```
 
 **Response** `200 OK`:

@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server';
 import { deleteScheduledJob, getScheduledJob, updateScheduledJob } from '@/lib/agents/scheduler';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(_req);
+  }
+
   const { id } = await params;
   const job = getScheduledJob(id);
   if (!job) {
@@ -13,6 +21,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   try {
     const { id } = await params;
     let body: Record<string, unknown>;
@@ -32,6 +44,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(_req);
+  }
+
   const { id } = await params;
   const deleted = deleteScheduledJob(id);
   if (!deleted) {

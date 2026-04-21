@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
 import { queryAuditEvents, type AuditEventKind } from '@/lib/agents/ops-audit';
 import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(request);
+  }
+
   const url = new URL(request.url);
   const pagination = parsePaginationSearchParams(url.searchParams, {
     defaultPageSize: 100,

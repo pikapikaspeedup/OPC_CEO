@@ -520,26 +520,44 @@ The API runs on port 3000 by default.
 ### 7. Departments
 
 #### Get Department Config
-- **URL:** `GET /api/departments?workspace=<absolute_path>`
-- **Description:** 获取部门配置。workspace 参数为绝对路径（不含 `file://`）。
+- **URL:** `GET /api/departments?workspace=<file_uri>`
+- **Description:** 获取部门配置。workspace 参数为 `file://` URI，并以 OPC workspace catalog 为准。
 - **Response:** `200 OK` `DepartmentConfig` object.
-- **Error:** `403` if workspace is not registered (path traversal protection).
+- **Error:** `403` if workspace is not known to OPC workspace catalog.
 
 #### Update Department Config
-- **URL:** `PUT /api/departments?workspace=<absolute_path>`
+- **URL:** `PUT /api/departments?workspace=<file_uri>`
 - **Request Body:** Full `DepartmentConfig` JSON object.
+- **Note:** 该接口现在只保存 `.department/config.json`，不会再隐式同步所有 IDE mirror。响应会返回 `{ ok: true, syncPending: true }`。
 
 #### Sync Department State
-- **URL:** `POST /api/departments/sync`
+- **URL:** `POST /api/departments/sync?workspace=<file_uri>&target=<all|antigravity|codex|claude-code|cursor>`
+- **Description:** 显式同步部门配置到对应 IDE mirror。
 
 #### Get Department Digest
-- **URL:** `GET /api/departments/digest`
+- **URL:** `GET /api/departments/digest?workspace=<file_uri>&date=<YYYY-MM-DD>&period=<day|week|month>`
 
 #### Get Department Quota
-- **URL:** `GET /api/departments/quota`
+- **URL:** `GET /api/departments/quota?workspace=<file_uri>`
 
 #### Read/Write Department Memory
-- **URL:** `GET /api/departments/memory` / `POST /api/departments/memory`
+- **URL:** `GET /api/departments/memory?workspace=<file_uri>` / `POST /api/departments/memory?workspace=<file_uri>&category=<knowledge|decisions|patterns>`
+
+### 7.1 Workspaces
+
+#### List Known Workspaces
+- **URL:** `GET /api/workspaces`
+- **Description:** 返回 OPC workspace catalog 中的所有已知 workspace。来源包括手动导入、Antigravity recent 导入和 CEO bootstrap。
+
+#### Import Workspace
+- **URL:** `POST /api/workspaces/import`
+- **Request Body (JSON):**
+  - `workspace` (String, required): Absolute path or `file://` URI
+- **Description:** 仅导入到 OPC catalog，不启动 Antigravity。
+
+#### Launch Workspace in Antigravity
+- **URL:** `POST /api/workspaces/launch`
+- **Description:** 先注册到 OPC catalog，再打开 Antigravity 并触发 language_server 启动。
 
 #### Knowledge Assets
 - **URL:** `GET /api/knowledge`

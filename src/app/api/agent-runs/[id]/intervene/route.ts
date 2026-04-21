@@ -3,6 +3,12 @@ import { getRun } from '@/lib/agents/run-registry';
 import { interveneRun, cancelRun, InterventionConflictError } from '@/lib/agents/group-runtime';
 import { cancelPromptRun, evaluatePromptRun } from '@/lib/agents/prompt-executor';
 import { createLogger } from '@/lib/logger';
+import {
+  proxyToControlPlane,
+  proxyToRuntime,
+  shouldProxyControlPlaneRequest,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +19,13 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   try {
     const { id: runId } = await params;
     const body = await req.json();

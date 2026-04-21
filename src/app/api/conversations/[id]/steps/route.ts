@@ -14,6 +14,10 @@ import {
   readLocalProviderTranscriptMessages,
 } from '@/lib/run-conversation-transcript';
 import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 const log = createLogger('StepsAPI');
 
@@ -24,6 +28,10 @@ function getErrorMessage(error: unknown): string {
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(_req);
+  }
+
   const { id: cascadeId } = await params;
   try {
     const conversationRecord = resolveConversationRecord(cascadeId);

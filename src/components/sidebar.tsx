@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type {
   Conversation,
   KnowledgeItem,
@@ -14,6 +14,7 @@ import type {
 } from '@/lib/types';
 import { useI18n } from '@/components/locale-provider';
 import { api } from '@/lib/api';
+import { type AppShellSection, getSidebarLoadPlan, getSidebarPollMs } from '@/lib/home-shell';
 import { cn } from '@/lib/utils';
 import { buildWorkspaceOptions, isWorkspaceHidden } from '@/lib/workspace-options';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
@@ -44,7 +45,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
-export type PrimarySection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
+export type PrimarySection = AppShellSection;
 
 interface SidebarProps {
   activeId: string | null;
@@ -179,19 +180,22 @@ export default function Sidebar({
   const [closeTarget, setCloseTarget] = useState('');
   const [closeLoading, setCloseLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loadPlan = useMemo(() => getSidebarLoadPlan(section), [section]);
 
   const load = useCallback(async () => {
     try {
       const [nextUser, nextConversations, nextKnowledge, nextSkills, nextWorkflows, nextServers, nextWorkspaces, nextRules, hidden] = await Promise.all([
         api.me(),
-        api.conversations(),
-        api.knowledge(),
-        api.skills(),
-        api.workflows(),
-        api.servers(),
-        api.workspaces(),
-        api.rules(),
-        fetch('/api/workspaces/close').then(res => res.json()).catch(() => [] as string[]),
+        loadPlan.conversations ? api.conversations() : Promise.resolve([] as Conversation[]),
+        loadPlan.knowledge ? api.knowledge() : Promise.resolve([] as KnowledgeItem[]),
+        loadPlan.operationsAssets ? api.skills() : Promise.resolve([] as Skill[]),
+        loadPlan.operationsAssets ? api.workflows() : Promise.resolve([] as Workflow[]),
+        loadPlan.runtimeStatus ? api.servers() : Promise.resolve([] as Server[]),
+        loadPlan.runtimeStatus ? api.workspaces() : Promise.resolve({ workspaces: [], playgrounds: [] } as { workspaces: Workspace[]; playgrounds: string[] }),
+        loadPlan.operationsAssets ? api.rules() : Promise.resolve([] as Rule[]),
+        loadPlan.runtimeStatus
+          ? fetch('/api/workspaces/close').then(res => res.json()).catch(() => [] as string[])
+          : Promise.resolve([] as string[]),
       ]);
 
       setUser(nextUser);
@@ -206,7 +210,7 @@ export default function Sidebar({
     } catch {
       /* silent */
     }
-  }, []);
+  }, [loadPlan]);
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
@@ -214,13 +218,13 @@ export default function Sidebar({
     }, 0);
     const timer = window.setInterval(() => {
       void load();
-    }, 8000);
+    }, getSidebarPollMs(section));
 
     return () => {
       window.clearTimeout(initialLoad);
       window.clearInterval(timer);
     };
-  }, [load, knowledgeRefreshSignal]);
+  }, [knowledgeRefreshSignal, load, section]);
 
   useEffect(() => {
     return () => {
@@ -365,6 +369,11 @@ export default function Sidebar({
   const runningWorkspaceCount = wsOptions.filter(option => option.running && !option.hidden).length;
 
   const sectionMeta: Record<PrimarySection, { eyebrow: string; title: string; description: string }> = {
+    overview: {
+      eyebrow: 'Home',
+      title: 'Company Home',
+      description: '首页负责入口分流和继续工作，不在左栏继续堆叠全局上下文。',
+    },
     ceo: {
       eyebrow: 'Executive',
       title: 'CEO Office',

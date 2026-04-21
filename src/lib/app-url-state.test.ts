@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { buildAppUrl, parseAppUrlState } from './app-url-state';
 
 describe('app-url-state', () => {
-  it('falls back to the projects section for invalid URLs', () => {
+  it('falls back to the overview section for invalid URLs', () => {
     expect(parseAppUrlState('?section=unknown&conversation=abc')).toEqual({
-      section: 'projects',
+      section: 'overview',
       utilityPanel: null,
       conversationId: null,
       conversationTitle: null,
@@ -47,6 +47,19 @@ describe('app-url-state', () => {
     ).toBe('/?section=projects&panel=settings&tab=api-keys&focus=third-party-provider&project=proj-42');
   });
 
+  it('accepts the profile settings tab when parsing', () => {
+    expect(parseAppUrlState('?section=projects&panel=settings&tab=profile')).toEqual({
+      section: 'projects',
+      utilityPanel: 'settings',
+      conversationId: null,
+      conversationTitle: null,
+      projectId: null,
+      knowledgeId: null,
+      settingsTab: 'profile',
+      settingsFocus: null,
+    });
+  });
+
   it('round-trips conversation URLs with human-readable titles', () => {
     const url = buildAppUrl('/', {
       section: 'conversations',
@@ -70,5 +83,29 @@ describe('app-url-state', () => {
       settingsTab: 'provider',
       settingsFocus: null,
     });
+  });
+
+  it('accepts overview as the default section and canonical URL root', () => {
+    expect(parseAppUrlState('')).toEqual({
+      section: 'overview',
+      utilityPanel: null,
+      conversationId: null,
+      conversationTitle: null,
+      projectId: null,
+      knowledgeId: null,
+      settingsTab: 'provider',
+      settingsFocus: null,
+    });
+
+    expect(buildAppUrl('/', {
+      section: 'overview',
+      utilityPanel: null,
+      conversationId: null,
+      conversationTitle: null,
+      projectId: null,
+      knowledgeId: null,
+      settingsTab: 'provider',
+      settingsFocus: null,
+    })).toBe('/?section=overview');
   });
 });

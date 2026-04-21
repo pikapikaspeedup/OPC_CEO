@@ -7,6 +7,10 @@ import {
   upsertDeliverableRecord,
 } from '@/lib/storage/gateway-db';
 import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +19,10 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   const { id } = await params;
   const project = getProject(id);
   if (!project) {
@@ -35,6 +43,10 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   const { id } = await params;
   const project = getProject(id);
   if (!project) {

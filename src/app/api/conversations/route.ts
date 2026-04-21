@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/lib/logger';
-import path from 'path';
-import { execSync } from 'child_process';
-import { mkdirSync } from 'fs';
-import { resolveProvider } from '@/lib/providers';
-import {
-  buildLocalProviderConversationId,
-  isSupportedLocalProvider,
-} from '@/lib/local-provider-conversations';
 import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 import { listConversationProjections } from '@/lib/storage/gateway-db';
+import {
+  proxyToControlPlane,
+  proxyToRuntime,
+  shouldProxyControlPlaneRequest,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +29,10 @@ function getErrorMessage(error: unknown): string {
 
 // GET /api/conversations — list conversations
 export async function GET(req: Request) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   const url = new URL(req.url);
   const filterWorkspace = url.searchParams.get('workspace') || '';
   const pagination = parsePaginationSearchParams(url.searchParams, {
@@ -64,7 +66,19 @@ export async function GET(req: Request) {
 
 // POST /api/conversations — create new conversation
 export async function POST(req: Request) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   const gateway = await import('@/lib/bridge/gateway');
+  const { resolveProvider } = await import('@/lib/providers');
+  const {
+    buildLocalProviderConversationId,
+    isSupportedLocalProvider,
+  } = await import('@/lib/local-provider-conversations');
+  const path = await import('path');
+  const { execSync } = await import('child_process');
+  const { mkdirSync } = await import('fs');
   const {
     addLocalConversation,
     preRegisterOwner,

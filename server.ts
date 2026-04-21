@@ -1,37 +1,39 @@
 /**
- * Custom Next.js server with WebSocket support.
- * Runs both Next.js and WS server on a single port.
+ * Unified server launcher.
  *
- * IMPORTANT: Do NOT statically import bridge modules here.
- * tsx watch monitors all static imports — if bridge files change,
- * it restarts the server, but Next.js doesn't release .next/dev/lock
- * in time, causing lock conflicts and restart loops.
- * Use dynamic import() instead so tsx watch only watches this file.
+ * Roles:
+ * - all: legacy all-in-one mode (web + runtime bridge worker + scheduler)
+ * - web: Next.js + WS ingress only
+ * - control-plane: standalone REST API for hot list/query endpoints
+ * - runtime: provider / conversation runtime API + optional bridge worker
+ * - scheduler: standalone background services
+ *
+ * IMPORTANT: Bridge modules remain lazy-loaded so `tsx watch` does not restart
+ * on every bridge file edit and collide with `.next/dev/lock`.
  */
-import { spawn, type ChildProcess } from 'child_process';
+import { type ChildProcess } from 'child_process';
 import { createServer } from 'http';
-import { createRequire } from 'module';
-import path from 'path';
 import next from 'next';
-import { fileURLToPath, parse } from 'url';
-import { WebSocketServer, WebSocket } from 'ws';
-import { createLogger } from './src/lib/logger';
-import { mergeStepsUpdate, extractLastTaskBoundary } from './src/lib/agents/step-merger';
+import { parse } from 'url';
+import { WebSocket, WebSocketServer } from 'ws';
+
+import { extractLastTaskBoundary, mergeStepsUpdate } from './src/lib/agents/step-merger';
 import { initializeGatewayHome } from './src/lib/agents/gateway-home';
+import {
+  getGatewayServerRole,
+  shouldLaunchBridgeWorker,
+  shouldStartSchedulerServices,
+} from './src/lib/gateway-role';
+import { createLogger } from './src/lib/logger';
+import { launchBridgeWorkerProcess } from './src/server/runtime/bridge-worker-process';
 
 const log = createLogger('Server');
-const require = createRequire(import.meta.url);
 
+const role = getGatewayServerRole(process.env);
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
-const port = parseInt(process.env.PORT || '3000');
+const port = Number.parseInt(process.env.PORT || '3000', 10);
 
-initializeGatewayHome({ syncAssets: true });
-
-const app = next({ dev, hostname, port, turbopack: false });
-const handle = app.getRequestHandler();
-
-// Lazy-loaded bridge modules (loaded on first WS connection, not at startup)
 type GatewayModule = typeof import('./src/lib/bridge/gateway');
 type GrpcModule = typeof import('./src/lib/bridge/grpc');
 type StreamStep = {
@@ -65,85 +67,196 @@ function getBridgeModules(): { gateway: GatewayModule; grpc: GrpcModule } {
   return { gateway, grpc };
 }
 
-async function warmBackgroundServices(): Promise<void> {
-  try {
-    const { initializeRunRegistry } = await import('./src/lib/agents/run-registry');
-    const { initializeProjectRegistry } = await import('./src/lib/agents/project-registry');
-    initializeRunRegistry();
-    initializeProjectRegistry();
-  } catch (err: unknown) {
-    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Registry initialization failed');
-  }
-
-  try {
-    const { initializeScheduler } = await import('./src/lib/agents/scheduler');
-    initializeScheduler();
-  } catch (err: unknown) {
-    log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Scheduler initialization failed');
-  }
-
-  try {
-    const { initializeFanOutController } = await import('./src/lib/agents/fan-out-controller');
-    initializeFanOutController();
-  } catch {
-    // Fan-out controller is optional during early startup or before V4.1 files exist.
-  }
-
-  try {
-    const { initApprovalTriggers } = await import('./src/lib/agents/approval-triggers');
-    initApprovalTriggers();
-  } catch {
-    // Approval triggers are optional.
-  }
-
-  try {
-    const { loadPersistedRequests } = await import('./src/lib/approval/request-store');
-    loadPersistedRequests();
-  } catch {
-    // Approval request persistence is optional during early startup.
-  }
-
-  try {
-    const { ensureCEOEventConsumer } = await import('./src/lib/organization/ceo-event-consumer');
-    ensureCEOEventConsumer();
-  } catch {
-    // CEO event consumer is optional during early startup.
-  }
-}
-
-function launchBridgeWorker(port: number): void {
-  if (process.env.AG_DISABLE_BRIDGE_WORKER === '1') {
-    log.info('Bridge worker disabled via AG_DISABLE_BRIDGE_WORKER');
+function startBridgeWorker(): void {
+  if (!shouldLaunchBridgeWorker(process.env)) {
+    if (process.env.AG_DISABLE_BRIDGE_WORKER === '1') {
+      log.info('Bridge worker disabled via AG_DISABLE_BRIDGE_WORKER');
+    }
     return;
   }
 
-  const tsxPackagePath = require.resolve('tsx/package.json');
-  const tsxCliPath = path.join(path.dirname(tsxPackagePath), 'dist', 'cli.mjs');
-  const workerEntry = fileURLToPath(new URL('./src/lib/bridge/worker-entry.ts', import.meta.url));
-  bridgeWorkerProcess = spawn(
-    process.execPath,
-    [tsxCliPath, workerEntry],
-    {
-      env: {
-        ...process.env,
-        PORT: String(port),
-      },
-      stdio: 'inherit',
-    },
-  );
-
-  bridgeWorkerProcess.on('exit', (code, signal) => {
-    log.warn({ code, signal }, 'Bridge worker exited');
+  bridgeWorkerProcess = launchBridgeWorkerProcess(port, process.env);
+  bridgeWorkerProcess.on('exit', () => {
     bridgeWorkerProcess = null;
     if (!shuttingDown) {
-      setTimeout(() => launchBridgeWorker(port), 2_000);
+      setTimeout(() => startBridgeWorker(), 2_000);
     }
   });
 }
 
-app.prepare().then(() => {
+function registerProcessCleanup(cleanup: () => void): void {
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+}
+
+function attachWebSocketIngress(wss: WebSocketServer): void {
+  const WS_PING_INTERVAL_MS = 25_000;
+  const wsAliveMap = new WeakMap<WebSocket, boolean>();
+
+  const pingInterval = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (wsAliveMap.get(ws) === false) {
+        log.debug('WS keepalive: terminating dead connection');
+        ws.terminate();
+        continue;
+      }
+      wsAliveMap.set(ws, false);
+      ws.ping();
+    }
+  }, WS_PING_INTERVAL_MS);
+
+  wss.on('close', () => {
+    clearInterval(pingInterval);
+  });
+
+  wss.on('connection', (ws: WebSocket) => {
+    wsAliveMap.set(ws, true);
+    ws.on('pong', () => {
+      wsAliveMap.set(ws, true);
+    });
+
+    const activeStreams = new Map<string, { abort: () => void; fullSteps: StreamStep[] }>();
+
+    function startStreamForId(cascadeId: string, conn: { port: number; csrf: string }) {
+      const { grpc: grpcModule, gateway: gatewayModule } = getBridgeModules();
+      const existing = activeStreams.get(cascadeId);
+      if (existing) {
+        existing.abort();
+        activeStreams.delete(cascadeId);
+      }
+
+      let fullSteps: StreamStep[] = [];
+
+      const abort = grpcModule.streamAgentState(
+        conn.port,
+        conn.csrf,
+        cascadeId,
+        (update: { mainTrajectoryUpdate?: { stepsUpdate?: { steps?: StreamStep[]; indices?: number[]; totalLength?: number } }; status?: string }) => {
+          const stepsUpdate = update?.mainTrajectoryUpdate?.stepsUpdate;
+          const status = update?.status || '';
+          const isActive = status !== 'CASCADE_RUN_STATUS_IDLE';
+          const cascadeStatus = status.replace('CASCADE_RUN_STATUS_', '').toLowerCase();
+
+          if (stepsUpdate?.steps?.length) {
+            fullSteps = mergeStepsUpdate(fullSteps, stepsUpdate);
+            const lastTaskBoundary = extractLastTaskBoundary(fullSteps);
+            const cleanSteps = fullSteps.filter((step) => step != null);
+            ws.send(JSON.stringify({
+              type: 'steps',
+              cascadeId,
+              data: { steps: cleanSteps },
+              isActive,
+              cascadeStatus,
+              totalLength: stepsUpdate.totalLength || cleanSteps.length,
+              lastTaskBoundary,
+            }));
+          } else {
+            const lastTaskBoundary = extractLastTaskBoundary(fullSteps);
+            ws.send(JSON.stringify({
+              type: 'status',
+              cascadeId,
+              isActive,
+              cascadeStatus,
+              stepCount: fullSteps.filter((step) => step != null).length,
+              lastTaskBoundary,
+            }));
+          }
+        },
+        async () => {
+          setTimeout(async () => {
+            if (ws.readyState === ws.OPEN) {
+              await ensureBridge();
+              await gatewayModule.refreshOwnerMap();
+              const newOwner = await gatewayModule.getOwnerConnection(cascadeId);
+              if (newOwner) {
+                startStreamForId(cascadeId, newOwner);
+              }
+            }
+          }, 2_000);
+        },
+      );
+
+      activeStreams.set(cascadeId, { abort, fullSteps });
+    }
+
+    ws.on('message', async (raw: Buffer) => {
+      try {
+        await ensureBridge();
+        const { gateway: gatewayModule } = getBridgeModules();
+        const msg = JSON.parse(raw.toString()) as {
+          type?: string;
+          cascadeId?: string;
+          cascadeIds?: string[];
+        };
+
+        if (msg.type === 'subscribe' && msg.cascadeId) {
+          const cascadeId = msg.cascadeId;
+          for (const [, stream] of activeStreams) {
+            stream.abort();
+          }
+          activeStreams.clear();
+
+          if (!gatewayModule.convOwnerMap.has(cascadeId) || Date.now() - gatewayModule.ownerMapAge > 30_000) {
+            await gatewayModule.refreshOwnerMap();
+          }
+
+          const owner = await gatewayModule.getOwnerConnection(cascadeId);
+          if (!owner) {
+            ws.send(JSON.stringify({ type: 'error', message: 'No server found for this conversation' }));
+            return;
+          }
+          startStreamForId(cascadeId, owner);
+        }
+
+        if (msg.type === 'multi-subscribe' && Array.isArray(msg.cascadeIds)) {
+          if (Date.now() - gatewayModule.ownerMapAge > 30_000) {
+            await gatewayModule.refreshOwnerMap();
+          }
+          for (const cascadeId of msg.cascadeIds) {
+            if (activeStreams.has(cascadeId)) continue;
+            const owner = await gatewayModule.getOwnerConnection(cascadeId);
+            if (owner) {
+              startStreamForId(cascadeId, owner);
+            }
+          }
+        }
+
+        if (msg.type === 'unsubscribe') {
+          if (msg.cascadeId) {
+            const stream = activeStreams.get(msg.cascadeId);
+            if (stream) {
+              stream.abort();
+              activeStreams.delete(msg.cascadeId);
+            }
+          } else {
+            for (const [, stream] of activeStreams) {
+              stream.abort();
+            }
+            activeStreams.clear();
+          }
+        }
+      } catch {
+        // ignore malformed WS frames
+      }
+    });
+
+    ws.on('close', () => {
+      for (const [, stream] of activeStreams) {
+        stream.abort();
+      }
+      activeStreams.clear();
+    });
+  });
+}
+
+async function startWebServer(options: { enableBackgroundServices: boolean }): Promise<void> {
+  initializeGatewayHome({ syncAssets: options.enableBackgroundServices });
+
+  const app = next({ dev, hostname, port, turbopack: false });
+  const handle = app.getRequestHandler();
+  await app.prepare();
+
   const server = createServer((req, res) => {
-    // CORS for remote clients (Obsidian plugin, etc.)
     const origin = req.headers.origin;
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -160,30 +273,8 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
-  // --- WebSocket Server ---
   const wss = new WebSocketServer({ noServer: true });
-
-  // --- WebSocket Ping/Pong Keepalive ---
-  // Prevents NAT/firewall timeout from silently killing idle connections
-  const WS_PING_INTERVAL_MS = 25_000; // 25 seconds (below typical 30-60s NAT timeout)
-  const wsAliveMap = new WeakMap<WebSocket, boolean>();
-
-  const pingInterval = setInterval(() => {
-    for (const ws of wss.clients) {
-      if (wsAliveMap.get(ws) === false) {
-        // No pong received since last ping — connection is dead
-        log.debug('WS keepalive: terminating dead connection');
-        ws.terminate();
-        continue;
-      }
-      wsAliveMap.set(ws, false);
-      ws.ping();
-    }
-  }, WS_PING_INTERVAL_MS);
-
-  wss.on('close', () => {
-    clearInterval(pingInterval);
-  });
+  attachWebSocketIngress(wss);
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = parse(req.url || '', true);
@@ -192,149 +283,80 @@ app.prepare().then(() => {
         wss.emit('connection', ws, req);
       });
     }
-    // Other upgrade requests (e.g. Next.js HMR) are handled by Next.js
-  });
-
-  wss.on('connection', (ws: WebSocket) => {
-    wsAliveMap.set(ws, true);
-    ws.on('pong', () => { wsAliveMap.set(ws, true); });
-
-    const activeStreams = new Map<string, { abort: () => void; fullSteps: StreamStep[] }>();
-
-    function startStreamForId(cascadeId: string, conn: { port: number; csrf: string }) {
-      const { grpc: grpcModule, gateway: gatewayModule } = getBridgeModules();
-      // Clean up existing stream for this ID if any
-      const existing = activeStreams.get(cascadeId);
-      if (existing) { existing.abort(); activeStreams.delete(cascadeId); }
-
-      let fullSteps: StreamStep[] = [];
-
-      const abort = grpcModule.streamAgentState(
-        conn.port,
-        conn.csrf,
-        cascadeId,
-        (update: { mainTrajectoryUpdate?: { stepsUpdate?: { steps?: StreamStep[]; indices?: number[]; totalLength?: number } }; status?: string }) => {
-          const stepsUpdate = update?.mainTrajectoryUpdate?.stepsUpdate;
-          const status = update?.status || '';
-          const isActive = status !== 'CASCADE_RUN_STATUS_IDLE';
-          const cascadeStatus = status.replace('CASCADE_RUN_STATUS_', '').toLowerCase();
-
-          if (stepsUpdate?.steps?.length) {
-            // Use shared merge logic
-            fullSteps = mergeStepsUpdate(fullSteps, stepsUpdate);
-
-            // Extract task boundary from merged steps (most reliable)
-            const lastTaskBoundary = extractLastTaskBoundary(fullSteps);
-
-            const cleanSteps = fullSteps.filter(s => s != null);
-            ws.send(JSON.stringify({
-              type: 'steps', cascadeId, data: { steps: cleanSteps }, isActive, cascadeStatus,
-              totalLength: stepsUpdate.totalLength || cleanSteps.length,
-              lastTaskBoundary,
-            }));
-          } else {
-            const lastTaskBoundary = extractLastTaskBoundary(fullSteps);
-            ws.send(JSON.stringify({
-              type: 'status', cascadeId, isActive, cascadeStatus,
-              stepCount: fullSteps.filter(s => s != null).length,
-              lastTaskBoundary,
-            }));
-          }
-        },
-        async (err: Error) => {
-          log.warn({ cascadeId: cascadeId.slice(0,8), err: err.message }, 'Stream ended, reconnecting...');
-          setTimeout(async () => {
-            if (ws.readyState === ws.OPEN) {
-              await ensureBridge();
-              await gatewayModule.refreshOwnerMap();
-              const newOwner = await gatewayModule.getOwnerConnection(cascadeId);
-              if (newOwner) {
-                log.info({ cascadeId: cascadeId.slice(0,8), port: newOwner.port }, 'Stream reconnected');
-                startStreamForId(cascadeId, newOwner);
-              }
-            }
-          }, 2000);
-        }
-      );
-
-      activeStreams.set(cascadeId, { abort, fullSteps });
-    }
-
-    ws.on('message', async (raw: Buffer) => {
-      try {
-        await ensureBridge();
-        const { gateway: gatewayModule } = getBridgeModules();
-        const msg = JSON.parse(raw.toString()) as {
-          type?: string;
-          cascadeId?: string;
-          cascadeIds?: string[];
-        };
-
-        // Single subscribe (backward compatible — clears all previous streams)
-        if (msg.type === 'subscribe' && msg.cascadeId) {
-          const cascadeId = msg.cascadeId;
-          // Close all existing streams
-          for (const [, s] of activeStreams) s.abort();
-          activeStreams.clear();
-
-          if (!gatewayModule.convOwnerMap.has(cascadeId) || Date.now() - gatewayModule.ownerMapAge > 30_000) {
-            await gatewayModule.refreshOwnerMap();
-          }
-
-          const owner = await gatewayModule.getOwnerConnection(cascadeId);
-          if (!owner) {
-            ws.send(JSON.stringify({ type: 'error', message: 'No server found for this conversation' }));
-            return;
-          }
-          log.info({ cascadeId: cascadeId.slice(0,8), port: owner.port }, 'Stream subscribe');
-          startStreamForId(cascadeId, owner);
-        }
-
-        // Multi-subscribe (add streams without clearing existing)
-        if (msg.type === 'multi-subscribe' && Array.isArray(msg.cascadeIds)) {
-          if (Date.now() - gatewayModule.ownerMapAge > 30_000) {
-            await gatewayModule.refreshOwnerMap();
-          }
-          for (const cascadeId of msg.cascadeIds) {
-            if (activeStreams.has(cascadeId)) continue; // already streaming
-            const owner = await gatewayModule.getOwnerConnection(cascadeId);
-            if (owner) {
-              log.info({ cascadeId: cascadeId.slice(0,8), port: owner.port }, 'Multi-subscribe');
-              startStreamForId(cascadeId, owner);
-            }
-          }
-        }
-
-        if (msg.type === 'unsubscribe') {
-          if (msg.cascadeId) {
-            const s = activeStreams.get(msg.cascadeId);
-            if (s) { s.abort(); activeStreams.delete(msg.cascadeId); }
-          } else {
-            for (const [, s] of activeStreams) s.abort();
-            activeStreams.clear();
-          }
-        }
-      } catch {}
-    });
-
-    ws.on('close', () => {
-      for (const [, s] of activeStreams) s.abort();
-      activeStreams.clear();
-    });
   });
 
   server.listen(port, hostname, async () => {
-    log.info({ hostname, port }, '🚀 Antigravity Gateway running');
-    log.info('Single-port mode: Next.js + API + WebSocket');
-    launchBridgeWorker(port);
-    void warmBackgroundServices();
+    log.info({ hostname, port, role }, 'Gateway web ingress running');
+    if (options.enableBackgroundServices && shouldLaunchBridgeWorker(process.env)) {
+      startBridgeWorker();
+    }
+    if (options.enableBackgroundServices && shouldStartSchedulerServices(process.env)) {
+      const { startSchedulerWorker } = await import('./src/server/workers/scheduler-worker');
+      await startSchedulerWorker();
+    }
   });
 
-  const cleanup = () => {
+  registerProcessCleanup(() => {
     shuttingDown = true;
     bridgeWorkerProcess?.kill('SIGTERM');
-    process.exit(0);
-  };
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+    void import('./src/server/workers/scheduler-worker')
+      .then(({ stopSchedulerWorker }) => stopSchedulerWorker())
+      .finally(() => process.exit(0));
+  });
+}
+
+async function startStandaloneRole(): Promise<void> {
+  initializeGatewayHome({ syncAssets: role === 'runtime' });
+
+  if (role === 'control-plane') {
+    const { startControlPlaneServer } = await import('./src/server/control-plane/server');
+    startControlPlaneServer({ port, hostname });
+    registerProcessCleanup(() => process.exit(0));
+    return;
+  }
+
+  if (role === 'runtime') {
+    const { startRuntimeServer } = await import('./src/server/runtime/server');
+    startRuntimeServer({ port, hostname });
+    startBridgeWorker();
+    registerProcessCleanup(() => {
+      shuttingDown = true;
+      bridgeWorkerProcess?.kill('SIGTERM');
+      process.exit(0);
+    });
+    return;
+  }
+
+  if (role === 'scheduler') {
+    if (shouldStartSchedulerServices(process.env)) {
+      const { startSchedulerWorker } = await import('./src/server/workers/scheduler-worker');
+      await startSchedulerWorker();
+    } else {
+      log.info('Scheduler role started with AG_ENABLE_SCHEDULER=0; staying idle');
+    }
+    registerProcessCleanup(() => {
+      void import('./src/server/workers/scheduler-worker')
+        .then(({ stopSchedulerWorker }) => stopSchedulerWorker())
+        .finally(() => process.exit(0));
+    });
+  }
+}
+
+async function main(): Promise<void> {
+  if (role === 'all') {
+    await startWebServer({ enableBackgroundServices: true });
+    return;
+  }
+
+  if (role === 'web') {
+    await startWebServer({ enableBackgroundServices: false });
+    return;
+  }
+
+  await startStandaloneRole();
+}
+
+void main().catch((error: unknown) => {
+  log.error({ err: error instanceof Error ? error.message : String(error), role }, 'Server startup failed');
+  process.exit(1);
 });

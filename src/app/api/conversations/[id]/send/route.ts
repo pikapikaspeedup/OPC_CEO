@@ -20,6 +20,10 @@ import {
   runApiConversationTurn,
 } from '@/lib/api-provider-conversations';
 import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 const log = createLogger('SendMsg');
 
@@ -30,6 +34,10 @@ function getErrorMessage(error: unknown): string {
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   const { id: cascadeId } = await params;
   const body = await req.json() as {
     text?: string;

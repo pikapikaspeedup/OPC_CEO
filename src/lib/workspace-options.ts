@@ -34,7 +34,7 @@ export function buildWorkspaceOptions(
     if (!uri || allWs.has(uri) || uri.includes('/playground/')) return;
     allWs.set(uri, {
       uri,
-      name: uri.replace('file://', '').split('/').pop() || uri,
+      name: workspace.name || uri.replace('file://', '').split('/').pop() || uri,
       running: false,
       hidden: isWorkspaceHidden(uri, hiddenWorkspaces),
     });

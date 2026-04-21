@@ -153,4 +153,41 @@ describe('gateway-db conversation projections', () => {
       ).map((row) => row.runId),
     ).toEqual(['run-1']);
   });
+
+  it('persists workspace catalog records in SQLite', async () => {
+    const db = await loadModule();
+
+    db.upsertWorkspaceCatalogRecord({
+      workspaceUri: 'file:///tmp/workspace-a',
+      workspacePath: '/tmp/workspace-a',
+      displayName: 'workspace-a',
+      workspaceKind: 'folder',
+      sourceKind: 'manual-import',
+      status: 'active',
+      createdAt: '2026-04-20T10:00:00.000Z',
+      updatedAt: '2026-04-20T10:00:00.000Z',
+    });
+
+    db.upsertWorkspaceCatalogRecord({
+      workspaceUri: 'file:///tmp/workspace-b',
+      workspacePath: '/tmp/workspace-b',
+      displayName: 'workspace-b',
+      workspaceKind: 'folder',
+      sourceKind: 'antigravity-recent',
+      status: 'hidden',
+      createdAt: '2026-04-20T10:05:00.000Z',
+      updatedAt: '2026-04-20T10:05:00.000Z',
+      lastSeenAt: '2026-04-20T10:05:00.000Z',
+    });
+
+    expect(db.getWorkspaceCatalogRecordByUri('file:///tmp/workspace-a')).toEqual(expect.objectContaining({
+      workspacePath: '/tmp/workspace-a',
+      sourceKind: 'manual-import',
+      status: 'active',
+    }));
+    expect(db.listWorkspaceCatalogRecords({ statuses: ['active', 'hidden'] }).map((record) => record.workspaceUri)).toEqual([
+      'file:///tmp/workspace-b',
+      'file:///tmp/workspace-a',
+    ]);
+  });
 });

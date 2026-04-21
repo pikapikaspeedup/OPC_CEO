@@ -4,6 +4,12 @@ import { getRun, recoverInterruptedRun, updateRun } from '@/lib/agents/run-regis
 import { cancelRun, interveneRun, InterventionConflictError } from '@/lib/agents/group-runtime';
 import { emitProjectEvent } from '@/lib/agents/project-events';
 import { createLogger } from '@/lib/logger';
+import {
+  proxyToControlPlane,
+  proxyToRuntime,
+  shouldProxyControlPlaneRequest,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +39,13 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   try {
     const { id: projectId } = await params;
     const project = getProject(projectId);

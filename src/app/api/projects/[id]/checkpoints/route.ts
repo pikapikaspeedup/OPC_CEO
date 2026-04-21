@@ -3,6 +3,10 @@ import { listCheckpoints, createCheckpoint } from '@/lib/agents/checkpoint-manag
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
 import { getProject } from '@/lib/agents/project-registry';
 import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +17,10 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(request);
+  }
+
   const { id } = await params;
 
   const project = getProject(id);
@@ -36,6 +44,10 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(request);
+  }
+
   const { id } = await params;
 
   const project = getProject(id);

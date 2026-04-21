@@ -1,6 +1,8 @@
-export type AppUrlSection = 'conversations' | 'projects' | 'knowledge' | 'operations' | 'ceo';
+import type { AppShellSection } from './home-shell';
+
+export type AppUrlSection = AppShellSection;
 export type AppUrlUtilityPanel = 'settings' | null;
-export type AppUrlSettingsTab = 'provider' | 'api-keys' | 'scenes' | 'mcp' | 'messaging';
+export type AppUrlSettingsTab = 'profile' | 'provider' | 'api-keys' | 'scenes' | 'mcp' | 'messaging';
 export type AppUrlSettingsFocus = 'third-party-provider' | null;
 
 export interface AppUrlState {
@@ -14,8 +16,8 @@ export interface AppUrlState {
   settingsFocus: AppUrlSettingsFocus;
 }
 
-const VALID_SECTIONS = new Set<AppUrlSection>(['conversations', 'projects', 'knowledge', 'operations', 'ceo']);
-const VALID_SETTINGS_TABS = new Set<AppUrlSettingsTab>(['provider', 'api-keys', 'scenes', 'mcp', 'messaging']);
+const VALID_SECTIONS = new Set<AppUrlSection>(['overview', 'conversations', 'projects', 'knowledge', 'operations', 'ceo']);
+const VALID_SETTINGS_TABS = new Set<AppUrlSettingsTab>(['profile', 'provider', 'api-keys', 'scenes', 'mcp', 'messaging']);
 
 function cleanParam(value: string | null): string | null {
   const trimmed = value?.trim();
@@ -32,7 +34,7 @@ export function parseAppUrlState(search: string | URLSearchParams): AppUrlState 
   const rawFocus = cleanParam(params.get('focus'));
   const section = rawSection && VALID_SECTIONS.has(rawSection as AppUrlSection)
     ? rawSection as AppUrlSection
-    : 'projects';
+    : 'overview';
 
   return {
     section,

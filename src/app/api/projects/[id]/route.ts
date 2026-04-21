@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
 import { getErrorMessage, normalizeProject } from '@/lib/project-utils';
 import { getProjectRecord, listRunRecordsByIds } from '@/lib/storage/gateway-db';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   const { id } = await params;
   const project = getProjectRecord(id);
   if (!project) {
@@ -26,6 +34,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   try {
     const { id } = await params;
     const body = await req.json();
@@ -41,6 +53,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   const { id } = await params;
   const { deleteProject } = await import('@/lib/agents/project-registry');
   const deleted = deleteProject(id);

@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { getProject, updateProject } from '@/lib/agents/project-registry';
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
 import { appendJournalEntry } from '@/lib/agents/execution-journal';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +19,10 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string; nodeId: string }> },
 ) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(request);
+  }
+
   const { id, nodeId } = await params;
 
   const project = getProject(id);

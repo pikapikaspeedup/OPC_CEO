@@ -1,4 +1,3 @@
-import { getWorkspaces } from '../bridge/gateway';
 import { readDepartmentConfig } from '../agents/department-capability-registry';
 import { listApprovalRequests } from '../approval/request-store';
 import { listProjects } from '../agents/project-registry';
@@ -6,6 +5,7 @@ import { listScheduledJobsEnriched } from '../agents/scheduler';
 import { listRunRecords } from '../storage/gateway-db';
 import { listRecentKnowledgeAssets } from '../knowledge';
 import type { DepartmentManagementOverview, ManagementMetric, ManagementOverview, ManagementRisk } from './contracts';
+import { listKnownWorkspaces } from '../workspace-catalog';
 
 function hasBlockedStage(project: ReturnType<typeof listProjects>[number]): boolean {
   return Boolean(project.pipelineState?.stages?.some((stage) => stage.status === 'blocked'));
@@ -49,7 +49,7 @@ function computeOkrProgressForWorkspace(workspaceUri: string): number | null {
 }
 
 function computeOrganizationOkrProgress(): number | null {
-  const workspaces = getWorkspaces() as Array<{ uri: string }>;
+  const workspaces = listKnownWorkspaces().map((workspace) => ({ uri: workspace.uri }));
   const progresses = workspaces
     .map((workspace) => computeOkrProgressForWorkspace(workspace.uri))
     .filter((value): value is number => value !== null);

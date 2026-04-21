@@ -13,6 +13,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRun } from '@/lib/agents/run-registry';
 import { onRunEvent, type RunEvent } from '@/lib/agents/run-events';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +24,10 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(_req);
+  }
+
   const { id } = await params;
   const run = getRun(id);
   if (!run) {

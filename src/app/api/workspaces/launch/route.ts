@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { spawnSync } from 'child_process';
 import { createLogger } from '@/lib/logger';
+import { registerWorkspace } from '@/lib/workspace-catalog';
 
 const log = createLogger('Launch');
 
@@ -17,8 +18,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing workspace path' }, { status: 400 });
   }
 
-  // Remove file:// prefix if present
-  const wsPath = workspace.replace(/^file:\/\//, '');
+  let wsPath = workspace.replace(/^file:\/\//, '');
+  try {
+    const registered = registerWorkspace({
+      workspace: wsPath,
+      sourceKind: 'manual-import',
+    });
+    wsPath = registered.path;
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  }
 
   log.info({ wsPath }, 'Opening workspace');
 

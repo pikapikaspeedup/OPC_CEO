@@ -2,10 +2,18 @@ import { NextResponse } from 'next/server';
 import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 import { getErrorMessage, normalizeProject } from '@/lib/project-utils';
 import { listProjectRecords, listRunRecordsByIds } from '@/lib/storage/gateway-db';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   try {
     const body = await req.json();
     const { name, goal, templateId, workspace, projectType, skillHint } = body;
@@ -23,6 +31,10 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+
   const { searchParams } = new URL(req.url);
   const pagination = parsePaginationSearchParams(searchParams, {
     defaultPageSize: 100,
