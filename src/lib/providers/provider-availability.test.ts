@@ -23,23 +23,35 @@ const inventory: ProviderInventory = {
 };
 
 describe('provider-availability', () => {
-  it('only exposes configured providers as selectable options', () => {
+  it('exposes all providers and disables unavailable options', () => {
     const options = getSelectableProviderOptions(inventory, undefined);
 
     expect(options.map((option) => option.value)).toEqual([
       'antigravity',
+      'native-codex',
       'codex',
+      'claude-code',
       'claude-api',
+      'openai-api',
+      'gemini-api',
+      'grok-api',
+      'custom',
     ]);
+    expect(options.find((option) => option.value === 'antigravity')?.disabled).toBe(false);
+    expect(options.find((option) => option.value === 'codex')?.disabled).toBe(false);
+    expect(options.find((option) => option.value === 'native-codex')).toMatchObject({
+      disabled: true,
+      label: expect.stringContaining('未配置'),
+    });
   });
 
   it('keeps the current invalid provider visible but disabled', () => {
     const options = getSelectableProviderOptions(inventory, undefined, 'openai-api');
+    const openai = options.find((option) => option.value === 'openai-api');
 
-    expect(options[0]).toMatchObject({
+    expect(openai).toMatchObject({
       value: 'openai-api',
       disabled: true,
-      label: expect.stringContaining('未配置'),
     });
   });
 

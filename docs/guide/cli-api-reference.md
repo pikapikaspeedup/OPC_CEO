@@ -10,8 +10,14 @@ The API runs on port 3000 by default.
 > `groupId`, `/api/agent-groups`, and scheduler `dispatch-group` are removed from the public contract.
 
 > List pagination contract (2026-04-20):
-> `GET /api/conversations`, `GET /api/projects`, `GET /api/agent-runs`, `GET /api/scheduler/jobs`, `GET /api/projects/:id/checkpoints`, `GET /api/projects/:id/journal`, `GET /api/projects/:id/deliverables`, `GET /api/operations/audit` 统一支持 `page` / `pageSize`，并返回 `{ items, page, pageSize, total, hasMore }`。
+> `GET /api/conversations`, `GET /api/projects`, `GET /api/agent-runs`, `GET /api/company/run-capsules`, `GET /api/company/memory-candidates`, `GET /api/company/signals`, `GET /api/company/agenda`, `GET /api/company/budget/*`, `GET /api/company/circuit-breakers`, `GET /api/company/growth/proposals`, `GET /api/company/loops/*`, `GET /api/company/self-improvement/*`, `GET /api/scheduler/jobs`, `GET /api/projects/:id/checkpoints`, `GET /api/projects/:id/journal`, `GET /api/projects/:id/deliverables`, `GET /api/operations/audit` 统一支持 `page` / `pageSize`，并返回 `{ items, page, pageSize, total, hasMore }`。
 > `journal` / `audit` 仍兼容旧 `limit` 参数，但语义已收口为 `pageSize`。
+
+> Split-mode ownership (2026-04-21):
+> 当 `web` 以 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 运行时，CLI 打到 `localhost:3000` 的这些 endpoint 会被壳层代理到独立后端。
+> - `control-plane`: `/api/approval*`、`/api/ai-config`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
+> - `runtime`: `/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation / run runtime 主链
+> - `api` 组合服务支持同一路径按 method 分流；`GET /api/conversations` 与 `POST /api/conversations` 不会因前序 route 返回 405 而互相截断。
 
 ## API Endpoints
 
@@ -30,6 +36,7 @@ The API runs on port 3000 by default.
 - `POST /api/conversations/:id/send`
   - `antigravity` conversation 仍走 gRPC send。
   - 本地 provider conversation 走 Gateway 本地 executor / provider transcript store，并把 transcript 写回本地 steps。
+  - 本地 provider executor 返回 `status=failed` 时，接口返回 `502 { "error": "..." }`；Native Codex 默认 90s 超时，可通过 `NATIVE_CODEX_TIMEOUT_MS` 调整。
 - `GET /api/conversations/:id/steps`
   - 对本地 provider conversation，返回标准化的 CORTEX transcript step（例如 `CORTEX_STEP_TYPE_USER_INPUT`、`CORTEX_STEP_TYPE_PLANNER_RESPONSE`），可直接被前端聊天面板渲染。
 - `POST /api/conversations/:id/cancel`
@@ -149,6 +156,7 @@ The API runs on port 3000 by default.
 
 #### Dispatch a Run
 - **URL:** `POST /api/agent-runs`
+- **Budget:** Manual dispatch records token/runtime budget ledger and bypasses only autonomous dispatch quota; scheduler-triggered dispatches are budgeted by scheduler before run creation.
 - **Request Body (JSON):**
   - `templateId` (String, required): Template ID. Also supports `pipelineId` as an alias.
   - `stageId` (String, optional): Target stage ID inside the template. If omitted, the API dispatches the template entry stage.
@@ -290,6 +298,114 @@ The API runs on port 3000 by default.
     "status": "cancelled"
   }
   ```
+
+### 2.1 Company Kernel
+
+Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI 可以读取 RunCapsule / MemoryCandidate，也可以读取经营信号、议程、预算 gate、熔断器和 GrowthProposal。分离部署时这些接口由 web 代理到 `api/control-plane` 服务。
+
+#### List Run Capsules
+- **URL:** `GET /api/company/run-capsules`
+- **Query Parameters:** `workspaceUri`, `projectId`, `status`, `providerId`, `page`, `pageSize`
+- **Response:** paginated `{ items, page, pageSize, total, hasMore }`
+
+#### Get Run Capsule
+- **URL:** `GET /api/company/run-capsules/:runId`
+- **Response:** `RunCapsule`
+- **Note:** capsule rebuild 会合并既有 WorkingCheckpoint，不覆盖历史 checkpoint。
+
+#### List Memory Candidates
+- **URL:** `GET /api/company/memory-candidates`
+- **Query Parameters:** `workspaceUri`, `sourceRunId`, `sourceCapsuleId`, `kind`, `status`, `minScore`, `page`, `pageSize`
+- **Response:** paginated `{ items, page, pageSize, total, hasMore }`
+- **Note:** `candidate` / `pending-review` 才是可审核状态；空证据、高冲突、volatile 候选不会自动晋升。
+
+#### Get Memory Candidate
+- **URL:** `GET /api/company/memory-candidates/:id`
+- **Response:** `MemoryCandidate`
+
+#### Promote Memory Candidate
+- **URL:** `POST /api/company/memory-candidates/:id/promote`
+- **Body:** optional `title`, `content`, `category`, `level`
+- **Response:** `201 Created`; `rejected/promoted/archived` 等闭合状态返回 `409 Conflict`
+  ```json
+  { "knowledge": { "id": "knowledge-...", "promotion": { "sourceCandidateId": "..." } } }
+  ```
+
+#### Reject Memory Candidate
+- **URL:** `POST /api/company/memory-candidates/:id/reject`
+- **Body:** `{ "reason": "duplicate or low evidence" }`
+- **Response:** `200 OK`; 已 promote 的候选返回 `409 Conflict`
+  ```json
+  { "candidate": { "id": "...", "status": "rejected" } }
+  ```
+
+#### Operating Signals
+- **URL:** `GET /api/company/signals`
+- **Query Parameters:** `workspaceUri`, `source`, `kind`, `status`, `minScore`, `page`, `pageSize`
+- **URL:** `GET /api/company/signals/:id`
+- **URL:** `POST /api/company/signals/:id/dismiss`
+- **Note:** approval submit / approve / reject / feedback lifecycle is converted into `approval` operating signals and agenda items.
+
+#### Operating Agenda
+- **URL:** `GET /api/company/agenda`
+- **Query Parameters:** `workspaceUri`, `status`, `priority`, `minScore`, `page`, `pageSize`
+- **URL:** `GET /api/company/agenda/:id`
+- **URL:** `POST /api/company/agenda/:id/snooze`
+- **URL:** `POST /api/company/agenda/:id/dismiss`
+- **URL:** `POST /api/company/agenda/:id/dispatch-check` returns `{ decision }` without creating a run
+- **URL:** `POST /api/company/agenda/:id/dispatch` validates target workspace before reserving budget, applies budget gate, creates a queued prompt run when allowed, attaches the reserved ledger to `runId`, and returns `{ decision, ledger, item, run }`. Terminal run status later commits or releases the reservation.
+
+#### Operating Day
+- **URL:** `GET /api/company/operating-day`
+- **Query Parameters:** `date`, `timezone`, `workspaceUri`, `limit`
+- **Response:** `CompanyOperatingDay` with `agenda`, `activeSignals`, `departmentStates`, `activeRuns`, `completedRuns`, `memoryCandidateIds`
+
+#### Budget & Circuit Breakers
+- **URL:** `GET /api/company/budget/policies`
+- **URL:** `GET|PUT /api/company/budget/policies/:id`
+- **URL:** `GET /api/company/budget/ledger`
+- **URL:** `GET /api/company/circuit-breakers`
+- **URL:** `POST /api/company/circuit-breakers/:id/reset`
+- **Note:** ledger `decision` can be `reserved`, `committed`, `released`, `blocked`, or `skipped`; scheduler budget/circuit blocks use `skipped` and do not create runs. Growth proposal generate/evaluate also writes `growth-proposal` scope ledger entries.
+- **Note:** real terminal run failures update department, scheduler-job, provider, and workflow circuit breakers; successful terminal runs reset the matching breakers.
+
+#### Growth Proposals
+- **URL:** `GET /api/company/growth/proposals`
+- **URL:** `POST /api/company/growth/proposals/generate`
+- **URL:** `GET /api/company/growth/proposals/:id`
+- **URL:** `POST /api/company/growth/proposals/:id/evaluate`
+- **URL:** `POST /api/company/growth/proposals/:id/approve`
+- **URL:** `POST /api/company/growth/proposals/:id/reject`
+- **URL:** `POST /api/company/growth/proposals/:id/dry-run`
+- **URL:** `POST /api/company/growth/proposals/:id/publish`
+- **URL:** `GET|POST /api/company/growth/observations`
+- **Note:** proposal `kind` can be `sop`, `workflow`, `skill`, `script`, or `rule`. Generate/evaluate is budgeted. Public publish no longer accepts force mode; high-risk proposals require approval, and `script` proposals additionally require a passed dry-run. Published workflow/skill proposals can be injected into later Prompt Mode execution resolution. Three or more repeated successful RunCapsules can generate a `workflow` proposal; repeated automation/script signals can generate `script`, and repeated operating constraints can generate `rule`.
+
+#### Company Loops
+
+- **URL:** `GET /api/company/loops/policies`
+- **URL:** `GET|PUT /api/company/loops/policies/:id`
+- **URL:** `GET /api/company/loops/runs`
+- **URL:** `GET /api/company/loops/runs/:id`
+- **URL:** `POST /api/company/loops/run-now`
+- **URL:** `GET /api/company/loops/digests`
+- **URL:** `GET /api/company/loops/digests/:id`
+- **URL:** `POST /api/company/loops/runs/:id/retry`
+- **Note:** `run-now` 执行 daily/weekly/growth/risk review，只选择 Top-N agenda，dispatch 仍经过 budget/circuit gate，policy disabled 时返回 skipped。scheduler 内置 daily/weekly company-loop 使用 cron job，不创建 5s interval，并从 `CompanyLoopPolicy` 读取 cadence / timezone / enabled。loop run 的 `metadata.skippedAgenda` 保存 skipped 原因；`notificationChannels` 会产出 web/email/webhook channel-specific notification id。
+
+#### Guarded Self Improvement
+
+- **URL:** `GET|POST /api/company/self-improvement/signals`
+- **URL:** `GET /api/company/self-improvement/proposals`
+- **URL:** `POST /api/company/self-improvement/proposals/generate`
+- **URL:** `GET /api/company/self-improvement/proposals/:id`
+- **URL:** `POST /api/company/self-improvement/proposals/:id/evaluate`
+- **URL:** `POST /api/company/self-improvement/proposals/:id/approve`
+- **URL:** `POST /api/company/self-improvement/proposals/:id/reject`
+- **URL:** `POST /api/company/self-improvement/proposals/:id/attach-test-evidence`
+- **URL:** `POST /api/company/self-improvement/proposals/:id/observe`
+- **Note:** high/critical proposal 不能通过 passed test evidence 绕过 approval；`approve` 会写入持久 approval metadata，已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 `ready-to-merge`。
+- **Note:** high/critical protected-core proposal 会创建 approval request；第一版没有 auto merge / auto push / auto deploy API。
 
 ### 3. Templates & Pipelines
 
@@ -462,6 +578,7 @@ The API runs on port 3000 by default.
   - `recentKnowledge`
   - `highlights`
   - `actions`
+- **Action Contract:** each `actions[]` item includes `id`, `type`, `status`, `priority`, `meta`, `count`, and a `target` object. `target.kind` maps to `approvals`, `project`, `scheduler`, `knowledge`, or `ceo-focus`; optional target IDs include `requestId`, `projectId`, `jobId`, `knowledgeId`, and `workspaceUri`.
 
 #### Get CEO Events
 - **URL:** `GET /api/ceo/events?limit=20`
@@ -476,8 +593,10 @@ The API runs on port 3000 by default.
   - `blockedProjects`
   - `pendingApprovals`
   - `activeSchedulers`
+  - `schedulerRuntime`
   - `recentKnowledge`
   - `metrics`
+- **Scheduler Runtime:** `schedulerRuntime.status` is one of `running`, `idle`, `disabled`, or `stalled`. Use it to tell whether cron scheduling is actually active instead of relying only on `activeSchedulers`.
 
 #### Get Department Management Overview
 - **URL:** `GET /api/management/overview?workspace=<workspace_uri>`
@@ -490,7 +609,12 @@ The API runs on port 3000 by default.
 
 #### List Approval Requests
 - **URL:** `GET /api/approval`
-- **Response:** `200 OK` Array of `ApprovalRequest` objects.
+- **Query Parameters (Optional):**
+  - `status`: `pending` / `approved` / `rejected` / `feedback`
+  - `workspace`: workspace URI
+  - `type`: approval type
+  - `summary`: set `true` to include status counts
+- **Response:** `200 OK` `{ requests: ApprovalRequest[], summary?: ApprovalSummary }`.
 
 #### Submit Approval Request
 - **URL:** `POST /api/approval`
@@ -513,15 +637,27 @@ The API runs on port 3000 by default.
   - `message` (String, optional): CEO 回复消息
 
 #### Submit Approval Feedback
-- **URL:** `POST /api/approval/:id/feedback`
-- **Request Body (JSON):**
-  - `message` (String, required): 反馈内容
+- **URL:** `GET|POST /api/approval/:id/feedback`
+- **Query Parameters:**
+  - `action` (String, required): `approve` / `reject` / `feedback`
+  - `token` (String, required): HMAC token generated by the approval notification channel
+  - `message` (String, optional): 反馈内容
+
+#### Subscribe Approval Events
+- **URL:** `GET /api/approval/events`
+- **Split mode owner:** `control-plane`
+- **Response:** `text/event-stream`
+- **Events:**
+  - `approval_request`: new approval request notification
+  - `approval_response`: CEO approved / rejected / replied
+- **Notes:** Web UI uses this SSE stream to refresh the approval inbox without polling every interaction. The stream replays recent events so reconnects do not miss the latest approval state.
 
 ### 7. Departments
 
 #### Get Department Config
 - **URL:** `GET /api/departments?workspace=<file_uri>`
 - **Description:** 获取部门配置。workspace 参数为 `file://` URI，并以 OPC workspace catalog 为准。
+- **Split mode owner:** `control-plane`
 - **Response:** `200 OK` `DepartmentConfig` object.
 - **Error:** `403` if workspace is not known to OPC workspace catalog.
 
@@ -529,10 +665,12 @@ The API runs on port 3000 by default.
 - **URL:** `PUT /api/departments?workspace=<file_uri>`
 - **Request Body:** Full `DepartmentConfig` JSON object.
 - **Note:** 该接口现在只保存 `.department/config.json`，不会再隐式同步所有 IDE mirror。响应会返回 `{ ok: true, syncPending: true }`。
+- **Split mode owner:** `control-plane`
 
 #### Sync Department State
 - **URL:** `POST /api/departments/sync?workspace=<file_uri>&target=<all|antigravity|codex|claude-code|cursor>`
 - **Description:** 显式同步部门配置到对应 IDE mirror。
+- **Split mode owner:** `control-plane`
 
 #### Get Department Digest
 - **URL:** `GET /api/departments/digest?workspace=<file_uri>&date=<YYYY-MM-DD>&period=<day|week|month>`
@@ -548,16 +686,19 @@ The API runs on port 3000 by default.
 #### List Known Workspaces
 - **URL:** `GET /api/workspaces`
 - **Description:** 返回 OPC workspace catalog 中的所有已知 workspace。来源包括手动导入、Antigravity recent 导入和 CEO bootstrap。
+- **Split mode owner:** `control-plane`
 
 #### Import Workspace
 - **URL:** `POST /api/workspaces/import`
 - **Request Body (JSON):**
   - `workspace` (String, required): Absolute path or `file://` URI
-- **Description:** 仅导入到 OPC catalog，不启动 Antigravity。
+- **Description:** 仅导入到 OPC catalog，不启动 Antigravity。Tauri 桌面壳的新建部门会先用原生目录选择器拿到本地路径，再调用此接口。
+- **Split mode owner:** `control-plane`
 
 #### Launch Workspace in Antigravity
 - **URL:** `POST /api/workspaces/launch`
 - **Description:** 先注册到 OPC catalog，再打开 Antigravity 并触发 language_server 启动。
+- **Split mode owner:** `runtime`
 
 #### Knowledge Assets
 - **URL:** `GET /api/knowledge`
@@ -614,7 +755,9 @@ The API runs on port 3000 by default.
 
 #### List Scheduled Jobs
 - **URL:** `GET /api/scheduler/jobs`
-- **Response:** `200 OK` Array of `ScheduledJob` objects (including `lastRunAt`, `lastRunResult`, `enabled`).
+- **Response:** `200 OK` Paginated envelope of `ScheduledJob` objects.
+- `cron` job 现在支持可选 `timeZone`（IANA 时区，例如 `Asia/Shanghai`）。
+- `GET /api/scheduler/jobs` / `GET /api/scheduler/jobs/:id` 会按 SQLite 主存储刷新，不再依赖单进程内存态；已过触发点但尚未执行的任务会把 `nextRunAt` 标为当前时间。
 
 #### Scheduler Action Kinds
 - `dispatch-pipeline`
@@ -622,6 +765,8 @@ The API runs on port 3000 by default.
 - `dispatch-execution-profile`
 - `health-check`
 - `create-project`
+
+默认同设备部署中，`opc-api` 负责 cron scheduler 循环；`web` 只做代理和页面，不执行定时任务。`AG_ENABLE_SCHEDULER=0` 可关闭 cron，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会额外启动 fan-out / approval / CEO event consumer 等恢复类后台。
 
 `dispatch-execution-profile` 当前支持：
 - `workflow-run`
@@ -634,6 +779,7 @@ The API runs on port 3000 by default.
   - `name` (String, required): 任务名称
   - `type` (String, required): `cron` / `interval` / `once`
   - `cronExpression` (String, conditional): cron 表达式
+  - `timeZone` (String, optional): cron 时区；留空则按服务端本地时区解释
   - `action` (Object, required): `{ kind: 'dispatch-pipeline' | 'health-check' | 'create-project', ... }`
   - `enabled` (Boolean, optional): 默认 `true`
   - `departmentWorkspaceUri` (String, optional): 关联部门 workspace
@@ -648,10 +794,11 @@ The API runs on port 3000 by default.
 
 #### Delete Scheduled Job
 - **URL:** `DELETE /api/scheduler/jobs/:id`
+- **说明:** 删除现在会同步移除 SQLite `scheduled_jobs` 行，不再只删当前进程内存态。
 
 #### Trigger Scheduled Job
 - **URL:** `POST /api/scheduler/jobs/:id/trigger`
-- **Description:** 立即触发一次执行（不影响 cron 下次触发）。
+- **Description:** 立即触发一次执行（不影响 cron 下次触发）。触发前会经过 Company Kernel budget gate；被 budget/circuit 拦截时返回 `status = skipped`，不会创建 run。
 
 ### 9. Deliverables
 

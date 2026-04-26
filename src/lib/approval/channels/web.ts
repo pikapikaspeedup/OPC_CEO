@@ -14,6 +14,8 @@ import type {
   NotificationChannel,
   NotificationResult,
 } from '../types';
+import { getApprovalInboxUrl } from '../approval-urls';
+import { publishApprovalNotificationEvent } from '../notification-events';
 
 const log = createLogger('WebChannel');
 
@@ -23,27 +25,24 @@ export class WebChannel implements NotificationChannel {
 
   constructor(private gatewayUrl: string) {}
 
-  /**
-   * Push notification to connected Web UI clients.
-   *
-   * TODO: Implement SSE/WebSocket push to frontend.
-   * Currently logs the notification for debugging.
-   */
   async send(request: ApprovalRequest): Promise<NotificationResult> {
+    const event = publishApprovalNotificationEvent({
+      type: 'approval_request',
+      request,
+    });
+
     log.info({
       requestId: request.id,
+      eventId: event.id,
       type: request.type,
       urgency: request.urgency,
       title: request.title,
-    }, 'Web notification dispatched (placeholder)');
-
-    // TODO: Push to SSE event stream or WebSocket
-    // e.g. sseClients.broadcast({ type: 'approval_request', data: request })
+    }, 'Web approval notification published');
 
     return {
       success: true,
       channel: this.id,
-      messageId: `web-${request.id}`,
+      messageId: event.id,
     };
   }
 
@@ -52,6 +51,6 @@ export class WebChannel implements NotificationChannel {
    * CEO clicks this link to open the approval page.
    */
   getApprovalUrl(requestId: string): string {
-    return `${this.gatewayUrl}/approval/${requestId}`;
+    return getApprovalInboxUrl(this.gatewayUrl, requestId);
   }
 }

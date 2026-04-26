@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import type { Workspace } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { Ticket } from 'lucide-react';
+import { WorkspaceSectionHeader, WorkspaceSurface } from '@/components/ui/workspace-primitives';
 
 interface TokenQuotaData {
   workspace: string;
@@ -29,16 +31,16 @@ function ProgressBar({ used, limit, label }: { used: number; limit: number; labe
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-[11px]">
-        <span className="text-white/50">{label}</span>
+        <span className="text-[var(--app-text-soft)]">{label}</span>
         <span className={cn(
           'font-mono tabular-nums',
-          isDanger ? 'text-red-400' : isWarning ? 'text-amber-400' : 'text-white/60'
+          isDanger ? 'text-red-700' : isWarning ? 'text-amber-700' : 'text-[var(--app-text-soft)]'
         )}>
           {used.toLocaleString()} / {unlimited ? '∞' : limit.toLocaleString()}
         </span>
       </div>
       {!unlimited && (
-        <div className="h-1.5 rounded-full bg-white/8 overflow-hidden">
+        <div className="h-1.5 overflow-hidden rounded-full bg-[var(--app-raised-2)]">
           <div
             className={cn(
               'h-full rounded-full transition-all duration-500',
@@ -88,31 +90,33 @@ export default function TokenQuotaWidget({ workspaces, className }: TokenQuotaWi
   if (loading) return null;
   if (!hasAnyQuota && quotas.length > 0) {
     return (
-      <div className={cn('rounded-xl border border-white/8 bg-white/[0.02] p-4', className)}>
-        <div className="text-xs font-semibold uppercase tracking-widest text-white/40 mb-2">
-          🎫 Token 配额
-        </div>
-        <p className="text-xs text-white/30">所有部门均无配额限制</p>
-      </div>
+      <WorkspaceSurface padding="sm" className={className}>
+        <WorkspaceSectionHeader
+          title="Token 配额"
+          icon={<Ticket className="h-4 w-4" />}
+        />
+        <p className="mt-3 text-xs text-[var(--app-text-muted)]">所有部门均无配额限制</p>
+      </WorkspaceSurface>
     );
   }
 
   return (
-    <div className={cn('rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-4', className)}>
-      <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
-        🎫 Token 配额
-      </div>
+    <WorkspaceSurface padding="sm" className={cn('space-y-4', className)}>
+      <WorkspaceSectionHeader
+        title="Token 配额"
+        icon={<Ticket className="h-4 w-4" />}
+      />
 
       {quotas.map(q => {
         const name = q.workspace.split('/').pop() || q.workspace;
         return (
           <div key={q.workspace} className="space-y-2">
-            <div className="text-xs font-medium text-white/70">{name}</div>
+            <div className="text-xs font-medium text-[var(--app-text)]">{name}</div>
             <ProgressBar used={q.quota.used.daily} limit={q.quota.daily} label="今日" />
             <ProgressBar used={q.quota.used.monthly} limit={q.quota.monthly} label="本月" />
           </div>
         );
       })}
-    </div>
+    </WorkspaceSurface>
   );
 }

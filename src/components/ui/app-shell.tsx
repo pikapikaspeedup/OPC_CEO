@@ -13,7 +13,7 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-[var(--app-ink)] text-[var(--app-text)]">
+    <div className="apple-reference-shell flex h-dvh flex-col overflow-hidden bg-[var(--app-ink)] text-[var(--app-text)]">
       {header}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {sidebar}
@@ -84,11 +84,11 @@ export function StatusChip({
   children: React.ReactNode;
 }) {
   const tones: Record<string, string> = {
-    neutral: 'border-white/8 bg-white/[0.04] text-[var(--app-text-soft)]',
-    success: 'border-emerald-400/18 bg-emerald-400/10 text-emerald-200',
-    warning: 'border-amber-400/18 bg-amber-400/10 text-amber-100',
-    danger: 'border-red-400/18 bg-red-400/10 text-red-100',
-    info: 'border-sky-400/18 bg-sky-400/10 text-sky-100',
+    neutral: 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)]',
+    success: 'border-emerald-400/18 bg-emerald-400/10 text-emerald-700',
+    warning: 'border-amber-400/18 bg-amber-400/10 text-amber-700',
+    danger: 'border-red-400/18 bg-red-400/10 text-red-700',
+    info: 'border-sky-400/18 bg-sky-400/10 text-sky-700',
     accent: 'border-transparent bg-[var(--app-accent-soft)] text-[var(--app-text)]',
   };
 
@@ -171,7 +171,7 @@ export function ModeTabs({
               fill && 'flex-1 justify-center',
               active
                 ? 'bg-[var(--app-accent-soft)] text-[var(--app-text)]'
-                : 'text-[var(--app-text-muted)] hover:bg-white/[0.04] hover:text-[var(--app-text)]',
+                : 'text-[var(--app-text-muted)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]',
             )}
             onClick={() => onValueChange(tab.value)}
           >
@@ -206,6 +206,80 @@ export function WorkspaceHeader({
       </div>
       {actions && <div className="shrink-0">{actions}</div>}
     </div>
+  );
+}
+
+export type WorkspaceMetricTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'accent';
+
+export function WorkspaceMetricCard({
+  label,
+  value,
+  detail,
+  tone = 'neutral',
+  className,
+}: {
+  label: React.ReactNode;
+  value: React.ReactNode;
+  detail?: React.ReactNode;
+  tone?: WorkspaceMetricTone;
+  className?: string;
+}) {
+  const toneClasses: Record<WorkspaceMetricTone, string> = {
+    neutral: 'from-white to-[#f8fbff] text-[var(--app-text)]',
+    success: 'from-emerald-400/[0.12] to-white text-[var(--app-text)]',
+    warning: 'from-amber-400/[0.12] to-white text-[var(--app-text)]',
+    danger: 'from-red-400/[0.12] to-white text-[var(--app-text)]',
+    info: 'from-sky-400/[0.12] to-white text-[var(--app-text)]',
+    accent: 'from-[var(--app-accent-soft)] to-white text-[var(--app-text)]',
+  };
+
+  return (
+    <div
+      className={cn(
+        'rounded-[22px] border border-[var(--app-border-soft)] bg-gradient-to-br p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]',
+        toneClasses[tone],
+        className,
+      )}
+    >
+      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">{label}</div>
+      <div className="mt-3 text-2xl font-semibold tracking-[-0.04em]">{value}</div>
+      {detail ? <div className="mt-2 text-xs leading-5 text-[var(--app-text-soft)]">{detail}</div> : null}
+    </div>
+  );
+}
+
+export function WorkspaceHero({
+  eyebrow,
+  title,
+  body,
+  meta,
+  actions,
+  metrics,
+  className,
+}: {
+  eyebrow: React.ReactNode;
+  title: React.ReactNode;
+  body?: React.ReactNode;
+  meta?: React.ReactNode;
+  actions?: React.ReactNode;
+  metrics?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <Pane tone="strong" className={cn('relative overflow-hidden p-5 md:p-7', className)}>
+      <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-[var(--app-accent)]/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-28 left-1/4 h-56 w-56 rounded-full bg-[var(--app-signal)]/8 blur-3xl" />
+      <div className="relative">
+        <WorkspaceHeader
+          eyebrow={eyebrow}
+          title={title}
+          meta={meta}
+          actions={actions}
+        />
+        {body ? <div className="mt-4 max-w-3xl text-sm leading-7 text-[var(--app-text-soft)]">{body}</div> : null}
+        {metrics ? <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metrics}</div> : null}
+      </div>
+    </Pane>
   );
 }
 

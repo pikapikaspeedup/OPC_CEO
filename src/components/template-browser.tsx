@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
 import {
   ArrowDown,
@@ -44,10 +44,9 @@ import type {
   TemplatePipelineStageFE,
 } from '@/lib/types';
 import { DAGView } from '@/components/dag-view';
-import { NODE_KIND_META, EXECUTION_MODE_LABELS } from '@/components/template-constants';
+import { NODE_KIND_META } from '@/components/template-constants';
 import { NodeEditor } from '@/components/template-node-editor';
 import { StageEditor } from '@/components/template-stage-editor';
-import { WorkflowEditor } from '@/components/template-workflow-editor';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -821,9 +820,9 @@ export default function TemplateBrowser({
 
       {/* Clone Dialog */}
       <Dialog open={showCloneDialog} onOpenChange={setShowCloneDialog}>
-        <DialogContent className="bg-[var(--app-surface)] border-white/10">
+        <DialogContent className="border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)]">
           <DialogHeader>
-            <DialogTitle className="text-white">克隆模板</DialogTitle>
+            <DialogTitle className="text-[var(--app-text)]">克隆模板</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
@@ -834,7 +833,7 @@ export default function TemplateBrowser({
                 placeholder="my-new-template"
                 className="font-mono text-sm"
               />
-              <p className="text-[10px] text-white/30 mt-1">小写字母、数字、连字符，至少两个字符</p>
+              <p className="mt-1 text-[10px] text-[var(--app-text-muted)]">小写字母、数字、连字符，至少两个字符</p>
             </div>
             <div>
               <label className="text-xs text-[var(--app-text-muted)] mb-1 block">标题（可选）</label>
@@ -876,12 +875,12 @@ export default function TemplateBrowser({
 
       {/* Delete Confirm Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="bg-[var(--app-surface)] border-white/10">
+        <DialogContent className="border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)]">
           <DialogHeader>
-            <DialogTitle className="text-white">确认删除</DialogTitle>
+            <DialogTitle className="text-[var(--app-text)]">确认删除</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-[var(--app-text-muted)] py-2">
-            确定要删除模板 <span className="font-mono text-white">{selectedId}</span> 吗？此操作不可撤销。
+            确定要删除模板 <span className="font-mono text-[var(--app-text)]">{selectedId}</span> 吗？此操作不可撤销。
           </p>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setShowDeleteConfirm(false)}>取消</Button>
@@ -915,9 +914,9 @@ export default function TemplateBrowser({
 
       {/* Add Node Dialog */}
       <Dialog open={showAddNodeDialog} onOpenChange={setShowAddNodeDialog}>
-        <DialogContent className="bg-[var(--app-surface)] border-white/10">
+        <DialogContent className="border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)]">
           <DialogHeader>
-            <DialogTitle className="text-white">添加 DAG 节点</DialogTitle>
+            <DialogTitle className="text-[var(--app-text)]">添加 DAG 节点</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
@@ -948,7 +947,7 @@ export default function TemplateBrowser({
                       'rounded-full px-2.5 py-1 text-[10px] font-medium border transition-colors',
                       newNodeKind === k
                         ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
-                        : 'bg-white/5 text-white/30 border-white/8 hover:text-white/60',
+                        : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-muted)] hover:text-[var(--app-text)]',
                     )}
                     onClick={() => setNewNodeKind(k)}
                   >
@@ -967,7 +966,7 @@ export default function TemplateBrowser({
                       'rounded-full px-2.5 py-1 text-[10px] font-medium border transition-colors',
                       newNodeStageConfigId === stageId
                         ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
-                        : 'bg-white/5 text-white/30 border-white/8 hover:text-white/60',
+                        : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-muted)] hover:text-[var(--app-text)]',
                     )}
                     onClick={() => setNewNodeStageConfigId(stageId)}
                   >
@@ -1016,9 +1015,9 @@ export default function TemplateBrowser({
 
       {/* Add Edge Dialog */}
       <Dialog open={showAddEdgeDialog} onOpenChange={setShowAddEdgeDialog}>
-        <DialogContent className="bg-[var(--app-surface)] border-white/10">
+        <DialogContent className="border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)]">
           <DialogHeader>
-            <DialogTitle className="text-white">添加连线</DialogTitle>
+            <DialogTitle className="text-[var(--app-text)]">添加连线</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
@@ -1031,7 +1030,7 @@ export default function TemplateBrowser({
                       'rounded-full px-2.5 py-1 text-[10px] font-mono border transition-colors',
                       newEdgeFrom === n.id
                         ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
-                        : 'bg-white/5 text-white/30 border-white/8 hover:text-white/60',
+                        : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-muted)] hover:text-[var(--app-text)]',
                     )}
                     onClick={() => setNewEdgeFrom(n.id)}
                   >
@@ -1050,7 +1049,7 @@ export default function TemplateBrowser({
                       'rounded-full px-2.5 py-1 text-[10px] font-mono border transition-colors',
                       newEdgeTo === n.id
                         ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
-                        : 'bg-white/5 text-white/30 border-white/8 hover:text-white/60',
+                        : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-muted)] hover:text-[var(--app-text)]',
                     )}
                     onClick={() => setNewEdgeTo(n.id)}
                   >

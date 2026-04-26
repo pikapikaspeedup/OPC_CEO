@@ -4,10 +4,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Bell, Zap, Play, X, CheckCircle2, AlertTriangle,
-  RotateCcw, SkipForward, Square, Loader2,
+  RotateCcw, SkipForward, Square,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { api } from '@/lib/api';
 import ApprovalPanel from '@/components/approval-panel';
 import type { CEOEvent, AgentRun, Project } from '@/lib/types';
 
@@ -49,18 +48,18 @@ function DrawerShell({ open, onClose, title, children, width = 400 }: {
   return createPortal(
     <div className="fixed inset-0 z-[100] flex justify-end">
       {/* Overlay */}
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-slate-900/18 backdrop-blur-sm" onClick={onClose} />
 
       {/* Drawer */}
       <div
-        className="relative flex flex-col bg-[rgba(9,17,27,0.97)] backdrop-blur-xl border-l border-white/8 shadow-[-20px_0_60px_rgba(0,0,0,0.4)] animate-in slide-in-from-right duration-300"
+        className="relative flex flex-col border-l border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.98)] shadow-[-20px_0_60px_rgba(28,44,73,0.16)] backdrop-blur-xl animate-in slide-in-from-right duration-300"
         style={{ width }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
-          <h2 className="text-sm font-semibold text-white">{title}</h2>
+        <div className="flex items-center justify-between border-b border-[var(--app-border-soft)] px-5 py-4">
+          <h2 className="text-sm font-semibold text-[var(--app-text)]">{title}</h2>
           <button
-            className="rounded-lg p-1 text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+            className="rounded-lg p-1 text-[var(--app-text-muted)] transition-colors hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]"
             onClick={onClose}
           >
             <X className="h-4 w-4" />
@@ -81,10 +80,10 @@ function DrawerShell({ open, onClose, title, children, width = 400 }: {
 
 function EventIcon({ type }: { type: CEOEvent['type'] }) {
   switch (type) {
-    case 'critical': return <AlertTriangle className="h-4 w-4 text-red-400" />;
-    case 'warning': return <AlertTriangle className="h-4 w-4 text-amber-400" />;
-    case 'info': return <Bell className="h-4 w-4 text-sky-400" />;
-    case 'done': return <CheckCircle2 className="h-4 w-4 text-emerald-400" />;
+    case 'critical': return <AlertTriangle className="h-4 w-4 text-red-700" />;
+    case 'warning': return <AlertTriangle className="h-4 w-4 text-amber-700" />;
+    case 'info': return <Bell className="h-4 w-4 text-sky-700" />;
+    case 'done': return <CheckCircle2 className="h-4 w-4 text-emerald-700" />;
   }
 }
 
@@ -116,6 +115,7 @@ export default function NotificationIndicators({
   const [openDrawer, setOpenDrawer] = useState<DrawerType>(null);
   const [dismissedEventIds, setDismissedEventIds] = useState<Set<string>>(new Set());
   const [interventionLoading, setInterventionLoading] = useState<string | null>(null);
+  const [snapshotNow, setSnapshotNow] = useState(() => Date.now());
 
   const visibleEvents = useMemo(
     () => events.filter(e => !dismissedEventIds.has(e.id)),
@@ -142,8 +142,8 @@ export default function NotificationIndicators({
         {/* Approvals */}
         <button
           className={cn(
-            'relative rounded-lg p-2 text-white/40 hover:text-white hover:bg-white/10 transition-colors',
-            openDrawer === 'approvals' && 'text-white bg-white/10',
+            'relative rounded-lg p-2 text-[var(--app-text-muted)] transition-colors hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]',
+            openDrawer === 'approvals' && 'bg-[var(--app-raised)] text-[var(--app-text)]',
           )}
           title="审批请求"
           onClick={() => setOpenDrawer(openDrawer === 'approvals' ? null : 'approvals')}
@@ -155,8 +155,8 @@ export default function NotificationIndicators({
         {/* Events */}
         <button
           className={cn(
-            'relative rounded-lg p-2 text-white/40 hover:text-white hover:bg-white/10 transition-colors',
-            openDrawer === 'events' && 'text-white bg-white/10',
+            'relative rounded-lg p-2 text-[var(--app-text-muted)] transition-colors hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]',
+            openDrawer === 'events' && 'bg-[var(--app-raised)] text-[var(--app-text)]',
             criticalCount > 0 && 'animate-pulse',
           )}
           title="事件通知"
@@ -169,11 +169,14 @@ export default function NotificationIndicators({
         {/* Active Runs */}
         <button
           className={cn(
-            'relative rounded-lg p-2 text-white/40 hover:text-white hover:bg-white/10 transition-colors',
-            openDrawer === 'runs' && 'text-white bg-white/10',
+            'relative rounded-lg p-2 text-[var(--app-text-muted)] transition-colors hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]',
+            openDrawer === 'runs' && 'bg-[var(--app-raised)] text-[var(--app-text)]',
           )}
           title="运行中任务"
-          onClick={() => setOpenDrawer(openDrawer === 'runs' ? null : 'runs')}
+          onClick={() => {
+            setSnapshotNow(Date.now());
+            setOpenDrawer(openDrawer === 'runs' ? null : 'runs');
+          }}
         >
           <Play className="h-4 w-4" />
           <Badge count={activeRuns.length} color="bg-sky-500 text-white" />
@@ -196,7 +199,7 @@ export default function NotificationIndicators({
         title={`事件 (${visibleEvents.length})`}
       >
         {visibleEvents.length === 0 ? (
-          <div className="text-sm text-white/30 text-center py-8">暂无事件</div>
+          <div className="py-8 text-center text-sm text-[var(--app-text-muted)]">暂无事件</div>
         ) : (
           <div className="space-y-2">
             {visibleEvents.map(event => (
@@ -206,22 +209,22 @@ export default function NotificationIndicators({
                   'rounded-lg border px-4 py-3 text-sm transition-colors',
                   event.type === 'critical' ? 'border-red-500/20 bg-red-500/5'
                     : event.type === 'warning' ? 'border-amber-500/20 bg-amber-500/5'
-                    : 'border-white/6 bg-white/[0.02]',
+                    : 'border-[var(--app-border-soft)] bg-[var(--app-raised)]',
                 )}
               >
                 <div className="flex items-start gap-2">
                   <EventIcon type={event.type} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-white/90">{event.title}</div>
+                    <div className="text-[var(--app-text)]">{event.title}</div>
                     {event.description && (
-                      <div className="mt-1 text-xs text-white/50">{event.description}</div>
+                      <div className="mt-1 text-xs text-[var(--app-text-soft)]">{event.description}</div>
                     )}
                     {event.actions && event.actions.length > 0 && (
                       <div className="mt-2 flex gap-2">
                         {event.actions.map(action => (
                           <button
                             key={action.label}
-                            className="rounded-md bg-white/10 px-2.5 py-1 text-xs font-medium text-white/80 hover:bg-white/15 transition-colors"
+                            className="rounded-md bg-[var(--app-raised-2)] px-2.5 py-1 text-xs font-medium text-[var(--app-text-soft)] transition-colors hover:text-[var(--app-text)]"
                             onClick={() => {
                               if (action.action === 'dismiss') {
                                 setDismissedEventIds(prev => new Set(prev).add(event.id));
@@ -251,12 +254,12 @@ export default function NotificationIndicators({
         width={480}
       >
         {activeRuns.length === 0 ? (
-          <div className="text-sm text-white/30 text-center py-8">当前没有运行中的任务</div>
+          <div className="py-8 text-center text-sm text-[var(--app-text-muted)]">当前没有运行中的任务</div>
         ) : (
           <div className="space-y-3">
             {activeRuns.map(run => {
               const elapsed = run.startedAt
-                ? Math.floor((Date.now() - new Date(run.startedAt).getTime()) / 1000)
+                ? Math.floor((snapshotNow - new Date(run.startedAt).getTime()) / 1000)
                 : 0;
               const mins = Math.floor(elapsed / 60);
               const secs = elapsed % 60;
@@ -269,10 +272,10 @@ export default function NotificationIndicators({
                   <div className="flex items-center gap-3">
                     <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-white/90 truncate">
+                      <div className="truncate text-sm font-medium text-[var(--app-text)]">
                         {proj?.name || (run.prompt.length > 50 ? run.prompt.slice(0, 50) + '…' : run.prompt)}
                       </div>
-                      <div className="flex gap-2 mt-0.5 text-xs text-white/40">
+                      <div className="mt-0.5 flex gap-2 text-xs text-[var(--app-text-muted)]">
                         <span>{wsName}</span>
                         <span>·</span>
                         <span>{mins}m{secs}s</span>
@@ -286,23 +289,23 @@ export default function NotificationIndicators({
                     </div>
                   </div>
                   {/* Intervention buttons */}
-                  <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-white/5">
+                  <div className="mt-2 flex items-center gap-1.5 border-t border-[var(--app-border-soft)] pt-2">
                     <button
-                      className="flex-1 rounded-md px-3 py-1.5 text-xs font-medium text-amber-300/80 bg-amber-500/10 hover:bg-amber-500/15 transition-colors disabled:opacity-30"
+                      className="flex-1 rounded-md bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-500/15 disabled:opacity-30"
                       disabled={isIntervening}
                       onClick={() => handleIntervene(run.runId, 'retry')}
                     >
                       <RotateCcw className="h-3 w-3 inline mr-1" />重试
                     </button>
                     <button
-                      className="flex-1 rounded-md px-3 py-1.5 text-xs font-medium text-sky-300/80 bg-sky-500/10 hover:bg-sky-500/15 transition-colors disabled:opacity-30"
+                      className="flex-1 rounded-md bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-500/15 disabled:opacity-30"
                       disabled={isIntervening}
                       onClick={() => handleIntervene(run.runId, 'nudge')}
                     >
                       <SkipForward className="h-3 w-3 inline mr-1" />跳过
                     </button>
                     <button
-                      className="flex-1 rounded-md px-3 py-1.5 text-xs font-medium text-red-300/80 bg-red-500/10 hover:bg-red-500/15 transition-colors disabled:opacity-30"
+                      className="flex-1 rounded-md bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 disabled:opacity-30"
                       disabled={isIntervening}
                       onClick={() => handleIntervene(run.runId, 'cancel')}
                     >
@@ -310,7 +313,7 @@ export default function NotificationIndicators({
                     </button>
                     {proj && (
                       <button
-                        className="rounded-md px-3 py-1.5 text-xs font-medium text-white/50 bg-white/5 hover:bg-white/10 transition-colors"
+                        className="rounded-md bg-[var(--app-raised-2)] px-3 py-1.5 text-xs font-medium text-[var(--app-text-soft)] transition-colors hover:text-[var(--app-text)]"
                         onClick={() => onNavigateToProject?.(proj.projectId)}
                       >
                         查看

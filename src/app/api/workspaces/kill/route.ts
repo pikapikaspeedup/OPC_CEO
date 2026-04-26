@@ -1,9 +1,8 @@
-import { NextResponse } from 'next/server';
-import { discoverLanguageServers } from '@/lib/bridge/gateway';
-import { closeAntigravityWindow } from '@/lib/window-control';
-import { createLogger } from '@/lib/logger';
-
-const log = createLogger('Kill');
+import { handleWorkspacesKillPost } from '@/server/runtime/routes/workspaces';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,33 +14,8 @@ export const dynamic = 'force-dynamic';
  * Use POST /api/workspaces/close (hide) if you just want to remove it from the sidebar.
  */
 export async function POST(req: Request) {
-  const { workspace } = await req.json();
-  if (!workspace) {
-    return NextResponse.json({ error: 'Missing workspace' }, { status: 400 });
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
   }
-
-  const servers = await discoverLanguageServers();
-  const target = servers.find(s =>
-    s.workspace === workspace ||
-    s.workspace?.includes(workspace) ||
-    workspace.includes(s.workspace || '\0')
-  );
-
-  if (!target) {
-    return NextResponse.json({ error: 'No server found for this workspace' }, { status: 404 });
-  }
-
-  log.info({ workspace }, 'Trying to close Antigravity window');
-
-  try {
-    const success = await closeAntigravityWindow(workspace);
-    if (!success) {
-      log.warn({ pid: target.pid }, 'Window not found via AppleScript, falling back to process.kill');
-      process.kill(target.pid, 'SIGTERM');
-    }
-    return NextResponse.json({ ok: true, killed: { pid: target.pid, port: target.port, windowClosed: success } });
-  } catch (e: any) {
-    log.error({ err: e.message, workspace }, 'Failed to clean up workspace');
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  return handleWorkspacesKillPost(req);
 }

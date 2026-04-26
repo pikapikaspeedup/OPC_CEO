@@ -10,6 +10,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
 import type { CEOProfileFE } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import {
+  workspaceFieldClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 type CEOProfileDraft = {
   name: string;
@@ -37,20 +41,20 @@ function SectionCard({
   className,
 }: {
   title: string;
-  description: string;
+  description?: string;
   icon: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
-    <div className={cn('rounded-2xl border border-white/8 bg-white/[0.025] p-5', className)}>
+    <div className={cn('rounded-[24px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.94))] p-5 shadow-[0_18px_48px_rgba(28,44,73,0.06)]', className)}>
       <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-400/15 bg-sky-400/[0.08] text-sky-300">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-500/20 bg-sky-500/[0.08] text-sky-700">
           {icon}
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-white">{title}</div>
-          <div className="mt-1 text-xs leading-6 text-white/50">{description}</div>
+          <div className="text-sm font-semibold text-[var(--app-text)]">{title}</div>
+          {description ? <div className="mt-1 text-xs leading-6 text-[var(--app-text-soft)]">{description}</div> : null}
         </div>
       </div>
       <div className="mt-5 space-y-4">{children}</div>
@@ -70,8 +74,8 @@ function FieldRow({
   return (
     <div className="grid gap-2 lg:grid-cols-[168px_minmax(0,1fr)] lg:items-start lg:gap-4">
       <div>
-        <div className="text-xs font-medium text-white/70">{label}</div>
-        {hint ? <div className="mt-1 text-[11px] leading-5 text-white/35">{hint}</div> : null}
+        <div className="text-xs font-medium text-[var(--app-text)]">{label}</div>
+        {hint ? <div className="mt-1 text-[11px] leading-5 text-[var(--app-text-muted)]">{hint}</div> : null}
       </div>
       <div className="min-w-0">{children}</div>
     </div>
@@ -113,9 +117,9 @@ function StatusMessage({ state }: { state: SaveState }) {
     <div
       className={cn(
         'flex items-center gap-2 rounded-xl border px-3 py-2 text-xs',
-        state.status === 'ok' && 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
-        state.status === 'error' && 'border-red-500/20 bg-red-500/10 text-red-300',
-        state.status === 'saving' && 'border-white/10 bg-white/[0.04] text-white/55',
+        state.status === 'ok' && 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700',
+        state.status === 'error' && 'border-red-500/20 bg-red-500/10 text-red-700',
+        state.status === 'saving' && 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)]',
       )}
     >
       {state.status === 'saving' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
@@ -219,7 +223,7 @@ export default function CEOProfileSettingsTab() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 py-10 text-sm text-white/40">
+      <div className="flex items-center gap-2 py-10 text-sm text-[var(--app-text-muted)]">
         <Loader2 className="h-4 w-4 animate-spin" />
         正在加载 CEO profile…
       </div>
@@ -228,12 +232,12 @@ export default function CEOProfileSettingsTab() {
 
   if (error || !draft || !profile) {
     return (
-      <div className="rounded-2xl border border-red-500/15 bg-red-500/[0.05] p-5 text-sm text-red-200">
+      <div className="rounded-2xl border border-red-500/15 bg-red-500/[0.05] p-5 text-sm text-red-700">
         <div className="flex items-center gap-2 font-medium">
           <AlertCircle className="h-4 w-4" />
           无法加载 CEO profile
         </div>
-        <div className="mt-2 text-xs leading-6 text-red-100/75">{error || 'unknown error'}</div>
+        <div className="mt-2 text-xs leading-6 text-red-700/75">{error || 'unknown error'}</div>
       </div>
     );
   }
@@ -241,43 +245,34 @@ export default function CEOProfileSettingsTab() {
   return (
     <div className="space-y-5">
       <SectionCard
-        title="CEO Profile Journey"
-        description="这里配置的是结构化偏好，不是 Persona/Playbook 文档。它直接读写 `/api/ceo/profile`，让用户偏好从隐藏存储变成可见、可编辑、可回显的旅程。"
+        title="CEO Profile"
         icon={<Sparkles className="h-4 w-4" />}
-        className="border-sky-400/15 bg-[linear-gradient(180deg,rgba(19,29,44,0.82),rgba(10,17,28,0.9))]"
+        className="border-sky-500/20 bg-[linear-gradient(135deg,rgba(47,109,246,0.08),rgba(255,255,255,0.98)_36%,rgba(248,250,252,0.94))]"
       >
         <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-2xl border border-white/8 bg-black/15 p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Identity</div>
-            <div className="mt-2 text-base font-semibold text-white">{profile.identity.name}</div>
-            <div className="mt-1 text-xs text-white/45">{profile.identity.tone || '未设置 tone'}</div>
+          <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Identity</div>
+            <div className="mt-2 text-base font-semibold text-[var(--app-text)]">{profile.identity.name}</div>
+            <div className="mt-1 text-xs text-[var(--app-text-soft)]">{profile.identity.tone || '未设置 tone'}</div>
           </div>
-          <div className="rounded-2xl border border-white/8 bg-black/15 p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Focus</div>
-            <div className="mt-2 text-base font-semibold text-white">{profile.activeFocus?.length || 0}</div>
-            <div className="mt-1 text-xs text-white/45">当前活跃关注点</div>
+          <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Focus</div>
+            <div className="mt-2 text-base font-semibold text-[var(--app-text)]">{profile.activeFocus?.length || 0}</div>
+            <div className="mt-1 text-xs text-[var(--app-text-soft)]">当前活跃关注点</div>
           </div>
-          <div className="rounded-2xl border border-white/8 bg-black/15 p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Updated</div>
-            <div className="mt-2 text-base font-semibold text-white">
+          <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Updated</div>
+            <div className="mt-2 text-base font-semibold text-[var(--app-text)]">
               {new Date(profile.updatedAt).toLocaleString()}
             </div>
-            <div className="mt-1 text-xs text-white/45">最近一次写入时间</div>
+            <div className="mt-1 text-xs text-[var(--app-text-soft)]">最近一次写入时间</div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3 text-xs leading-6 text-white/55">
-          当前生效链路：
-          <span className="text-white/75"> Settings → CEO Profile → `ceo-profile.json` → `/api/ceo/profile` 回显</span>
-          ，其中
-          <span className="text-white/75"> `activeFocus`</span>
-          已直接进入 CEO routine 摘要，其余字段保持为结构化偏好合同，不再埋在 prompt 文档里。
-        </div>
       </SectionCard>
 
       <SectionCard
-        title="Structured Preferences"
-        description="把“是谁、关注什么、如何沟通、如何取舍”放进结构化配置，避免 CEO 行为只能靠 prompt 文本猜测。"
+        title="结构化偏好"
         icon={<ShieldAlert className="h-4 w-4" />}
       >
         <FieldRow label="CEO 名称" hint="用于结构化身份回显。">
@@ -285,7 +280,7 @@ export default function CEOProfileSettingsTab() {
             value={draft.name}
             onChange={(event) => updateDraft('name', event.target.value)}
             placeholder="AI CEO"
-            className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85 placeholder:text-white/20"
+            className={cn('h-10', workspaceFieldClassName)}
           />
         </FieldRow>
 
@@ -294,7 +289,7 @@ export default function CEOProfileSettingsTab() {
             value={draft.tone}
             onChange={(event) => updateDraft('tone', event.target.value)}
             placeholder="pragmatic"
-            className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85 placeholder:text-white/20"
+            className={cn('h-10', workspaceFieldClassName)}
           />
         </FieldRow>
 
@@ -303,7 +298,7 @@ export default function CEOProfileSettingsTab() {
             value={draft.prioritiesText}
             onChange={(event) => updateDraft('prioritiesText', event.target.value)}
             placeholder={'例如：\n增长速度\n稳定性\n交付确定性'}
-            className="min-h-28 rounded-2xl border-white/8 bg-white/[0.04] text-sm text-white/85 placeholder:text-white/20"
+            className={cn('min-h-28 rounded-2xl', workspaceFieldClassName)}
           />
         </FieldRow>
 
@@ -313,9 +308,9 @@ export default function CEOProfileSettingsTab() {
               value={draft.activeFocusText}
               onChange={(event) => updateDraft('activeFocusText', event.target.value)}
               placeholder={'例如：\n部门设置解耦\n开发态响应速度\n可观测性补齐'}
-              className="min-h-28 rounded-2xl border-white/8 bg-white/[0.04] text-sm text-white/85 placeholder:text-white/20"
+              className={cn('min-h-28 rounded-2xl', workspaceFieldClassName)}
             />
-            <div className={cn('text-[11px] text-white/35', activeFocusCount > 5 && 'text-amber-200')}>
+            <div className={cn('text-[11px] text-[var(--app-text-muted)]', activeFocusCount > 5 && 'text-amber-700')}>
               当前录入 {activeFocusCount} 条，保存后最多保留 5 条。
             </div>
           </div>
@@ -324,7 +319,7 @@ export default function CEOProfileSettingsTab() {
         <div className="grid gap-4 xl:grid-cols-2">
           <FieldRow label="信息详略" hint="决定汇报偏向简报还是展开说明。">
             <Select value={draft.verbosity} onValueChange={(value) => updateDraft('verbosity', value as CEOProfileDraft['verbosity'])}>
-              <SelectTrigger className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85">
+              <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -337,7 +332,7 @@ export default function CEOProfileSettingsTab() {
 
           <FieldRow label="升级风格" hint="遇到风险时是更激进提醒，还是更克制。">
             <Select value={draft.escalationStyle} onValueChange={(value) => updateDraft('escalationStyle', value as CEOProfileDraft['escalationStyle'])}>
-              <SelectTrigger className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85">
+              <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -350,7 +345,7 @@ export default function CEOProfileSettingsTab() {
 
           <FieldRow label="风险容忍度" hint="影响默认取舍语境。">
             <Select value={draft.riskTolerance} onValueChange={(value) => updateDraft('riskTolerance', value as CEOProfileDraft['riskTolerance'])}>
-              <SelectTrigger className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85">
+              <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -363,7 +358,7 @@ export default function CEOProfileSettingsTab() {
 
           <FieldRow label="评审偏好" hint="更关心结果、过程，还是折中。">
             <Select value={draft.reviewPreference} onValueChange={(value) => updateDraft('reviewPreference', value as CEOProfileDraft['reviewPreference'])}>
-              <SelectTrigger className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85">
+              <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -379,7 +374,7 @@ export default function CEOProfileSettingsTab() {
           <Button
             onClick={handleSaveProfile}
             disabled={!isDirty || saveState.status === 'saving'}
-            className="bg-sky-500 text-white hover:bg-sky-400"
+            className="rounded-full bg-[var(--app-accent)] px-4 text-white hover:brightness-105"
           >
             {saveState.status === 'saving' ? (
               <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -393,14 +388,13 @@ export default function CEOProfileSettingsTab() {
       </SectionCard>
 
       <SectionCard
-        title="Feedback Signals"
-        description="把用户对 CEO 行为的纠偏、认可和偏好记录成结构化信号，避免反馈只停留在聊天历史里。"
+        title="反馈信号"
         icon={<MessageSquareQuote className="h-4 w-4" />}
       >
         <div className="grid gap-4 xl:grid-cols-[minmax(0,0.36fr)_minmax(0,1fr)]">
           <FieldRow label="反馈类型" hint="用于后续区分偏好、纠偏、审批通过等。">
             <Select value={feedbackType} onValueChange={(value) => setFeedbackType(value as FeedbackType)}>
-              <SelectTrigger className="h-10 rounded-xl border-white/8 bg-white/[0.04] text-sm text-white/85">
+              <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -417,7 +411,7 @@ export default function CEOProfileSettingsTab() {
               value={feedbackContent}
               onChange={(event) => setFeedbackContent(event.target.value)}
               placeholder="写入一条会长期保留的 CEO 行为反馈。"
-              className="min-h-24 rounded-2xl border-white/8 bg-white/[0.04] text-sm text-white/85 placeholder:text-white/20"
+              className={cn('min-h-24 rounded-2xl', workspaceFieldClassName)}
             />
           </FieldRow>
         </div>
@@ -426,7 +420,7 @@ export default function CEOProfileSettingsTab() {
           <Button
             onClick={handleAppendFeedback}
             disabled={!feedbackContent.trim() || feedbackState.status === 'saving'}
-            className="bg-white/[0.08] text-white hover:bg-white/[0.14]"
+            className={cn('rounded-full px-4', workspaceOutlineActionClassName)}
           >
             {feedbackState.status === 'saving' ? (
               <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -439,22 +433,22 @@ export default function CEOProfileSettingsTab() {
         </div>
 
         <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-white/35">Recent Signals</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Recent Signals</div>
           {recentFeedback.length > 0 ? (
             <div className="space-y-2">
               {recentFeedback.map((item) => (
-                <div key={`${item.timestamp}:${item.content}`} className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/35">
+                <div key={`${item.timestamp}:${item.content}`} className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
                     <span>{item.type}</span>
-                    <span className="text-white/20">•</span>
+                    <span className="text-[var(--app-border-strong)]">•</span>
                     <span>{new Date(item.timestamp).toLocaleString()}</span>
                   </div>
-                  <div className="mt-2 text-sm leading-6 text-white/75">{item.content}</div>
+                  <div className="mt-2 text-sm leading-6 text-[var(--app-text-soft)]">{item.content}</div>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm text-white/35">
+            <div className="rounded-2xl border border-dashed border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-5 text-sm text-[var(--app-text-muted)]">
               还没有任何结构化反馈信号。
             </div>
           )}

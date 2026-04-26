@@ -1,45 +1,17 @@
-import { NextResponse } from 'next/server';
-import { spawnSync } from 'child_process';
-import { createLogger } from '@/lib/logger';
-import { registerWorkspace } from '@/lib/workspace-catalog';
-
-const log = createLogger('Launch');
+import { handleWorkspacesLaunchPost } from '@/server/runtime/routes/workspaces';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
-
-const ANTIGRAVITY_CLI = '/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity';
 
 /**
  * POST /api/workspaces/launch — Open a workspace in Antigravity (triggers language_server start)
  */
 export async function POST(req: Request) {
-  const { workspace } = await req.json();
-  if (!workspace) {
-    return NextResponse.json({ error: 'Missing workspace path' }, { status: 400 });
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
   }
-
-  let wsPath = workspace.replace(/^file:\/\//, '');
-  try {
-    const registered = registerWorkspace({
-      workspace: wsPath,
-      sourceKind: 'manual-import',
-    });
-    wsPath = registered.path;
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 400 });
-  }
-
-  log.info({ wsPath }, 'Opening workspace');
-
-  try {
-    spawnSync(ANTIGRAVITY_CLI, ['--new-window', wsPath], {
-      timeout: 5000,
-      stdio: 'ignore',
-    });
-    log.info({ wsPath }, 'Antigravity CLI executed');
-    return NextResponse.json({ ok: true, launched: wsPath });
-  } catch (e: any) {
-    log.error({ err: e.message, wsPath }, 'Launch failed');
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  return handleWorkspacesLaunchPost(req);
 }

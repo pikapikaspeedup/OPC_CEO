@@ -1,4 +1,5 @@
 import { createLogger } from '@/lib/logger';
+import type { NextRequest } from 'next/server';
 import { DELETE as deleteAgentRun } from '@/app/api/agent-runs/[id]/route';
 import { POST as postAgentRunIntervene } from '@/app/api/agent-runs/[id]/intervene/route';
 import { GET as getAgentRunStream } from '@/app/api/agent-runs/[id]/stream/route';
@@ -9,8 +10,17 @@ import { POST as postConversationCancel } from '@/app/api/conversations/[id]/can
 import { POST as postProjectResume } from '@/app/api/projects/[id]/resume/route';
 import { handleRuntimeAgentRunDispatch } from '@/server/runtime/agent-runs-dispatch';
 import {
+  handleMeGet,
+  handleModelsGet,
+} from '@/server/runtime/routes/user';
+import {
+  handleWorkspacesKillPost,
+  handleWorkspacesLaunchPost,
+} from '@/server/runtime/routes/workspaces';
+import {
   jsonResponse,
   methodNotAllowedResponse,
+  type RouteDefinition,
   startRouteServer,
 } from '@/server/shared/http-server';
 
@@ -20,19 +30,12 @@ function params(id: string): { params: Promise<{ id: string }> } {
   return { params: Promise.resolve({ id }) };
 }
 
-export function startRuntimeServer(options: {
-  port: number;
-  hostname?: string;
-}) {
-  const server = startRouteServer({
-    name: 'runtime',
-    port: options.port,
-    hostname: options.hostname,
-    routes: [
-      {
+export function createRuntimeRoutes(options: { includeHealth?: boolean } = {}): RouteDefinition[] {
+  return [
+      ...(options.includeHealth === false ? [] : [{
         pattern: /^\/health$/,
         handler: async () => jsonResponse({ ok: true, role: 'runtime' }),
-      },
+      }]),
       {
         pattern: /^\/internal\/runtime\/agent-runs$/,
         handler: async (req) => {
@@ -93,7 +96,7 @@ export function startRuntimeServer(options: {
         pattern: /^\/api\/agent-runs\/([^/]+)\/stream$/,
         handler: async (req, match) => {
           if (req.method === 'GET') {
-            return getAgentRunStream(req as any, params(decodeURIComponent(match[1])));
+            return getAgentRunStream(req as unknown as NextRequest, params(decodeURIComponent(match[1])));
           }
           return methodNotAllowedResponse(['GET']);
         },
@@ -143,7 +146,54 @@ export function startRuntimeServer(options: {
           return methodNotAllowedResponse(['POST']);
         },
       },
-    ],
+      {
+        pattern: /^\/api\/me$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleMeGet();
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/models$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleModelsGet();
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/workspaces\/launch$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleWorkspacesLaunchPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/workspaces\/kill$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleWorkspacesKillPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+    ];
+}
+
+export function startRuntimeServer(options: {
+  port: number;
+  hostname?: string;
+}) {
+  const server = startRouteServer({
+    name: 'runtime',
+    port: options.port,
+    hostname: options.hostname,
+    routes: createRuntimeRoutes(),
   });
 
   log.info({ port: options.port }, 'Runtime server started');

@@ -22,26 +22,66 @@ import { POST as postSchedulerJobTrigger } from '@/app/api/scheduler/jobs/[id]/t
 import { GET as getManagementOverview } from '@/app/api/management/overview/route';
 import { GET as getAuditEvents } from '@/app/api/operations/audit/route';
 import {
+  handleApprovalCreatePost,
+  handleApprovalDetailGet,
+  handleApprovalDetailPatch,
+  handleApprovalFeedback,
+  handleApprovalListGet,
+} from '@/server/control-plane/routes/approval';
+import { handleApprovalEventsStream } from '@/server/control-plane/routes/approval-events';
+import { createCompanyControlPlaneRoutes } from '@/server/control-plane/company-routes';
+import {
+  handleCEOCommandPost,
+  handleCEOEventsGet,
+  handleCEOProfileFeedbackPost,
+  handleCEOProfileGet,
+  handleCEOProfilePatch,
+  handleCEORoutineGet,
+  handleCEOSetupGet,
+  handleCEOSetupPost,
+} from '@/server/control-plane/routes/ceo';
+import {
+  handleDepartmentsDigestGet,
+  handleDepartmentsGet,
+  handleDepartmentsMemoryGet,
+  handleDepartmentsMemoryPost,
+  handleDepartmentsPut,
+  handleDepartmentsQuotaGet,
+  handleDepartmentsSyncPost,
+} from '@/server/control-plane/routes/departments';
+import {
+  handleAIConfigGet,
+  handleAIConfigPut,
+  handleApiKeysGet,
+  handleApiKeysPut,
+  handleApiKeysTestPost,
+  handleMcpConfigGet,
+  handleMcpServersDelete,
+  handleMcpServersPost,
+  handleMcpToolsGet,
+} from '@/server/control-plane/routes/settings';
+import {
+  handleWorkspacesCloseDelete,
+  handleWorkspacesCloseGet,
+  handleWorkspacesClosePost,
+  handleWorkspacesGet,
+  handleWorkspacesImportPost,
+} from '@/server/control-plane/routes/workspaces';
+import {
   jsonResponse,
   methodNotAllowedResponse,
+  type RouteDefinition,
   startRouteServer,
 } from '@/server/shared/http-server';
 
 const log = createLogger('ControlPlaneServer');
 
-export function startControlPlaneServer(options: {
-  port: number;
-  hostname?: string;
-}) {
-  const server = startRouteServer({
-    name: 'control-plane',
-    port: options.port,
-    hostname: options.hostname,
-    routes: [
-      {
+export function createControlPlaneRoutes(options: { includeHealth?: boolean } = {}): RouteDefinition[] {
+  return [
+      ...(options.includeHealth === false ? [] : [{
         pattern: /^\/health$/,
         handler: async () => jsonResponse({ ok: true, role: 'control-plane' }),
-      },
+      }]),
       {
         pattern: /^\/api\/agent-runs$/,
         handler: async (req) => {
@@ -230,6 +270,194 @@ export function startControlPlaneServer(options: {
           return methodNotAllowedResponse(['GET']);
         },
       },
+      ...createCompanyControlPlaneRoutes(),
+      {
+        pattern: /^\/api\/approval$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleApprovalListGet(req);
+          }
+          if (req.method === 'POST') {
+            return handleApprovalCreatePost(req);
+          }
+          return methodNotAllowedResponse(['GET', 'POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/approval\/events$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleApprovalEventsStream(req);
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/approval\/([^/]+)\/feedback$/,
+        handler: async (req, match) => {
+          if (req.method === 'GET' || req.method === 'POST') {
+            return handleApprovalFeedback(req, decodeURIComponent(match[1]));
+          }
+          return methodNotAllowedResponse(['GET', 'POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/approval\/([^/]+)$/,
+        handler: async (req, match) => {
+          const id = decodeURIComponent(match[1]);
+          if (req.method === 'GET') {
+            return handleApprovalDetailGet(id);
+          }
+          if (req.method === 'PATCH') {
+            return handleApprovalDetailPatch(req, id);
+          }
+          return methodNotAllowedResponse(['GET', 'PATCH']);
+        },
+      },
+      {
+        pattern: /^\/api\/ai-config$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleAIConfigGet();
+          }
+          if (req.method === 'PUT') {
+            return handleAIConfigPut(req);
+          }
+          return methodNotAllowedResponse(['GET', 'PUT']);
+        },
+      },
+      {
+        pattern: /^\/api\/api-keys$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleApiKeysGet();
+          }
+          if (req.method === 'PUT') {
+            return handleApiKeysPut(req);
+          }
+          return methodNotAllowedResponse(['GET', 'PUT']);
+        },
+      },
+      {
+        pattern: /^\/api\/api-keys\/test$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleApiKeysTestPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/ceo\/command$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleCEOCommandPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/ceo\/events$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleCEOEventsGet(req);
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/ceo\/profile$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleCEOProfileGet();
+          }
+          if (req.method === 'PATCH') {
+            return handleCEOProfilePatch(req);
+          }
+          return methodNotAllowedResponse(['GET', 'PATCH']);
+        },
+      },
+      {
+        pattern: /^\/api\/ceo\/profile\/feedback$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleCEOProfileFeedbackPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/ceo\/routine$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleCEORoutineGet();
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/ceo\/setup$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleCEOSetupGet();
+          }
+          if (req.method === 'POST') {
+            return handleCEOSetupPost(req);
+          }
+          return methodNotAllowedResponse(['GET', 'POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleDepartmentsGet(req);
+          }
+          if (req.method === 'PUT') {
+            return handleDepartmentsPut(req);
+          }
+          return methodNotAllowedResponse(['GET', 'PUT']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments\/digest$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleDepartmentsDigestGet(req);
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments\/memory$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleDepartmentsMemoryGet(req);
+          }
+          if (req.method === 'POST') {
+            return handleDepartmentsMemoryPost(req);
+          }
+          return methodNotAllowedResponse(['GET', 'POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments\/quota$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleDepartmentsQuotaGet(req);
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments\/sync$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleDepartmentsSyncPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
       {
         pattern: /^\/api\/scheduler\/jobs$/,
         handler: async (req) => {
@@ -285,9 +513,82 @@ export function startControlPlaneServer(options: {
           return methodNotAllowedResponse(['GET']);
         },
       },
-    ],
-  });
+      {
+        pattern: /^\/api\/mcp$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleMcpConfigGet();
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/mcp\/servers$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleMcpServersPost(req);
+          }
+          if (req.method === 'DELETE') {
+            return handleMcpServersDelete(req);
+          }
+          return methodNotAllowedResponse(['POST', 'DELETE']);
+        },
+      },
+      {
+        pattern: /^\/api\/mcp\/tools$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleMcpToolsGet();
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/workspaces$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleWorkspacesGet();
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/workspaces\/import$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleWorkspacesImportPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/workspaces\/close$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleWorkspacesCloseGet();
+          }
+          if (req.method === 'POST') {
+            return handleWorkspacesClosePost(req);
+          }
+          if (req.method === 'DELETE') {
+            return handleWorkspacesCloseDelete(req);
+          }
+          return methodNotAllowedResponse(['GET', 'POST', 'DELETE']);
+        },
+      },
+    ];
+}
 
+export function startControlPlaneServer(options: {
+  port: number;
+  hostname?: string;
+}) {
+  const server = startRouteServer({
+    name: 'control-plane',
+    port: options.port,
+    hostname: options.hostname,
+    routes: createControlPlaneRoutes(),
+  });
   log.info({ port: options.port }, 'Control-plane server started');
   return server;
 }

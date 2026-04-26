@@ -8,6 +8,7 @@ node_modules/
 # build / production
 /build
 dist/
+src-tauri/target/
 
 # OS files
 .DS_Store
@@ -19,6 +20,11 @@ dist/
 test.raw
 /test-results/
 /coverage
+/tmp/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
 
 # env files
 .env*
@@ -55,4 +61,3 @@ public/assets/
 #.agents/*
 #!.agents/rules.md
 #!.agents/runs/3e2d5054-b66a-48a9-a47c-69593d25f6ba/*
-

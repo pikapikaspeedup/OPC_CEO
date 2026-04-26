@@ -3,6 +3,7 @@ export interface ScheduledJob {
   name: string;
   type: 'cron' | 'interval' | 'once';
   cronExpression?: string;
+  timeZone?: string;
   intervalMs?: number;
   scheduledAt?: string;
   action: ScheduledAction;
@@ -73,6 +74,11 @@ export type ScheduledAction =
   | {
       kind: 'health-check';
       projectId: string;
+    }
+  | {
+      kind: 'company-loop';
+      loopKind: 'daily-review' | 'weekly-review' | 'growth-review' | 'risk-review';
+      policyId?: string;
     }
   | {
       kind: 'create-project';

@@ -1,0 +1,30 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "OPC CEO",
+  "version": "0.3.0",
+  "identifier": "ai.opc.ceo",
+  "build": {
+    "devUrl": "http://127.0.0.1:3000"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OPC CEO Office",
+        "width": 1440,
+        "height": 950,
+        "minWidth": 1100,
+        "minHeight": 760,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}
+

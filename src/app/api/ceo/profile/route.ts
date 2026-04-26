@@ -1,19 +1,26 @@
-import { NextResponse } from 'next/server';
-
-import { getCEOProfile, updateCEOProfile } from '@/lib/organization';
+import {
+  handleCEOProfileGet,
+  handleCEOProfilePatch,
+} from '@/server/control-plane/routes/ceo';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  return NextResponse.json(getCEOProfile());
+const DEFAULT_REQUEST = new Request('http://localhost/api/ceo/profile');
+
+export async function GET(req: Request = DEFAULT_REQUEST) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+  return handleCEOProfileGet();
 }
 
 export async function PATCH(req: Request) {
-  try {
-    const body = await req.json();
-    const profile = updateCEOProfile(body || {});
-    return NextResponse.json(profile);
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
   }
+  return handleCEOProfilePatch(req);
 }

@@ -3,6 +3,7 @@ import { buildGenerationContext } from './generation-context';
 import type { TemplateDefinition } from './pipeline/pipeline-types';
 
 const baseGroup = { title: 'G', description: 'g', executionMode: 'review-loop' as const, roles: [] };
+const baseRole = { id: 'worker', workflow: '/dev-worker', timeoutMs: 1000, autoApprove: true };
 
 function makeTemplate(overrides: Partial<TemplateDefinition> = {}): TemplateDefinition {
   return {
@@ -20,19 +21,24 @@ function makeTemplate(overrides: Partial<TemplateDefinition> = {}): TemplateDefi
 }
 
 describe('buildGenerationContext', () => {
-  it('extracts groups from templates', () => {
-    const ctx = buildGenerationContext([makeTemplate()]);
-    expect(ctx.availableGroups).toHaveLength(2);
-    expect(ctx.availableGroups.map(g => g.id).sort()).toEqual(['dev', 'review']);
+  it('extracts workflows from templates', () => {
+    const ctx = buildGenerationContext([makeTemplate({
+      pipeline: [
+        { groupId: 'dev', roles: [baseRole] },
+        { groupId: 'review', roles: [{ ...baseRole, id: 'reviewer', workflow: '/review-worker' }] },
+      ],
+    })]);
+    expect(ctx.workflows).toEqual(['/dev-worker', '/review-worker']);
   });
 
-  it('deduplicates groups across templates', () => {
-    const t1 = makeTemplate({ id: 't1', groups: { dev: baseGroup, qa: baseGroup } });
-    const t2 = makeTemplate({ id: 't2', groups: { dev: baseGroup, deploy: baseGroup } });
+  it('deduplicates workflows across templates', () => {
+    const t1 = makeTemplate({ id: 't1', pipeline: [{ groupId: 'dev', roles: [baseRole] }] });
+    const t2 = makeTemplate({
+      id: 't2',
+      pipeline: [{ groupId: 'qa', roles: [baseRole, { ...baseRole, id: 'qa', workflow: '/qa-worker' }] }],
+    });
     const ctx = buildGenerationContext([t1, t2]);
-    // dev appears in both but should only appear once
-    expect(ctx.availableGroups.filter(g => g.id === 'dev')).toHaveLength(1);
-    expect(ctx.availableGroups).toHaveLength(3); // dev, qa, deploy
+    expect(ctx.workflows).toEqual(['/dev-worker', '/qa-worker']);
   });
 
   it('summarizes templates', () => {
@@ -83,13 +89,13 @@ describe('buildGenerationContext', () => {
 
   it('handles empty template list', () => {
     const ctx = buildGenerationContext([]);
-    expect(ctx.availableGroups).toHaveLength(0);
+    expect(ctx.workflows).toHaveLength(0);
     expect(ctx.existingTemplates).toHaveLength(0);
   });
 
   it('includes output schema', () => {
     const ctx = buildGenerationContext([]);
     expect(ctx.outputSchema).toBeDefined();
-    expect((ctx.outputSchema as any).type).toBe('object');
+    expect((ctx.outputSchema as { type?: string }).type).toBe('object');
   });
 });

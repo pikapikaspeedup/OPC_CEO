@@ -1,18 +1,16 @@
-import { NextResponse } from 'next/server';
-import { tryAllServers, grpc } from '@/lib/bridge/gateway';
-import { buildProviderAwareModelResponse, mergeModelResponses } from '@/lib/provider-model-catalog';
+import { handleModelsGet } from '@/server/runtime/routes/user';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const fallback = buildProviderAwareModelResponse();
-  try {
-    const data = await tryAllServers((p, c, a) => grpc.getModelConfigs(p, c, a));
-    return NextResponse.json(mergeModelResponses(data, fallback));
-  } catch (error: unknown) {
-    if ((fallback.clientModelConfigs || []).length > 0) {
-      return NextResponse.json(fallback);
-    }
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+const DEFAULT_REQUEST = new Request('http://localhost/api/models');
+
+export async function GET(req: Request = DEFAULT_REQUEST) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
   }
+  return handleModelsGet();
 }

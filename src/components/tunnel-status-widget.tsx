@@ -6,6 +6,15 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Globe, Loader2, Power, PowerOff, Settings, Save, X } from 'lucide-react';
+import {
+  WorkspaceBadge,
+  WorkspaceEmptyBlock,
+  WorkspaceSectionHeader,
+  WorkspaceStatusDot,
+  WorkspaceSurface,
+  workspaceFieldClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 interface TunnelStatusWidgetProps {
   className?: string;
@@ -67,59 +76,55 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
   if (loading) return null;
   if (!status) return null;
 
+  const statusTone = status.running ? 'success' : status.starting ? 'warning' : 'neutral';
+
   return (
-    <div className={cn('rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3', className)}>
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
-          🌐 Cloudflare Tunnel
-        </div>
-        <div className={cn(
-          'flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium',
-          status.running
-            ? 'bg-emerald-400/10 text-emerald-400'
-            : status.starting
-              ? 'bg-amber-400/10 text-amber-400'
-              : 'bg-white/5 text-white/30'
-        )}>
-          <div className={cn(
-            'h-1.5 w-1.5 rounded-full',
-            status.running ? 'bg-emerald-400' : status.starting ? 'bg-amber-400 animate-pulse' : 'bg-white/20'
-          )} />
-          {status.running ? '运行中' : status.starting ? '启动中' : '已停止'}
-        </div>
-      </div>
+    <WorkspaceSurface className={cn('space-y-3', className)}>
+      <WorkspaceSectionHeader
+        eyebrow="Tunnel"
+        title="Cloudflare Tunnel"
+        icon={<Globe className="h-4 w-4" />}
+        actions={(
+          <WorkspaceBadge tone={statusTone}>
+            <WorkspaceStatusDot tone={statusTone} pulse={status.starting} className="mr-1.5" />
+            {status.running ? '运行中' : status.starting ? '启动中' : '已停止'}
+          </WorkspaceBadge>
+        )}
+      />
 
       {!status.configured ? (
-        <p className="text-xs text-white/30">
-          Tunnel 未配置。设置 ~/.gemini/antigravity/tunnel_config.json
-        </p>
+        <WorkspaceEmptyBlock
+          title="Tunnel 未配置"
+          description="设置 ~/.gemini/antigravity/tunnel_config.json 后可在这里启动。"
+          className="py-5"
+        />
       ) : null}
 
       {/* Config Editor */}
       {editing && (
-        <div className="space-y-2 border-t border-white/5 pt-2">
+        <div className="space-y-2 border-t border-[var(--app-border-soft)] pt-3">
           <div>
-            <label className="text-[10px] text-white/40">Tunnel 名称</label>
+            <label className="text-[10px] text-[var(--app-text-muted)]">Tunnel 名称</label>
             <Input
-              className="h-7 text-xs bg-white/5 border-white/10"
+              className={cn('h-8 text-xs', workspaceFieldClassName)}
               value={configForm.tunnelName}
               onChange={e => setConfigForm(f => ({ ...f, tunnelName: e.target.value }))}
               placeholder="my-tunnel"
             />
           </div>
           <div>
-            <label className="text-[10px] text-white/40">URL</label>
+            <label className="text-[10px] text-[var(--app-text-muted)]">URL</label>
             <Input
-              className="h-7 text-xs bg-white/5 border-white/10"
+              className={cn('h-8 text-xs', workspaceFieldClassName)}
               value={configForm.url}
               onChange={e => setConfigForm(f => ({ ...f, url: e.target.value }))}
               placeholder="http://localhost:3000"
             />
           </div>
           <div>
-            <label className="text-[10px] text-white/40">Credentials 路径（可选）</label>
+            <label className="text-[10px] text-[var(--app-text-muted)]">Credentials 路径（可选）</label>
             <Input
-              className="h-7 text-xs bg-white/5 border-white/10"
+              className={cn('h-8 text-xs', workspaceFieldClassName)}
               value={configForm.credentialsPath}
               onChange={e => setConfigForm(f => ({ ...f, credentialsPath: e.target.value }))}
               placeholder="~/.cloudflared/cert.pem"
@@ -132,7 +137,7 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
               onChange={e => setConfigForm(f => ({ ...f, autoStart: e.target.checked }))}
               className="h-3 w-3"
             />
-            <label className="text-[10px] text-white/40">自动启动</label>
+            <label className="text-[10px] text-[var(--app-text-muted)]">自动启动</label>
           </div>
           <div className="flex gap-2">
             <Button
@@ -162,7 +167,7 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
             <Button
               size="sm"
               variant="outline"
-              className="h-7 text-xs gap-1 border-white/10"
+              className={cn('h-8 gap-1 text-xs', workspaceOutlineActionClassName)}
               onClick={() => setEditing(false)}
             >
               <X className="h-3 w-3" /> 取消
@@ -175,12 +180,12 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
         <div className="space-y-2">
           {status.url && (
             <div className="flex items-center gap-2">
-              <Globe className="h-3 w-3 text-white/30 shrink-0" />
+              <Globe className="h-3 w-3 shrink-0 text-[var(--app-text-muted)]" />
               <a
                 href={status.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-sky-400 hover:text-sky-300 truncate"
+                className="truncate text-xs text-sky-700 hover:text-sky-800"
               >
                 {status.url}
               </a>
@@ -188,7 +193,7 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
           )}
 
           {status.error && (
-            <p className="text-xs text-red-400/80">{status.error}</p>
+            <p className="rounded-[14px] border border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-700">{status.error}</p>
           )}
 
           <div className="flex gap-2 pt-1">
@@ -196,7 +201,7 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs gap-1.5 border-white/10"
+                className={cn('h-8 gap-1.5 text-xs', workspaceOutlineActionClassName)}
                 onClick={handleStop}
                 disabled={actionLoading}
               >
@@ -217,7 +222,7 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
             <Button
               size="sm"
               variant="outline"
-              className="h-7 text-xs gap-1 border-white/10"
+              className={cn('h-8 gap-1 text-xs', workspaceOutlineActionClassName)}
               onClick={() => setEditing(true)}
             >
               <Settings className="h-3 w-3" /> 配置
@@ -225,6 +230,6 @@ export default function TunnelStatusWidget({ className }: TunnelStatusWidgetProp
           </div>
         </div>
       )}
-    </div>
+    </WorkspaceSurface>
   );
 }

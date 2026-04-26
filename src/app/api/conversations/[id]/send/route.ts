@@ -111,6 +111,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         }
       }
 
+      if ('status' in result && result.status === 'failed') {
+        const failureMessage = result.content || `${localProvider} execution failed`;
+        log.error({ cascadeId, provider: localProvider, err: failureMessage }, 'Local provider reported failed status');
+        return NextResponse.json({ error: failureMessage }, { status: 502 });
+      }
+
       const steps = isApiConversationProvider(localProvider)
         ? await readApiConversationSteps(result.handle)
         : appendLocalProviderConversationTurn(conversationId, originalText, result.content || '');

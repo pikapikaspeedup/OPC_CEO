@@ -1,7 +1,6 @@
 import type { DepartmentConfig } from './types';
 
 export type AppShellSection =
-  | 'overview'
   | 'ceo'
   | 'projects'
   | 'conversations'
@@ -47,7 +46,7 @@ export function getSidebarLoadPlan(section: AppShellSection): SidebarLoadPlan {
       };
     case 'ceo':
       return {
-        conversations: true,
+        conversations: false,
         knowledge: false,
         runtimeStatus: false,
         operationsAssets: false,
@@ -55,7 +54,7 @@ export function getSidebarLoadPlan(section: AppShellSection): SidebarLoadPlan {
     case 'knowledge':
       return {
         conversations: false,
-        knowledge: true,
+        knowledge: false,
         runtimeStatus: false,
         operationsAssets: false,
       };
@@ -63,20 +62,19 @@ export function getSidebarLoadPlan(section: AppShellSection): SidebarLoadPlan {
       return {
         conversations: false,
         knowledge: false,
-        runtimeStatus: true,
-        operationsAssets: true,
+        runtimeStatus: false,
+        operationsAssets: false,
       };
     case 'projects':
       return {
         conversations: false,
         knowledge: false,
-        runtimeStatus: true,
+        runtimeStatus: false,
         operationsAssets: false,
       };
-    case 'overview':
     default:
       return {
-        conversations: false,
+        conversations: true,
         knowledge: false,
         runtimeStatus: false,
         operationsAssets: false,
@@ -87,17 +85,14 @@ export function getSidebarLoadPlan(section: AppShellSection): SidebarLoadPlan {
 export function getSidebarPollMs(section: AppShellSection): number {
   switch (section) {
     case 'conversations':
-    case 'ceo':
       return 8_000;
+    case 'ceo':
     case 'operations':
-      return 10_000;
     case 'projects':
-      return 15_000;
     case 'knowledge':
-      return 20_000;
-    case 'overview':
+      return 60_000;
     default:
-      return 30_000;
+      return 8_000;
   }
 }
 
@@ -105,24 +100,14 @@ export function getAgentStateRefreshMs(
   section: AppShellSection,
   utilityPanel: AppShellUtilityPanel,
 ): number {
-  if (utilityPanel === 'settings') return 30_000;
-
-  switch (section) {
-    case 'overview':
-    case 'knowledge':
-      return 15_000;
-    case 'projects':
-    case 'conversations':
-    case 'operations':
-    case 'ceo':
-    default:
-      return 5_000;
-  }
+  void section;
+  void utilityPanel;
+  return 60_000;
 }
 
 export function shouldShowShellSidebar(
-  section: AppShellSection,
+  _section: AppShellSection,
   utilityPanel: AppShellUtilityPanel,
 ): boolean {
-  return utilityPanel === null && section !== 'overview';
+  return utilityPanel === null;
 }

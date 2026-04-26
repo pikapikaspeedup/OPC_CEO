@@ -4,17 +4,32 @@ import { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import {
+  Bell,
+  Bot,
+  Building2,
   ExternalLink,
-  Loader2,
+  Gamepad2,
+  Hash,
+  MessageCircle,
+  MessagesSquare,
   Plus,
+  Send,
+  Smartphone,
   Wifi,
   WifiOff,
-  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  WorkspaceBadge,
+  WorkspaceEmptyBlock,
+  WorkspaceIconFrame,
+  WorkspaceSurface,
+  workspaceCodeBlockClassName,
+  workspaceFieldClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 // ─── Platform Definitions ───────────────────────────────────────
 
@@ -32,7 +47,7 @@ interface PlatformField {
 interface PlatformDef {
   type: string;
   label: string;
-  emoji: string;
+  icon: typeof MessageCircle;
   setupUrl?: string;
   requiresPublicIp?: boolean;
   connection: string;
@@ -41,7 +56,7 @@ interface PlatformDef {
 
 const PLATFORMS: PlatformDef[] = [
   {
-    type: 'feishu', label: '飞书 Feishu', emoji: '🐦', connection: 'WebSocket',
+    type: 'feishu', label: '飞书 Feishu', icon: MessagesSquare, connection: 'WebSocket',
     setupUrl: 'https://open.feishu.cn',
     fields: [
       { name: 'app_id', label: 'App ID', type: 'string', required: true, placeholder: 'cli_xxxxxx' },
@@ -53,7 +68,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'telegram', label: 'Telegram', emoji: '✈️', connection: 'Long Polling',
+    type: 'telegram', label: 'Telegram', icon: Send, connection: 'Long Polling',
     setupUrl: 'https://t.me/BotFather',
     fields: [
       { name: 'token', label: 'Bot Token', type: 'string', required: true, placeholder: '123456:ABC-DEF...', secret: true },
@@ -63,7 +78,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'slack', label: 'Slack', emoji: '💬', connection: 'Socket Mode',
+    type: 'slack', label: 'Slack', icon: MessageCircle, connection: 'Socket Mode',
     setupUrl: 'https://api.slack.com/apps',
     fields: [
       { name: 'bot_token', label: 'Bot Token', type: 'string', required: true, placeholder: 'xoxb-...', secret: true },
@@ -73,7 +88,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'dingtalk', label: '钉钉 DingTalk', emoji: '🔔', connection: 'Stream',
+    type: 'dingtalk', label: '钉钉 DingTalk', icon: Bell, connection: 'Stream',
     setupUrl: 'https://open-dev.dingtalk.com',
     fields: [
       { name: 'client_id', label: 'AppKey', type: 'string', required: true },
@@ -83,7 +98,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'discord', label: 'Discord', emoji: '🎮', connection: 'Gateway',
+    type: 'discord', label: 'Discord', icon: Gamepad2, connection: 'Gateway',
     setupUrl: 'https://discord.com/developers/applications',
     fields: [
       { name: 'token', label: 'Bot Token', type: 'string', required: true, secret: true },
@@ -94,7 +109,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'line', label: 'LINE', emoji: '🟢', connection: 'Webhook', requiresPublicIp: true,
+    type: 'line', label: 'LINE', icon: MessageCircle, connection: 'Webhook', requiresPublicIp: true,
     setupUrl: 'https://developers.line.biz/console/',
     fields: [
       { name: 'channel_secret', label: 'Channel Secret', type: 'string', required: true, secret: true },
@@ -104,7 +119,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'wecom', label: '企业微信 WeChat Work', emoji: '🏢', connection: 'Webhook / WebSocket',
+    type: 'wecom', label: '企业微信 WeChat Work', icon: Building2, connection: 'Webhook / WebSocket',
     setupUrl: 'https://work.weixin.qq.com/wework_admin',
     fields: [
       { name: 'corp_id', label: 'Corp ID', type: 'string', required: true },
@@ -116,7 +131,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'weixin', label: '微信 Weixin', emoji: '💚', connection: 'Long Polling',
+    type: 'weixin', label: '微信 Weixin', icon: Smartphone, connection: 'Long Polling',
     fields: [
       { name: 'token', label: 'iLink Token', type: 'string', required: true, secret: true, description: '通过 cc-connect weixin setup 获取' },
       { name: 'base_url', label: 'Base URL', type: 'string', defaultValue: 'https://ilinkai.weixin.qq.com' },
@@ -125,7 +140,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'qq', label: 'QQ (OneBot)', emoji: '🐧', connection: 'WebSocket',
+    type: 'qq', label: 'QQ (OneBot)', icon: Hash, connection: 'WebSocket',
     setupUrl: 'https://github.com/NapNeko/NapCatQQ',
     fields: [
       { name: 'ws_url', label: 'WebSocket URL', type: 'string', required: true, placeholder: 'ws://127.0.0.1:3001' },
@@ -135,7 +150,7 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
-    type: 'qqbot', label: 'QQ 官方机器人', emoji: '🤖', connection: 'WebSocket',
+    type: 'qqbot', label: 'QQ 官方机器人', icon: Bot, connection: 'WebSocket',
     setupUrl: 'https://q.qq.com',
     fields: [
       { name: 'app_id', label: 'App ID', type: 'string', required: true },
@@ -183,12 +198,11 @@ function generateTomlBlock(platformType: string, values: Record<string, string |
 
 // ─── Component ──────────────────────────────────────────────────
 
-export default function PlatformManager({ platforms, projectName, onRefresh }: PlatformManagerProps) {
+export default function PlatformManager({ platforms }: PlatformManagerProps) {
   const [addOpen, setAddOpen] = useState(false);
   const [selectedType, setSelectedType] = useState('');
   const [fieldValues, setFieldValues] = useState<Record<string, string | boolean>>({});
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState(false);
   const [tomlOutput, setTomlOutput] = useState('');
 
   const selectedDef = PLATFORMS.find(p => p.type === selectedType);
@@ -241,28 +255,28 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
       {/* Current platforms */}
       <div className="space-y-2 mb-4">
         {platforms.length === 0 ? (
-          <p className="text-xs text-white/30 text-center py-3">暂无已配置的平台</p>
+          <WorkspaceEmptyBlock title="暂无已配置的平台" className="py-5" />
         ) : (
           platforms.map(p => {
             const def = PLATFORMS.find(d => d.type === p.type);
+            const Icon = def?.icon || MessageCircle;
             return (
-              <div key={p.type} className="flex items-center justify-between rounded-lg border border-white/6 bg-white/[0.015] p-3">
+              <WorkspaceSurface key={p.type} padding="sm" className="flex items-center justify-between rounded-lg">
                 <div className="flex items-center gap-2">
-                  <span className="text-base">{def?.emoji ?? '📱'}</span>
-                  <span className="text-xs text-white/70">{def?.label ?? p.type}</span>
-                  <Badge variant="outline" className={cn(
-                    'text-[10px]',
-                    p.connected ? 'text-emerald-400 border-emerald-400/30' : 'text-red-400 border-red-400/30',
-                  )}>
+                  <WorkspaceIconFrame className="h-8 w-8 rounded-xl">
+                    <Icon className="h-4 w-4" />
+                  </WorkspaceIconFrame>
+                  <span className="text-xs text-[var(--app-text)]">{def?.label ?? p.type}</span>
+                  <WorkspaceBadge tone={p.connected ? 'success' : 'danger'}>
                     {p.connected ? '已连接' : '未连接'}
-                  </Badge>
+                  </WorkspaceBadge>
                 </div>
                 {p.connected ? (
-                  <Wifi className="h-3.5 w-3.5 text-emerald-400/60" />
+                  <Wifi className="h-3.5 w-3.5 text-emerald-700" />
                 ) : (
-                  <WifiOff className="h-3.5 w-3.5 text-red-400/40" />
+                  <WifiOff className="h-3.5 w-3.5 text-red-700" />
                 )}
-              </div>
+              </WorkspaceSurface>
             );
           })
         )}
@@ -272,7 +286,7 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
       <Button
         variant="outline"
         size="sm"
-        className="w-full border-dashed border-white/10 text-white/50 hover:text-white/70"
+        className={cn('w-full border-dashed', workspaceOutlineActionClassName)}
         onClick={() => setAddOpen(true)}
       >
         <Plus className="mr-1.5 h-3 w-3" />
@@ -281,34 +295,35 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
 
       {/* Add platform dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="max-w-lg bg-[#0a0a14] border-white/10 text-white max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)]">
           <DialogHeader>
             <DialogTitle className="text-sm">添加消息平台</DialogTitle>
-            <DialogDescription className="text-xs text-white/40">
-              选择平台并填写凭证，生成配置后添加到 cc-connect config.toml
-            </DialogDescription>
+            <DialogDescription className="text-xs text-[var(--app-text-muted)]">选择平台并填写凭证。</DialogDescription>
           </DialogHeader>
 
           {/* Platform selector */}
           <div className="grid grid-cols-5 gap-1.5 my-3">
-            {PLATFORMS.map(p => (
-              <button
-                key={p.type}
-                className={cn(
-                  'flex flex-col items-center gap-1 rounded-lg border p-2 text-[10px] transition-colors',
-                  selectedType === p.type
-                    ? 'border-sky-400/50 bg-sky-400/10 text-sky-300'
-                    : connectedTypes.has(p.type)
-                      ? 'border-emerald-400/20 bg-emerald-400/5 text-white/40 cursor-default'
-                      : 'border-white/8 hover:border-white/20 text-white/50',
-                )}
-                onClick={() => !connectedTypes.has(p.type) && handleSelectPlatform(p.type)}
-              >
-                <span className="text-lg">{p.emoji}</span>
-                <span className="leading-tight">{p.label.split(' ')[0]}</span>
-                {connectedTypes.has(p.type) && <span className="text-[8px] text-emerald-400">✓</span>}
-              </button>
-            ))}
+            {PLATFORMS.map(p => {
+              const Icon = p.icon;
+              return (
+                <button
+                  key={p.type}
+                  className={cn(
+                    'flex flex-col items-center gap-1 rounded-lg border p-2 text-[10px] transition-colors',
+                    selectedType === p.type
+                      ? 'border-sky-400/50 bg-sky-400/10 text-sky-700'
+                      : connectedTypes.has(p.type)
+                        ? 'cursor-default border-emerald-400/20 bg-emerald-400/5 text-[var(--app-text-muted)]'
+                        : 'border-[var(--app-border-soft)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:text-[var(--app-text)]',
+                  )}
+                  onClick={() => !connectedTypes.has(p.type) && handleSelectPlatform(p.type)}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="leading-tight">{p.label.split(' ')[0]}</span>
+                  {connectedTypes.has(p.type) && <span className="text-[8px] text-emerald-700">✓</span>}
+                </button>
+              );
+            })}
           </div>
 
           {/* Config form */}
@@ -316,9 +331,9 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span>{selectedDef.emoji}</span>
+                  <selectedDef.icon className="h-4 w-4 text-[var(--app-accent)]" />
                   <span className="text-xs font-medium">{selectedDef.label}</span>
-                  <Badge variant="outline" className="text-[10px] text-white/30 border-white/10">
+                  <Badge variant="outline" className="border-[var(--app-border-soft)] text-[10px] text-[var(--app-text-muted)]">
                     {selectedDef.connection}
                   </Badge>
                 </div>
@@ -335,14 +350,14 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
               </div>
 
               {selectedDef.requiresPublicIp && (
-                <div className="rounded border border-amber-400/20 bg-amber-400/5 p-2 text-[10px] text-amber-300">
-                  ⚠️ 此平台需要公网 IP 或域名（Webhook 模式）
+                <div className="rounded border border-amber-400/20 bg-amber-400/5 p-2 text-[10px] text-amber-700">
+                  此平台需要公网 IP 或域名（Webhook 模式）
                 </div>
               )}
 
               {selectedDef.fields.map(field => (
                 <div key={field.name} className="space-y-1">
-                  <label className="text-[11px] text-white/50 flex items-center gap-1">
+                  <label className="flex items-center gap-1 text-[11px] text-[var(--app-text-soft)]">
                     {field.label}
                     {field.required && <span className="text-red-400">*</span>}
                   </label>
@@ -352,9 +367,9 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
                         type="checkbox"
                         checked={fieldValues[field.name] as boolean ?? false}
                         onChange={(e) => handleFieldChange(field.name, e.target.checked)}
-                        className="h-4 w-4 rounded border-white/20 bg-white/5 accent-sky-400"
+                        className="h-4 w-4 rounded border-[var(--app-border-soft)] bg-[var(--app-raised)] accent-sky-500"
                       />
-                      <span className="text-[10px] text-white/30">{field.description}</span>
+                      <span className="text-[10px] text-[var(--app-text-muted)]">{field.description}</span>
                     </div>
                   ) : (
                     <div className="relative">
@@ -363,12 +378,12 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
                         value={fieldValues[field.name] as string ?? ''}
                         onChange={(e) => handleFieldChange(field.name, e.target.value)}
                         placeholder={field.placeholder}
-                        className="h-8 text-xs bg-white/5 border-white/10 pr-8"
+                        className={cn('h-8 pr-8 text-xs', workspaceFieldClassName)}
                       />
                       {field.secret && (
                         <button
                           type="button"
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/50"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--app-text-muted)] hover:text-[var(--app-text)]"
                           onClick={() => setShowSecret(prev => ({ ...prev, [field.name]: !prev[field.name] }))}
                         >
                           <span className="text-[10px]">{showSecret[field.name] ? '隐藏' : '显示'}</span>
@@ -377,7 +392,7 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
                     </div>
                   )}
                   {field.description && field.type !== 'boolean' && (
-                    <p className="text-[10px] text-white/25">{field.description}</p>
+                    <p className="text-[10px] text-[var(--app-text-muted)]">{field.description}</p>
                   )}
                 </div>
               ))}
@@ -395,10 +410,10 @@ export default function PlatformManager({ platforms, projectName, onRefresh }: P
               {/* TOML output */}
               {tomlOutput && (
                 <div className="space-y-2">
-                  <pre className="rounded-lg bg-black/40 border border-white/8 p-3 text-[11px] text-emerald-300 font-mono overflow-x-auto whitespace-pre">
+                  <pre className={cn('overflow-x-auto whitespace-pre text-[11px] text-emerald-700', workspaceCodeBlockClassName)}>
                     {tomlOutput}
                   </pre>
-                  <p className="text-[10px] text-white/30">
+                  <p className="text-[10px] text-[var(--app-text-muted)]">
                     将以上配置追加到 <code className="text-sky-400">~/.cc-connect/config.toml</code> 然后重启 cc-connect
                   </p>
                 </div>

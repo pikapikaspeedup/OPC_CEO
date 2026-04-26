@@ -66,7 +66,6 @@ import {
   getOwnerConnection,
   updateLocalConversation,
 } from '@/lib/bridge/gateway';
-import { listRuns } from '@/lib/agents/run-registry';
 import { getExecutor } from '@/lib/providers';
 import {
   appendLocalProviderConversationTurn,
@@ -190,6 +189,39 @@ describe('POST /api/conversations/[id]/send', () => {
       'continued response',
     );
     expect(vi.mocked(updateLocalConversation)).not.toHaveBeenCalled();
+  });
+
+  it('returns an HTTP error when a local provider reports failed status', async () => {
+    vi.mocked(resolveConversationRecord).mockReturnValue({
+      id: 'local-native-codex-1',
+      title: 'CEO Office',
+      workspace: 'file:///tmp/native-codex',
+      stepCount: 0,
+      provider: 'native-codex',
+      sessionHandle: '',
+    } as never);
+    vi.mocked(inferLocalProviderFromConversation).mockReturnValue('native-codex');
+
+    vi.mocked(getExecutor).mockReturnValue({
+      executeTask: vi.fn(async () => ({
+        handle: 'native-codex-session-1',
+        content: 'Native Codex request timed out after 90000ms',
+        steps: [],
+        changedFiles: [],
+        status: 'failed',
+      })),
+      appendMessage: vi.fn(),
+    } as never);
+
+    const res = await POST(makeRequest({ text: 'hello native codex' }), params('local-native-codex-1'));
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({
+      error: 'Native Codex request timed out after 90000ms',
+    });
+    expect(vi.mocked(appendLocalProviderConversationTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateLocalConversation)).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it('routes local API-backed conversations through the API conversation helper', async () => {

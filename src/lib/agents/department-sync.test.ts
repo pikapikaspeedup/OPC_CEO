@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { syncRulesToIDE, syncRulesToAllIDEs } from './department-sync';
+import { syncAssetsToGlobal } from './gateway-home';
 
 describe('department-sync', () => {
   let tmpDir: string;
@@ -16,18 +17,22 @@ describe('department-sync', () => {
   });
 
   describe('syncRulesToIDE', () => {
-    it('returns empty when no .department/rules/ exists', () => {
+    it('writes department identity when no .department/rules/ exists', () => {
       const { synced } = syncRulesToIDE(tmpDir, 'codex');
-      expect(synced).toEqual([]);
+      expect(synced).toEqual([path.join(tmpDir, 'AGENTS.md')]);
+      expect(fs.readFileSync(synced[0], 'utf-8')).toContain('# Department Context');
     });
 
-    it('returns empty when rules dir has no .md files', () => {
+    it('writes department identity when rules dir has no .md files', () => {
       const rulesDir = path.join(tmpDir, '.department', 'rules');
       fs.mkdirSync(rulesDir, { recursive: true });
       fs.writeFileSync(path.join(rulesDir, 'config.json'), '{}');
 
       const { synced } = syncRulesToIDE(tmpDir, 'codex');
-      expect(synced).toEqual([]);
+      expect(synced).toEqual([path.join(tmpDir, 'AGENTS.md')]);
+      const content = fs.readFileSync(synced[0], 'utf-8');
+      expect(content).toContain('# Department Context');
+      expect(content).not.toContain('## Department Rules');
     });
 
     it('concatenates rules into single AGENTS.md for codex target', () => {
@@ -65,19 +70,20 @@ describe('department-sync', () => {
       expect(synced[0]).toBe(path.join(tmpDir, '.cursorrules'));
     });
 
-    it('creates symlinks for antigravity target (multi-file)', () => {
+    it('writes mirrored rule files for antigravity target (multi-file)', () => {
       const rulesDir = path.join(tmpDir, '.department', 'rules');
       fs.mkdirSync(rulesDir, { recursive: true });
       fs.writeFileSync(path.join(rulesDir, 'rule1.md'), '# Rule 1');
       fs.writeFileSync(path.join(rulesDir, 'rule2.md'), '# Rule 2');
 
       const { synced } = syncRulesToIDE(tmpDir, 'antigravity');
-      expect(synced).toHaveLength(2);
+      expect(synced).toHaveLength(3);
+      expect(synced).toContain(path.join(tmpDir, '.agents', 'rules', 'department-identity.md'));
 
-      // Verify symlinks were created
+      // Verify mirror files were created
       for (const file of synced) {
         expect(fs.existsSync(file)).toBe(true);
-        expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+        expect(fs.lstatSync(file).isFile()).toBe(true);
       }
     });
 
@@ -97,16 +103,22 @@ describe('department-sync', () => {
 
     it('includes workflows for single-file targets', () => {
       const rulesDir = path.join(tmpDir, '.department', 'rules');
-      const wfDir = path.join(tmpDir, '.department', 'workflows');
+      const configDir = path.join(tmpDir, '.department');
       fs.mkdirSync(rulesDir, { recursive: true });
-      fs.mkdirSync(wfDir, { recursive: true });
+      fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(path.join(rulesDir, 'rules.md'), '# Rules');
-      fs.writeFileSync(path.join(wfDir, 'ci-check.md'), '# CI Check Workflow');
+      fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({
+        name: 'QA',
+        type: 'build',
+        okr: null,
+        skills: [{ name: 'digest', workflowRef: '/ai_digest' }],
+      }));
+      syncAssetsToGlobal();
 
       syncRulesToIDE(tmpDir, 'codex');
       const content = fs.readFileSync(path.join(tmpDir, 'AGENTS.md'), 'utf-8');
-      expect(content).toContain('Workflow: ci-check');
-      expect(content).toContain('CI Check Workflow');
+      expect(content).toContain('## Department Workflows');
+      expect(content).toContain('### ai_digest');
     });
   });
 

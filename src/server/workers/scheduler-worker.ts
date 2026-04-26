@@ -6,6 +6,7 @@ import { GATEWAY_HOME } from '@/lib/agents/gateway-home';
 import { initializeProjectRegistry } from '@/lib/agents/project-registry';
 import { initializeRunRegistry } from '@/lib/agents/run-registry';
 import { initializeScheduler, stopScheduler } from '@/lib/agents/scheduler';
+import { shouldStartSchedulerCompanionServices } from '@/lib/gateway-role';
 
 const log = createLogger('SchedulerWorker');
 const LOCK_FILE = path.join(GATEWAY_HOME, 'scheduler.lock');
@@ -83,32 +84,36 @@ export async function startSchedulerWorker(): Promise<void> {
       log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Scheduler initialization failed');
     }
 
-    try {
-      const { initializeFanOutController } = await import('@/lib/agents/fan-out-controller');
-      initializeFanOutController();
-    } catch (error: unknown) {
-      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Fan-out controller initialization skipped');
-    }
+    if (shouldStartSchedulerCompanionServices(process.env)) {
+      try {
+        const { initializeFanOutController } = await import('@/lib/agents/fan-out-controller');
+        initializeFanOutController();
+      } catch (error: unknown) {
+        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Fan-out controller initialization skipped');
+      }
 
-    try {
-      const { initApprovalTriggers } = await import('@/lib/agents/approval-triggers');
-      initApprovalTriggers();
-    } catch (error: unknown) {
-      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Approval triggers initialization skipped');
-    }
+      try {
+        const { initApprovalTriggers } = await import('@/lib/agents/approval-triggers');
+        initApprovalTriggers();
+      } catch (error: unknown) {
+        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Approval triggers initialization skipped');
+      }
 
-    try {
-      const { loadPersistedRequests } = await import('@/lib/approval/request-store');
-      loadPersistedRequests();
-    } catch (error: unknown) {
-      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Approval request restore skipped');
-    }
+      try {
+        const { loadPersistedRequests } = await import('@/lib/approval/request-store');
+        loadPersistedRequests();
+      } catch (error: unknown) {
+        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Approval request restore skipped');
+      }
 
-    try {
-      const { ensureCEOEventConsumer } = await import('@/lib/organization/ceo-event-consumer');
-      ensureCEOEventConsumer();
-    } catch (error: unknown) {
-      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'CEO event consumer initialization skipped');
+      try {
+        const { ensureCEOEventConsumer } = await import('@/lib/organization/ceo-event-consumer');
+        ensureCEOEventConsumer();
+      } catch (error: unknown) {
+        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'CEO event consumer initialization skipped');
+      }
+    } else {
+      log.info('Scheduler companion services disabled');
     }
   } catch (error: unknown) {
     releaseSchedulerLock();

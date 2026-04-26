@@ -99,25 +99,35 @@ export function startRouteServer(options: {
     try {
       const request = await toFetchRequest(req, `http://${hostname}:${options.port}`);
       const pathname = new URL(request.url).pathname;
-      const route = options.routes.find((candidate) => {
+      const routes = options.routes.filter((candidate) => {
         if (candidate.method && candidate.method !== request.method) {
           return false;
         }
         return candidate.pattern.test(pathname);
       });
 
-      if (!route) {
+      if (!routes.length) {
         await writeFetchResponse(res, notFoundResponse());
         return;
       }
 
-      const match = pathname.match(route.pattern);
-      if (!match) {
-        await writeFetchResponse(res, notFoundResponse());
-        return;
+      let methodNotAllowed: Response | null = null;
+      for (const route of routes) {
+        const match = pathname.match(route.pattern);
+        if (!match) {
+          continue;
+        }
+
+        const response = await route.handler(request, match);
+        if (response.status !== 405) {
+          await writeFetchResponse(res, response);
+          return;
+        }
+
+        methodNotAllowed = methodNotAllowed || response;
       }
 
-      await writeFetchResponse(res, await route.handler(request, match));
+      await writeFetchResponse(res, methodNotAllowed || notFoundResponse());
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       await writeFetchResponse(res, jsonResponse({ error: message }, { status: 500 }));

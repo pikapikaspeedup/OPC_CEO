@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../logger';
-import type { ApprovalRequest, ApprovalResponse, CreateApprovalInput } from './types';
+import type { ApprovalRequest, ApprovalResponse, CreateApprovalInput, NotificationDelivery } from './types';
 import { appendCEOEvent } from '../organization/ceo-event-store';
 import { appendCEOPendingIssue, removeCEOPendingIssue } from '../organization/ceo-profile-store';
 
@@ -210,6 +210,24 @@ export function respondToRequest(id: string, response: ApprovalResponse): Approv
   });
 
   log.info({ requestId: id, action: response.action, channel: response.channel }, 'Request responded');
+  return updated;
+}
+
+export function updateRequestNotifications(
+  id: string,
+  notifications: NotificationDelivery[],
+): ApprovalRequest | undefined {
+  ensureRequestsLoaded();
+  const request = requests.get(id);
+  if (!request) return undefined;
+
+  const updated: ApprovalRequest = {
+    ...request,
+    notifications,
+    updatedAt: new Date().toISOString(),
+  };
+  requests.set(id, updated);
+  persistRequest(updated);
   return updated;
 }
 

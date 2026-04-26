@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./prompt-executor', () => ({
   executePrompt: vi.fn(async () => ({ runId: 'prompt-run-ceo-1' })),
@@ -44,6 +44,7 @@ import { executeDispatch } from './dispatch-service';
 import { callLLMOneshot } from './llm-oneshot';
 import { createProject } from './project-registry';
 import { processCEOCommand } from './ceo-agent';
+import { deleteScheduledJob, listScheduledJobs, stopScheduler } from './scheduler';
 import type { DepartmentConfig } from '../types';
 
 function makeDepartments(): Map<string, DepartmentConfig> {
@@ -77,6 +78,13 @@ beforeEach(() => {
   vi.mocked(callLLMOneshot).mockRejectedValue(new Error('LLM not available in test'));
   mockAppendCEODecision.mockReset();
   mockUpdateCEOActiveFocus.mockReset();
+});
+
+afterEach(() => {
+  for (const job of listScheduledJobs()) {
+    deleteScheduledJob(job.jobId);
+  }
+  stopScheduler();
 });
 
 describe('processCEOCommand — playbook-driven routing', () => {

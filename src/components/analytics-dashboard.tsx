@@ -14,6 +14,12 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  WorkspaceEmptyBlock,
+  WorkspaceSectionHeader,
+  WorkspaceSurface,
+  workspaceGhostActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 // ---------------------------------------------------------------------------
 // Stat card
@@ -33,16 +39,16 @@ function StatCard({
   color: string;
 }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
+    <WorkspaceSurface padding="sm" className="space-y-2">
       <div className="flex items-center gap-2">
         <div className={cn('flex h-8 w-8 items-center justify-center rounded-lg', color)}>
           <Icon className="h-4 w-4" />
         </div>
-        <span className="text-xs text-white/50">{label}</span>
+        <span className="text-xs text-[var(--app-text-soft)]">{label}</span>
       </div>
-      <div className="text-2xl font-bold text-white tabular-nums">{value}</div>
-      {subValue && <div className="text-[11px] text-white/30">{subValue}</div>}
-    </div>
+      <div className="text-2xl font-bold text-[var(--app-text)] tabular-nums">{value}</div>
+      {subValue && <div className="text-[11px] text-[var(--app-text-muted)]">{subValue}</div>}
+    </WorkspaceSurface>
   );
 }
 
@@ -69,7 +75,7 @@ function MiniBarChart({
             style={{ height: `${(d.value / maxVal) * 100}%`, minHeight: d.value > 0 ? 4 : 0 }}
             title={`${d.label}: ${d.value}`}
           />
-          <span className="text-[8px] text-white/20 truncate w-full text-center">
+          <span className="w-full truncate text-center text-[8px] text-[var(--app-text-muted)]">
             {d.label}
           </span>
         </div>
@@ -139,7 +145,7 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
 
   if (loading) {
     return (
-      <div className={cn('flex items-center justify-center py-16 text-white/40', className)}>
+      <div className={cn('flex items-center justify-center py-16 text-[var(--app-text-muted)]', className)}>
         <Loader2 className="h-5 w-5 animate-spin" />
       </div>
     );
@@ -147,14 +153,16 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
 
   if (error || !data) {
     return (
-      <div className={cn('rounded-xl border border-white/8 bg-white/[0.02] p-8 text-center', className)}>
-        <BarChart3 className="mx-auto mb-3 h-8 w-8 text-white/15" />
-        <p className="text-sm text-white/40">无法加载分析数据</p>
-        <Button variant="ghost" size="sm" onClick={fetchData} className="mt-3 gap-1.5 rounded-full">
+      <WorkspaceEmptyBlock
+        icon={<BarChart3 className="h-5 w-5" />}
+        title="无法加载分析数据"
+        className={className}
+      >
+        <Button variant="ghost" size="sm" onClick={fetchData} className={cn('mt-3 gap-1.5 rounded-full', workspaceGhostActionClassName)}>
           <RefreshCw className="h-3 w-3" />
           重试
         </Button>
-      </div>
+      </WorkspaceEmptyBlock>
     );
   }
 
@@ -181,24 +189,23 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
 
   return (
     <div className={cn('space-y-6', className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <BarChart3 className="h-5 w-5 text-white/50" />
-          <h2 className="text-lg font-bold text-white">Analytics</h2>
-        </div>
+      <WorkspaceSectionHeader
+        title="Analytics"
+        icon={<BarChart3 className="h-5 w-5" />}
+        actions={(
         <Button
           variant="ghost"
           size="sm"
           onClick={fetchData}
-          className="gap-1.5 rounded-full text-white/40 hover:text-white/60"
+          className={cn('gap-1.5 rounded-full', workspaceGhostActionClassName)}
         >
           <RefreshCw className="h-3 w-3" />
         </Button>
-      </div>
+        )}
+      />
 
       {providerAwareNotice && (
-        <div className="rounded-xl border border-sky-400/15 bg-sky-400/[0.06] px-4 py-3 text-xs leading-6 text-sky-100/85">
+        <div className="rounded-xl border border-sky-400/15 bg-sky-400/[0.06] px-4 py-3 text-xs leading-6 text-sky-700">
           {providerAwareNotice}
         </div>
       )}
@@ -209,25 +216,25 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
             icon={BarChart3}
             label="Gateway Runs (30d)"
             value={providerUsageSummary.totalRuns.toLocaleString()}
-            color="bg-cyan-400/10 text-cyan-300"
+            color="bg-cyan-400/10 text-cyan-700"
           />
           <StatCard
             icon={MessageSquare}
             label="Providers Active"
             value={providerUsageSummary.providers.toLocaleString()}
-            color="bg-indigo-400/10 text-indigo-300"
+            color="bg-indigo-400/10 text-indigo-700"
           />
           <StatCard
             icon={Sparkles}
             label="Token-Tracked Runs"
             value={providerUsageSummary.tokenRuns.toLocaleString()}
-            color="bg-violet-400/10 text-violet-300"
+            color="bg-violet-400/10 text-violet-700"
           />
           <StatCard
             icon={TrendingUp}
             label="Gateway Tokens"
             value={`${(providerUsageSummary.totalTokens / 1000).toFixed(1)}k`}
-            color="bg-emerald-400/10 text-emerald-300"
+            color="bg-emerald-400/10 text-emerald-700"
           />
         </div>
       )}
@@ -263,37 +270,37 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
 
       {/* Daily completions chart */}
       {dailyData.length > 0 && (
-        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+        <WorkspaceSurface padding="sm" className="space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
             Daily Completions Accepted
           </div>
           <MiniBarChart data={dailyData} />
-        </div>
+        </WorkspaceSurface>
       )}
 
       {providerUsage.length > 0 && (
-        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
+        <WorkspaceSurface padding="sm" className="space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+            <div className="text-xs font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
               Provider Usage (Gateway Runs)
             </div>
             {data.dataSources && (
-              <div className="text-[10px] text-white/30">
+              <div className="text-[10px] text-[var(--app-text-muted)]">
                 {data.dataSources.antigravityRuntime ? 'Runtime + Gateway' : 'Gateway only'}
               </div>
             )}
           </div>
           <div className="space-y-2">
             {providerUsage.map((entry) => (
-              <div key={entry.provider} className="rounded-xl border border-white/6 bg-black/15 px-4 py-3">
+              <div key={entry.provider} className="rounded-xl border border-[var(--app-border-soft)] bg-white px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white truncate">{entry.provider}</div>
-                    <div className="mt-1 text-[11px] text-white/40">
+                    <div className="truncate text-sm font-semibold text-[var(--app-text)]">{entry.provider}</div>
+                    <div className="mt-1 text-[11px] text-[var(--app-text-muted)]">
                       {entry.runCount} runs · {entry.completedCount} completed · {entry.failedCount} failed · {entry.activeCount} active
                     </div>
                   </div>
-                  <div className="text-right text-[11px] text-white/50">
+                  <div className="text-right text-[11px] text-[var(--app-text-soft)]">
                     <div>{(entry.totalTokens / 1000).toFixed(1)}k tokens</div>
                     {entry.lastRunAt ? <div>{entry.lastRunAt.slice(0, 10)}</div> : null}
                   </div>
@@ -301,14 +308,14 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
               </div>
             ))}
           </div>
-        </div>
+        </WorkspaceSurface>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {/* Language distribution */}
         {langData.length > 0 && (
-          <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
-            <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+          <WorkspaceSurface padding="sm" className="space-y-3">
+            <div className="text-xs font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
               By Language
             </div>
             <div className="space-y-2">
@@ -318,25 +325,25 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
                 const pct = langTotal > 0 ? (count / langTotal) * 100 : 0;
                 return (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="text-xs text-white/60 w-20 truncate">{name}</span>
-                    <div className="flex-1 h-1.5 rounded-full bg-white/8 overflow-hidden">
+                    <span className="w-20 truncate text-xs text-[var(--app-text-soft)]">{name}</span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--app-raised-2)]">
                       <div
                         className="h-full rounded-full bg-gradient-to-r from-sky-400/60 to-emerald-400/40"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-white/30 tabular-nums w-8 text-right">{count}</span>
+                    <span className="w-8 text-right text-[10px] text-[var(--app-text-muted)] tabular-nums">{count}</span>
                   </div>
                 );
               })}
             </div>
-          </div>
+          </WorkspaceSurface>
         )}
 
         {/* Chat by model */}
         {(data.chatsByModel || []).length > 0 && (
-          <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
-            <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+          <WorkspaceSurface padding="sm" className="space-y-3">
+            <div className="text-xs font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
               Chats by Model
             </div>
             <div className="space-y-2">
@@ -347,19 +354,19 @@ export default function AnalyticsDashboard({ className }: AnalyticsDashboardProp
                   const pct = totalChats > 0 ? ((m.numChats ?? 0) / totalChats) * 100 : 0;
                   return (
                     <div key={i} className="flex items-center gap-2">
-                      <span className="text-xs text-white/60 w-24 truncate">{m.model || 'Unknown'}</span>
-                      <div className="flex-1 h-1.5 rounded-full bg-white/8 overflow-hidden">
+                      <span className="w-24 truncate text-xs text-[var(--app-text-soft)]">{m.model || 'Unknown'}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--app-raised-2)]">
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-violet-400/60 to-sky-400/40"
                           style={{ width: `${pct}%` }}
                         />
                       </div>
-                      <span className="text-[10px] text-white/30 tabular-nums w-8 text-right">{m.numChats}</span>
+                      <span className="w-8 text-right text-[10px] text-[var(--app-text-muted)] tabular-nums">{m.numChats}</span>
                     </div>
                   );
                 })}
             </div>
-          </div>
+          </WorkspaceSurface>
         )}
       </div>
     </div>

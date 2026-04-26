@@ -40,81 +40,54 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #09090b;
+  --foreground: #1b2435;
   --card: #ffffff;
-  --card-foreground: #09090b;
+  --card-foreground: #1b2435;
   --popover: #ffffff;
-  --popover-foreground: #09090b;
-  --primary: #18181b;
+  --popover-foreground: #1b2435;
+  --primary: #2f6df6;
   --primary-foreground: #fafafa;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
+  --secondary: #eef3fb;
+  --secondary-foreground: #1b2435;
+  --muted: #f3f6fb;
+  --muted-foreground: #7b8798;
+  --accent: #edf3ff;
+  --accent-foreground: #1b2435;
   --destructive: #ef4444;
   --destructive-foreground: #fafafa;
-  --border: #e4e4e7;
-  --input: #e4e4e7;
-  --ring: #18181b;
-  --chart-1: #e76e50;
-  --chart-2: #2a9d8f;
-  --chart-3: #264653;
-  --chart-4: #e9c46a;
-  --chart-5: #f4a261;
+  --border: #dbe4f0;
+  --input: #dbe4f0;
+  --ring: #2f6df6;
+  --chart-1: #2f6df6;
+  --chart-2: #2eb78d;
+  --chart-3: #ffb447;
+  --chart-4: #70a5ff;
+  --chart-5: #ff7a7a;
   --radius: 0.6rem;
-}
 
-.dark {
-  --background: #09111b;
-  --foreground: #f4f7fb;
-  --card: #0f1726;
-  --card-foreground: #f4f7fb;
-  --popover: #101a2b;
-  --popover-foreground: #f4f7fb;
-  --primary: #fafafa;
-  --primary-foreground: #18181b;
-  --secondary: #172133;
-  --secondary-foreground: #fafafa;
-  --muted: #131d2e;
-  --muted-foreground: #8ea0b8;
-  --accent: #182335;
-  --accent-foreground: #fafafa;
-  --destructive: #f87171;
-  --destructive-foreground: #fafafa;
-  --border: #213047;
-  --input: #131d2e;
-  --ring: #58f3d4;
-  --chart-1: #58f3d4;
-  --chart-2: #22c55e;
-  --chart-3: #f5b74c;
-  --chart-4: #60a5fa;
-  --chart-5: #f87171;
-
-  --app-ink: #09111b;
-  --app-surface: #0f1726;
-  --app-raised: #131d2e;
-  --app-raised-2: #162235;
-  --app-text: #f4f7fb;
-  --app-text-soft: #c0cbda;
-  --app-text-muted: #8ea0b8;
-  --app-border-soft: rgba(142, 160, 184, 0.18);
-  --app-border-strong: rgba(88, 243, 212, 0.22);
-  --app-accent: #58f3d4;
-  --app-accent-soft: rgba(88, 243, 212, 0.14);
-  --app-signal: #f5b74c;
-  --app-signal-soft: rgba(245, 183, 76, 0.14);
-  --app-danger: #f87171;
+  --app-ink: #f5f7fb;
+  --app-surface: #ffffff;
+  --app-raised: #f9fbfe;
+  --app-raised-2: #f2f5fb;
+  --app-text: #1b2435;
+  --app-text-soft: #5d6b80;
+  --app-text-muted: #8b97a8;
+  --app-border-soft: rgba(131, 149, 176, 0.2);
+  --app-border-strong: rgba(47, 109, 246, 0.2);
+  --app-accent: #2f6df6;
+  --app-accent-soft: rgba(47, 109, 246, 0.1);
+  --app-signal: #2eb78d;
+  --app-signal-soft: rgba(46, 183, 141, 0.12);
+  --app-danger: #ef4444;
   --panel-radius: 24px;
   --panel-radius-tight: 18px;
-  --panel-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  --panel-shadow: 0 24px 60px rgba(28, 44, 73, 0.08);
 
-  --agent-shell: var(--app-ink);
-  --agent-shell-2: var(--app-surface);
-  --agent-panel: color-mix(in srgb, var(--app-surface) 92%, transparent);
-  --agent-panel-strong: color-mix(in srgb, var(--app-surface) 96%, transparent);
-  --agent-panel-soft: color-mix(in srgb, var(--app-raised) 82%, transparent);
+  --agent-shell: #f7f9fd;
+  --agent-shell-2: #ffffff;
+  --agent-panel: rgba(255, 255, 255, 0.95);
+  --agent-panel-strong: rgba(255, 255, 255, 0.98);
+  --agent-panel-soft: rgba(247, 250, 255, 0.92);
   --agent-border-soft: var(--app-border-soft);
   --agent-border-strong: var(--app-border-strong);
   --agent-highlight: var(--app-accent);
@@ -133,6 +106,9 @@
     @apply bg-background text-foreground font-sans antialiased;
     overflow: hidden;
     height: 100dvh;
+    background:
+      radial-gradient(circle at top left, rgba(47, 109, 246, 0.05), transparent 24%),
+      linear-gradient(180deg, #f8fafe 0%, #f3f6fb 100%);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -223,15 +199,15 @@
 @layer utilities {
   .agent-stage {
     background:
-      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 22%),
-      radial-gradient(circle at 76% 8%, rgba(245, 183, 76, 0.08), transparent 18%),
-      linear-gradient(180deg, #09111b 0%, #0b1320 45%, #09111b 100%);
+      radial-gradient(circle at top left, rgba(47, 109, 246, 0.05), transparent 24%),
+      radial-gradient(circle at 76% 8%, rgba(46, 183, 141, 0.05), transparent 18%),
+      linear-gradient(180deg, #f9fbff 0%, #f2f5fb 100%);
   }
 
   .agent-grid {
     background-image:
-      linear-gradient(rgba(142, 160, 184, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(142, 160, 184, 0.03) 1px, transparent 1px);
+      linear-gradient(rgba(133, 149, 175, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(133, 149, 175, 0.06) 1px, transparent 1px);
     background-position: center;
     background-size: 48px 48px;
     mask-image: radial-gradient(circle at center, black 46%, transparent 100%);
@@ -239,56 +215,56 @@
 
   .app-shell-stage {
     background:
-      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 22%),
-      linear-gradient(180deg, #09111b 0%, #0a1421 52%, #09111b 100%);
+      radial-gradient(circle at top left, rgba(47, 109, 246, 0.05), transparent 22%),
+      linear-gradient(180deg, #fbfcff 0%, #f3f6fb 52%, #f8fafe 100%);
   }
 
   .app-pane {
-    background: linear-gradient(180deg, rgba(15, 23, 38, 0.92) 0%, rgba(12, 19, 31, 0.92) 100%);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 251, 255, 0.96) 100%);
     border: 1px solid var(--app-border-soft);
   }
 
   .app-pane-strong {
     background:
-      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 28%),
-      linear-gradient(180deg, rgba(16, 24, 38, 0.96) 0%, rgba(10, 17, 28, 0.96) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+      radial-gradient(circle at top left, rgba(47, 109, 246, 0.06), transparent 28%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 249, 255, 0.98) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.2);
   }
 
   .app-pane-soft {
-    background: linear-gradient(180deg, rgba(18, 28, 43, 0.82) 0%, rgba(13, 21, 34, 0.82) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: linear-gradient(180deg, rgba(248, 250, 255, 0.94) 0%, rgba(241, 245, 251, 0.94) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.16);
   }
 
   .chat-stage-panel {
     background:
-      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 24%),
-      linear-gradient(180deg, rgba(14, 22, 35, 0.94) 0%, rgba(10, 17, 28, 0.98) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    box-shadow: 0 34px 90px rgba(0, 0, 0, 0.3);
+      radial-gradient(circle at top left, rgba(47, 109, 246, 0.05), transparent 24%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 255, 0.98) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.18);
+    box-shadow: 0 24px 60px rgba(28, 44, 73, 0.08);
     backdrop-filter: blur(22px);
   }
 
   .chat-stage-content {
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.014) 0%, rgba(255, 255, 255, 0) 16%),
-      radial-gradient(circle at top center, rgba(88, 243, 212, 0.04), transparent 38%);
+      linear-gradient(180deg, rgba(47, 109, 246, 0.02) 0%, rgba(255, 255, 255, 0) 16%),
+      radial-gradient(circle at top center, rgba(47, 109, 246, 0.03), transparent 38%);
   }
 
   .chat-composer-frame {
     background:
-      radial-gradient(circle at top right, rgba(88, 243, 212, 0.07), transparent 32%),
-      linear-gradient(180deg, rgba(16, 24, 38, 0.97) 0%, rgba(10, 17, 28, 0.99) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+      radial-gradient(circle at top right, rgba(47, 109, 246, 0.05), transparent 32%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 250, 255, 0.98) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.2);
     box-shadow:
-      0 24px 70px rgba(0, 0, 0, 0.36),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      0 20px 50px rgba(28, 44, 73, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.65);
     border-radius: 30px;
     backdrop-filter: blur(24px);
   }
 
   .agent-panel {
-    background: linear-gradient(180deg, rgba(15, 23, 38, 0.92) 0%, rgba(12, 19, 31, 0.92) 100%);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 251, 255, 0.96) 100%);
     border: 1px solid var(--agent-border-soft);
     box-shadow: var(--panel-shadow);
     backdrop-filter: blur(18px);
@@ -297,18 +273,18 @@
 
   .agent-panel-strong {
     background:
-      radial-gradient(circle at top left, rgba(88, 243, 212, 0.08), transparent 30%),
-      linear-gradient(180deg, rgba(16, 24, 38, 0.96) 0%, rgba(10, 17, 28, 0.96) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.07);
+      radial-gradient(circle at top left, rgba(47, 109, 246, 0.06), transparent 30%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 249, 255, 0.98) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.18);
     box-shadow: var(--panel-shadow);
     backdrop-filter: blur(22px);
     border-radius: var(--panel-radius);
   }
 
   .agent-panel-soft {
-    background: linear-gradient(180deg, rgba(18, 28, 43, 0.82) 0%, rgba(13, 21, 34, 0.82) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    background: linear-gradient(180deg, rgba(248, 250, 255, 0.94) 0%, rgba(241, 245, 251, 0.94) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.14);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
     backdrop-filter: blur(14px);
     border-radius: var(--panel-radius-tight);
   }
@@ -338,10 +314,71 @@
   }
 
   .agent-metric {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, rgba(255, 255, 255, 0.012) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 249, 255, 0.96) 100%);
+    border: 1px solid rgba(131, 149, 176, 0.16);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
     border-radius: var(--panel-radius-tight);
+  }
+
+  .apple-reference-shell [class*='text-white/90'],
+  .apple-reference-shell [class*='text-white/88'],
+  .apple-reference-shell [class*='text-white/85'],
+  .apple-reference-shell [class*='text-white/80'],
+  .apple-reference-shell .text-white {
+    color: var(--app-text) !important;
+  }
+
+  .apple-reference-shell [class*='text-white/70'],
+  .apple-reference-shell [class*='text-white/60'],
+  .apple-reference-shell [class*='text-white/55'],
+  .apple-reference-shell [class*='text-white/50'],
+  .apple-reference-shell [class*='text-white/45'] {
+    color: var(--app-text-soft) !important;
+  }
+
+  .apple-reference-shell [class*='text-white/40'],
+  .apple-reference-shell [class*='text-white/35'],
+  .apple-reference-shell [class*='text-white/30'],
+  .apple-reference-shell [class*='text-white/25'],
+  .apple-reference-shell [class*='text-white/20'],
+  .apple-reference-shell [class*='text-white/15'] {
+    color: var(--app-text-muted) !important;
+  }
+
+  .apple-reference-shell [class*='bg-[var(--app-accent)]'][class*='text-white'],
+  .apple-reference-shell [class*='bg-sky-500'][class*='text-white'],
+  .apple-reference-shell [class*='bg-red-500'][class*='text-white'],
+  .apple-reference-shell [class*='bg-emerald-500'][class*='text-white'],
+  .apple-reference-shell [class*='bg-amber-500'][class*='text-white'] {
+    color: #ffffff !important;
+  }
+
+  .apple-reference-shell [class*='bg-white/5'],
+  .apple-reference-shell [class*='bg-white/6'],
+  .apple-reference-shell [class*='bg-white/8'],
+  .apple-reference-shell [class*='bg-white/10'],
+  .apple-reference-shell [class*='bg-white/12'],
+  .apple-reference-shell [class*='bg-white/[0.02]'],
+  .apple-reference-shell [class*='bg-white/[0.025]'],
+  .apple-reference-shell [class*='bg-white/[0.03]'],
+  .apple-reference-shell [class*='bg-white/[0.04]'],
+  .apple-reference-shell [class*='bg-white/[0.045]'],
+  .apple-reference-shell [class*='bg-white/[0.05]'],
+  .apple-reference-shell [class*='bg-black/15'],
+  .apple-reference-shell [class*='bg-black/20'],
+  .apple-reference-shell [class*='bg-black/24'],
+  .apple-reference-shell [class*='bg-black/40'] {
+    background: var(--app-raised) !important;
+  }
+
+  .apple-reference-shell [class*='border-white/5'],
+  .apple-reference-shell [class*='border-white/6'],
+  .apple-reference-shell [class*='border-white/8'],
+  .apple-reference-shell [class*='border-white/10'],
+  .apple-reference-shell [class*='border-white/12'],
+  .apple-reference-shell [class*='border-white/15'],
+  .apple-reference-shell [class*='border-white/20'] {
+    border-color: var(--app-border-soft) !important;
   }
 
   .agent-floating {

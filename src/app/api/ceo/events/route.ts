@@ -1,13 +1,14 @@
-import { NextResponse } from 'next/server';
-
-import { ensureCEOEventConsumer } from '@/lib/organization/ceo-event-consumer';
-import { listCEOEvents } from '@/lib/organization/ceo-event-store';
+import { handleCEOEventsGet } from '@/server/control-plane/routes/ceo';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  ensureCEOEventConsumer();
-  const url = new URL(req.url);
-  const limit = Number(url.searchParams.get('limit') || 20);
-  return NextResponse.json({ events: listCEOEvents(limit) });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+  return handleCEOEventsGet(req);
 }

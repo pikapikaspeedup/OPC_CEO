@@ -1,0 +1,18 @@
+[package]
+name = "opc-ceo-desktop"
+version = "0.3.0"
+description = "OPC CEO desktop shell"
+authors = ["OPC"]
+edition = "2021"
+
+[lib]
+name = "opc_ceo_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+

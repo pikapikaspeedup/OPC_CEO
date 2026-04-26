@@ -1,5 +1,14 @@
 # Provider Runtime Hardening（2026-04-17）
 
+## 2026-04-21 补注
+
+当前机制在保留本文主线的基础上又补了一层：
+
+1. canonical workflow frontmatter 现在除了 `runtimeProfile` / `runtimeSkill`，也支持 `runtimeScriptsDir`
+2. `ai_digest` 已切到 `gateway/assets/workflow-scripts/ai_digest/*` 这条全局脚本资产链路
+3. `baogaoai-ai-digest-generator` skill 可以继续保留，但它现在是可选能力入口，不再是日报 runtime helper 的必需宿主
+4. `ai_bigevent` 仍然沿用 `runtimeSkill` 方案，因此这套能力是兼容增量，而不是推翻原有 Antigravity skill 模型
+
 ## 背景
 
 在 `Native Codex AI 大事件` 成功后，又针对 4 个 review finding 做了第二轮收口：
@@ -23,8 +32,10 @@
 - canonical workflow frontmatter 新增：
   - `runtimeProfile`
   - `runtimeSkill`
+  - `runtimeScriptsDir`
 - runtime hook 不再按 `/ai_digest`、`/ai_bigevent` 名字分支
 - 共享 runtime 只认 `runtimeProfile`
+- helper 资产优先走 `runtimeScriptsDir`，缺失时再 fallback 到 `runtimeSkill`
 
 当前 profile：
 
@@ -66,7 +77,7 @@
 
 结果：
 
-- repo `.agents/workflows` / `.agents/skills` 现在每次启动都会刷新 canonical home mirror
+- repo `.agents/workflows` / `.agents/skills` / `.agents/workflow-scripts` 现在每次启动都会刷新 canonical home mirror
 - legacy home assets 仍保留“只补缺，不覆写”
 - 这样 repo 修复不会再被旧 canonical skill 吃掉
 

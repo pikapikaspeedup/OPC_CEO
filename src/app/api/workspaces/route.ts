@@ -1,15 +1,16 @@
-import { NextResponse } from 'next/server';
-import { getPlaygrounds } from '@/lib/bridge/gateway';
-import { listKnownWorkspaces } from '@/lib/workspace-catalog';
+import { handleWorkspacesGet } from '@/server/control-plane/routes/workspaces';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const workspaces = listKnownWorkspaces().map((workspace) => ({
-    name: workspace.name,
-    uri: workspace.uri,
-  }));
-  const playgrounds = getPlaygrounds();
+const DEFAULT_REQUEST = new Request('http://localhost/api/workspaces');
 
-  return NextResponse.json({ workspaces, playgrounds });
+export async function GET(req: Request = DEFAULT_REQUEST) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+  return handleWorkspacesGet();
 }

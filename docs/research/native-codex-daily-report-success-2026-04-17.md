@@ -1,5 +1,14 @@
 # Native Codex 今日日报总结成功验证（2026-04-17）
 
+## 2026-04-21 补注
+
+这份文档保留 `2026-04-17` 的成功证据，但当前实现已经进一步收口为：
+
+1. `/ai_digest` 仍是 canonical workflow
+2. 日报 helper scripts 已迁到 `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/*`
+3. `baogaoai-ai-digest-generator` skill 仍可作为全局能力入口保留，但日报 runtime 不再必须依赖它来挂脚本
+4. 因此，下面凡是把 digest scripts 直接描述成“必须位于 skill 下”的地方，都应以本补注为准
+
 ## 背景
 
 此前 `AI情报工作室` 的“总结今天日报”场景虽然能通过 `native-codex` 跑通，但始终只落在 **pure prompt fallback**，没有命中任何 canonical workflow / skill，因此输出经常：
@@ -11,7 +20,7 @@
 本次目标是把该场景真正推进到：
 
 1. 命中 canonical workflow
-2. 命中关联 skill
+2. 可命中关联 skill，但运行时不再强依赖 skill 挂脚本
 3. 基于真实当天 digest 内容生成总结
 4. 由 `native-codex` 完成最终写作
 
@@ -30,18 +39,18 @@
 - 成为 `AI情报工作室` 的 canonical 日报 workflow
 - 明确要求优先使用预先准备好的 digest context
 
-### 2. 迁移 canonical skill 与脚本
+### 2. 迁移 canonical skill 与全局 workflow scripts
 
 新增：
 
 - `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/SKILL.md`
-- `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/scripts/fetch_context.py`
-- `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/scripts/report_digest.py`
+- `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py`
+- `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py`
 
 作用：
 
-- skill 成为 canonical fallback 资产
-- 脚本进入统一全局资产包
+- skill 成为可选 canonical 能力入口
+- 脚本进入 workflow 自己的统一全局资产包
 
 ### 3. 绑定部门能力声明
 
@@ -70,12 +79,13 @@
 
 修改：
 
-- `src/lib/agents/prompt-executor.ts`
+- `src/lib/agents/workflow-runtime-hooks.ts`
 
 行为：
 
-- 当 `resolvedWorkflowRef === '/ai_digest'` 时
-- 先运行 `fetch_context.py`
+- 当 workflow manifest 声明 `runtimeProfile = daily-digest` 时
+- 先解析 canonical workflow 的 runtime helper 配置
+- 优先运行 `workflow-scripts/ai_digest/fetch_context.py`
 - 若发现当天 digest 已存在，则直接调用 `https://api.aitrend.us/digest?date=YYYY-MM-DD`
 - 把当天 digest 的：
   - 标题
@@ -132,7 +142,7 @@ CEO 命令返回：
 这次已经不是 pure prompt fallback，而是：
 
 - ✅ 命中 canonical workflow：`/ai_digest`
-- ✅ 命中 canonical skill：`baogaoai-ai-digest-generator`
+- ✅ 可同时保留 canonical skill：`baogaoai-ai-digest-generator`
 - ✅ provider 确实是 `native-codex`
 
 ### 输出表现
@@ -164,7 +174,7 @@ CEO 命令返回：
 ### 技术层
 
 - ✅ `native-codex` provider 真正参与执行
-- ✅ Prompt Mode 命中 workflow / skill
+- ✅ Prompt Mode 命中 workflow，且可以叠加 skill 能力入口
 - ✅ 结构化 `promptResolution` 正确落盘
 
 ### 业务层

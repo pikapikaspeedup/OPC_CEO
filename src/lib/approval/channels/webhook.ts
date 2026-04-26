@@ -19,6 +19,7 @@ import type {
   NotificationChannel,
   NotificationResult,
 } from '../types';
+import { getApprovalFeedbackUrl, getApprovalInboxUrl } from '../approval-urls';
 
 const log = createLogger('WebhookChannel');
 
@@ -42,7 +43,13 @@ export interface WebhookEndpoint {
    * Transform function to convert ApprovalRequest to webhook-specific payload.
    * If not provided, sends the raw ApprovalRequest JSON.
    */
-  transform?: (request: ApprovalRequest, approvalUrl: string) => Record<string, unknown>
+  transform?: (request: ApprovalRequest, urls: WebhookActionUrls) => Record<string, unknown>
+}
+
+export interface WebhookActionUrls {
+  approvalUrl: string;
+  approveUrl: string;
+  rejectUrl: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +59,7 @@ export interface WebhookEndpoint {
 /** Slack incoming webhook payload format. */
 export function slackTransform(
   request: ApprovalRequest,
-  approvalUrl: string,
+  urls: WebhookActionUrls,
 ): Record<string, unknown> {
   const urgencyEmoji: Record<string, string> = {
     low: ':large_green_circle:', normal: ':large_blue_circle:',
@@ -76,9 +83,9 @@ export function slackTransform(
       {
         type: 'actions',
         elements: [
-          { type: 'button', text: { type: 'plain_text', text: '✅ 批准' }, url: `${approvalUrl}?action=approve` },
-          { type: 'button', text: { type: 'plain_text', text: '❌ 拒绝' }, url: `${approvalUrl}?action=reject` },
-          { type: 'button', text: { type: 'plain_text', text: '💬 详情' }, url: approvalUrl },
+          { type: 'button', text: { type: 'plain_text', text: 'Approve' }, url: urls.approveUrl },
+          { type: 'button', text: { type: 'plain_text', text: 'Reject' }, url: urls.rejectUrl },
+          { type: 'button', text: { type: 'plain_text', text: 'Details' }, url: urls.approvalUrl },
         ],
       },
     ],
@@ -91,11 +98,14 @@ export function slackTransform(
 
 export class WebhookChannel implements NotificationChannel {
   readonly id = 'webhook';
-  readonly enabled = true;
 
   private endpoints: WebhookEndpoint[] = [];
 
   constructor(private gatewayUrl: string) {}
+
+  get enabled(): boolean {
+    return this.endpoints.some((endpoint) => endpoint.enabled);
+  }
 
   /** Register a webhook endpoint. */
   addEndpoint(endpoint: WebhookEndpoint): void {
@@ -114,8 +124,6 @@ export class WebhookChannel implements NotificationChannel {
    * - Constructs payload (raw or transformed)
    * - Signs with HMAC if secret is configured
    * - POSTs to each enabled endpoint
-   *
-   * TODO: Implement actual HTTP POST (currently placeholder).
    */
   async send(request: ApprovalRequest): Promise<NotificationResult> {
     const enabledEndpoints = this.endpoints.filter(e => e.enabled);
@@ -128,9 +136,12 @@ export class WebhookChannel implements NotificationChannel {
     for (const endpoint of enabledEndpoints) {
       try {
         const approvalUrl = this.getApprovalUrl(request.id);
+        const approveUrl = getApprovalFeedbackUrl(this.gatewayUrl, request.id, 'approve');
+        const rejectUrl = getApprovalFeedbackUrl(this.gatewayUrl, request.id, 'reject');
+        const urls = { approvalUrl, approveUrl, rejectUrl };
         const payload = endpoint.transform
-          ? endpoint.transform(request, approvalUrl)
-          : { ...request, approvalUrl };
+          ? endpoint.transform(request, urls)
+          : { ...request, approvalUrl, approveUrl, rejectUrl };
 
         const body = JSON.stringify(payload);
 
@@ -147,23 +158,21 @@ export class WebhookChannel implements NotificationChannel {
           headers['X-Signature-256'] = `sha256=${signature}`;
         }
 
-        // TODO: Replace with actual fetch/http call
-        // const response = await fetch(endpoint.url, {
-        //   method: 'POST',
-        //   headers,
-        //   body,
-        // });
+        const response = await fetch(endpoint.url, {
+          method: 'POST',
+          headers,
+          body,
+        });
 
-        log.info({
-          endpointId: endpoint.id,
-          requestId: request.id,
-          url: endpoint.url.slice(0, 30) + '...',
-        }, 'Webhook notification dispatched (placeholder)');
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
 
         results.push({ id: endpoint.id, success: true });
-      } catch (err: any) {
-        log.error({ endpointId: endpoint.id, err: err.message }, 'Webhook notification failed');
-        results.push({ id: endpoint.id, success: false, error: err.message });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error({ endpointId: endpoint.id, err: message }, 'Webhook notification failed');
+        results.push({ id: endpoint.id, success: false, error: message });
       }
     }
 
@@ -177,6 +186,6 @@ export class WebhookChannel implements NotificationChannel {
   }
 
   getApprovalUrl(requestId: string): string {
-    return `${this.gatewayUrl}/approval/${requestId}`;
+    return getApprovalInboxUrl(this.gatewayUrl, requestId);
   }
 }

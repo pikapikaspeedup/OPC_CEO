@@ -8,13 +8,27 @@
  * process startup code instead of relying on import-time side effects.
  */
 
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import path from 'path';
 import { existsSync, mkdirSync, readdirSync, copyFileSync, statSync, cpSync } from 'fs';
 
 const DEFAULT_HOME = path.join(homedir(), '.gemini', 'antigravity', 'gateway');
 
-export const GATEWAY_HOME = process.env.AG_GATEWAY_HOME || DEFAULT_HOME;
+function resolveGatewayHome(): string {
+  const explicitHome = process.env.AG_GATEWAY_HOME?.trim();
+  if (explicitHome) {
+    return explicitHome;
+  }
+
+  if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
+    const workerId = process.env.VITEST_WORKER_ID || String(process.pid);
+    return path.join(tmpdir(), 'antigravity-mobility-cli-vitest', `worker-${workerId}`, 'gateway');
+  }
+
+  return DEFAULT_HOME;
+}
+
+export const GATEWAY_HOME = resolveGatewayHome();
 
 // Legacy registry files.
 // Runtime persistence now lives in storage.sqlite; these are kept only so the
@@ -27,6 +41,7 @@ export const SCHEDULED_JOBS_FILE = path.join(GATEWAY_HOME, 'scheduled_jobs.json'
 
 // Global assets directory
 export const GLOBAL_ASSETS_DIR = path.join(GATEWAY_HOME, 'assets');
+export const GLOBAL_WORKFLOW_SCRIPTS_DIR = path.join(GLOBAL_ASSETS_DIR, 'workflow-scripts');
 
 // Per-workspace artifact directory name (relative to workspace root)
 export const ARTIFACT_ROOT_DIR = 'demolong';
@@ -65,6 +80,16 @@ export function syncAssetsToGlobal(): void {
   syncFlatRepoDir(path.join(repoRoot, '.agents', 'assets', 'templates'), path.join(GLOBAL_ASSETS_DIR, 'templates'), '.json');
   syncFlatRepoDir(path.join(repoRoot, '.agents', 'assets', 'review-policies'), path.join(GLOBAL_ASSETS_DIR, 'review-policies'), '.json');
   syncFlatRepoDir(path.join(repoRoot, '.agents', 'workflows'), path.join(GLOBAL_ASSETS_DIR, 'workflows'), '.md');
+
+  const repoWorkflowScriptsDir = path.join(repoRoot, '.agents', 'workflow-scripts');
+  if (existsSync(repoWorkflowScriptsDir)) {
+    mkdirSync(GLOBAL_WORKFLOW_SCRIPTS_DIR, { recursive: true });
+    for (const entry of readdirSync(repoWorkflowScriptsDir)) {
+      const src = path.join(repoWorkflowScriptsDir, entry);
+      const dst = path.join(GLOBAL_WORKFLOW_SCRIPTS_DIR, entry);
+      cpSync(src, dst, { recursive: true, force: true });
+    }
+  }
 
   const legacyWorkflowDir = path.join(homedir(), '.gemini', 'antigravity', 'global_workflows');
   if (existsSync(legacyWorkflowDir)) {
@@ -112,7 +137,6 @@ export function syncAssetsToGlobal(): void {
   }
 }
 
-let initialized = false;
 let assetsSynced = false;
 
 export function initializeGatewayHome(options: { syncAssets?: boolean } = {}): void {
@@ -121,5 +145,4 @@ export function initializeGatewayHome(options: { syncAssets?: boolean } = {}): v
     syncAssetsToGlobal();
     assetsSynced = true;
   }
-  initialized = true;
 }

@@ -15,6 +15,10 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  workspaceGhostActionClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 interface ChatProps {
   steps: StepsData | null;
@@ -156,7 +160,7 @@ function ToolGroup({ steps, t }: { steps: Step[]; t: (key: string, values?: Reco
           {steps.map((s, i) => {
             const { icon, text, statusIcon } = getToolLabel(s, t);
             return (
-              <div key={i} className={cn('flex items-center gap-3 rounded-[16px] border border-dashed border-[var(--app-border-soft)] bg-black/10 px-3 py-2 text-[11px] text-[var(--app-text-soft)] transition-all hover:border-solid', isCanceled(s.status) && 'opacity-40 line-through')}>
+              <div key={i} className={cn('flex items-center gap-3 rounded-[16px] border border-dashed border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-[11px] text-[var(--app-text-soft)] transition-all hover:border-solid', isCanceled(s.status) && 'opacity-40 line-through')}>
                 <div className="shrink-0">{icon}</div>
                 <span className="truncate font-mono flex-1">{text}</span>
                 {statusIcon}
@@ -211,7 +215,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
             <Button
               variant="ghost"
               size="icon"
-              className="mt-2 h-8 w-8 shrink-0 rounded-full border border-white/6 bg-black/10 text-[var(--app-text-muted)] opacity-0 transition-opacity group-hover:opacity-100 hover:border-[var(--app-border-strong)] hover:bg-white/[0.04] hover:text-[var(--app-text)]"
+              className={cn('mt-2 h-8 w-8 shrink-0 rounded-full opacity-0 transition-opacity group-hover:opacity-100', workspaceGhostActionClassName)}
               onClick={() => onRevert(originalIndex)}
               title={t('chat.revertMessage')}
             >
@@ -246,7 +250,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
               </div>
             )}
           </div>
-          <Avatar className="mt-2 hidden h-9 w-9 shrink-0 border border-white/8 bg-[var(--app-raised)] shadow-[0_16px_36px_rgba(0,0,0,0.2)] sm:flex">
+          <Avatar className="mt-2 hidden h-9 w-9 shrink-0 border border-[var(--app-border-soft)] bg-[var(--app-raised)] shadow-[0_16px_36px_rgba(37,99,235,0.12)] sm:flex">
             <AvatarFallback className="bg-slate-950 text-[10px] font-bold text-white">YOU</AvatarFallback>
           </Avatar>
         </div>
@@ -263,7 +267,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
     return (
       <div className={cn('group flex', isFastMode ? 'mb-2 mt-4' : 'mb-4 mt-7')}>
         <div className="flex w-full max-w-full items-start gap-3">
-          <Avatar className="mt-1 h-9 w-9 shrink-0 border border-white/8 bg-[var(--app-raised)] shadow-[0_16px_36px_rgba(0,0,0,0.2)]">
+          <Avatar className="mt-1 h-9 w-9 shrink-0 border border-[var(--app-border-soft)] bg-[var(--app-raised)] shadow-[0_16px_36px_rgba(37,99,235,0.12)]">
             <AvatarFallback className={cn(
               'text-white',
               isFastMode ? 'bg-gradient-to-br from-violet-500 to-sky-500' : 'bg-[linear-gradient(135deg,#1d4ed8_0%,#2563eb_60%,#38bdf8_100%)]'
@@ -272,11 +276,11 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
             </AvatarFallback>
           </Avatar>
           <div className={cn(
-            'min-w-0 flex-1 overflow-hidden rounded-[28px] rounded-tl-[10px] border px-5 py-4 text-[15px] leading-relaxed chat-markdown shadow-[0_24px_70px_rgba(0,0,0,0.18)]',
+            'min-w-0 flex-1 overflow-hidden rounded-[28px] rounded-tl-[10px] border px-5 py-4 text-[15px] leading-relaxed chat-markdown text-[var(--app-text)] shadow-[0_24px_70px_rgba(37,99,235,0.08)]',
             isFastMode
-              ? 'border-white/6 bg-[linear-gradient(180deg,rgba(21,24,46,0.82)_0%,rgba(14,20,37,0.9)_100%)]'
-              : 'border-white/6 bg-[linear-gradient(180deg,rgba(18,28,43,0.94)_0%,rgba(12,19,31,0.98)_100%)]',
-            streaming && 'border-[var(--app-border-strong)] shadow-[0_0_0_1px_rgba(88,243,212,0.14),0_24px_70px_rgba(0,0,0,0.18)]'
+              ? 'border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(241,245,249,0.9)_100%)]'
+              : 'border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,250,252,0.94)_100%)]',
+            streaming && 'border-[var(--app-border-strong)] shadow-[0_0_0_1px_rgba(37,99,235,0.12),0_24px_70px_rgba(37,99,235,0.12)]'
           )}>
             {text ? (
               <div dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />
@@ -294,7 +298,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
             <Button
               variant="ghost"
               size="icon"
-              className="mt-2 h-8 w-8 shrink-0 rounded-full border border-white/6 bg-black/10 text-[var(--app-text-muted)] opacity-0 transition-opacity group-hover:opacity-100 hover:border-[var(--app-border-strong)] hover:bg-white/[0.04] hover:text-[var(--app-text)]"
+              className={cn('mt-2 h-8 w-8 shrink-0 rounded-full opacity-0 transition-opacity group-hover:opacity-100', workspaceGhostActionClassName)}
               onClick={() => onRevert(originalIndex)}
               title={t('chat.revertMessage')}
             >
@@ -354,12 +358,12 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
     return (
       <div className="mb-6 mt-6 flex">
         <div className="flex w-full max-w-full items-start gap-3">
-          <Avatar className="mt-1 h-9 w-9 shrink-0 border border-white/8 bg-[var(--app-raised)] shadow-[0_16px_36px_rgba(0,0,0,0.2)]">
+          <Avatar className="mt-1 h-9 w-9 shrink-0 border border-[var(--app-border-soft)] bg-[var(--app-raised)] shadow-[0_16px_36px_rgba(37,99,235,0.12)]">
             <AvatarFallback className="bg-[linear-gradient(135deg,#1d4ed8_0%,#2563eb_60%,#38bdf8_100%)] text-white">
               <Bot className="h-4 w-4" />
             </AvatarFallback>
           </Avatar>
-          <div className="flex-1 rounded-[28px] rounded-tl-[10px] border border-white/6 bg-[linear-gradient(180deg,rgba(18,28,43,0.94)_0%,rgba(12,19,31,0.98)_100%)] px-5 py-4 shadow-[0_24px_70px_rgba(0,0,0,0.18)]">
+          <div className="flex-1 rounded-[28px] rounded-tl-[10px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,250,252,0.94)_100%)] px-5 py-4 text-[var(--app-text)] shadow-[0_24px_70px_rgba(37,99,235,0.08)]">
             {content && (
               <div className="chat-markdown text-[15px] leading-relaxed mb-4" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
             )}
@@ -372,7 +376,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
                 {reviewPaths.map(uri => {
                   const name = uri.replace('file://', '').split('/').pop();
                   return (
-                    <Card key={uri} className="cursor-pointer border-dashed border-white/8 bg-white/[0.03] shadow-none transition-colors hover:bg-white/[0.05]" onClick={() => window.open(uri, '_blank')}>
+                    <Card key={uri} className="cursor-pointer border-dashed border-[var(--app-border-soft)] bg-[var(--app-raised)] shadow-none transition-colors hover:border-[var(--app-border-strong)] hover:bg-white" onClick={() => window.open(uri, '_blank')}>
                       <div className="flex items-center justify-between p-3">
                         <div className="flex items-center gap-3 min-w-0 pr-2">
                           <FileCode className="h-4 w-4 text-indigo-500 shrink-0" />
@@ -390,7 +394,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
             {/* Blocking approval section */}
             {blocked && !hasFollowup && (
               <div className="mt-8 p-5 rounded-xl border-l-4 border-l-amber-500 border bg-amber-500/[0.03] space-y-4">
-                <div className="flex items-center gap-3 text-amber-600 dark:text-amber-500">
+                <div className="flex items-center gap-3 text-amber-700">
                   <Clock className="w-4 h-4 animate-pulse" />
                   <span className="text-sm font-bold uppercase tracking-wider">
                     {autoProc ? t('chat.autoProceeding') : t('chat.approvalRequired')}
@@ -401,7 +405,7 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
                     <Button onClick={() => onProceed?.(reviewPaths[0] || '')} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-10 shadow-lg shadow-indigo-500/10">
                       <CheckCircle2 className="w-4 h-4 mr-2" /> {t('chat.proceed')}
                     </Button>
-                    <Button variant="outline" className="flex-1 border-zinc-500/20 hover:bg-zinc-500/5 font-bold h-10">
+                    <Button variant="outline" className={cn('h-10 flex-1 font-bold', workspaceOutlineActionClassName)}>
                       <XCircle className="w-4 h-4 mr-2" /> {t('chat.reject')}
                     </Button>
                   </div>
@@ -505,20 +509,20 @@ export default function Chat({ steps, loading, onProceed, onRevert, isActive }: 
   if (!steps && !loading) {
     return (
       <div className="flex min-h-full items-center justify-center px-5 py-10">
-        <div className="w-full max-w-[560px] rounded-[32px] border border-white/6 bg-[linear-gradient(180deg,rgba(18,28,43,0.88)_0%,rgba(12,19,31,0.96)_100%)] px-8 py-10 text-center shadow-[0_28px_80px_rgba(0,0,0,0.24)]">
+        <div className="w-full max-w-[560px] rounded-[32px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,250,252,0.94)_100%)] px-8 py-10 text-center shadow-[0_28px_80px_rgba(37,99,235,0.1)]">
           <div className="mx-auto mb-8 flex h-16 w-16 items-center justify-center rounded-[22px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-accent)] shadow-[0_18px_48px_rgba(0,0,0,0.18)]">
             <Rocket className="h-7 w-7" />
           </div>
           <h2 className="app-heading text-3xl">{t('chat.emptyTitle')}</h2>
           <p className="mx-auto mt-3 max-w-sm text-sm leading-7 text-[var(--app-text-soft)]">{t('chat.emptySubtitle')}</p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-[22px] border border-white/6 bg-white/[0.03] px-5 py-4">
+            <div className="rounded-[22px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-5 py-4">
               <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-[16px] border border-dashed border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text)]">
                 <span className="font-mono text-sm">/</span>
               </div>
               <div className="mt-3 text-[11px] font-bold uppercase tracking-[0.24em] text-[var(--app-text-muted)]">{t('chat.skillsHint')}</div>
             </div>
-            <div className="rounded-[22px] border border-white/6 bg-white/[0.03] px-5 py-4">
+            <div className="rounded-[22px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-5 py-4">
               <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-[16px] border border-dashed border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text)]">
                 <span className="font-mono text-sm">@</span>
               </div>

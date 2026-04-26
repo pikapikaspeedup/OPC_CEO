@@ -24,10 +24,14 @@ vi.mock('@/lib/agents/prompt-executor', () => ({
   },
 }));
 
-vi.mock('@/lib/storage/gateway-db', () => ({
-  countRunRecordsByFilter: vi.fn(() => 0),
-  listRunRecordsByFilter: vi.fn(() => []),
-}));
+vi.mock('@/lib/storage/gateway-db', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/storage/gateway-db')>('@/lib/storage/gateway-db');
+  return {
+    ...actual,
+    countRunRecordsByFilter: vi.fn(() => 0),
+    listRunRecordsByFilter: vi.fn(() => []),
+  };
+});
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
@@ -40,7 +44,8 @@ vi.mock('@/lib/logger', () => ({
 
 import { executeDispatch } from '@/lib/agents/dispatch-service';
 import { executePrompt } from '@/lib/agents/prompt-executor';
-import { countRunRecordsByFilter, listRunRecordsByFilter } from '@/lib/storage/gateway-db';
+import { countRunRecordsByFilter, getGatewayDb, listRunRecordsByFilter } from '@/lib/storage/gateway-db';
+import { listBudgetLedgerEntries, summarizeBudgetLedger } from '@/lib/company-kernel/budget-ledger-store';
 import { GET, POST } from './route';
 
 function makeRequest(body: Record<string, unknown>) {
@@ -57,6 +62,9 @@ describe('POST /api/agent-runs', () => {
     vi.mocked(executePrompt).mockClear();
     vi.mocked(countRunRecordsByFilter).mockClear();
     vi.mocked(listRunRecordsByFilter).mockClear();
+    const db = getGatewayDb();
+    db.prepare('DELETE FROM budget_ledger').run();
+    db.prepare('DELETE FROM budget_policies').run();
   });
 
   it('keeps legacy template dispatch compatibility', async () => {
@@ -111,6 +119,31 @@ describe('POST /api/agent-runs', () => {
       triggerContext: { source: 'ceo-command' },
     }));
     expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+  });
+
+  it('records manual prompt dispatch in the budget ledger without autonomous dispatch quota', async () => {
+    const workspace = 'file:///tmp/manual-budget-route';
+    const res = await POST(makeRequest({
+      workspace,
+      prompt: '整理今天 AI 资讯重点',
+      executionTarget: {
+        kind: 'prompt',
+      },
+      triggerContext: {
+        source: 'ceo-command',
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    const entries = listBudgetLedgerEntries({
+      scope: 'department',
+      scopeId: workspace,
+      decision: 'reserved',
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].runId).toBe('prompt-run');
+    expect(entries[0].metadata?.operationKind).toBe('manual.prompt');
+    expect(summarizeBudgetLedger(entries).dispatches).toBe(0);
   });
 
   it('supports explicit template executionTarget requests', async () => {

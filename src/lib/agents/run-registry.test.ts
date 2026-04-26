@@ -11,6 +11,8 @@ const { MOCK_GATEWAY_HOME, MOCK_RUNS_FILE } = vi.hoisted(() => {
 
 vi.mock('./gateway-home', () => ({
   GATEWAY_HOME: MOCK_GATEWAY_HOME,
+  GLOBAL_ASSETS_DIR: `${MOCK_GATEWAY_HOME}/assets`,
+  ARTIFACT_ROOT_DIR: 'demolong',
   RUNS_FILE: MOCK_RUNS_FILE,
 }));
 
@@ -25,14 +27,18 @@ vi.mock('../logger', () => ({
 
 import { createRun, getRun, updateRun } from './run-registry';
 
+const registryGlobals = globalThis as unknown as {
+  __AGENT_RUNS_REGISTRY_MAP?: Map<string, unknown>;
+};
+
 describe('run-registry characterization', () => {
   beforeEach(() => {
-    (globalThis as any).__AGENT_RUNS_REGISTRY_MAP?.clear();
+    registryGlobals.__AGENT_RUNS_REGISTRY_MAP?.clear();
     fs.rmSync(MOCK_GATEWAY_HOME, { recursive: true, force: true });
   });
 
   afterEach(() => {
-    (globalThis as any).__AGENT_RUNS_REGISTRY_MAP?.clear();
+    registryGlobals.__AGENT_RUNS_REGISTRY_MAP?.clear();
     fs.rmSync(MOCK_GATEWAY_HOME, { recursive: true, force: true });
   });
 

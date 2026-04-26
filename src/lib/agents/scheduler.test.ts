@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./dispatch-service', () => ({
   executeDispatch: vi.fn(async () => ({ runId: 'run-1' })),
 }));
@@ -8,14 +8,26 @@ vi.mock('./prompt-executor', () => ({
 import { executeDispatch } from './dispatch-service';
 import { executePrompt } from './prompt-executor';
 import { deleteProject } from './project-registry';
-import { createScheduledJob, deleteScheduledJob, getSchedulerLoopDelay, isScheduledJobDue, normalizeScheduledJobDefinition, triggerScheduledJob, updateScheduledJob } from './scheduler';
+import { createScheduledJob, deleteScheduledJob, getNextRunAt, getSchedulerLoopDelay, getSchedulerRuntimeStatus, initializeScheduler, isScheduledJobDue, listScheduledJobs, normalizeScheduledJobDefinition, stopScheduler, triggerScheduledJob, updateScheduledJob } from './scheduler';
 import type { ScheduledJob } from './scheduler-types';
+import { buildDefaultBudgetPolicy, upsertBudgetPolicy } from '../company-kernel/budget-policy';
+import { listBudgetLedgerEntries } from '../company-kernel/budget-ledger-store';
 
 beforeEach(() => {
   vi.mocked(executeDispatch).mockClear();
   vi.mocked(executeDispatch).mockResolvedValue({ runId: 'run-1' });
   vi.mocked(executePrompt).mockClear();
   vi.mocked(executePrompt).mockResolvedValue({ runId: 'prompt-run-1' });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  for (const job of listScheduledJobs()) {
+    deleteScheduledJob(job.jobId);
+  }
+  stopScheduler();
+  delete process.env.AG_ROLE;
+  process.env.AG_ENABLE_SCHEDULER = '0';
 });
 
 function makeJob(overrides: Partial<ScheduledJob>): ScheduledJob {
@@ -40,6 +52,43 @@ describe('isScheduledJobDue', () => {
   it('does not fire disabled jobs', () => {
     const job = makeJob({ enabled: false });
     expect(isScheduledJobDue(job, new Date('2026-03-27T09:00:00.000Z'))).toBe(false);
+  });
+
+  it('evaluates cron jobs in the configured IANA timezone', () => {
+    const job = makeJob({
+      type: 'cron',
+      cronExpression: '0 20 * * *',
+      timeZone: 'Asia/Shanghai',
+      intervalMs: undefined,
+      lastRunAt: '2026-03-26T12:00:00.000Z',
+      action: {
+        kind: 'dispatch-prompt',
+        workspace: 'file:///Users/darrel/Documents/ai-news',
+        prompt: '生成日报',
+      },
+    });
+
+    expect(isScheduledJobDue(job, new Date('2026-03-27T12:00:01.000Z'))).toBe(true);
+    expect(isScheduledJobDue(job, new Date('2026-03-27T11:59:00.000Z'))).toBe(false);
+  });
+
+  it('reports overdue cron jobs as runnable now', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-27T12:05:00.000Z'));
+    const job = makeJob({
+      type: 'cron',
+      cronExpression: '0 20 * * *',
+      timeZone: 'Asia/Shanghai',
+      intervalMs: undefined,
+      lastRunAt: '2026-03-26T12:00:00.000Z',
+      action: {
+        kind: 'dispatch-prompt',
+        workspace: 'file:///Users/darrel/Documents/ai-news',
+        prompt: '生成日报',
+      },
+    });
+
+    expect(getNextRunAt(job)).toBe('2026-03-27T12:05:00.000Z');
   });
 
   it('fires once jobs only once', () => {
@@ -69,6 +118,29 @@ describe('isScheduledJobDue', () => {
     });
 
     expect(getSchedulerLoopDelay(new Date('2026-03-27T08:00:05.100Z'), [job])).toBe(1_000);
+  });
+
+  it('reports disabled runtime when scheduler is disabled by process env', () => {
+    process.env.AG_ROLE = 'api';
+    process.env.AG_ENABLE_SCHEDULER = '0';
+    const status = getSchedulerRuntimeStatus([makeJob({})], new Date('2026-03-27T08:00:05.100Z'));
+
+    expect(status.status).toBe('disabled');
+    expect(status.enabledJobCount).toBe(1);
+    expect(status.configuredToStart).toBe(false);
+  });
+
+  it('reports running runtime when the scheduler loop is initialized', () => {
+    process.env.AG_ROLE = 'api';
+    process.env.AG_ENABLE_SCHEDULER = '1';
+    const created = createScheduledJob(makeJob({}));
+
+    initializeScheduler();
+    const status = getSchedulerRuntimeStatus([created], new Date('2026-03-27T08:00:05.100Z'));
+
+    expect(status.status).toBe('running');
+    expect(status.loopActive).toBe(true);
+    expect(status.configuredToStart).toBe(true);
   });
 
   it('normalizes create-project jobs to file URIs', () => {
@@ -232,6 +304,36 @@ describe('isScheduledJobDue', () => {
       }),
     }));
     expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+
+    deleteScheduledJob(created.jobId);
+  });
+
+  it('skips dispatch jobs when scheduler budget gate blocks them', async () => {
+    const workspace = 'file:///tmp/scheduler-budget-block';
+    upsertBudgetPolicy({
+      ...buildDefaultBudgetPolicy({ scope: 'department', scopeId: workspace }),
+      maxTokens: 1,
+      maxMinutes: 1,
+      maxDispatches: 1,
+    });
+    const created = createScheduledJob({
+      ...makeJob({
+        type: 'cron',
+        cronExpression: '0 9 * * 1-5',
+        action: {
+          kind: 'dispatch-prompt',
+          workspace,
+          prompt: '整理今天 AI 资讯重点信号',
+        },
+      }),
+    });
+
+    const result = await triggerScheduledJob(created.jobId);
+
+    expect(result.status).toBe('skipped');
+    expect(result.message).toContain('Token budget exceeded');
+    expect(vi.mocked(executePrompt)).not.toHaveBeenCalled();
+    expect(listBudgetLedgerEntries({ schedulerJobId: created.jobId })[0]?.decision).toBe('skipped');
 
     deleteScheduledJob(created.jobId);
   });

@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { buildAppUrl, parseAppUrlState } from './app-url-state';
 
 describe('app-url-state', () => {
-  it('falls back to the overview section for invalid URLs', () => {
+  it('falls back to the CEO section for invalid URLs', () => {
     expect(parseAppUrlState('?section=unknown&conversation=abc')).toEqual({
-      section: 'overview',
+      section: 'ceo',
       utilityPanel: null,
-      conversationId: null,
+      conversationId: 'abc',
       conversationTitle: null,
       projectId: null,
       knowledgeId: null,
@@ -85,9 +85,9 @@ describe('app-url-state', () => {
     });
   });
 
-  it('accepts overview as the default section and canonical URL root', () => {
+  it('uses CEO Office as the default section and canonical URL root', () => {
     expect(parseAppUrlState('')).toEqual({
-      section: 'overview',
+      section: 'ceo',
       utilityPanel: null,
       conversationId: null,
       conversationTitle: null,
@@ -98,7 +98,7 @@ describe('app-url-state', () => {
     });
 
     expect(buildAppUrl('/', {
-      section: 'overview',
+      section: 'ceo',
       utilityPanel: null,
       conversationId: null,
       conversationTitle: null,
@@ -106,6 +106,6 @@ describe('app-url-state', () => {
       knowledgeId: null,
       settingsTab: 'provider',
       settingsFocus: null,
-    })).toBe('/?section=overview');
+    })).toBe('/');
   });
 });

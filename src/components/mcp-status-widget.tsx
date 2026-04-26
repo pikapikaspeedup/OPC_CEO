@@ -2,8 +2,18 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
-import type { McpConfig, McpServer } from '@/lib/types';
+import type { McpConfig } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import {
+  WorkspaceBadge,
+  WorkspaceEmptyBlock,
+  WorkspaceIconFrame,
+  WorkspaceListItem,
+  WorkspaceSectionHeader,
+  WorkspaceStatusDot,
+  WorkspaceSurface,
+} from '@/components/ui/workspace-primitives';
+import { Plug } from 'lucide-react';
 
 interface McpStatusWidgetProps {
   className?: string;
@@ -32,39 +42,40 @@ export default function McpStatusWidget({ className }: McpStatusWidgetProps) {
   const servers = config?.servers ?? [];
 
   return (
-    <div className={cn('rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3', className)}>
-      <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
-        🔌 MCP 服务器
-      </div>
+    <WorkspaceSurface className={cn('space-y-3', className)}>
+      <WorkspaceSectionHeader
+        eyebrow="MCP"
+        title="MCP 服务器"
+        icon={<Plug className="h-4 w-4" />}
+        actions={<WorkspaceBadge tone={servers.length ? 'success' : 'neutral'}>{servers.length} configured</WorkspaceBadge>}
+      />
 
       {servers.length === 0 ? (
-        <p className="text-xs text-white/30">未配置 MCP 服务器</p>
+        <WorkspaceEmptyBlock
+          title="未配置 MCP 服务器"
+          description="配置后显示可用工具。"
+          className="py-5"
+        />
       ) : (
         <div className="space-y-2">
           {servers.map((s, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-lg border border-white/6 bg-white/[0.02] px-3 py-2">
-              <div className="h-2 w-2 rounded-full bg-emerald-400/80" title="已配置" />
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-white/70 truncate">
-                  {s.name || s.command || `Server ${i + 1}`}
-                </div>
-                {s.description && (
-                  <div className="text-[10px] text-white/30 truncate">{s.description}</div>
-                )}
-              </div>
-              {s.command && (
-                <code className="text-[10px] text-white/20 font-mono truncate max-w-[140px]">
-                  {s.command}
-                </code>
-              )}
-            </div>
+            <WorkspaceListItem
+              key={i}
+              icon={<WorkspaceStatusDot tone="success" />}
+              title={s.name || s.command || `Server ${i + 1}`}
+              description={s.description}
+              meta={s.command ? <code className="max-w-[140px] truncate font-mono">{s.command}</code> : undefined}
+            />
           ))}
         </div>
       )}
 
-      <p className="text-[10px] text-white/20">
+      <div className="flex items-center gap-2 text-[10px] text-[var(--app-text-muted)]">
+        <WorkspaceIconFrame tone="neutral" className="h-6 w-6 rounded-lg">
+          <Plug className="h-3 w-3" />
+        </WorkspaceIconFrame>
         配置文件: ~/.gemini/antigravity/mcp_config.json
-      </p>
-    </div>
+      </div>
+    </WorkspaceSurface>
   );
 }

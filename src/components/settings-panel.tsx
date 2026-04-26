@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from 'react';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -19,12 +19,12 @@ import {
   XCircle,
   RefreshCw,
   AlertCircle,
+  ShieldAlert,
   Plug,
   Terminal,
   Activity,
   Globe,
   MessageCircle,
-  ArrowRight,
   CircleCheck,
   Cpu,
   Network,
@@ -33,9 +33,21 @@ import {
   Wand2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isUnconfiguredWebApiError, readJsonOrThrow } from '@/lib/api-response';
 import CcConnectTab from '@/components/cc-connect-tab';
 import CEOProfileSettingsTab from '@/components/ceo-profile-settings-tab';
+import {
+  WorkspaceBadge,
+  WorkspaceEmptyBlock,
+  WorkspaceSurface,
+  WorkspaceTabsList,
+  WorkspaceTabsTrigger,
+  type WorkspacePrimitiveTone,
+  workspaceFieldClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 import type { AIProviderConfig, AILayer, ProviderId, SceneProviderConfig } from '@/lib/providers/types';
+import type { CompanyLoopPolicyFE, OperatingBudgetPolicyFE } from '@/lib/types';
 import {
   PROVIDER_LABELS,
   getSelectableProviderOptions,
@@ -57,7 +69,7 @@ const LAYER_LABELS: Record<AILayer, string> = {
   utility: 'Utility',
 };
 
-export type SettingsTabId = 'profile' | 'provider' | 'api-keys' | 'scenes' | 'mcp' | 'messaging';
+export type SettingsTabId = 'profile' | 'provider' | 'api-keys' | 'scenes' | 'autonomy' | 'mcp' | 'messaging';
 export type SettingsFocusTarget = 'third-party-provider' | null;
 
 type ThirdPartyProviderPresetId = 'deepseek' | 'groq' | 'ollama' | 'openai-compatible' | 'custom';
@@ -71,6 +83,10 @@ type ProviderActionState = {
   status: 'idle' | 'saving' | 'ok' | 'error';
   message?: string;
 };
+
+type SettingsConfigError =
+  | { kind: 'web-api-unavailable'; message: string; path?: string }
+  | { kind: 'generic'; message: string };
 
 type ThirdPartyPreset = {
   id: ThirdPartyProviderPresetId;
@@ -159,9 +175,113 @@ const SETTINGS_TABS: Array<{ value: SettingsTabId; label: string; icon: React.Re
   { value: 'provider', label: 'Provider 配置', icon: <Layers className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'api-keys', label: 'API Keys', icon: <Key className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'scenes', label: 'Scene 覆盖', icon: <Map className="mr-1.5 h-3.5 w-3.5" /> },
+  { value: 'autonomy', label: 'Autonomy 预算', icon: <Activity className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'mcp', label: 'MCP 服务器', icon: <Plug className="mr-1.5 h-3.5 w-3.5" /> },
   { value: 'messaging', label: '消息平台', icon: <MessageCircle className="mr-1.5 h-3.5 w-3.5" /> },
 ];
+
+const ORGANIZATION_BUDGET_POLICY_ID = 'budget:organization:default:day';
+const DEPARTMENT_DEFAULT_BUDGET_POLICY_ID = 'budget:department:default:day';
+const ORGANIZATION_LOOP_POLICY_ID = 'company-loop-policy:organization:default';
+
+function buildDefaultOrganizationBudgetPolicy(): OperatingBudgetPolicyFE {
+  const now = new Date().toISOString();
+  return {
+    id: ORGANIZATION_BUDGET_POLICY_ID,
+    scope: 'organization',
+    period: 'day',
+    maxTokens: 1_000_000,
+    maxMinutes: 480,
+    maxDispatches: 80,
+    maxConcurrentRuns: 12,
+    cooldownMinutesByKind: {
+      'growth.generate': 60,
+      'growth.evaluate': 15,
+      'agenda.dispatch': 10,
+    },
+    failureBudget: {
+      maxConsecutiveFailures: 3,
+      coolDownMinutes: 30,
+    },
+    warningThreshold: 0.8,
+    hardStop: true,
+    createdAt: now,
+    updatedAt: now,
+    metadata: {
+      highRiskApprovalThreshold: 0.7,
+    },
+  };
+}
+
+function buildDefaultDepartmentBudgetPolicy(): OperatingBudgetPolicyFE {
+  const now = new Date().toISOString();
+  return {
+    id: DEPARTMENT_DEFAULT_BUDGET_POLICY_ID,
+    scope: 'department',
+    period: 'day',
+    maxTokens: 250_000,
+    maxMinutes: 120,
+    maxDispatches: 20,
+    maxConcurrentRuns: 3,
+    cooldownMinutesByKind: {
+      'manual.prompt': 0,
+      'manual.template': 0,
+      'agenda.dispatch': 10,
+    },
+    failureBudget: {
+      maxConsecutiveFailures: 3,
+      coolDownMinutes: 30,
+    },
+    warningThreshold: 0.8,
+    hardStop: true,
+    createdAt: now,
+    updatedAt: now,
+    metadata: {
+      source: 'settings-department-default',
+    },
+  };
+}
+
+function buildDefaultCompanyLoopPolicy(): CompanyLoopPolicyFE {
+  const now = new Date().toISOString();
+  return {
+    id: ORGANIZATION_LOOP_POLICY_ID,
+    scope: 'organization',
+    enabled: true,
+    timezone: 'Asia/Shanghai',
+    dailyReviewHour: 20,
+    weeklyReviewDay: 5,
+    weeklyReviewHour: 20,
+    maxAgendaPerDailyLoop: 5,
+    maxAutonomousDispatchesPerLoop: 1,
+    allowedAgendaActions: ['observe', 'dispatch', 'snooze', 'dismiss'],
+    growthReviewEnabled: true,
+    notificationChannels: ['web'],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function cooldownToDraft(policy: OperatingBudgetPolicyFE): string {
+  return Object.entries(policy.cooldownMinutesByKind || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([kind, minutes]) => `${kind}=${minutes}`)
+    .join('\n');
+}
+
+function draftToCooldown(value: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const line of value.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const [rawKey, rawValue] = trimmed.split('=');
+    const key = rawKey?.trim();
+    const minutes = Number(rawValue?.trim());
+    if (!key || Number.isNaN(minutes)) continue;
+    result[key] = Math.max(0, Math.trunc(minutes));
+  }
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -170,8 +290,8 @@ const SETTINGS_TABS: Array<{ value: SettingsTabId; label: string; icon: React.Re
 function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 mb-4">
-      <span className="text-sky-400">{icon}</span>
-      <h3 className="text-sm font-semibold text-white">{children}</h3>
+      <span className="text-[var(--app-accent)]">{icon}</span>
+      <h3 className="text-sm font-semibold text-[var(--app-text)]">{children}</h3>
     </div>
   );
 }
@@ -179,15 +299,12 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
 const Card = forwardRef<HTMLDivElement, { children: React.ReactNode; className?: string }>(
   function Card({ children, className }, ref) {
     return (
-      <div
+      <WorkspaceSurface
         ref={ref}
-        className={cn(
-          'rounded-xl border border-white/8 bg-white/[0.025] p-4',
-          className,
-        )}
+        className={className}
       >
         {children}
-      </div>
+      </WorkspaceSurface>
     );
   },
 );
@@ -195,7 +312,7 @@ const Card = forwardRef<HTMLDivElement, { children: React.ReactNode; className?:
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-4">
-      <label className="w-32 shrink-0 text-xs text-white/50">{label}</label>
+      <label className="w-32 shrink-0 text-xs text-[var(--app-text-muted)]">{label}</label>
       <div className="flex-1 min-w-0">{children}</div>
     </div>
   );
@@ -216,7 +333,7 @@ function ProviderSelect({
 
   return (
     <Select value={value} onValueChange={(v) => onChange(v as ProviderId)}>
-      <SelectTrigger className="h-8 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80">
+      <SelectTrigger className="h-8 rounded-lg border-[var(--app-border-soft)] bg-[var(--app-raised)] text-xs text-[var(--app-text)]">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -248,6 +365,162 @@ function SaveFeedback({ saved, error }: { saved: boolean; error: string | null }
     );
   }
   return null;
+}
+
+type ApiKeyTestStatus = 'idle' | 'testing' | 'ok' | 'invalid' | 'error';
+
+function ApiKeyCard({
+  title,
+  isSet,
+  value,
+  showValue,
+  placeholder,
+  testStatus,
+  testError,
+  successMessage,
+  onValueChange,
+  onToggleShow,
+  onTest,
+}: {
+  title: string;
+  isSet: boolean;
+  value: string;
+  showValue: boolean;
+  placeholder: string;
+  testStatus: ApiKeyTestStatus;
+  testError: string | null;
+  successMessage: string;
+  onValueChange: (value: string) => void;
+  onToggleShow: () => void;
+  onTest: () => void;
+}) {
+  return (
+    <Card>
+      <SectionTitle icon={<Key className="h-4 w-4" />}>{title}</SectionTitle>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-[var(--app-text-muted)]">状态：</span>
+          {isSet ? (
+            <span className="flex items-center gap-1 text-xs text-emerald-400">
+              <CheckCircle2 className="h-3 w-3" />
+              已设置
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-xs text-[var(--app-text-muted)]">
+              <AlertCircle className="h-3 w-3" />
+              未设置
+            </span>
+          )}
+        </div>
+
+        <FieldRow label="新 Key">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showValue ? 'text' : 'password'}
+                value={value}
+                onChange={(event) => onValueChange(event.target.value)}
+                placeholder={isSet ? '输入新 key 以替换' : placeholder}
+                className={cn('h-8 rounded-lg pr-9 text-xs', workspaceFieldClassName)}
+              />
+              <button
+                type="button"
+                onClick={onToggleShow}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--app-text-muted)] transition-colors hover:text-[var(--app-text-soft)]"
+              >
+                {showValue ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onTest}
+              disabled={!value.trim() || testStatus === 'testing'}
+              className={cn('shrink-0 text-xs', workspaceOutlineActionClassName)}
+            >
+              {testStatus === 'testing' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              <span className="ml-1.5">测试连接</span>
+            </Button>
+          </div>
+        </FieldRow>
+
+        {testStatus === 'ok' ? (
+          <div className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+            {successMessage}
+          </div>
+        ) : null}
+        {testStatus === 'invalid' ? (
+          <div className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+            <XCircle className="h-3.5 w-3.5 shrink-0" />
+            {testError ?? 'Key 无效'}
+          </div>
+        ) : null}
+        {testStatus === 'error' ? (
+          <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            {testError ?? '测试失败'}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+function SettingsBackendUnavailable({ error }: { error: SettingsConfigError }) {
+  const isWebApiUnavailable = error.kind === 'web-api-unavailable';
+  return (
+    <div className="px-6 py-8">
+      <WorkspaceSurface tone={isWebApiUnavailable ? 'warning' : 'danger'} className="space-y-5" padding="lg">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <WorkspaceBadge tone={isWebApiUnavailable ? 'warning' : 'danger'}>
+              {isWebApiUnavailable ? 'Backend required' : 'Config unavailable'}
+            </WorkspaceBadge>
+            <h3 className="mt-3 text-lg font-semibold tracking-[-0.03em] text-[var(--app-text)]">
+              {isWebApiUnavailable ? 'Settings 需要连接 Control Plane / Runtime' : '无法加载 Settings 配置'}
+            </h3>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--app-text-soft)]">
+              {isWebApiUnavailable
+                ? '当前进程处于 web ingress-only 模式，并且没有配置后端 URL。为避免误触发本地控制面副作用，配置类 API 已被主动隔离。'
+                : error.message}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-3 text-xs leading-6 text-[var(--app-text-soft)]">
+            <div><span className="text-[var(--app-text-muted)]">Required:</span> AG_CONTROL_PLANE_URL</div>
+            <div><span className="text-[var(--app-text-muted)]">Required:</span> AG_RUNTIME_URL</div>
+            {isWebApiUnavailable && error.path ? <div><span className="text-[var(--app-text-muted)]">Blocked:</span> {error.path}</div> : null}
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <WorkspaceSurface padding="sm">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">不做的事</div>
+            <div className="mt-2 text-sm text-[var(--app-text-soft)]">不会从 web 进程穿透到本地 route handler。</div>
+          </WorkspaceSurface>
+          <WorkspaceSurface padding="sm">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">要做的事</div>
+            <div className="mt-2 text-sm text-[var(--app-text-soft)]">启动 control-plane/runtime，或给 web 配置后端 URL。</div>
+          </WorkspaceSurface>
+          <WorkspaceSurface padding="sm">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">当前页面</div>
+            <div className="mt-2 text-sm text-[var(--app-text-soft)]">保持只读降级，不创建后台 scheduler / registry 噪音。</div>
+          </WorkspaceSurface>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          className={cn('rounded-full', workspaceOutlineActionClassName)}
+          onClick={() => window.location.reload()}
+        >
+          重新检查连接
+        </Button>
+      </WorkspaceSurface>
+    </div>
+  );
 }
 
 function inferThirdPartyPreset(config: AIProviderConfig | null): ThirdPartyProviderPresetId {
@@ -291,6 +564,8 @@ function ProviderConfigTab({
   const [thirdPartyPreset, setThirdPartyPreset] = useState<ThirdPartyProviderPresetId>(inferThirdPartyPreset(initialConfig));
   const [thirdPartyTest, setThirdPartyTest] = useState<ThirdPartyTestState>({ status: 'idle' });
   const [thirdPartyAction, setThirdPartyAction] = useState<ProviderActionState>({ status: 'idle' });
+  const [showLayerConfig, setShowLayerConfig] = useState(false);
+  const [showProviderMatrix, setShowProviderMatrix] = useState(false);
   const thirdPartySectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -486,33 +761,7 @@ function ProviderConfigTab({
 
   const handleSaveThirdPartyProfile = async () => {
     if (!config) return;
-    await persistConfig(config, '第三方 Provider 配置已保存。');
-  };
-
-  const handleApplyThirdPartyAsDefault = async () => {
-    if (!config) return;
-    const nextConfig: AIProviderConfig = {
-      ...config,
-      defaultProvider: 'custom',
-      defaultModel: config.customProvider?.defaultModel || config.defaultModel,
-    };
-    await persistConfig(nextConfig, '已应用为组织默认 Provider。');
-  };
-
-  const handleApplyThirdPartyToLayer = async (layer: AILayer) => {
-    if (!config) return;
-    const nextConfig: AIProviderConfig = {
-      ...config,
-      layers: {
-        ...config.layers,
-        [layer]: {
-          ...(config.layers?.[layer] ?? {}),
-          provider: 'custom',
-          model: config.customProvider?.defaultModel || config.layers?.[layer]?.model,
-        },
-      },
-    };
-    await persistConfig(nextConfig, `已应用到 ${LAYER_LABELS[layer]} 层。`);
+    await persistConfig(config, '第三方连接信息已保存。');
   };
 
   const handleSave = async () => {
@@ -542,7 +791,7 @@ function ProviderConfigTab({
 
   if (!config) {
     return (
-      <div className="flex items-center gap-2 py-8 text-sm text-white/40">
+      <div className="flex items-center gap-2 py-8 text-sm text-[var(--app-text-soft)]">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading config…
       </div>
@@ -552,6 +801,9 @@ function ProviderConfigTab({
   const customProvider = config.customProvider ?? {};
   const customProviderReady = isCustomProviderConfigured(customProvider);
   const customProviderConnected = thirdPartyTest.status === 'ok';
+  const layerOverrideCount = Object.values(config.layers ?? {})
+    .filter((layer) => Boolean(layer?.provider || layer?.model))
+    .length;
   const providerMatrix = [
     {
       id: 'claude-api',
@@ -621,26 +873,26 @@ function ProviderConfigTab({
       status: customProviderReady ? (customProviderConnected ? 'ready' : 'configured') : 'needs-config',
       detail: customProviderReady
         ? (customProviderConnected ? '第三方 profile 已测试通过' : '第三方 profile 已填写，建议先测试连接')
-        : '请先完成上方第三方 Provider onboarding',
+        : '请先完成上方第三方连接信息',
     },
   ] as const;
 
   const StatusDot = ({ providerId }: { providerId: string }) => {
     const status = providerStatus[providerId];
     if (!status || status === 'unknown') return null;
-    if (status === 'checking') return <Loader2 className="h-3 w-3 animate-spin text-white/30" />;
+    if (status === 'checking') return <Loader2 className="h-3 w-3 animate-spin text-[var(--app-text-muted)]" />;
     if (status === 'ok') return <div className="h-2 w-2 rounded-full bg-emerald-400" title="已连接" />;
       return <div className="h-2 w-2 rounded-full bg-red-400" title="未配置或连接失败" />;
   };
 
   const MatrixStatusBadge = ({ status }: { status: typeof providerMatrix[number]['status'] }) => {
-    const styles: Record<string, string> = {
-      ready: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
-      configured: 'border-sky-500/20 bg-sky-500/10 text-sky-200',
-      'needs-key': 'border-amber-500/20 bg-amber-500/10 text-amber-100',
-      'needs-config': 'border-amber-500/20 bg-amber-500/10 text-amber-100',
-      'login-needed': 'border-amber-500/20 bg-amber-500/10 text-amber-100',
-      'not-installed': 'border-white/10 bg-white/[0.04] text-white/45',
+    const tones: Record<string, WorkspacePrimitiveTone> = {
+      ready: 'success',
+      configured: 'info',
+      'needs-key': 'warning',
+      'needs-config': 'warning',
+      'login-needed': 'warning',
+      'not-installed': 'neutral',
     };
     const labelMap: Record<string, string> = {
       ready: 'Ready',
@@ -652,45 +904,40 @@ function ProviderConfigTab({
     };
 
     return (
-      <span className={cn('inline-flex h-6 items-center rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-[0.16em]', styles[status])}>
+      <WorkspaceBadge tone={tones[status] ?? 'neutral'}>
         {labelMap[status]}
-      </span>
+      </WorkspaceBadge>
     );
   };
 
   return (
     <div className="space-y-5">
-      <Card ref={thirdPartySectionRef} className="border-sky-400/15 bg-[linear-gradient(180deg,rgba(19,29,44,0.82),rgba(10,17,28,0.9))]">
+      <Card ref={thirdPartySectionRef} className="border-sky-400/15 bg-[linear-gradient(180deg,#ffffff,#f4f8ff)]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
-            <SectionTitle icon={<Globe className="h-4 w-4" />}>OpenAI-compatible Provider Profiles</SectionTitle>
-            <p className="text-sm leading-6 text-white/70">
-              这里是“添加 + 配置 + 校验 + 应用” OpenAI-compatible profile 的主入口。当前支持 DeepSeek、Groq、Ollama，以及任意 OpenAI-compatible 端点。
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-white/45">
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">单个活动 profile</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">统一映射到 custom provider</span>
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">支持连通测试与即时应用</span>
-            </div>
-            <div className="mt-3 rounded-xl border border-white/8 bg-black/15 px-4 py-3 text-xs leading-6 text-white/55">
-              官方 `Claude API / OpenAI API / Gemini API / Grok API` 仍通过下方 Provider 矩阵和 API Keys 区块单独配置；这里只有 OpenAI-compatible profile。
+            <SectionTitle icon={<Globe className="h-4 w-4" />}>第三方连接信息</SectionTitle>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <WorkspaceBadge>DeepSeek</WorkspaceBadge>
+              <WorkspaceBadge>Groq</WorkspaceBadge>
+              <WorkspaceBadge>Ollama</WorkspaceBadge>
+              <WorkspaceBadge>Custom endpoint</WorkspaceBadge>
             </div>
           </div>
 
-          <div className="min-w-[240px] rounded-2xl border border-white/8 bg-black/20 p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">Current profile</div>
-            <div className="mt-2 text-base font-semibold text-white">{customProvider.name || selectedPreset.defaultName}</div>
-            <div className="mt-1 text-xs text-white/45">
+          <div className="min-w-[240px] rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)]">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">Current profile</div>
+            <div className="mt-2 text-base font-semibold text-[var(--app-text)]">{customProvider.name || selectedPreset.defaultName}</div>
+            <div className="mt-1 text-xs text-[var(--app-text-soft)]">
               {customProvider.vendor ? `Preset: ${customProvider.vendor}` : '未保存第三方 profile'}
             </div>
-            <div className="mt-3 space-y-1 text-xs text-white/55">
+            <div className="mt-3 space-y-1 text-xs text-[var(--app-text-soft)]">
               <div className="truncate">Endpoint: {customProvider.baseUrl || selectedPreset.endpointHint}</div>
               <div>Model: {customProvider.defaultModel || selectedPreset.modelHint}</div>
             </div>
           </div>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           {THIRD_PARTY_PRESETS.map((preset) => {
             const active = preset.id === thirdPartyPreset;
             return (
@@ -701,37 +948,33 @@ function ProviderConfigTab({
                   'rounded-2xl border p-4 text-left transition-all',
                   active
                     ? 'border-sky-400/35 bg-sky-400/[0.08] shadow-[0_18px_44px_rgba(14,165,233,0.12)]'
-                    : 'border-white/8 bg-white/[0.025] hover:bg-white/[0.05]',
+                    : 'border-[var(--app-border-soft)] bg-[var(--app-surface)] hover:bg-[var(--app-raised)]',
                 )}
                 onClick={() => applyThirdPartyPreset(preset.id)}
               >
                 <div className="flex items-center gap-2">
-                  <span className={cn('flex h-9 w-9 items-center justify-center rounded-xl border', active ? 'border-sky-400/30 bg-sky-400/10 text-sky-300' : 'border-white/10 bg-white/[0.03] text-white/60')}>
+                  <span className={cn('flex h-9 w-9 items-center justify-center rounded-xl border', active ? 'border-sky-400/30 bg-sky-400/10 text-sky-700' : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)]')}>
                     {preset.icon}
                   </span>
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white">{preset.title}</div>
-                    <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">{preset.deployment}</div>
+                    <div className="text-sm font-semibold text-[var(--app-text)]">{preset.title}</div>
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{preset.deployment}</div>
                   </div>
                 </div>
-                <div className="mt-3 text-xs leading-5 text-white/55">{preset.description}</div>
+                <div className="mt-3 text-xs leading-5 text-[var(--app-text-soft)]">{preset.description}</div>
               </button>
             );
           })}
         </div>
 
-        <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
-          <div className="space-y-4 rounded-2xl border border-white/8 bg-black/15 p-4">
+        <div className="mt-6 space-y-4 rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-white">连接配置</div>
-                <div className="mt-1 text-xs text-white/45">
-                  选择预设后填写连接信息；不需要先在默认 Provider 下拉里切到 Custom。
-                </div>
+                <div className="text-sm font-semibold text-[var(--app-text)]">连接配置</div>
               </div>
-              <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-white/40">
+              <WorkspaceBadge tone="accent">
                 {selectedPreset.title}
-              </div>
+              </WorkspaceBadge>
             </div>
 
             <FieldRow label="显示名称">
@@ -739,7 +982,7 @@ function ProviderConfigTab({
                 value={customProvider.name ?? ''}
                 onChange={(e) => setCustomField('name', e.target.value)}
                 placeholder={selectedPreset.defaultName}
-                className="h-9 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80 placeholder:text-white/20"
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
               />
             </FieldRow>
             <FieldRow label="API Base URL">
@@ -747,7 +990,7 @@ function ProviderConfigTab({
                 value={customProvider.baseUrl ?? ''}
                 onChange={(e) => setCustomField('baseUrl', e.target.value)}
                 placeholder={selectedPreset.endpointHint}
-                className="h-9 rounded-lg border-white/8 bg-white/[0.04] font-mono text-xs text-white/80 placeholder:text-white/20"
+                className={cn('h-9 rounded-lg font-mono text-xs', workspaceFieldClassName)}
               />
             </FieldRow>
             <FieldRow label="API Key">
@@ -756,7 +999,7 @@ function ProviderConfigTab({
                 value={customProvider.apiKey ?? ''}
                 onChange={(e) => setCustomField('apiKey', e.target.value)}
                 placeholder="sk-..."
-                className="h-9 rounded-lg border-white/8 bg-white/[0.04] font-mono text-xs text-white/80 placeholder:text-white/20"
+                className={cn('h-9 rounded-lg font-mono text-xs', workspaceFieldClassName)}
               />
             </FieldRow>
             <FieldRow label="默认模型">
@@ -764,15 +1007,15 @@ function ProviderConfigTab({
                 value={customProvider.defaultModel ?? ''}
                 onChange={(e) => setCustomField('defaultModel', e.target.value)}
                 placeholder={selectedPreset.modelHint}
-                className="h-9 rounded-lg border-white/8 bg-white/[0.04] font-mono text-xs text-white/80 placeholder:text-white/20"
+                className={cn('h-9 rounded-lg font-mono text-xs', workspaceFieldClassName)}
               />
             </FieldRow>
 
-            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 text-xs leading-6 text-white/55">
-              <div><span className="text-white/35">部署形态：</span>{selectedPreset.deployment}</div>
-              <div><span className="text-white/35">端点提示：</span>{selectedPreset.endpointHint}</div>
-              <div><span className="text-white/35">推荐模型：</span>{selectedPreset.modelHint}</div>
-              <div><span className="text-white/35">说明：</span>{selectedPreset.notes}</div>
+            <div className="rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3 text-xs leading-6 text-[var(--app-text-soft)]">
+              <div><span className="text-[var(--app-text-muted)]">部署形态：</span>{selectedPreset.deployment}</div>
+              <div><span className="text-[var(--app-text-muted)]">端点提示：</span>{selectedPreset.endpointHint}</div>
+              <div><span className="text-[var(--app-text-muted)]">推荐模型：</span>{selectedPreset.modelHint}</div>
+              <div><span className="text-[var(--app-text-muted)]">备注：</span>{selectedPreset.notes}</div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -781,7 +1024,7 @@ function ProviderConfigTab({
                 variant="outline"
                 onClick={handleTestThirdParty}
                 disabled={!customProvider.apiKey || !customProvider.baseUrl || thirdPartyTest.status === 'testing'}
-                className="border-white/10 bg-white/[0.04] text-xs text-white/70 hover:bg-white/[0.08] hover:text-white"
+                className={cn('text-xs', workspaceOutlineActionClassName)}
               >
                 {thirdPartyTest.status === 'testing' ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -801,7 +1044,7 @@ function ProviderConfigTab({
                 ) : (
                   <CircleCheck className="mr-1.5 h-3.5 w-3.5" />
                 )}
-                保存 Provider 配置
+                保存连接信息
               </Button>
             </div>
 
@@ -812,7 +1055,7 @@ function ProviderConfigTab({
                   thirdPartyTest.status === 'ok' && 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
                   thirdPartyTest.status === 'invalid' && 'border-red-500/20 bg-red-500/10 text-red-300',
                   thirdPartyTest.status === 'error' && 'border-amber-500/20 bg-amber-500/10 text-amber-300',
-                  thirdPartyTest.status === 'testing' && 'border-white/10 bg-white/[0.04] text-white/55',
+                  thirdPartyTest.status === 'testing' && 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)]',
                 )}
               >
                 {thirdPartyTest.status === 'ok' ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : null}
@@ -829,7 +1072,7 @@ function ProviderConfigTab({
                   'flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs',
                   thirdPartyAction.status === 'ok' && 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
                   thirdPartyAction.status === 'error' && 'border-red-500/20 bg-red-500/10 text-red-300',
-                  thirdPartyAction.status === 'saving' && 'border-white/10 bg-white/[0.04] text-white/55',
+                  thirdPartyAction.status === 'saving' && 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)]',
                 )}
               >
                 {thirdPartyAction.status === 'ok' ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : null}
@@ -838,76 +1081,24 @@ function ProviderConfigTab({
                 <span>{thirdPartyAction.message}</span>
               </div>
             ) : null}
-          </div>
-
-          <div className="space-y-4 rounded-2xl border border-white/8 bg-black/15 p-4">
-            <div>
-              <div className="text-sm font-semibold text-white">应用到运行配置</div>
-              <div className="mt-1 text-xs text-white/45">
-                先完成连接测试，再决定将当前第三方 Provider 应用到默认执行路径或某个 layer。
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Button
-                size="sm"
-                onClick={handleApplyThirdPartyAsDefault}
-                disabled={!customProviderReady || thirdPartyAction.status === 'saving'}
-                className="w-full justify-between bg-white/[0.04] text-white hover:bg-white/[0.08]"
-                variant="outline"
-              >
-                <span>设为组织默认 Provider</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Button>
-              {LAYERS.map((layer) => (
-                <Button
-                  key={layer}
-                  size="sm"
-                  onClick={() => handleApplyThirdPartyToLayer(layer)}
-                  disabled={!customProviderReady || thirdPartyAction.status === 'saving'}
-                  className="w-full justify-between border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06] hover:text-white"
-                  variant="outline"
-                >
-                  <span>应用到 {LAYER_LABELS[layer]}</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Button>
-              ))}
-            </div>
-
-            <div className="rounded-xl border border-amber-500/15 bg-amber-500/[0.05] px-4 py-3 text-xs leading-6 text-amber-100/80">
-              <div>1. “测试连接” 只校验端点与 key。</div>
-              <div>2. “保存 Provider 配置” 只保存第三方 profile，不改默认路由。</div>
-              <div>3. “应用到默认 / layer” 会把执行入口切到 `custom`，并立即保存。</div>
-            </div>
-          </div>
         </div>
       </Card>
 
       <Card>
-        <SectionTitle icon={<ServerCog className="h-4 w-4" />}>Provider 支持矩阵</SectionTitle>
-        <p className="mb-4 text-xs text-white/45">
-          这里汇总当前所有 provider 的可用性：是否已安装、是否已登录、是否已配置 key，以及是否已经可以被立即应用到组织或 layer。
-        </p>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {providerMatrix.map((item) => (
-            <div key={item.id} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-white">{item.title}</div>
-                  <div className="mt-1 text-xs leading-5 text-white/45">{item.summary}</div>
-                </div>
-                <MatrixStatusBadge status={item.status} />
-              </div>
-              <div className="mt-4 text-xs leading-5 text-white/65">{item.detail}</div>
-            </div>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <SectionTitle icon={<Layers className="h-4 w-4" />}>运行 Provider</SectionTitle>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setShowProviderMatrix((value) => !value)}
+            className={cn('rounded-full text-xs', workspaceOutlineActionClassName)}
+          >
+            {showProviderMatrix ? '收起诊断' : 'Provider 诊断'}
+          </Button>
         </div>
-      </Card>
-
-      <Card>
-        <SectionTitle icon={<Layers className="h-4 w-4" />}>默认配置</SectionTitle>
         <div className="space-y-3">
-          <FieldRow label="默认 Provider">
+          <FieldRow label="组织默认">
             <div className="flex items-center gap-2">
               <div className="flex-1">
                 <ProviderSelect
@@ -921,72 +1112,106 @@ function ProviderConfigTab({
             </div>
           </FieldRow>
           {!isProviderAvailable(config.defaultProvider, providerInventory, config.customProvider) ? (
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-100/85">
-              当前默认 Provider <code className="font-mono text-amber-50">{PROVIDER_LABELS[config.defaultProvider]}</code> 未配置，必须切换到可用 Provider 后才能保存。
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">
+              当前运行 Provider <code className="font-mono text-amber-800">{PROVIDER_LABELS[config.defaultProvider]}</code> 未配置，必须切换到可用 Provider 后才能保存。
             </div>
           ) : null}
           {config.defaultProvider === 'custom' ? (
-            <div className="rounded-lg border border-sky-400/15 bg-sky-400/[0.04] px-4 py-3 text-xs text-sky-100/85">
-              当前组织默认已指向 `custom`。如需修改连接信息，请先在上方“第三方 Provider”区块完成配置与测试。
+            <div className="rounded-lg border border-sky-400/15 bg-sky-400/[0.08] px-4 py-3 text-xs text-sky-700">
+              当前组织默认已指向第三方连接信息。端点、key 或模型在上方维护。
             </div>
           ) : null}
-          <FieldRow label="默认 Model">
+          <FieldRow label="组织默认 Model">
             <Input
               value={config.defaultModel ?? ''}
               onChange={(e) => setDefaultModel(e.target.value)}
               placeholder="留空使用 provider 默认"
-              className="h-8 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80 placeholder:text-white/20"
+              className={cn('h-8 rounded-lg text-xs', workspaceFieldClassName)}
             />
           </FieldRow>
         </div>
+
+        {showProviderMatrix ? (
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {providerMatrix.map((item) => (
+              <div key={item.id} className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-[var(--app-text)]">{item.title}</div>
+                    <div className="mt-1 text-xs leading-5 text-[var(--app-text-soft)]">{item.summary}</div>
+                  </div>
+                  <MatrixStatusBadge status={item.status} />
+                </div>
+                <div className="mt-4 text-xs leading-5 text-[var(--app-text-soft)]">{item.detail}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </Card>
 
       <Card>
-        <SectionTitle icon={<Layers className="h-4 w-4" />}>层级配置</SectionTitle>
-        <div className="space-y-3">
-          {LAYERS.map((layer) => {
-            const layerProvider = getLayerProvider(layer);
-            const layerProviderAvailable = isProviderAvailable(layerProvider, providerInventory, config.customProvider);
-            return (
-              <div key={layer} className="rounded-lg border border-white/5 bg-white/[0.02] p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-sky-400/70">
-                    {LAYER_LABELS[layer]}
-                  </div>
-                  <StatusDot providerId={layerProvider} />
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <FieldRow label="Provider">
-                    <ProviderSelect
-                      value={layerProvider}
-                      onChange={(v) => setLayerProvider(layer, v)}
-                      providerInventory={providerInventory}
-                      customProvider={config.customProvider}
-                    />
-                  </FieldRow>
-                  <FieldRow label="Model">
-                    <Input
-                      value={getLayerModel(layer)}
-                      onChange={(e) => setLayerModel(layer, e.target.value)}
-                      placeholder="继承默认"
-                      className="h-8 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80 placeholder:text-white/20"
-                    />
-                  </FieldRow>
-                </div>
-                {!layerProviderAvailable ? (
-                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100/85">
-                    当前 layer 指向 <code className="font-mono text-amber-50">{PROVIDER_LABELS[layerProvider]}</code>，但该 Provider 尚未配置。
-                  </div>
-                ) : null}
-                {layerProvider === 'custom' ? (
-                  <div className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
-                    该 layer 已使用第三方 Provider。若要调整端点、key 或模型，请返回上方“第三方 Provider”区块。
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <SectionTitle icon={<Layers className="h-4 w-4" />}>高级覆盖</SectionTitle>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setShowLayerConfig((value) => !value)}
+            className={cn('rounded-full text-xs', workspaceOutlineActionClassName)}
+          >
+            {showLayerConfig ? '收起' : `展开${layerOverrideCount ? ` · ${layerOverrideCount}` : ''}`}
+          </Button>
         </div>
+        {showLayerConfig ? (
+          <div className="space-y-3">
+            {LAYERS.map((layer) => {
+              const layerProvider = getLayerProvider(layer);
+              const layerProviderAvailable = isProviderAvailable(layerProvider, providerInventory, config.customProvider);
+              return (
+                <div key={layer} className="space-y-2 rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-widest text-sky-400/70">
+                      {LAYER_LABELS[layer]}
+                    </div>
+                    <StatusDot providerId={layerProvider} />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <FieldRow label="Provider">
+                      <ProviderSelect
+                        value={layerProvider}
+                        onChange={(v) => setLayerProvider(layer, v)}
+                        providerInventory={providerInventory}
+                        customProvider={config.customProvider}
+                      />
+                    </FieldRow>
+                    <FieldRow label="Model">
+                      <Input
+                        value={getLayerModel(layer)}
+                        onChange={(e) => setLayerModel(layer, e.target.value)}
+                        placeholder="继承默认"
+                        className={cn('h-8 rounded-lg text-xs', workspaceFieldClassName)}
+                      />
+                    </FieldRow>
+                  </div>
+                  {!layerProviderAvailable ? (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+                      当前 layer 指向 <code className="font-mono text-amber-800">{PROVIDER_LABELS[layerProvider]}</code>，但该 Provider 尚未配置。
+                    </div>
+                  ) : null}
+                  {layerProvider === 'custom' ? (
+                    <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-3 py-2 text-xs text-[var(--app-text-soft)]">
+                      该 layer 已使用第三方连接信息。端点、key 或模型在上方维护。
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3 text-xs text-[var(--app-text-soft)]">
+            未设置 layer override。
+          </div>
+        )}
       </Card>
 
       <div className="flex items-center gap-3">
@@ -997,11 +1222,11 @@ function ProviderConfigTab({
           className="bg-sky-500 px-4 font-medium text-white hover:bg-sky-400"
         >
           {saving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
-          保存组织配置
+          保存运行配置
         </Button>
         <SaveFeedback saved={saved} error={saveError} />
         {customProviderConnected ? (
-          <span className="text-xs text-emerald-400">最近一次第三方 Provider 测试已通过</span>
+          <span className="text-xs text-emerald-400">最近一次第三方连接测试已通过</span>
         ) : null}
       </div>
     </div>
@@ -1009,7 +1234,568 @@ function ProviderConfigTab({
 }
 
 // ---------------------------------------------------------------------------
-// Tab 2: API Key Management
+// Tab 2: Autonomy / Budget
+// ---------------------------------------------------------------------------
+
+function AutonomyBudgetTab() {
+  const [policy, setPolicy] = useState<OperatingBudgetPolicyFE | null>(null);
+  const [departmentPolicy, setDepartmentPolicy] = useState<OperatingBudgetPolicyFE | null>(null);
+  const [loopPolicy, setLoopPolicy] = useState<CompanyLoopPolicyFE | null>(null);
+  const [cooldownDraft, setCooldownDraft] = useState('');
+  const [departmentCooldownDraft, setDepartmentCooldownDraft] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const loadPolicy = useCallback(async () => {
+    setLoading(true);
+    setSaveError(null);
+    try {
+      const [organizationRes, departmentRes, loopRes] = await Promise.all([
+        fetch('/api/company/budget/policies?scope=organization&period=day&pageSize=1'),
+        fetch(`/api/company/budget/policies/${encodeURIComponent(DEPARTMENT_DEFAULT_BUDGET_POLICY_ID)}`),
+        fetch(`/api/company/loops/policies/${encodeURIComponent(ORGANIZATION_LOOP_POLICY_ID)}`),
+      ]);
+      if (!organizationRes.ok) {
+        const data = (await organizationRes.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || 'Failed to load autonomy policy');
+      }
+      const organizationData = (await organizationRes.json()) as { items?: OperatingBudgetPolicyFE[] };
+      const nextPolicy = organizationData.items?.[0] || buildDefaultOrganizationBudgetPolicy();
+      const nextDepartmentPolicy = departmentRes.ok
+        ? (await departmentRes.json()) as OperatingBudgetPolicyFE
+        : buildDefaultDepartmentBudgetPolicy();
+      const nextLoopPolicy = loopRes.ok
+        ? (await loopRes.json()) as CompanyLoopPolicyFE
+        : buildDefaultCompanyLoopPolicy();
+      setPolicy(nextPolicy);
+      setDepartmentPolicy(nextDepartmentPolicy);
+      setLoopPolicy(nextLoopPolicy);
+      setCooldownDraft(cooldownToDraft(nextPolicy));
+      setDepartmentCooldownDraft(cooldownToDraft(nextDepartmentPolicy));
+    } catch (err) {
+      const fallback = buildDefaultOrganizationBudgetPolicy();
+      const departmentFallback = buildDefaultDepartmentBudgetPolicy();
+      setPolicy(fallback);
+      setDepartmentPolicy(departmentFallback);
+      setLoopPolicy(buildDefaultCompanyLoopPolicy());
+      setCooldownDraft(cooldownToDraft(fallback));
+      setDepartmentCooldownDraft(cooldownToDraft(departmentFallback));
+      setSaveError(err instanceof Error ? err.message : 'Failed to load autonomy policy');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPolicy();
+  }, [loadPolicy]);
+
+  const updateNumber = (
+    target: 'organization' | 'department',
+    field: keyof Pick<OperatingBudgetPolicyFE, 'maxTokens' | 'maxMinutes' | 'maxDispatches' | 'maxConcurrentRuns' | 'warningThreshold'>,
+    value: string,
+  ) => {
+    const parsed = Number(value);
+    const setter = target === 'organization' ? setPolicy : setDepartmentPolicy;
+    setter((prev) => {
+      if (!prev) return prev;
+      if (field === 'warningThreshold') {
+        return { ...prev, warningThreshold: Math.max(0, Math.min(1, parsed || 0)) };
+      }
+      return { ...prev, [field]: Math.max(0, Math.trunc(parsed || 0)) };
+    });
+  };
+
+  const updateFailureBudget = (
+    target: 'organization' | 'department',
+    field: 'maxConsecutiveFailures' | 'coolDownMinutes',
+    value: string,
+  ) => {
+    const parsed = Math.max(0, Math.trunc(Number(value) || 0));
+    const setter = target === 'organization' ? setPolicy : setDepartmentPolicy;
+    setter((prev) => prev ? {
+      ...prev,
+      failureBudget: {
+        maxConsecutiveFailures: prev.failureBudget?.maxConsecutiveFailures ?? 3,
+        coolDownMinutes: prev.failureBudget?.coolDownMinutes ?? 30,
+        [field]: parsed,
+      },
+    } : prev);
+  };
+
+  const updateApprovalThreshold = (value: string) => {
+    const parsed = Math.max(0, Math.min(1, Number(value) || 0));
+    setPolicy((prev) => prev ? {
+      ...prev,
+      metadata: {
+        ...(prev.metadata || {}),
+        highRiskApprovalThreshold: parsed,
+      },
+    } : prev);
+  };
+
+  const updateLoopNumber = (
+    field: keyof Pick<CompanyLoopPolicyFE, 'dailyReviewHour' | 'weeklyReviewDay' | 'weeklyReviewHour' | 'maxAgendaPerDailyLoop' | 'maxAutonomousDispatchesPerLoop'>,
+    value: string,
+  ) => {
+    const parsed = Math.trunc(Number(value) || 0);
+    setLoopPolicy((prev) => prev ? {
+      ...prev,
+      [field]: field === 'weeklyReviewDay'
+        ? Math.max(0, Math.min(6, parsed))
+        : field.endsWith('Hour')
+          ? Math.max(0, Math.min(23, parsed))
+          : Math.max(0, parsed),
+    } : prev);
+  };
+
+  const handleSave = async () => {
+    if (!policy || !departmentPolicy || !loopPolicy) return;
+    setSaving(true);
+    setSaved(false);
+    setSaveError(null);
+    try {
+      const nextPolicy: OperatingBudgetPolicyFE = {
+        ...policy,
+        id: policy.id || ORGANIZATION_BUDGET_POLICY_ID,
+        scope: 'organization',
+        period: 'day',
+        cooldownMinutesByKind: draftToCooldown(cooldownDraft),
+      };
+      const nextDepartmentPolicy: OperatingBudgetPolicyFE = {
+        ...departmentPolicy,
+        id: departmentPolicy.id || DEPARTMENT_DEFAULT_BUDGET_POLICY_ID,
+        scope: 'department',
+        scopeId: undefined,
+        period: 'day',
+        cooldownMinutesByKind: draftToCooldown(departmentCooldownDraft),
+      };
+      const nextLoopPolicy: CompanyLoopPolicyFE = {
+        ...loopPolicy,
+        id: loopPolicy.id || ORGANIZATION_LOOP_POLICY_ID,
+        scope: 'organization',
+      };
+      const [organizationRes, departmentRes, loopRes] = await Promise.all([
+        fetch(`/api/company/budget/policies/${encodeURIComponent(nextPolicy.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(nextPolicy),
+        }),
+        fetch(`/api/company/budget/policies/${encodeURIComponent(nextDepartmentPolicy.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(nextDepartmentPolicy),
+        }),
+        fetch(`/api/company/loops/policies/${encodeURIComponent(nextLoopPolicy.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(nextLoopPolicy),
+        }),
+      ]);
+      if (!organizationRes.ok || !departmentRes.ok || !loopRes.ok) {
+        const failed = !organizationRes.ok ? organizationRes : !departmentRes.ok ? departmentRes : loopRes;
+        const data = (await failed.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || 'Save failed');
+      }
+      const organizationData = (await organizationRes.json()) as { policy: OperatingBudgetPolicyFE };
+      const departmentData = (await departmentRes.json()) as { policy: OperatingBudgetPolicyFE };
+      const loopData = (await loopRes.json()) as { policy: CompanyLoopPolicyFE };
+      setPolicy(organizationData.policy);
+      setDepartmentPolicy(departmentData.policy);
+      setLoopPolicy(loopData.policy);
+      setCooldownDraft(cooldownToDraft(organizationData.policy));
+      setDepartmentCooldownDraft(cooldownToDraft(departmentData.policy));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading || !policy || !departmentPolicy || !loopPolicy) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-[var(--app-text-soft)]">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading autonomy policy…
+      </div>
+    );
+  }
+
+  const highRiskApprovalThreshold = Number(policy.metadata?.highRiskApprovalThreshold ?? 0.7);
+
+  return (
+    <div className="space-y-5">
+      <Card className="border-sky-400/15 bg-[linear-gradient(180deg,#ffffff,#f4f8ff)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <SectionTitle icon={<Activity className="h-4 w-4" />}>组织自运营预算</SectionTitle>
+            <p className="max-w-2xl text-xs leading-6 text-[var(--app-text-soft)]">
+              这里控制 autonomous agenda、scheduler、growth proposal 的预算闸门。手动任务仍会记录 ledger，但不消耗 autonomous dispatch quota。
+            </p>
+          </div>
+          <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-3 text-xs leading-6 text-[var(--app-text-soft)]">
+            <div><span className="text-[var(--app-text-muted)]">Policy:</span> {policy.id}</div>
+            <div><span className="text-[var(--app-text-muted)]">Scope:</span> organization / day</div>
+            <div><span className="text-[var(--app-text-muted)]">Mode:</span> {policy.hardStop ? 'hard stop' : 'warn only'}</div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <FieldRow label="Max tokens">
+            <Input
+              type="number"
+              value={policy.maxTokens}
+              onChange={(event) => updateNumber('organization', 'maxTokens', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Max minutes">
+            <Input
+              type="number"
+              value={policy.maxMinutes}
+              onChange={(event) => updateNumber('organization', 'maxMinutes', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Dispatch cap">
+            <Input
+              type="number"
+              value={policy.maxDispatches}
+              onChange={(event) => updateNumber('organization', 'maxDispatches', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Concurrent">
+            <Input
+              type="number"
+              value={policy.maxConcurrentRuns ?? 0}
+              onChange={(event) => updateNumber('organization', 'maxConcurrentRuns', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+        </div>
+      </Card>
+
+      <Card className="border-emerald-400/15 bg-[linear-gradient(180deg,#ffffff,#f5fbf8)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <SectionTitle icon={<Layers className="h-4 w-4" />}>部门默认预算</SectionTitle>
+            <p className="max-w-2xl text-xs leading-6 text-[var(--app-text-soft)]">
+              新部门或未配置专属 budget policy 的部门会继承这组默认值；已有专属策略不会被覆盖。
+            </p>
+          </div>
+          <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-3 text-xs leading-6 text-[var(--app-text-soft)]">
+            <div><span className="text-[var(--app-text-muted)]">Policy:</span> {departmentPolicy.id}</div>
+            <div><span className="text-[var(--app-text-muted)]">Scope:</span> department / default / day</div>
+            <div><span className="text-[var(--app-text-muted)]">Mode:</span> {departmentPolicy.hardStop ? 'hard stop' : 'warn only'}</div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <FieldRow label="Max tokens">
+            <Input
+              type="number"
+              value={departmentPolicy.maxTokens}
+              onChange={(event) => updateNumber('department', 'maxTokens', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Max minutes">
+            <Input
+              type="number"
+              value={departmentPolicy.maxMinutes}
+              onChange={(event) => updateNumber('department', 'maxMinutes', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Dispatch cap">
+            <Input
+              type="number"
+              value={departmentPolicy.maxDispatches}
+              onChange={(event) => updateNumber('department', 'maxDispatches', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Concurrent">
+            <Input
+              type="number"
+              value={departmentPolicy.maxConcurrentRuns ?? 0}
+              onChange={(event) => updateNumber('department', 'maxConcurrentRuns', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_0.85fr]">
+          <FieldRow label="Department cooldown">
+            <textarea
+              value={departmentCooldownDraft}
+              onChange={(event) => setDepartmentCooldownDraft(event.target.value)}
+              spellCheck={false}
+              className={cn('min-h-[120px] w-full resize-y rounded-2xl border px-4 py-3 font-mono text-xs leading-6 outline-none', workspaceFieldClassName)}
+              placeholder={'manual.prompt=0\nmanual.template=0\nagenda.dispatch=10'}
+            />
+          </FieldRow>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FieldRow label="Failure count">
+              <Input
+                type="number"
+                value={departmentPolicy.failureBudget?.maxConsecutiveFailures ?? 3}
+                onChange={(event) => updateFailureBudget('department', 'maxConsecutiveFailures', event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <FieldRow label="Cooldown min">
+              <Input
+                type="number"
+                value={departmentPolicy.failureBudget?.coolDownMinutes ?? 30}
+                onChange={(event) => updateFailureBudget('department', 'coolDownMinutes', event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <FieldRow label="Warn ratio">
+              <Input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={departmentPolicy.warningThreshold}
+                onChange={(event) => updateNumber('department', 'warningThreshold', event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <label className="flex items-center gap-2 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-xs text-[var(--app-text-soft)]">
+              <input
+                type="checkbox"
+                checked={departmentPolicy.hardStop}
+                onChange={(event) => setDepartmentPolicy((prev) => prev ? { ...prev, hardStop: event.target.checked } : prev)}
+              />
+              Hard stop
+            </label>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="border-blue-400/15 bg-[linear-gradient(180deg,#ffffff,#f5f8ff)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <SectionTitle icon={<RefreshCw className="h-4 w-4" />}>公司循环策略</SectionTitle>
+          </div>
+          <label className="flex items-center gap-2 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-3 py-2 text-xs text-[var(--app-text-soft)]">
+            <input
+              type="checkbox"
+              checked={loopPolicy.enabled}
+              onChange={(event) => setLoopPolicy((prev) => prev ? { ...prev, enabled: event.target.checked } : prev)}
+            />
+            Enabled
+          </label>
+        </div>
+
+        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <FieldRow label="Timezone">
+            <Input
+              value={loopPolicy.timezone}
+              onChange={(event) => setLoopPolicy((prev) => prev ? { ...prev, timezone: event.target.value } : prev)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Daily hour">
+            <Input
+              type="number"
+              min="0"
+              max="23"
+              value={loopPolicy.dailyReviewHour}
+              onChange={(event) => updateLoopNumber('dailyReviewHour', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Weekly day">
+            <Input
+              type="number"
+              min="0"
+              max="6"
+              value={loopPolicy.weeklyReviewDay}
+              onChange={(event) => updateLoopNumber('weeklyReviewDay', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Weekly hour">
+            <Input
+              type="number"
+              min="0"
+              max="23"
+              value={loopPolicy.weeklyReviewHour}
+              onChange={(event) => updateLoopNumber('weeklyReviewHour', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Top agenda">
+            <Input
+              type="number"
+              value={loopPolicy.maxAgendaPerDailyLoop}
+              onChange={(event) => updateLoopNumber('maxAgendaPerDailyLoop', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+          <FieldRow label="Dispatch cap">
+            <Input
+              type="number"
+              value={loopPolicy.maxAutonomousDispatchesPerLoop}
+              onChange={(event) => updateLoopNumber('maxAutonomousDispatchesPerLoop', event.target.value)}
+              className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+            />
+          </FieldRow>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-3 text-xs text-[var(--app-text-soft)]">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={loopPolicy.growthReviewEnabled}
+              onChange={(event) => setLoopPolicy((prev) => prev ? { ...prev, growthReviewEnabled: event.target.checked } : prev)}
+            />
+            Growth review
+          </label>
+          {(['observe', 'dispatch', 'approve', 'snooze', 'dismiss'] as CompanyLoopPolicyFE['allowedAgendaActions']).map((action) => (
+            <label key={action} className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={loopPolicy.allowedAgendaActions.includes(action)}
+                onChange={(event) => setLoopPolicy((prev) => {
+                  if (!prev) return prev;
+                  const nextActions = event.target.checked
+                    ? Array.from(new Set([...prev.allowedAgendaActions, action]))
+                    : prev.allowedAgendaActions.filter((item) => item !== action);
+                  return { ...prev, allowedAgendaActions: nextActions };
+                })}
+              />
+              {action}
+            </label>
+          ))}
+        </div>
+        <div className="mt-4 rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">Notification channels</div>
+          <div className="mt-3 flex flex-wrap gap-3 text-xs text-[var(--app-text-soft)]">
+            {(['web', 'email', 'webhook'] as CompanyLoopPolicyFE['notificationChannels']).map((channel) => (
+              <label key={channel} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={loopPolicy.notificationChannels.includes(channel)}
+                  onChange={(event) => setLoopPolicy((prev) => {
+                    if (!prev) return prev;
+                    const nextChannels = event.target.checked
+                      ? Array.from(new Set([...prev.notificationChannels, channel]))
+                      : prev.notificationChannels.filter((item) => item !== channel);
+                    return { ...prev, notificationChannels: nextChannels };
+                  })}
+                />
+                {channel}
+              </label>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid gap-5 lg:grid-cols-[1fr_0.85fr]">
+        <Card>
+          <SectionTitle icon={<RefreshCw className="h-4 w-4" />}>Operation cooldown</SectionTitle>
+          <textarea
+            value={cooldownDraft}
+            onChange={(event) => setCooldownDraft(event.target.value)}
+            spellCheck={false}
+            className={cn('min-h-[180px] w-full resize-y rounded-2xl border px-4 py-3 font-mono text-xs leading-6 outline-none', workspaceFieldClassName)}
+            placeholder={'growth.generate=60\ngrowth.evaluate=15\nagenda.dispatch=10'}
+          />
+          <p className="mt-3 text-xs leading-6 text-[var(--app-text-soft)]">
+            每行一个 `operationKind=minutes`。budget gate 会按 ledger metadata 拦截冷却期内重复动作。
+          </p>
+        </Card>
+
+        <Card>
+          <SectionTitle icon={<ShieldAlert className="h-4 w-4" />}>风险与熔断</SectionTitle>
+          <div className="space-y-3">
+            <FieldRow label="Failure count">
+              <Input
+                type="number"
+                value={policy.failureBudget?.maxConsecutiveFailures ?? 3}
+                onChange={(event) => updateFailureBudget('organization', 'maxConsecutiveFailures', event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <FieldRow label="Cooldown min">
+              <Input
+                type="number"
+                value={policy.failureBudget?.coolDownMinutes ?? 30}
+                onChange={(event) => updateFailureBudget('organization', 'coolDownMinutes', event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <FieldRow label="Warn ratio">
+              <Input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={policy.warningThreshold}
+                onChange={(event) => updateNumber('organization', 'warningThreshold', event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <FieldRow label="Approval risk">
+              <Input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={highRiskApprovalThreshold}
+                onChange={(event) => updateApprovalThreshold(event.target.value)}
+                className={cn('h-9 rounded-lg text-xs', workspaceFieldClassName)}
+              />
+            </FieldRow>
+            <label className="flex items-center gap-2 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-xs text-[var(--app-text-soft)]">
+              <input
+                type="checkbox"
+                checked={policy.hardStop}
+                onChange={(event) => setPolicy((prev) => prev ? { ...prev, hardStop: event.target.checked } : prev)}
+              />
+              Hard stop when budget is exceeded
+            </label>
+          </div>
+        </Card>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          onClick={handleSave}
+          disabled={saving}
+          className="bg-sky-500 px-4 font-medium text-white hover:bg-sky-400"
+        >
+          {saving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
+          保存自运营策略
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => void loadPolicy()}
+          className={cn('text-xs', workspaceOutlineActionClassName)}
+        >
+          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+          重新加载
+        </Button>
+        <SaveFeedback saved={saved} error={saveError} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tab 3: API Key Management
 // ---------------------------------------------------------------------------
 
 function ApiKeysTab({ onInventoryChanged }: { onInventoryChanged?: (inventory: ProviderInventory) => void }) {
@@ -1211,172 +1997,48 @@ function ApiKeysTab({ onInventoryChanged }: { onInventoryChanged?: (inventory: P
 
   return (
     <div className="space-y-5">
-      {/* Anthropic */}
-      <Card>
-        <SectionTitle icon={<Key className="h-4 w-4" />}>Anthropic API Key</SectionTitle>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/40">状态：</span>
-            {keyStatus.anthropic ? (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" />
-                已设置
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs text-white/30">
-                <AlertCircle className="h-3 w-3" />
-                未设置
-              </span>
-            )}
-          </div>
+      <ApiKeyCard
+        title="Anthropic API Key"
+        isSet={keyStatus.anthropic}
+        value={anthropicKey}
+        showValue={showAnthropicKey}
+        placeholder="sk-ant-..."
+        testStatus={testStatus}
+        testError={testError}
+        successMessage="连接成功，Key 有效"
+        onValueChange={(value) => {
+          setAnthropicKey(value);
+          setTestStatus('idle');
+        }}
+        onToggleShow={() => setShowAnthropicKey((value) => !value)}
+        onTest={handleTestAnthropicKey}
+      />
 
-          <FieldRow label="新 Key">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Input
-                  type={showAnthropicKey ? 'text' : 'password'}
-                  value={anthropicKey}
-                  onChange={(e) => {
-                    setAnthropicKey(e.target.value);
-                    setTestStatus('idle');
-                  }}
-                  placeholder={keyStatus.anthropic ? '输入新 key 以替换' : 'sk-ant-...'}
-                  className="h-8 rounded-lg border-white/8 bg-white/[0.04] pr-9 text-xs text-white/80 placeholder:text-white/20"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowAnthropicKey((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
-                >
-                  {showAnthropicKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleTestAnthropicKey}
-                disabled={!anthropicKey.trim() || testStatus === 'testing'}
-                className="shrink-0 border-white/10 bg-white/[0.04] text-xs text-white/60 hover:text-white hover:bg-white/[0.08]"
-              >
-                {testStatus === 'testing' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                <span className="ml-1.5">测试连接</span>
-              </Button>
-            </div>
-          </FieldRow>
-
-          {/* Test result */}
-          {testStatus === 'ok' && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              连接成功，Key 有效
-            </div>
-          )}
-          {testStatus === 'invalid' && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-              <XCircle className="h-3.5 w-3.5 shrink-0" />
-              {testError ?? 'Key 无效'}
-            </div>
-          )}
-          {testStatus === 'error' && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              {testError ?? '测试失败'}
-            </div>
-          )}
-        </div>
-      </Card>
-
-      {/* OpenAI */}
-      <Card>
-        <SectionTitle icon={<Key className="h-4 w-4" />}>OpenAI API Key</SectionTitle>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/40">状态：</span>
-            {keyStatus.openai ? (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" />
-                已设置
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs text-white/30">
-                <AlertCircle className="h-3 w-3" />
-                未设置
-              </span>
-            )}
-          </div>
-
-          <FieldRow label="新 Key">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Input
-                  type={showOpenaiKey ? 'text' : 'password'}
-                  value={openaiKey}
-                  onChange={(e) => {
-                    setOpenaiKey(e.target.value);
-                    setOpenaiTestStatus('idle');
-                  }}
-                  placeholder={keyStatus.openai ? '输入新 key 以替换' : 'sk-...'}
-                  className="h-8 rounded-lg border-white/8 bg-white/[0.04] pr-9 text-xs text-white/80 placeholder:text-white/20"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowOpenaiKey((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
-                >
-                  {showOpenaiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleTestOpenaiKey}
-                disabled={!openaiKey.trim() || openaiTestStatus === 'testing'}
-                className="shrink-0 border-white/10 bg-white/[0.04] text-xs text-white/60 hover:text-white hover:bg-white/[0.08]"
-              >
-                {openaiTestStatus === 'testing' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                <span className="ml-1.5">测试连接</span>
-              </Button>
-            </div>
-          </FieldRow>
-
-          {/* OpenAI Test result */}
-          {openaiTestStatus === 'ok' && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              连接成功，Key 有效
-            </div>
-          )}
-          {openaiTestStatus === 'invalid' && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-              <XCircle className="h-3.5 w-3.5 shrink-0" />
-              {openaiTestError ?? 'Key 无效'}
-            </div>
-          )}
-          {openaiTestStatus === 'error' && (
-            <div className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              {openaiTestError ?? '测试失败'}
-            </div>
-          )}
-        </div>
-      </Card>
+      <ApiKeyCard
+        title="OpenAI API Key"
+        isSet={keyStatus.openai}
+        value={openaiKey}
+        showValue={showOpenaiKey}
+        placeholder="sk-..."
+        testStatus={openaiTestStatus}
+        testError={openaiTestError}
+        successMessage="连接成功，Key 有效"
+        onValueChange={(value) => {
+          setOpenaiKey(value);
+          setOpenaiTestStatus('idle');
+        }}
+        onToggleShow={() => setShowOpenaiKey((value) => !value)}
+        onTest={handleTestOpenaiKey}
+      />
 
       <Card>
         <SectionTitle icon={<Cpu className="h-4 w-4" />}>本地登录态</SectionTitle>
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4">
+          <div className="rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-white">Codex Native</div>
-                <div className="mt-1 text-xs text-white/45">读取 `~/.codex/auth.json`，复用本机 Codex 登录。</div>
+                <div className="text-sm font-semibold text-[var(--app-text)]">Codex Native</div>
+                <div className="mt-1 text-xs text-[var(--app-text-soft)]">读取 `~/.codex/auth.json`，复用本机 Codex 登录。</div>
               </div>
               <span className={cn(
                 'inline-flex h-6 items-center rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-[0.16em]',
@@ -1384,12 +2046,12 @@ function ApiKeysTab({ onInventoryChanged }: { onInventoryChanged?: (inventory: P
                   ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
                   : providerInventory?.providers.nativeCodex.installed
                     ? 'border-amber-500/20 bg-amber-500/10 text-amber-100'
-                    : 'border-white/10 bg-white/[0.04] text-white/45',
+                    : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-muted)]',
               )}>
                 {providerInventory?.providers.nativeCodex.loggedIn ? 'Ready' : providerInventory?.providers.nativeCodex.installed ? 'Needs Login' : 'Not Installed'}
               </span>
             </div>
-            <div className="mt-3 text-xs leading-5 text-white/65">
+            <div className="mt-3 text-xs leading-5 text-[var(--app-text-soft)]">
               {providerInventory?.providers.nativeCodex.loggedIn
                 ? '已检测到 Codex OAuth 登录，可以直接应用为默认或 layer provider。'
                 : providerInventory?.providers.nativeCodex.installed
@@ -1398,11 +2060,11 @@ function ApiKeysTab({ onInventoryChanged }: { onInventoryChanged?: (inventory: P
             </div>
           </div>
 
-          <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4">
+          <div className="rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-white">Claude Code</div>
-                <div className="mt-1 text-xs text-white/45">本地 Claude Code CLI / profile 状态检测。</div>
+                <div className="text-sm font-semibold text-[var(--app-text)]">Claude Code</div>
+                <div className="mt-1 text-xs text-[var(--app-text-soft)]">本地 Claude Code CLI / profile 状态检测。</div>
               </div>
               <span className={cn(
                 'inline-flex h-6 items-center rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-[0.16em]',
@@ -1410,12 +2072,12 @@ function ApiKeysTab({ onInventoryChanged }: { onInventoryChanged?: (inventory: P
                   ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
                   : providerInventory?.providers.claudeCode.installed
                     ? 'border-amber-500/20 bg-amber-500/10 text-amber-100'
-                    : 'border-white/10 bg-white/[0.04] text-white/45',
+                    : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-muted)]',
               )}>
                 {providerInventory?.providers.claudeCode.installed && providerInventory?.providers.claudeCode.loginDetected ? 'Ready' : providerInventory?.providers.claudeCode.installed ? 'Needs Login' : 'Not Installed'}
               </span>
             </div>
-            <div className="mt-3 text-xs leading-5 text-white/65">
+            <div className="mt-3 text-xs leading-5 text-[var(--app-text-soft)]">
               {providerInventory?.providers.claudeCode.installed
                 ? (providerInventory?.providers.claudeCode.loginDetected
                   ? '已检测到本地 Claude 配置，可切到 Claude Code provider。'
@@ -1426,119 +2088,39 @@ function ApiKeysTab({ onInventoryChanged }: { onInventoryChanged?: (inventory: P
         </div>
       </Card>
 
-      <Card>
-        <SectionTitle icon={<Key className="h-4 w-4" />}>Gemini API Key</SectionTitle>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/40">状态：</span>
-            {keyStatus.gemini ? (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" />
-                已设置
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs text-white/30">
-                <AlertCircle className="h-3 w-3" />
-                未设置
-              </span>
-            )}
-          </div>
+      <ApiKeyCard
+        title="Gemini API Key"
+        isSet={keyStatus.gemini}
+        value={geminiKey}
+        showValue={showGeminiKey}
+        placeholder="AIza..."
+        testStatus={geminiTestStatus}
+        testError={geminiTestError}
+        successMessage="连接成功，Gemini Key 有效"
+        onValueChange={(value) => {
+          setGeminiKey(value);
+          setGeminiTestStatus('idle');
+        }}
+        onToggleShow={() => setShowGeminiKey((value) => !value)}
+        onTest={handleTestGeminiKey}
+      />
 
-          <FieldRow label="新 Key">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Input
-                  type={showGeminiKey ? 'text' : 'password'}
-                  value={geminiKey}
-                  onChange={(e) => {
-                    setGeminiKey(e.target.value);
-                    setGeminiTestStatus('idle');
-                  }}
-                  placeholder={keyStatus.gemini ? '输入新 key 以替换' : 'AIza...'}
-                  className="h-8 rounded-lg border-white/8 bg-white/[0.04] pr-9 text-xs text-white/80 placeholder:text-white/20"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowGeminiKey((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
-                >
-                  {showGeminiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleTestGeminiKey}
-                disabled={!geminiKey.trim() || geminiTestStatus === 'testing'}
-                className="shrink-0 border-white/10 bg-white/[0.04] text-xs text-white/60 hover:text-white hover:bg-white/[0.08]"
-              >
-                {geminiTestStatus === 'testing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                <span className="ml-1.5">测试连接</span>
-              </Button>
-            </div>
-          </FieldRow>
-          {geminiTestStatus === 'ok' ? <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">连接成功，Gemini Key 有效</div> : null}
-          {geminiTestStatus === 'invalid' ? <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{geminiTestError ?? 'Key 无效'}</div> : null}
-          {geminiTestStatus === 'error' ? <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{geminiTestError ?? '测试失败'}</div> : null}
-        </div>
-      </Card>
-
-      <Card>
-        <SectionTitle icon={<Key className="h-4 w-4" />}>Grok API Key</SectionTitle>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/40">状态：</span>
-            {keyStatus.grok ? (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 className="h-3 w-3" />
-                已设置
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs text-white/30">
-                <AlertCircle className="h-3 w-3" />
-                未设置
-              </span>
-            )}
-          </div>
-
-          <FieldRow label="新 Key">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Input
-                  type={showGrokKey ? 'text' : 'password'}
-                  value={grokKey}
-                  onChange={(e) => {
-                    setGrokKey(e.target.value);
-                    setGrokTestStatus('idle');
-                  }}
-                  placeholder={keyStatus.grok ? '输入新 key 以替换' : 'xai-...'}
-                  className="h-8 rounded-lg border-white/8 bg-white/[0.04] pr-9 text-xs text-white/80 placeholder:text-white/20"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowGrokKey((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
-                >
-                  {showGrokKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleTestGrokKey}
-                disabled={!grokKey.trim() || grokTestStatus === 'testing'}
-                className="shrink-0 border-white/10 bg-white/[0.04] text-xs text-white/60 hover:text-white hover:bg-white/[0.08]"
-              >
-                {grokTestStatus === 'testing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                <span className="ml-1.5">测试连接</span>
-              </Button>
-            </div>
-          </FieldRow>
-          {grokTestStatus === 'ok' ? <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">连接成功，Grok Key 有效</div> : null}
-          {grokTestStatus === 'invalid' ? <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">{grokTestError ?? 'Key 无效'}</div> : null}
-          {grokTestStatus === 'error' ? <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{grokTestError ?? '测试失败'}</div> : null}
-        </div>
-      </Card>
+      <ApiKeyCard
+        title="Grok API Key"
+        isSet={keyStatus.grok}
+        value={grokKey}
+        showValue={showGrokKey}
+        placeholder="xai-..."
+        testStatus={grokTestStatus}
+        testError={grokTestError}
+        successMessage="连接成功，Grok Key 有效"
+        onValueChange={(value) => {
+          setGrokKey(value);
+          setGrokTestStatus('idle');
+        }}
+        onToggleShow={() => setShowGrokKey((value) => !value)}
+        onTest={handleTestGrokKey}
+      />
 
       {/* Save */}
       <div className="flex items-center gap-3">
@@ -1650,7 +2232,7 @@ function SceneOverridesTab({
 
   if (!config) {
     return (
-      <div className="flex items-center gap-2 py-8 text-sm text-white/40">
+      <div className="flex items-center gap-2 py-8 text-sm text-[var(--app-text-soft)]">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading config…
       </div>
@@ -1661,14 +2243,14 @@ function SceneOverridesTab({
     <div className="space-y-5">
       <Card>
         <SectionTitle icon={<Map className="h-4 w-4" />}>Scene 覆盖配置</SectionTitle>
-        <p className="mb-4 text-xs text-white/40">
-          Scene 配置优先级最高，覆盖层级配置和默认配置。留空 Model 则继承层级配置。
+        <p className="mb-4 text-xs text-[var(--app-text-soft)]">
+          Scene 覆盖优先级最高，留空 Model 则继承运行 Provider。
         </p>
 
         {sceneEntries.length > 0 ? (
           <div className="space-y-2 mb-4">
             {sceneEntries.map(([key, scene]) => (
-              <div key={key} className="flex items-center gap-2 rounded-lg border border-white/6 bg-white/[0.02] px-3 py-2">
+              <div key={key} className="flex items-center gap-2 rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2">
                 <span className="w-36 shrink-0 truncate font-mono text-[11px] text-sky-300/80">{key}</span>
                 <div className="flex-1 grid grid-cols-2 gap-2 min-w-0">
                   <ProviderSelect
@@ -1681,13 +2263,13 @@ function SceneOverridesTab({
                     value={scene.model ?? ''}
                     onChange={(e) => updateScene(key, 'model', e.target.value)}
                     placeholder="继承默认"
-                    className="h-8 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80 placeholder:text-white/20"
+                    className={cn('h-8 rounded-lg text-xs', workspaceFieldClassName)}
                   />
                 </div>
                 <button
                   type="button"
                   onClick={() => deleteScene(key)}
-                  className="shrink-0 text-white/20 hover:text-red-400 transition-colors"
+                  className="shrink-0 text-[var(--app-text-muted)] transition-colors hover:text-red-500"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -1695,14 +2277,12 @@ function SceneOverridesTab({
             ))}
           </div>
         ) : (
-          <div className="mb-4 rounded-lg border border-dashed border-white/8 px-4 py-6 text-center text-xs text-white/30">
-            暂无 scene 覆盖配置
-          </div>
+          <WorkspaceEmptyBlock title="暂无 scene 覆盖配置" className="mb-4 py-6" />
         )}
 
         {/* Add scene */}
-        <div className="rounded-lg border border-white/6 bg-white/[0.015] p-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-white/30">
+        <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-3">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
             添加 Scene
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -1711,7 +2291,7 @@ function SceneOverridesTab({
               onChange={(e) => setNewKey(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') addScene(); }}
               placeholder="scene 名称（如 code-summary）"
-              className="h-8 flex-1 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80 placeholder:text-white/20"
+              className={cn('h-8 flex-1 rounded-lg text-xs', workspaceFieldClassName)}
             />
             <ProviderSelect
               value={newProvider}
@@ -1723,13 +2303,13 @@ function SceneOverridesTab({
               value={newModel}
               onChange={(e) => setNewModel(e.target.value)}
               placeholder="Model（可选）"
-              className="h-8 w-32 rounded-lg border-white/8 bg-white/[0.04] text-xs text-white/80 placeholder:text-white/20"
+              className={cn('h-8 w-32 rounded-lg text-xs', workspaceFieldClassName)}
             />
             <Button
               size="sm"
               onClick={addScene}
               disabled={!newKey.trim()}
-              className="shrink-0 border border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20"
+              className={cn('shrink-0', workspaceOutlineActionClassName)}
               variant="outline"
             >
               <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -1855,7 +2435,7 @@ function McpServersTab() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-sm text-white/40">
+      <div className="flex items-center gap-2 text-sm text-[var(--app-text-soft)]">
         <Loader2 className="h-4 w-4 animate-spin" />
         加载中...
       </div>
@@ -1867,14 +2447,14 @@ function McpServersTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-white/80">MCP 服务器配置</h3>
-          <p className="text-xs text-white/40 mt-1">管理 Model Context Protocol 服务器连接</p>
+          <h3 className="text-sm font-medium text-[var(--app-text)]">MCP 服务器配置</h3>
+          <p className="mt-1 text-xs text-[var(--app-text-soft)]">管理 Model Context Protocol 服务器连接</p>
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={() => setShowAddForm(!showAddForm)}
-          className="text-xs h-8 border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06] hover:text-white/80"
+          className={cn('h-8 text-xs', workspaceOutlineActionClassName)}
         >
           <Plus className="mr-1.5 h-3.5 w-3.5" />
           添加服务器
@@ -1886,18 +2466,18 @@ function McpServersTab() {
         <div className="space-y-3 rounded-xl border border-sky-400/15 bg-sky-400/5 p-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[11px] text-white/50 mb-1 block">名称 *</label>
+              <label className="mb-1 block text-[11px] text-[var(--app-text-soft)]">名称 *</label>
               <Input
                 value={newServer.name}
                 onChange={(e) => setNewServer((s) => ({ ...s, name: e.target.value }))}
                 placeholder="my-mcp-server"
-                className="h-8 text-xs bg-black/20 border-white/10"
+                className={cn('h-8 text-xs', workspaceFieldClassName)}
               />
             </div>
             <div>
-              <label className="text-[11px] text-white/50 mb-1 block">类型</label>
+              <label className="mb-1 block text-[11px] text-[var(--app-text-soft)]">类型</label>
               <Select value={newServer.type} onValueChange={(v: string | null) => setNewServer((s) => ({ ...s, type: v ?? s.type }))}>
-                <SelectTrigger className="h-8 text-xs bg-black/20 border-white/10">
+                <SelectTrigger className={cn('h-8 text-xs', workspaceFieldClassName)}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1911,42 +2491,42 @@ function McpServersTab() {
           {newServer.type === 'stdio' ? (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[11px] text-white/50 mb-1 block">命令</label>
+                <label className="mb-1 block text-[11px] text-[var(--app-text-soft)]">命令</label>
                 <Input
                   value={newServer.command}
                   onChange={(e) => setNewServer((s) => ({ ...s, command: e.target.value }))}
                   placeholder="npx -y @modelcontextprotocol/server-xxx"
-                  className="h-8 text-xs bg-black/20 border-white/10 font-mono"
+                  className={cn('h-8 text-xs font-mono', workspaceFieldClassName)}
                 />
               </div>
               <div>
-                <label className="text-[11px] text-white/50 mb-1 block">参数 (空格分隔)</label>
+                <label className="mb-1 block text-[11px] text-[var(--app-text-soft)]">参数 (空格分隔)</label>
                 <Input
                   value={newServer.args}
                   onChange={(e) => setNewServer((s) => ({ ...s, args: e.target.value }))}
                   placeholder="--flag value"
-                  className="h-8 text-xs bg-black/20 border-white/10 font-mono"
+                  className={cn('h-8 text-xs font-mono', workspaceFieldClassName)}
                 />
               </div>
             </div>
           ) : (
             <div>
-              <label className="text-[11px] text-white/50 mb-1 block">URL</label>
+              <label className="mb-1 block text-[11px] text-[var(--app-text-soft)]">URL</label>
               <Input
                 value={newServer.url}
                 onChange={(e) => setNewServer((s) => ({ ...s, url: e.target.value }))}
                 placeholder="http://localhost:8080/mcp"
-                className="h-8 text-xs bg-black/20 border-white/10 font-mono"
+                className={cn('h-8 text-xs font-mono', workspaceFieldClassName)}
               />
             </div>
           )}
           <div>
-            <label className="text-[11px] text-white/50 mb-1 block">描述</label>
+            <label className="mb-1 block text-[11px] text-[var(--app-text-soft)]">描述</label>
             <Input
               value={newServer.description}
               onChange={(e) => setNewServer((s) => ({ ...s, description: e.target.value }))}
               placeholder="可选描述"
-              className="h-8 text-xs bg-black/20 border-white/10"
+              className={cn('h-8 text-xs', workspaceFieldClassName)}
             />
           </div>
           <div className="flex items-center gap-2 pt-1">
@@ -1963,7 +2543,7 @@ function McpServersTab() {
               variant="ghost"
               size="sm"
               onClick={() => setShowAddForm(false)}
-              className="h-7 text-xs text-white/50"
+              className="h-7 text-xs text-[var(--app-text-soft)] hover:text-[var(--app-text)]"
             >
               取消
             </Button>
@@ -1985,30 +2565,30 @@ function McpServersTab() {
 
       {/* Server list */}
       {servers.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-6 py-10 text-center">
-          <Plug className="mx-auto h-8 w-8 text-white/15 mb-3" />
-          <p className="text-xs text-white/30 mb-1">尚未配置 MCP 服务器</p>
-          <p className="text-[10px] text-white/20">点击&quot;添加服务器&quot;开始配置</p>
-        </div>
+        <WorkspaceEmptyBlock
+          icon={<Plug className="h-5 w-5" />}
+          title="尚未配置 MCP 服务器"
+          description="点击“添加服务器”开始配置"
+        />
       ) : (
         <div className="space-y-2">
           {servers.map((s) => (
             <div
               key={s.name}
-              className="group flex items-start gap-3 rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3 hover:bg-white/[0.04] transition-colors"
+              className="group flex items-start gap-3 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-3 transition-colors hover:bg-[var(--app-raised)]"
             >
               <div className="mt-0.5 h-2 w-2 rounded-full bg-emerald-400/70 shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-white/70">{s.name}</span>
-                  <span className="rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-white/30">
+                  <span className="text-xs font-medium text-[var(--app-text)]">{s.name}</span>
+                  <span className="rounded-full bg-[var(--app-raised)] px-1.5 py-0.5 text-[10px] text-[var(--app-text-muted)]">
                     {s.type ?? 'stdio'}
                   </span>
                 </div>
-                {s.description && <p className="text-[10px] text-white/30 mt-0.5">{s.description}</p>}
+                {s.description && <p className="mt-0.5 text-[10px] text-[var(--app-text-soft)]">{s.description}</p>}
                 <div className="flex items-center gap-1 mt-1">
-                  <Terminal className="h-3 w-3 text-white/20" />
-                  <code className="text-[10px] text-white/25 font-mono truncate">
+                  <Terminal className="h-3 w-3 text-[var(--app-text-muted)]" />
+                  <code className="truncate font-mono text-[10px] text-[var(--app-text-muted)]">
                     {s.command ? `${s.command} ${(s.args ?? []).join(' ')}`.trim() : s.url ?? '-'}
                   </code>
                 </div>
@@ -2026,7 +2606,7 @@ function McpServersTab() {
         </div>
       )}
 
-      <p className="text-[10px] text-white/15">配置文件: ~/.gemini/antigravity/mcp_config.json</p>
+      <p className="text-[10px] text-[var(--app-text-muted)]">配置文件: ~/.gemini/antigravity/mcp_config.json</p>
     </div>
   );
 }
@@ -2046,22 +2626,30 @@ export default function SettingsPanel({
 }) {
   const [config, setConfig] = useState<AIProviderConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
-  const [configError, setConfigError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<SettingsConfigError | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTabId>(requestedTab);
   const [providerInventory, setProviderInventory] = useState<ProviderInventory | null>(null);
 
   useEffect(() => {
     fetch('/api/ai-config')
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to load config');
-        return res.json() as Promise<AIProviderConfig>;
-      })
+      .then((res) => readJsonOrThrow<AIProviderConfig>(res, 'Failed to load config'))
       .then((data) => {
         setConfig(data);
         setConfigError(null);
       })
-      .catch(() => {
-        setConfigError('无法加载 AI 配置');
+      .catch((error: unknown) => {
+        if (isUnconfiguredWebApiError(error)) {
+          setConfigError({
+            kind: 'web-api-unavailable',
+            message: error.message,
+            path: error.path,
+          });
+          return;
+        }
+        setConfigError({
+          kind: 'generic',
+          message: error instanceof Error ? error.message : '无法加载 AI 配置',
+        });
       })
       .finally(() => setConfigLoading(false));
   }, []);
@@ -2083,47 +2671,33 @@ export default function SettingsPanel({
   }, [requestedTab, requestToken]);
 
   return (
-    <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(160deg,rgba(18,28,46,0.7)_0%,rgba(9,14,26,0.9)_100%)] shadow-2xl overflow-hidden">
-      {/* Panel header */}
-      <div className="flex items-center gap-3 border-b border-white/6 px-6 py-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/20 bg-sky-400/10">
-          <Key className="h-4 w-4 text-sky-400" />
-        </div>
-        <div>
-          <div className="text-sm font-semibold text-white">Settings</div>
-          <div className="text-[11px] text-white/40">CEO Profile · 第三方 Provider 接入 · API Key 管理</div>
-        </div>
-      </div>
-
+    <WorkspaceSurface padding="none" className="overflow-hidden rounded-[28px] bg-[linear-gradient(180deg,#ffffff,#f7faff)] shadow-[0_24px_60px_rgba(28,44,73,0.08)]">
       {configLoading ? (
-        <div className="flex items-center gap-2 px-6 py-12 text-sm text-white/40">
+        <div className="flex items-center gap-2 px-6 py-12 text-sm text-[var(--app-text-muted)]">
           <Loader2 className="h-4 w-4 animate-spin" />
           加载中…
         </div>
       ) : configError ? (
-        <div className="flex items-center gap-2 px-6 py-12 text-sm text-red-400">
-          <XCircle className="h-4 w-4" />
-          {configError}
-        </div>
+        <SettingsBackendUnavailable error={configError} />
       ) : (
         <Tabs
           value={activeTab}
           onValueChange={(value) => value && setActiveTab(value as SettingsTabId)}
           className="flex flex-col"
         >
-          <div className="border-b border-white/6 px-6 pt-4 pb-0">
-            <TabsList className="h-9 gap-1 rounded-none bg-transparent p-0">
+          <div className="border-b border-[var(--app-border-soft)] px-6 pt-4 pb-0">
+            <WorkspaceTabsList variant="underline">
               {SETTINGS_TABS.map((tab) => (
-                <TabsTrigger
+                <WorkspaceTabsTrigger
                   key={tab.value}
                   value={tab.value}
-                  className="h-9 rounded-none border-0 border-b-2 border-transparent px-3 text-xs font-medium text-white/50 data-active:border-sky-400 data-active:text-sky-300 data-active:bg-transparent"
+                  variant="underline"
                 >
                   {tab.icon}
                   {tab.label}
-                </TabsTrigger>
+                </WorkspaceTabsTrigger>
               ))}
-            </TabsList>
+            </WorkspaceTabsList>
           </div>
 
           <TabsContent value="profile" className="p-6">
@@ -2143,6 +2717,9 @@ export default function SettingsPanel({
           <TabsContent value="scenes" className="p-6">
             <SceneOverridesTab initialConfig={config} providerInventory={providerInventory} />
           </TabsContent>
+          <TabsContent value="autonomy" className="p-6">
+            <AutonomyBudgetTab />
+          </TabsContent>
           <TabsContent value="mcp" className="p-6">
             <McpServersTab />
           </TabsContent>
@@ -2151,6 +2728,6 @@ export default function SettingsPanel({
           </TabsContent>
         </Tabs>
       )}
-    </div>
+    </WorkspaceSurface>
   );
 }

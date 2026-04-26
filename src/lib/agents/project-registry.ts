@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, rmSync } from 'fs';
 import path from 'path';
 import type { BranchProgress, ProjectDefinition, ProjectPipelineState, PipelineStageProgress } from './project-types';
 import { AssetLoader } from './asset-loader';
@@ -7,8 +7,17 @@ import { createLogger } from '../logger';
 import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { resolveStageId } from './pipeline/pipeline-graph';
 import { deleteProjectRecord, listProjectRecords, upsertProjectRecord } from '../storage/gateway-db';
+import { getRun } from './run-registry';
 
 const log = createLogger('ProjectRegistry');
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 // ---------------------------------------------------------------------------
 // In-memory store (Preserved across Next.js HMR via globalThis)
@@ -44,8 +53,8 @@ function persistProject(project: ProjectDefinition, options: { writeMirror?: boo
       writeProjectMirror(project, { ensureDir: options.ensureMirrorDir });
     }
     log.debug({ projectId: project.projectId }, 'Project persisted');
-  } catch (err: any) {
-    log.error({ err: err.message, projectId: project.projectId }, 'Failed to persist project');
+  } catch (err: unknown) {
+    log.error({ err: getErrorMessage(err), projectId: project.projectId }, 'Failed to persist project');
   }
 }
 
@@ -84,8 +93,8 @@ function loadFromDisk(): void {
     initialized = true;
     globalForProjects.__PROJECT_REGISTRY_INITIALIZED__ = true;
     log.info({ total: entries.length, skippedLegacy }, 'Projects loaded from disk');
-  } catch (err: any) {
-    log.warn({ err: err.message }, 'Failed to load projects from disk');
+  } catch (err: unknown) {
+    log.warn({ err: getErrorMessage(err) }, 'Failed to load projects from disk');
   }
 }
 
@@ -177,13 +186,12 @@ export function deleteProject(projectId: string): boolean {
   // Optional: Remove project directory if workspace is available
   if (project.workspace) {
     try {
-      const { rmSync } = require('fs');
       const projectDir = path.join(project.workspace.replace(/^file:\/\//, ''), ARTIFACT_ROOT_DIR, 'projects', projectId);
       if (existsSync(projectDir)) {
         rmSync(projectDir, { recursive: true, force: true });
       }
-    } catch (err: any) {
-      log.warn({ err: err.message, projectId }, 'Failed to delete project directory');
+    } catch (err: unknown) {
+      log.warn({ err: getErrorMessage(err), projectId }, 'Failed to delete project directory');
     }
   }
 
@@ -244,7 +252,7 @@ export function initializePipelineState(
 
   let stages: PipelineStageProgress[] = [];
   if (template.pipeline) {
-      stages = template.pipeline.map((stage: any, idx: number) => ({
+    stages = template.pipeline.map((stage, idx) => ({
       stageId: resolveStageId(stage),
       title: stage.title,
       stageIndex: idx,
@@ -252,7 +260,7 @@ export function initializePipelineState(
       attempts: 0,
     }));
   } else if (template.graphPipeline) {
-    stages = template.graphPipeline.nodes.map((node: any, idx: number) => ({
+    stages = template.graphPipeline.nodes.map((node, idx) => ({
       stageId: node.id,
       title: node.title || node.label,
       stageIndex: idx,
@@ -278,18 +286,18 @@ export function initializePipelineState(
 }
 
 /** Deep-merge source into target (mutates target). Arrays are replaced, not concatenated. */
-function deepMerge(target: any, source: any): any {
+function deepMerge<T extends object>(target: T, source: Record<string, unknown>): T {
+  const targetRecord = target as Record<string, unknown>;
   for (const key of Object.keys(source)) {
+    const sourceValue = source[key];
+    const targetValue = targetRecord[key];
     if (
-      source[key] !== null &&
-      typeof source[key] === 'object' &&
-      !Array.isArray(source[key]) &&
-      typeof target[key] === 'object' &&
-      !Array.isArray(target[key])
+      isPlainObject(sourceValue) &&
+      isPlainObject(targetValue)
     ) {
-      deepMerge(target[key], source[key]);
+      deepMerge(targetValue, sourceValue);
     } else {
-      target[key] = source[key];
+      targetRecord[key] = sourceValue;
     }
   }
   return target;
@@ -414,7 +422,6 @@ export function getFirstActionableStage(projectId: string): PipelineStageProgres
   const project = projects.get(projectId);
   if (!project?.pipelineState) return null;
 
-  const { getRun } = require('./run-registry');
   return project.pipelineState.stages.find((stage: PipelineStageProgress) => {
     if (stage.status === 'failed' || stage.status === 'blocked' || stage.status === 'cancelled') {
       return true;

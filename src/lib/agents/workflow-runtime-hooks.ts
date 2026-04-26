@@ -3,7 +3,11 @@ import * as path from 'path';
 import { execFile as execFileCallback } from 'child_process';
 import { promisify } from 'util';
 
-import { getCanonicalSkill, getCanonicalWorkflowRuntimeConfig } from './canonical-assets';
+import {
+  getCanonicalSkill,
+  getCanonicalWorkflowRuntimeConfig,
+  getCanonicalWorkflowScriptsDir,
+} from './canonical-assets';
 import type { TaskResult } from './group-types';
 import { createLogger } from '../logger';
 
@@ -85,14 +89,52 @@ export interface WorkflowRuntimePreparation {
 type AiDigestPreparedContext = {
   status?: string;
   skipReason?: string | null;
+  targetDate?: string;
   articleCount?: number;
   sourceArticleIds?: Array<string | number>;
   articles?: Array<{ title?: string; summary?: string; url?: string }>;
+  window?: {
+    start?: string;
+    end?: string;
+  };
+};
+
+type AiDigestOutput = {
+  title?: string;
+  summary?: string;
+  contentHtml?: string;
+  sourceArticleIds?: Array<string | number>;
+};
+
+type AiDigestVerification = {
+  status?: string;
+  reportUrl?: string;
+  verifyApiUrl?: string;
+  verifyPageUrl?: string | null;
+  verifyPageStatus?: number | null;
+  reportResponse?: unknown;
+  verifyApiResponse?: {
+    data?: {
+      exists?: boolean;
+      run?: {
+        id?: number;
+        digestDate?: string;
+        title?: string;
+      };
+    };
+  };
 };
 
 type WorkflowRuntimeManifest = {
   runtimeProfile?: string;
   runtimeSkill?: string;
+  runtimeScriptsDir?: string;
+};
+
+type WorkflowRuntimeSupport = {
+  skillName?: string;
+  skillBaseDir?: string | null;
+  scriptsDir?: string | null;
 };
 
 function getAsiaShanghaiDateString(now: Date = new Date()): string {
@@ -167,37 +209,70 @@ function resolveWorkflowRuntimeManifest(resolvedWorkflowRef: string | undefined)
   return getCanonicalWorkflowRuntimeConfig(resolvedWorkflowRef) ?? {};
 }
 
+function resolveWorkflowRuntimeSupport(manifest: WorkflowRuntimeManifest): WorkflowRuntimeSupport {
+  const skill = manifest.runtimeSkill ? getCanonicalSkill(manifest.runtimeSkill) : null;
+  return {
+    skillName: skill?.name,
+    skillBaseDir: skill?.baseDir ?? null,
+    scriptsDir: manifest.runtimeScriptsDir ? getCanonicalWorkflowScriptsDir(manifest.runtimeScriptsDir) : null,
+  };
+}
+
+function resolveRuntimeScriptPath(runtime: WorkflowRuntimeSupport, scriptName: string): string | null {
+  if (runtime.scriptsDir) {
+    const workflowScript = path.join(runtime.scriptsDir, scriptName);
+    if (fs.existsSync(workflowScript)) {
+      return workflowScript;
+    }
+  }
+  if (runtime.skillBaseDir) {
+    const skillScript = path.join(runtime.skillBaseDir, 'scripts', scriptName);
+    if (fs.existsSync(skillScript)) {
+      return skillScript;
+    }
+  }
+  return null;
+}
+
 function resolveDepartmentPrivatePath(workspacePath: string): string {
   return path.join(workspacePath, '.department', 'private.json');
 }
 
 async function prepareAiDigestContext(
-  runtimeSkill: string,
+  manifest: WorkflowRuntimeManifest,
   workspacePath: string,
   artifactAbsDir: string,
 ): Promise<string> {
-  const skill = getCanonicalSkill(runtimeSkill);
-  if (!skill) {
-    return '';
-  }
-
+  const runtime = resolveWorkflowRuntimeSupport(manifest);
   const targetDate = getAsiaShanghaiDateString();
   const contextPath = path.join(artifactAbsDir, 'prepared-ai-digest-context.json');
-  const fetchScript = path.join(skill.baseDir, 'scripts', 'fetch_context.py');
-  const reportScript = path.join(skill.baseDir, 'scripts', 'report_digest.py');
+  const fetchScript = resolveRuntimeScriptPath(runtime, 'fetch_context.py');
+  const reportScript = resolveRuntimeScriptPath(runtime, 'report_digest.py');
   const sections: string[] = [
     '## Prepared Daily Digest Context',
     `- Absolute target date: ${targetDate} (Asia/Shanghai)`,
-    `- Workflow helper skill: ${skill.name}`,
-    `- Fetch script: ${fetchScript}`,
-    `- Report script: ${reportScript}`,
+    ...(runtime.scriptsDir ? [`- Workflow scripts dir: ${runtime.scriptsDir}`] : []),
+    ...(runtime.skillName ? [`- Workflow helper skill: ${runtime.skillName}`] : []),
+    `- Fetch script: ${fetchScript || 'missing'}`,
+    `- Report script: ${reportScript || 'missing'}`,
   ];
+
+  if (!fetchScript) {
+    sections.push(
+      '',
+      '- Runtime preflight skipped: missing fetch_context.py helper in canonical workflow assets.',
+      `- Today is still ${targetDate}; do not invent another date.`,
+    );
+    return sections.join('\n');
+  }
 
   try {
     await runPythonScript(fetchScript, [
       '--date', targetDate,
       '--limit', '50',
       '--max-pages', '2',
+      '--window-start-hour', '20',
+      '--window-end-hour', '20',
       '--out', contextPath,
       '--insecure',
     ], workspacePath);
@@ -214,7 +289,8 @@ async function prepareAiDigestContext(
   }
 
   if (preparedContext?.status === 'skip' && preparedContext.skipReason?.includes('digest_already_exists')) {
-    const digest = await fetchExistingDigest(targetDate);
+    const effectiveTargetDate = preparedContext.targetDate || targetDate;
+    const digest = await fetchExistingDigest(effectiveTargetDate);
     if (digest) {
       sections.push(
         '',
@@ -230,15 +306,20 @@ async function prepareAiDigestContext(
         '### Hard constraints for summarization',
         '- Use the provided existing digest above as the factual source of truth for today.',
         '- Do not ask the user for more materials if the digest above is sufficient.',
-        `- Do not invent another date. Today is ${targetDate}.`,
+        `- Do not invent another date. Today is ${effectiveTargetDate}.`,
       );
       return sections.join('\n');
     }
   }
 
   if (preparedContext?.status === 'ok') {
+    const effectiveTargetDate = preparedContext.targetDate || targetDate;
     sections.push(
       '',
+      `- Absolute target date: ${effectiveTargetDate} (Asia/Shanghai)`,
+      ...(preparedContext.window?.start && preparedContext.window?.end
+        ? [`- Context window: ${preparedContext.window.start} -> ${preparedContext.window.end}`]
+        : []),
       `- Article count in context window: ${preparedContext.articleCount ?? 0}`,
       `- Source article ids: ${(preparedContext.sourceArticleIds ?? []).join(', ') || 'none'}`,
     );
@@ -252,7 +333,7 @@ async function prepareAiDigestContext(
       '',
       '### Hard constraints for summarization',
       '- Base the report strictly on the prepared article context above.',
-      `- Do not invent another date. Today is ${targetDate}.`,
+      `- Do not invent another date. Today is ${effectiveTargetDate}.`,
     );
     return sections.join('\n');
   }
@@ -261,7 +342,7 @@ async function prepareAiDigestContext(
     sections.push(
       '',
       `- Context preparation skipped: ${preparedContext.skipReason || 'unknown'}`,
-      `- Today is still ${targetDate}; do not invent another date.`,
+      `- Today is still ${preparedContext.targetDate || targetDate}; do not invent another date.`,
     );
   }
 
@@ -285,18 +366,23 @@ function renderEventList(
 }
 
 async function prepareAiBigEventContext(
-  runtimeSkill: string,
+  manifest: WorkflowRuntimeManifest,
   workspacePath: string,
   artifactAbsDir: string,
 ): Promise<string> {
-  const skill = getCanonicalSkill(runtimeSkill);
-  if (!skill) {
-    return '';
-  }
-
+  const runtime = resolveWorkflowRuntimeSupport(manifest);
   const targetDate = getAsiaShanghaiDateString();
   const contextPath = path.join(artifactAbsDir, 'prepared-ai-bigevent-context.json');
-  const fetchScript = path.join(skill.baseDir, 'scripts', 'fetch_context.py');
+  const fetchScript = resolveRuntimeScriptPath(runtime, 'fetch_context.py');
+
+  if (!fetchScript) {
+    return [
+      '## Prepared Daily Events Context',
+      `- Target date: ${targetDate} (Asia/Shanghai)`,
+      '- Context preparation failed: missing fetch_context.py helper.',
+      '- If you cannot infer valid events from the prompt, output an empty events array in the required JSON schema.',
+    ].join('\n');
+  }
 
   try {
     await runPythonScript(fetchScript, [
@@ -408,30 +494,189 @@ function summarizeBigEventVerification(verification: BigEventVerification): stri
   return `AI 大事件已上报成功：${verification.targetDate}，共 ${verification.saved || 0} 条。${titleSummary}`;
 }
 
-async function finalizeAiBigEventRun(
-  runtimeSkill: string,
+function summarizeAiDigestVerification(
+  verification: AiDigestVerification,
+  payload: AiDigestOutput,
+  preparedContext: AiDigestPreparedContext | null,
+): string {
+  const targetDate = verification.verifyApiResponse?.data?.run?.digestDate
+    || preparedContext?.targetDate
+    || getAsiaShanghaiDateString();
+  const title = verification.verifyApiResponse?.data?.run?.title || payload.title || '未命名日报';
+  const articleCount = payload.sourceArticleIds?.length
+    || preparedContext?.sourceArticleIds?.length
+    || 0;
+  return `AI 日报已上报成功：${targetDate}，标题《${title}》，来源文章 ${articleCount} 篇。`;
+}
+
+async function finalizeAiDigestRun(
+  manifest: WorkflowRuntimeManifest,
   workspacePath: string,
   artifactAbsDir: string,
   result: TaskResult,
 ): Promise<TaskResult> {
-  const skill = getCanonicalSkill(runtimeSkill);
-  if (!skill) {
+  if (result.status !== 'completed') {
+    return result;
+  }
+
+  const runtime = resolveWorkflowRuntimeSupport(manifest);
+  const contextPath = path.join(artifactAbsDir, 'prepared-ai-digest-context.json');
+  const digestOutputPath = path.join(artifactAbsDir, 'digest_output.json');
+  const payloadPath = path.join(artifactAbsDir, 'daily-digest-report-payload.json');
+  const verificationPath = path.join(artifactAbsDir, 'daily-digest-verification.json');
+  const reportScript = resolveRuntimeScriptPath(runtime, 'report_digest.py');
+
+  if (!reportScript) {
     return {
       ...result,
       status: 'failed',
-      blockers: [...result.blockers, `Missing canonical skill: ${runtimeSkill}`],
-      summary: `AI 大事件 post-run 失败：缺少 canonical skill ${runtimeSkill}。`,
+      blockers: [...result.blockers, 'Missing runtime helper: report_digest.py'],
+      summary: 'AI 日报 post-run 失败：缺少运行时脚本 report_digest.py。',
     };
   }
 
+  let preparedContext: AiDigestPreparedContext | null = null;
+  try {
+    preparedContext = JSON.parse(fs.readFileSync(contextPath, 'utf-8')) as AiDigestPreparedContext;
+  } catch {
+    preparedContext = null;
+  }
+
+  if (preparedContext?.status === 'skip') {
+    const skipReason = preparedContext.skipReason || '日报预处理要求跳过';
+    return {
+      ...result,
+      status: 'blocked',
+      blockers: [...result.blockers, skipReason],
+      summary: `AI 日报未上报：${skipReason}`,
+      reportedEventDate: preparedContext.targetDate,
+      reportedEventCount: 0,
+      verificationPassed: false,
+    };
+  }
+
+  if (!fs.existsSync(digestOutputPath)) {
+    return {
+      ...result,
+      status: 'failed',
+      blockers: [...result.blockers, 'AI 日报输出文件缺失：digest_output.json'],
+      summary: 'AI 日报 post-run 失败：未找到 digest_output.json。',
+    };
+  }
+
+  let digestOutput: AiDigestOutput | null = null;
+  try {
+    digestOutput = JSON.parse(fs.readFileSync(digestOutputPath, 'utf-8')) as AiDigestOutput;
+  } catch {
+    digestOutput = null;
+  }
+
+  if (!digestOutput) {
+    return {
+      ...result,
+      status: 'failed',
+      blockers: [...result.blockers, 'AI 日报输出文件无法解析：digest_output.json'],
+      summary: 'AI 日报 post-run 失败：digest_output.json 无法解析。',
+    };
+  }
+
+  let verification: AiDigestVerification | null = null;
+  try {
+    const { stdout } = await runPythonScript(reportScript, [
+      '--input', digestOutputPath,
+      '--context', contextPath,
+      '--payload-out', payloadPath,
+      '--insecure',
+    ], workspacePath);
+    verification = JSON.parse(stdout.trim()) as AiDigestVerification;
+    fs.writeFileSync(verificationPath, `${JSON.stringify(verification, null, 2)}\n`, 'utf-8');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'unknown';
+    return {
+      ...result,
+      status: 'failed',
+      blockers: [...result.blockers, `AI 日报上报失败：${message}`],
+      summary: `AI 日报上报失败：${message}`,
+      changedFiles: uniqStrings([
+        ...result.changedFiles,
+        fs.existsSync(payloadPath) ? toRelativePath(workspacePath, payloadPath) : '',
+      ]),
+      reportedEventDate: preparedContext?.targetDate,
+      reportedEventCount: digestOutput.sourceArticleIds?.length || preparedContext?.sourceArticleIds?.length || 0,
+      verificationPassed: false,
+    };
+  }
+
+  const verificationPassed = Boolean(
+    verification?.status === 'ok'
+    && verification.verifyApiResponse?.data?.exists
+    && (verification.verifyPageStatus === null || verification.verifyPageStatus === undefined || verification.verifyPageStatus < 400),
+  );
+
+  if (!verificationPassed) {
+    return {
+      ...result,
+      status: 'failed',
+      blockers: [...result.blockers, 'AI 日报回读验证失败'],
+      summary: 'AI 日报回读验证失败。',
+      changedFiles: uniqStrings([
+        ...result.changedFiles,
+        toRelativePath(workspacePath, payloadPath),
+        toRelativePath(workspacePath, verificationPath),
+      ]),
+      reportedEventDate: preparedContext?.targetDate,
+      reportedEventCount: digestOutput.sourceArticleIds?.length || preparedContext?.sourceArticleIds?.length || 0,
+      verificationPassed: false,
+      reportApiResponse: verification?.reportUrl,
+    };
+  }
+
+  return {
+    ...result,
+    status: 'completed',
+    summary: summarizeAiDigestVerification(verification, digestOutput, preparedContext),
+    blockers: [],
+    changedFiles: uniqStrings([
+      ...result.changedFiles,
+      toRelativePath(workspacePath, digestOutputPath),
+      toRelativePath(workspacePath, payloadPath),
+      toRelativePath(workspacePath, verificationPath),
+    ]),
+    reportedEventDate: verification.verifyApiResponse?.data?.run?.digestDate || preparedContext?.targetDate,
+    reportedEventCount: digestOutput.sourceArticleIds?.length || preparedContext?.sourceArticleIds?.length || 0,
+    verificationPassed: true,
+    reportApiResponse: verification.reportUrl,
+  };
+}
+
+async function finalizeAiBigEventRun(
+  manifest: WorkflowRuntimeManifest,
+  workspacePath: string,
+  artifactAbsDir: string,
+  result: TaskResult,
+): Promise<TaskResult> {
+  const runtime = resolveWorkflowRuntimeSupport(manifest);
   const contextPath = path.join(artifactAbsDir, 'prepared-ai-bigevent-context.json');
   const rawDraftPath = path.join(artifactAbsDir, 'native-codex-ai-bigevent-draft.md');
   const payloadPath = path.join(artifactAbsDir, 'daily-events-report.json');
   const buildMetaPath = path.join(artifactAbsDir, 'daily-events-build.json');
   const verificationPath = path.join(artifactAbsDir, 'daily-events-verification.json');
-  const buildScript = path.join(skill.baseDir, 'scripts', 'build_report.py');
-  const reportScript = path.join(skill.baseDir, 'scripts', 'report_daily_events.py');
+  const buildScript = resolveRuntimeScriptPath(runtime, 'build_report.py');
+  const reportScript = resolveRuntimeScriptPath(runtime, 'report_daily_events.py');
   const privateConfigPath = resolveDepartmentPrivatePath(workspacePath);
+
+  if (!buildScript || !reportScript) {
+    const missingHelpers = [
+      !buildScript ? 'build_report.py' : null,
+      !reportScript ? 'report_daily_events.py' : null,
+    ].filter(Boolean);
+    return {
+      ...result,
+      status: 'failed',
+      blockers: [...result.blockers, `Missing runtime helpers: ${missingHelpers.join(', ')}`],
+      summary: `AI 大事件 post-run 失败：缺少运行时脚本 ${missingHelpers.join(', ')}。`,
+    };
+  }
 
   fs.writeFileSync(rawDraftPath, result.summary, 'utf-8');
 
@@ -573,15 +818,16 @@ export async function prepareWorkflowRuntimeContext(
   artifactAbsDir: string,
 ): Promise<WorkflowRuntimePreparation> {
   const manifest = resolveWorkflowRuntimeManifest(resolvedWorkflowRef);
+  const hasRuntimeHelpers = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir);
 
   switch (manifest.runtimeProfile) {
     case 'daily-digest':
-      return manifest.runtimeSkill
-        ? { promptAppendix: await prepareAiDigestContext(manifest.runtimeSkill, workspacePath, artifactAbsDir) }
+      return hasRuntimeHelpers
+        ? { promptAppendix: await prepareAiDigestContext(manifest, workspacePath, artifactAbsDir) }
         : { promptAppendix: '' };
     case 'daily-events':
-      return manifest.runtimeSkill
-        ? { promptAppendix: await prepareAiBigEventContext(manifest.runtimeSkill, workspacePath, artifactAbsDir) }
+      return hasRuntimeHelpers
+        ? { promptAppendix: await prepareAiBigEventContext(manifest, workspacePath, artifactAbsDir) }
         : { promptAppendix: '' };
     default:
       return { promptAppendix: '' };
@@ -595,11 +841,16 @@ export async function finalizeWorkflowRun(
   result: TaskResult,
 ): Promise<TaskResult> {
   const manifest = resolveWorkflowRuntimeManifest(resolvedWorkflowRef);
+  const hasRuntimeHelpers = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir);
 
   switch (manifest.runtimeProfile) {
+    case 'daily-digest':
+      return hasRuntimeHelpers
+        ? finalizeAiDigestRun(manifest, workspacePath, artifactAbsDir, result)
+        : result;
     case 'daily-events':
-      return manifest.runtimeSkill
-        ? finalizeAiBigEventRun(manifest.runtimeSkill, workspacePath, artifactAbsDir, result)
+      return hasRuntimeHelpers
+        ? finalizeAiBigEventRun(manifest, workspacePath, artifactAbsDir, result)
         : result;
     default:
       return result;

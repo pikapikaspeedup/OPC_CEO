@@ -34,7 +34,23 @@ function makeSubgraph(overrides?: Partial<SubgraphDefinition>): SubgraphDefiniti
 
 function makeSubgraphResolver(subgraphs: SubgraphDefinition[]) {
   const map = new Map(subgraphs.map(s => [s.id, s]));
-  return (id: string) => map.get(id) ?? null;
+  return (id: string) => {
+    const subgraph = map.get(id);
+    return subgraph
+      ? { ...subgraph, graphPipeline: withExecution(subgraph.graphPipeline) }
+      : null;
+  };
+}
+
+function withExecution(graph: GraphPipeline): GraphPipeline {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => ({
+      executionMode: 'review-loop' as const,
+      roles: [],
+      ...node,
+    })),
+  };
 }
 
 // ── Validation Tests ────────────────────────────────────────────────────────
@@ -52,7 +68,7 @@ describe('subgraph-ref validation', () => {
         { from: 'review', to: 'deploy' },
       ],
     };
-    const errors = validateGraphPipeline(graph);
+    const errors = validateGraphPipeline(withExecution(graph));
     expect(errors).toEqual([]);
   });
 
@@ -63,7 +79,7 @@ describe('subgraph-ref validation', () => {
       ],
       edges: [],
     };
-    const errors = validateGraphPipeline(graph);
+    const errors = validateGraphPipeline(withExecution(graph));
     expect(errors).toContain("Subgraph-ref node 'ref' must have subgraphRef configuration");
   });
 
@@ -74,7 +90,7 @@ describe('subgraph-ref validation', () => {
       ],
       edges: [],
     };
-    const errors = validateGraphPipeline(graph);
+    const errors = validateGraphPipeline(withExecution(graph));
     expect(errors).toContain("Node 'bad' has subgraphRef configuration but kind is 'stage'");
   });
 });
@@ -96,7 +112,7 @@ describe('subgraph expansion', () => {
       ],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([sg]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([sg]));
 
     // Should have 4 nodes: start, review.review, review.fix, deploy
     expect(ir.nodes).toHaveLength(4);
@@ -122,7 +138,7 @@ describe('subgraph expansion', () => {
       ],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([sg]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([sg]));
 
     // Edges:
     // start → review.review (entry of subgraph)
@@ -143,7 +159,7 @@ describe('subgraph expansion', () => {
       edges: [],
     };
 
-    expect(() => compileGraphPipelineToIR('test', graph, () => null))
+    expect(() => compileGraphPipelineToIR('test', withExecution(graph), () => null))
       .toThrow("Subgraph 'missing' not found");
   });
 
@@ -188,7 +204,7 @@ describe('subgraph expansion', () => {
       edges: [],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([loopSg]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([loopSg]));
 
     const ls = ir.nodes.find(n => n.id === 'myloop.ls')!;
     const le = ir.nodes.find(n => n.id === 'myloop.le')!;
@@ -231,7 +247,7 @@ describe('subgraph expansion', () => {
       edges: [],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([switchSg]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([switchSg]));
 
     const sw = ir.nodes.find(n => n.id === 'mysw.sw')!;
     expect(sw.switch!.branches[0].targetNodeId).toBe('mysw.a');
@@ -269,7 +285,7 @@ describe('subgraph expansion', () => {
       edges: [],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([fanOutSg]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([fanOutSg]));
 
     const jo = ir.nodes.find(n => n.id === 'myfo.jo')!;
     expect(jo.join!.sourceNodeId).toBe('myfo.fo');
@@ -310,7 +326,7 @@ describe('subgraph expansion', () => {
       ],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([sg1, sg2]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([sg1, sg2]));
 
     // Both subgraphs have a 'step' node, but prefixed differently
     expect(ir.nodes.map(n => n.id).sort()).toEqual(['ref-a.step', 'ref-b.step']);
@@ -330,7 +346,7 @@ describe('subgraph expansion', () => {
       ],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph);
+    const ir = compileGraphPipelineToIR('test', withExecution(graph));
     expect(ir.nodes).toHaveLength(2);
     expect(ir.nodes.find(n => n.id === 'ref')!.kind).toBe('subgraph-ref');
   });
@@ -363,7 +379,7 @@ describe('subgraph expansion', () => {
       ],
     };
 
-    const ir = compileGraphPipelineToIR('test', graph, makeSubgraphResolver([multiSg]));
+    const ir = compileGraphPipelineToIR('test', withExecution(graph), makeSubgraphResolver([multiSg]));
 
     // pre → multi.a, pre → multi.b (fan to both entries)
     // multi.a → post, multi.b → post (both exits to post)

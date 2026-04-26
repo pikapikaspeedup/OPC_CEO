@@ -7,22 +7,54 @@
  */
 
 import { randomUUID } from 'crypto';
-import { readFileSync, existsSync } from 'fs';
-import path from 'path';
 import type {
   AgentRunState,
   ExecutionTarget,
   ExecutorKind,
   RunStatus,
+  TaskResult,
   TaskEnvelope,
   TriggerContext,
 } from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
+import type { PipelineStageProgress } from './project-types';
+import { getProject, updatePipelineStage, updatePipelineStageByStageId } from './project-registry';
+import { emitProjectEvent } from './project-events';
 import { createLogger } from '../logger';
 import { appendRunHistoryEntry } from './run-history';
 import { listRunRecords, syncRunArtifactsToDeliverables, upsertRunRecord } from '../storage/gateway-db';
+import { observeRunCapsuleForAgenda } from '../company-kernel/operating-integration';
+import { finalizeBudgetForTerminalRun } from '../company-kernel/budget-gate';
+import { recordRunTerminalForCircuitBreakers } from '../company-kernel/circuit-breaker';
+import { buildRunCapsuleFromRun } from '../company-kernel/run-capsule';
+import { getRunCapsuleByRunId, upsertRunCapsule } from '../company-kernel/run-capsule-store';
 
 const log = createLogger('RunRegistry');
+
+type ProcessWithBuiltinModule = NodeJS.Process & {
+  getBuiltinModule?: (id: 'fs') => typeof import('fs');
+};
+
+const runtimeFs = (process as ProcessWithBuiltinModule).getBuiltinModule?.('fs');
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isReviewOutcome(value: unknown): value is AgentRunState['reviewOutcome'] {
+  return value === 'approved' || value === 'rejected' || value === 'revise-exhausted';
+}
+
+function joinArtifactPath(base: string, artifactDir: string, subpath: string): string {
+  const normalizedBase = base === '/' ? '/' : base.replace(/\/+$/, '');
+  const relativePath = [artifactDir, subpath]
+    .map((segment) => segment.replace(/^\/+/, ''))
+    .filter(Boolean)
+    .join('/');
+  if (!normalizedBase) return relativePath;
+  if (normalizedBase === '/') return `/${relativePath}`;
+  return `${normalizedBase}/${relativePath}`;
+}
 
 // ---------------------------------------------------------------------------
 // In-memory store (Preserved across Next.js HMR)
@@ -48,9 +80,46 @@ function persistRun(run: AgentRunState): void {
   try {
     upsertRunRecord(run);
     log.debug({ runId: run.runId.slice(0, 8) }, 'Run persisted');
-  } catch (err: any) {
-    log.error({ err: err.message, runId: run.runId.slice(0, 8) }, 'Failed to persist run');
+  } catch (err: unknown) {
+    log.error({ err: getErrorMessage(err), runId: run.runId.slice(0, 8) }, 'Failed to persist run');
   }
+}
+
+function persistRunCapsuleSnapshot(run: AgentRunState): void {
+  try {
+    const capsule = upsertRunCapsule(buildRunCapsuleFromRun(run, getRunCapsuleByRunId(run.runId)));
+    observeRunCapsuleForAgenda(capsule);
+  } catch (err: unknown) {
+    log.debug({ err: getErrorMessage(err), runId: run.runId.slice(0, 8) }, 'Failed to persist run capsule snapshot');
+  }
+}
+
+function shouldCaptureRunCapsule(updates: Partial<Omit<AgentRunState, 'runId' | 'stageId' | 'workspace' | 'prompt' | 'createdAt'>>): boolean {
+  return Boolean(
+    updates.status
+    || updates.startedAt
+    || updates.finishedAt
+    || updates.childConversationId
+    || updates.activeConversationId
+    || updates.sessionProvenance
+    || updates.result
+    || updates.resultEnvelope
+    || updates.artifactManifestPath
+    || updates.reviewOutcome
+    || updates.reportedEventDate
+    || updates.reportedEventCount !== undefined
+    || updates.verificationPassed !== undefined
+    || updates.reportApiResponse
+    || updates.tokenUsage,
+  );
+}
+
+function runtimeMinutesForRun(run: AgentRunState): number {
+  const startedAt = run.startedAt || run.createdAt;
+  const finishedAt = run.finishedAt || new Date().toISOString();
+  const durationMs = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return 0;
+  return Math.max(1, Math.ceil(durationMs / 60_000));
 }
 
 function artifactSignature(run: AgentRunState): string {
@@ -86,8 +155,8 @@ export function recoverInterruptedRun(entry: AgentRunState, force = false): bool
   if (entry.resultEnvelope?.status === 'completed') {
     entry.status = 'completed';
     entry.lastError = undefined;
-    if (!entry.reviewOutcome && entry.resultEnvelope.decision) {
-      entry.reviewOutcome = entry.resultEnvelope.decision as any;
+    if (!entry.reviewOutcome && isReviewOutcome(entry.resultEnvelope.decision)) {
+      entry.reviewOutcome = entry.resultEnvelope.decision;
     }
     return true;
   }
@@ -104,10 +173,10 @@ export function recoverInterruptedRun(entry: AgentRunState, force = false): bool
 
   const checkResultFile = (subpath: string) => {
     if (!entry.artifactDir) return false;
-    const fullPath = path.join(resolveBase(), entry.artifactDir, subpath);
-    if (!existsSync(fullPath)) return false;
+    const fullPath = joinArtifactPath(resolveBase(), entry.artifactDir, subpath);
+    if (!runtimeFs?.existsSync(fullPath)) return false;
     try {
-      const data = JSON.parse(readFileSync(fullPath, 'utf-8'));
+      const data = JSON.parse(runtimeFs.readFileSync(fullPath, 'utf-8')) as TaskResult;
       if (data && data.status === 'completed') {
         entry.status = 'completed';
         entry.lastError = undefined;
@@ -181,8 +250,8 @@ function loadFromDisk(): void {
         syncRunStatusToProject(entry);
       }
     }
-  } catch (err: any) {
-    log.warn({ err: err.message }, 'Failed to load runs from disk');
+  } catch (err: unknown) {
+    log.warn({ err: getErrorMessage(err) }, 'Failed to load runs from disk');
   }
 }
 
@@ -260,6 +329,7 @@ export function createRun(input: {
   }
   runs.set(run.runId, run);
   persistRun(run);
+  persistRunCapsuleSnapshot(run);
   appendRunHistoryEntry({
     runId: run.runId,
     provider: run.provider,
@@ -306,6 +376,9 @@ export function updateRun(
   }
 
   persistRun(run);
+  if (shouldCaptureRunCapsule(updates)) {
+    persistRunCapsuleSnapshot(run);
+  }
   log.debug({ runId: runId.slice(0, 8), status: run.status }, 'Run updated');
 
   if (run.resultEnvelope?.outputArtifacts?.length) {
@@ -316,6 +389,25 @@ export function updateRun(
   // propagate the change to the Project's pipelineState
   if (updates.status && updates.status !== prevStatus && run.projectId && (run.pipelineStageId || run.pipelineStageIndex !== undefined)) {
     syncRunStatusToProject(run);
+  }
+
+  if (updates.status && updates.status !== prevStatus && TERMINAL_STATUSES.has(run.status)) {
+    try {
+      finalizeBudgetForTerminalRun({
+        runId,
+        status: run.status,
+        tokens: run.tokenUsage?.totalTokens,
+        minutes: runtimeMinutesForRun(run),
+        reason: run.status === 'completed' ? 'run completed' : run.lastError || `run ${run.status}`,
+      });
+    } catch (err: unknown) {
+      log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to finalize run budget ledger');
+    }
+    try {
+      recordRunTerminalForCircuitBreakers(run);
+    } catch (err: unknown) {
+      log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to update run circuit breakers');
+    }
   }
 
   if (updates.status && updates.status !== prevStatus) {
@@ -390,9 +482,6 @@ export function updateRun(
  * Called automatically by updateRun when status transitions.
  */
 function syncRunStatusToProject(run: AgentRunState): void {
-  // Lazy import to avoid circular dependency
-  const { updatePipelineStage, updatePipelineStageByStageId, getProject } = require('./project-registry');
-  const { emitProjectEvent } = require('./project-events');
   const stageIdentifier = run.pipelineStageId || run.pipelineStageIndex;
   if (stageIdentifier === undefined) return;
 
@@ -402,7 +491,7 @@ function syncRunStatusToProject(run: AgentRunState): void {
   }
 
   const project = getProject(run.projectId!);
-  const stage = project?.pipelineState?.stages.find((item: any) =>
+  const stage = project?.pipelineState?.stages.find((item: PipelineStageProgress) =>
     typeof stageIdentifier === 'string' ? item.stageId === stageIdentifier : item.stageIndex === stageIdentifier,
   );
   if (stage?.status === 'completed' && (run.status === 'running' || run.status === 'starting')) {
@@ -447,7 +536,7 @@ function syncRunStatusToProject(run: AgentRunState): void {
   const updatedProject = getProject(run.projectId!);
   const resolvedStageId = typeof stageIdentifier === 'string'
     ? stageIdentifier
-    : updatedProject?.pipelineState?.stages.find((item: any) => item.stageIndex === stageIdentifier)?.stageId;
+    : updatedProject?.pipelineState?.stages.find((item: PipelineStageProgress) => item.stageIndex === stageIdentifier)?.stageId;
 
   if (run.status === 'completed' && resolvedStageId) {
     emitProjectEvent({ type: 'stage:completed', projectId: run.projectId!, stageId: resolvedStageId, runId: run.runId });

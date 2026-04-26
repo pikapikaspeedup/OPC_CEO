@@ -190,4 +190,34 @@ describe('gateway-db conversation projections', () => {
       'file:///tmp/workspace-a',
     ]);
   });
+
+  it('persists and deletes scheduled job rows in SQLite', async () => {
+    const db = await loadModule();
+
+    db.upsertScheduledJobRecord({
+      jobId: 'job-1',
+      name: 'AI 日报',
+      type: 'cron',
+      cronExpression: '0 20 * * *',
+      timeZone: 'Asia/Shanghai',
+      action: {
+        kind: 'dispatch-prompt',
+        workspace: 'file:///tmp/workspace',
+        prompt: '生成 AI 日报',
+      },
+      enabled: true,
+      createdAt: '2026-04-22T10:00:00.000Z',
+    });
+
+    expect(db.listScheduledJobRecords()).toEqual([
+      expect.objectContaining({
+        jobId: 'job-1',
+        timeZone: 'Asia/Shanghai',
+      }),
+    ]);
+
+    db.deleteScheduledJobRecord('job-1');
+
+    expect(db.listScheduledJobRecords()).toEqual([]);
+  });
 });

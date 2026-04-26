@@ -2,8 +2,9 @@
  * Unified server launcher.
  *
  * Roles:
- * - all: legacy all-in-one mode (web + runtime bridge worker + scheduler)
- * - web: Next.js + WS ingress only
+ * - all: legacy all-in-one mode (web + API in one process)
+ * - web: Next.js + WS ingress; HTTP API requests proxy to api
+ * - api: same-device backend API (control-plane + runtime routes; scheduler optional)
  * - control-plane: standalone REST API for hot list/query endpoints
  * - runtime: provider / conversation runtime API + optional bridge worker
  * - scheduler: standalone background services
@@ -299,6 +300,10 @@ async function startWebServer(options: { enableBackgroundServices: boolean }): P
   registerProcessCleanup(() => {
     shuttingDown = true;
     bridgeWorkerProcess?.kill('SIGTERM');
+    if (!options.enableBackgroundServices) {
+      process.exit(0);
+      return;
+    }
     void import('./src/server/workers/scheduler-worker')
       .then(({ stopSchedulerWorker }) => stopSchedulerWorker())
       .finally(() => process.exit(0));
@@ -306,7 +311,25 @@ async function startWebServer(options: { enableBackgroundServices: boolean }): P
 }
 
 async function startStandaloneRole(): Promise<void> {
-  initializeGatewayHome({ syncAssets: role === 'runtime' });
+  initializeGatewayHome({ syncAssets: role === 'runtime' || role === 'api' });
+
+  if (role === 'api') {
+    const { startApiServer } = await import('./src/server/api/server');
+    startApiServer({ port, hostname });
+    startBridgeWorker();
+    if (shouldStartSchedulerServices(process.env)) {
+      const { startSchedulerWorker } = await import('./src/server/workers/scheduler-worker');
+      await startSchedulerWorker();
+    }
+    registerProcessCleanup(() => {
+      shuttingDown = true;
+      bridgeWorkerProcess?.kill('SIGTERM');
+      void import('./src/server/workers/scheduler-worker')
+        .then(({ stopSchedulerWorker }) => stopSchedulerWorker())
+        .finally(() => process.exit(0));
+    });
+    return;
+  }
 
   if (role === 'control-plane') {
     const { startControlPlaneServer } = await import('./src/server/control-plane/server');

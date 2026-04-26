@@ -11,8 +11,13 @@
 import { createLogger } from '../logger';
 import type { ApprovalRequest, NotificationDelivery } from './types';
 import { getEnabledChannels } from './channels';
+import { publishApprovalNotificationEvent } from './notification-events';
 
 const log = createLogger('Dispatcher');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 async function executeCustomCallback(request: ApprovalRequest): Promise<void> {
   const callback = request.response?.action === 'approved'
@@ -47,6 +52,36 @@ async function executeCustomCallback(request: ApprovalRequest): Promise<void> {
     return;
   }
 
+  if (action === 'publish-growth-proposal' && typeof callback.payload.proposalId === 'string') {
+    const { publishGrowthProposal } = await import('../company-kernel/growth-publisher');
+    await Promise.resolve(publishGrowthProposal(callback.payload.proposalId, { force: true }));
+    return;
+  }
+
+  if (action === 'reject-growth-proposal' && typeof callback.payload.proposalId === 'string') {
+    const { rejectGrowthProposal } = await import('../company-kernel/growth-evaluator');
+    await Promise.resolve(rejectGrowthProposal(
+      callback.payload.proposalId,
+      request.response?.message,
+    ));
+    return;
+  }
+
+  if (action === 'approve-system-improvement-proposal' && typeof callback.payload.proposalId === 'string') {
+    const { approveSystemImprovementProposal } = await import('../company-kernel/self-improvement-approval');
+    await Promise.resolve(approveSystemImprovementProposal(callback.payload.proposalId));
+    return;
+  }
+
+  if (action === 'reject-system-improvement-proposal' && typeof callback.payload.proposalId === 'string') {
+    const { rejectSystemImprovementProposal } = await import('../company-kernel/self-improvement-approval');
+    await Promise.resolve(rejectSystemImprovementProposal(
+      callback.payload.proposalId,
+      request.response?.message,
+    ));
+    return;
+  }
+
   log.warn({
     requestId: request.id,
     callbackType: callback.type,
@@ -63,8 +98,11 @@ async function executeCustomCallback(request: ApprovalRequest): Promise<void> {
  * @param request — The approval request to notify about.
  * @returns Array of delivery results.
  */
-export async function dispatchNotifications(request: ApprovalRequest): Promise<NotificationDelivery[]> {
-  const channels = getEnabledChannels();
+export async function dispatchNotifications(
+  request: ApprovalRequest,
+  channelIds?: string[],
+): Promise<NotificationDelivery[]> {
+  const channels = getEnabledChannels(channelIds);
   if (channels.length === 0) {
     log.warn({ requestId: request.id }, 'No enabled notification channels');
     return [];
@@ -95,7 +133,7 @@ export async function dispatchNotifications(request: ApprovalRequest): Promise<N
         channel: 'unknown',
         success: false,
         sentAt: new Date().toISOString(),
-        error: result.reason?.message || 'Unknown error',
+        error: getErrorMessage(result.reason),
       });
     }
   }
@@ -113,19 +151,22 @@ export async function dispatchNotifications(request: ApprovalRequest): Promise<N
 /**
  * Dispatch a follow-up notification (e.g. CEO's feedback → agent).
  *
- * TODO: Implement agent notification after CEO responds.
- * This would send a message back to the requesting department/agent.
- *
  * @param request — The updated request with CEO's response.
  */
 export async function dispatchFeedbackNotification(request: ApprovalRequest): Promise<void> {
   if (!request.response) return;
 
+  const event = publishApprovalNotificationEvent({
+    type: 'approval_response',
+    request,
+  });
+
   log.info({
     requestId: request.id,
+    eventId: event.id,
     action: request.response.action,
     workspace: request.workspace,
-  }, 'Feedback notification dispatched (placeholder)');
+  }, 'Feedback notification published');
 
   await executeCustomCallback(request);
 }

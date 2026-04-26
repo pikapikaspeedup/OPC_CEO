@@ -12,22 +12,30 @@ import AnalyticsDashboard from '@/components/analytics-dashboard';
 import TokenQuotaWidget from '@/components/token-quota-widget';
 import McpStatusWidget from '@/components/mcp-status-widget';
 import CodexWidget from '@/components/codex-widget';
-import CeoOfficeSettings from '@/components/ceo-office-settings';
+import CeoOfficeCockpit from '@/components/ceo-office-cockpit';
 import SettingsPanel, { type SettingsFocusTarget, type SettingsTabId } from '@/components/settings-panel';
 import SchedulerPanel from '@/components/scheduler-panel';
 import TunnelStatusWidget from '@/components/tunnel-status-widget';
 import AssetsManager from '@/components/assets-manager';
-import HomeOverview from '@/components/home-overview';
 import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
 import NotificationIndicators from '@/components/notification-indicators';
 import { useI18n } from '@/components/locale-provider';
 import { buildAppUrl, parseAppUrlState } from '@/lib/app-url-state';
 import { api, connectWs, type AuditEvent } from '@/lib/api';
-import type { AgentRun, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
+import { formatRelativeTime } from '@/lib/i18n/formatting';
+import type { AgentRun, Conversation, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
-import { Download, Menu, PanelLeftOpen, Settings2, Terminal, X } from 'lucide-react';
+import {
+  Download,
+  FolderKanban,
+  Menu,
+  PanelLeftOpen,
+  Sparkles,
+  Terminal,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -36,9 +44,11 @@ import {
   shouldShowShellSidebar,
   type AppShellUtilityPanel,
 } from '@/lib/home-shell';
+import { dedupeAuditEvents } from '@/lib/ceo-office-home';
 import { buildWorkspaceOptions } from '@/lib/workspace-options';
 import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
-import { AppShell } from '@/components/ui/app-shell';
+import { AppShell, StatusChip, WorkspaceHero, WorkspaceMetricCard } from '@/components/ui/app-shell';
+import { WorkspaceListItem, WorkspaceSurface } from '@/components/ui/workspace-primitives';
 import { cn } from '@/lib/utils';
 
 type UtilityPanel = AppShellUtilityPanel;
@@ -79,10 +89,10 @@ function isLocalProviderConversation(id: string | null | undefined): boolean {
 }
 
 export default function Home() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mainMenuOpen, setMainMenuOpen] = useState(false);
-  const [sidebarSection, setSidebarSection] = useState<PrimarySection>('overview');
+  const [sidebarSection, setSidebarSection] = useState<PrimarySection>('ceo');
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel>(null);
   const [settingsPanelRequest, setSettingsPanelRequest] = useState<SettingsPanelRequest>({
     tab: 'provider',
@@ -137,6 +147,7 @@ export default function Home() {
   const operationsAssetsLoadedRef = useRef(false);
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
   const [recentAuditEvents, setRecentAuditEvents] = useState<AuditEvent[]>([]);
+  const [ceoHistory, setCeoHistory] = useState<Conversation[]>([]);
 
   const loadModels = useCallback(async () => {
     api.models().then(data => {
@@ -499,12 +510,12 @@ export default function Home() {
 
   useEffect(() => {
     if (sidebarSection === 'ceo') {
-      api.conversations().then(data => {
+      api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 1 }).then(data => {
          const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === CEO_WORKSPACE_URI);
          if (!isCurrentlyCeo) {
-           const ceoConv = data.find(c => c.workspace === CEO_WORKSPACE_URI);
+           const ceoConv = data[0];
            if (ceoConv) {
-             handleSelect(ceoConv.id, 'CEO Office', 'ceo', 'replace');
+             handleSelect(ceoConv.id, ceoConv.title || 'CEO Office', 'ceo', 'replace');
            } else {
              syncConversationSelection(null, null, 'ceo');
            }
@@ -513,6 +524,32 @@ export default function Home() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sidebarSection]);
+
+  useEffect(() => {
+    if (sidebarSection !== 'ceo' && activeConversationScope !== 'ceo') return;
+
+    let cancelled = false;
+    const poll = () => {
+      api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 8 })
+        .then((items) => {
+          if (!cancelled) {
+            setCeoHistory(
+              [...items].sort((a, b) => b.mtime - a.mtime),
+            );
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setCeoHistory([]);
+        });
+    };
+
+    poll();
+    const interval = window.setInterval(poll, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeConversationScope, sidebarSection]);
 
   const handleSend = async (text: string, attachments?: unknown) => {
     if (!activeId) return;
@@ -780,21 +817,35 @@ export default function Home() {
     setOnboardingOpen(true);
   }, [activateSection]);
   const headerSignalPollMs = useMemo(
-    () => (utilityPanel === 'settings' || sidebarSection === 'overview' || sidebarSection === 'knowledge' ? 15_000 : 8_000),
-    [sidebarSection, utilityPanel],
+    () => 60_000,
+    [],
   );
 
   // Poll pending approval count for header badge
   useEffect(() => {
     let cancelled = false;
-    const poll = () => {
-      api.listApprovals({ status: 'pending' })
-        .then(res => { if (!cancelled) setPendingApprovals(res.summary?.pending ?? 0); })
-        .catch(() => { });
+    let eventSource: EventSource | null = null;
+    const poll = async () => {
+      try {
+        const res = await api.listApprovals({ status: 'pending' });
+        if (cancelled) return;
+        setPendingApprovals(res.summary?.pending ?? 0);
+        if (!eventSource && typeof EventSource !== 'undefined') {
+          eventSource = new EventSource('/api/approval/events');
+          eventSource.addEventListener('approval_request', () => { void poll(); });
+          eventSource.addEventListener('approval_response', () => { void poll(); });
+        }
+      } catch {
+        // web-only without backend intentionally returns 503; keep the shell usable.
+      }
     };
-    poll();
+    void poll();
     const interval = setInterval(poll, headerSignalPollMs);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      eventSource?.close();
+    };
   }, [headerSignalPollMs]);
 
   useEffect(() => {
@@ -823,60 +874,117 @@ export default function Home() {
     () => agentRuns.filter(r => isAgentRunActive(r.status)),
     [agentRuns],
   );
+  const activeProjectCount = useMemo(
+    () => projects.filter(project => project.status === 'active').length,
+    [projects],
+  );
+  const completedProjectCount = useMemo(
+    () => projects.filter(project => project.status === 'completed').length,
+    [projects],
+  );
+  const failedProjectCount = useMemo(
+    () => projects.filter(project => project.status === 'failed').length,
+    [projects],
+  );
+  const pausedProjectCount = useMemo(
+    () => projects.filter(project => project.status === 'paused').length,
+    [projects],
+  );
+  const operationsAssetCount = skills.length + workflows.length + rules.length;
+  const departmentSetupValue = departmentWorkspaces.length
+    ? `${configuredDepartmentCount}/${departmentWorkspaces.length}`
+    : '0';
   const selectedProject = projects.find(project => project.projectId === selectedProjectId) || null;
   const showShellSidebar = useMemo(
     () => shouldShowShellSidebar(sidebarSection, utilityPanel),
     [sidebarSection, utilityPanel],
   );
-  const primaryNavItems: Array<{ value: PrimarySection; label: string; description: string }> = [
-    { value: 'overview', label: 'Home', description: 'Entry routing, setup status, and continue-work shortcuts.' },
-    { value: 'ceo', label: 'CEO Office', description: 'Executive chat, decisions, and company-level control.' },
-    { value: 'projects', label: 'OPC', description: 'Departments, project workbench, and company execution overview.' },
-    { value: 'conversations', label: t('shell.chats'), description: 'Workspace conversations grouped by active threads.' },
-    { value: 'knowledge', label: t('shell.knowledge'), description: 'Artifacts, summaries, and department memory.' },
-    { value: 'operations', label: 'Ops', description: 'Scheduler, policy, tunnel, MCP, and operational assets.' },
+  const primaryNavItems: Array<{ value: PrimarySection | 'settings'; label: string }> = [
+    { value: 'ceo', label: 'CEO Office' },
+    { value: 'projects', label: 'OPC' },
+    { value: 'knowledge', label: t('shell.knowledge') },
+    { value: 'operations', label: 'Ops' },
+    { value: 'settings', label: 'Settings' },
   ];
 
   const currentSectionLabel = utilityPanel === 'settings'
     ? 'Settings'
-    : primaryNavItems.find(item => item.value === sidebarSection)?.label || t('common.appName');
+    : sidebarSection === 'conversations'
+      ? 'Threads'
+      : primaryNavItems.find(item => item.value === sidebarSection)?.label || t('common.appName');
 
   const currentViewTitle = utilityPanel === 'settings'
     ? 'Settings'
-    : sidebarSection === 'overview'
-      ? 'Company Home'
     : sidebarSection === 'projects'
       ? (selectedProject?.name || 'OPC')
       : sidebarSection === 'knowledge'
         ? (selectedKnowledgeTitle || t('shell.knowledge'))
         : sidebarSection === 'ceo'
-          ? (activeTitle || 'CEO Office')
+          ? 'CEO Office'
           : sidebarSection === 'conversations'
             ? (activeTitle || t('shell.chats'))
             : 'Operations';
 
-  const currentViewCaption = utilityPanel === 'settings'
-    ? 'CEO profile, provider, API key, MCP, and scene configuration.'
-    : sidebarSection === 'overview'
-      ? 'Start from setup status, continue-work shortcuts, and explicit section entry points.'
-    : sidebarSection === 'projects'
-      ? (selectedProject ? `Project workbench · ${selectedProject.status}` : 'Company operations and project context.')
-      : sidebarSection === 'knowledge'
-        ? 'Knowledge entries, artifacts, and department memory.'
-        : sidebarSection === 'ceo'
-          ? 'Executive workspace with approvals and project follow-through.'
-          : sidebarSection === 'conversations'
-            ? 'Thread history, workspace selection, and live execution chat.'
-            : 'System operations, assets, quotas, and runtime health.';
+  const visibleActiveTasks = useMemo(
+    () => activeTasks
+      .filter(task => !dismissedTasks.has(task.cascadeId))
+      .map(task => {
+        const run = agentRuns.find(r => r.childConversationId === task.cascadeId);
+        return run?.supervisorReviews ? { ...task, supervisorReviews: run.supervisorReviews } : task;
+      }),
+    [activeTasks, agentRuns, dismissedTasks],
+  );
+
+  const ceoPriorityTasks = useMemo(
+    () => visibleActiveTasks.slice(0, 4),
+    [visibleActiveTasks],
+  );
+
+  const ceoRecentEvents = useMemo(
+    () => dedupeAuditEvents(recentAuditEvents, 4),
+    [recentAuditEvents],
+  );
+
+  const openConversationWorkbench = useCallback(() => {
+    if (activeId && activeConversationScope === 'ceo') {
+      handleSelect(activeId, activeTitle || 'CEO Office', 'conversations');
+      return;
+    }
+    activateSection('conversations');
+  }, [activateSection, activeConversationScope, activeId, activeTitle, handleSelect]);
+
+  const projectAttentionItems = useMemo(
+    () => [...projects]
+      .filter(project => ['failed', 'paused', 'active'].includes(project.status))
+      .sort((a, b) => {
+        const priority = (status: string) => status === 'failed' ? 0 : status === 'paused' ? 1 : 2;
+        const leftPriority = priority(a.status);
+        const rightPriority = priority(b.status);
+        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      })
+      .slice(0, 6),
+    [projects],
+  );
+
+  const recentProjectItems = useMemo(
+    () => [...projects]
+      .filter(project => !project.parentProjectId)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, 5),
+    [projects],
+  );
+  const useCeoOfficeShell = sidebarSection === 'ceo' && utilityPanel !== 'settings';
 
   return (
     <>
       <AppShell
-        sidebar={showShellSidebar ? (
+        sidebar={showShellSidebar && !useCeoOfficeShell ? (
           <Sidebar
             activeId={activeId}
             onSelect={handleSelect}
             onNew={handleNew}
+            onActivateSection={activateSection}
             open={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
             selectedKnowledgeId={selectedKnowledgeId}
@@ -887,10 +995,15 @@ export default function Home() {
             selectedProjectId={selectedProjectId}
             onSelectProject={navigateToProject}
             onOpenOpsAsset={openOpsAsset}
+            ceoThreadCount={ceoHistory.length}
+            ceoActiveRunCount={headerActiveRuns.length}
+            ceoPendingApprovalCount={pendingApprovals}
+            ceoDepartmentSetupValue={departmentSetupValue}
+            ceoDepartmentSetupComplete={!isOpcUnconfigured}
           />
         ) : null}
-        header={(
-          <header className="relative z-20 flex h-16 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(9,17,27,0.90)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(9,17,27,0.82)] md:px-5">
+        header={useCeoOfficeShell ? null : (
+          <header className="relative z-20 flex h-18 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.84)] px-4 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(255,255,255,0.76)] md:px-6">
             <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setMainMenuOpen(true)}>
                 <Menu className="h-4 w-4" />
@@ -903,19 +1016,21 @@ export default function Home() {
             </div>
 
             <div className="flex min-w-0 shrink-0 items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-sm font-bold text-[var(--app-text)] shadow-[0_8px_20px_rgba(0,0,0,0.15)]">
-                A
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,#ffffff,#f4f7fc)] text-sm font-bold text-[var(--app-accent)] shadow-[0_10px_24px_rgba(28,44,73,0.08)]">
+                O
               </div>
               <div className="min-w-0">
-                <div className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">{currentSectionLabel}</div>
-                <div className="truncate text-sm font-semibold text-white">{currentViewTitle || t('common.appName')}</div>
+                <div className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">{currentSectionLabel}</div>
+                <div className="truncate text-sm font-semibold text-[var(--app-text)]">{currentViewTitle || t('common.appName')}</div>
               </div>
             </div>
 
             <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
-              <nav className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--app-border-soft)] bg-[var(--app-raised)]/88 p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <nav className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.88)] p-1.5 shadow-[0_8px_24px_rgba(28,44,73,0.05)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {primaryNavItems.map(item => {
-                  const active = utilityPanel === null && sidebarSection === item.value;
+                  const active = item.value === 'settings'
+                    ? utilityPanel === 'settings'
+                    : utilityPanel === null && sidebarSection === item.value;
                   return (
                     <button
                       key={item.value}
@@ -923,20 +1038,16 @@ export default function Home() {
                       className={cn(
                         'inline-flex shrink-0 items-center rounded-full px-4 py-2.5 text-sm font-medium transition-all',
                         active
-                          ? 'bg-[var(--app-accent-soft)] text-white'
-                          : 'text-[var(--app-text-muted)] hover:bg-white/[0.05] hover:text-white',
+                          ? 'bg-[var(--app-accent-soft)] text-[var(--app-accent)]'
+                          : 'text-[var(--app-text-soft)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]',
                       )}
-                      onClick={() => activateSection(item.value)}
+                      onClick={() => item.value === 'settings' ? openSettingsPanel() : activateSection(item.value)}
                     >
                       {item.label}
                     </button>
                   );
                 })}
               </nav>
-            </div>
-
-            <div className="hidden min-w-0 flex-1 xl:block">
-              <div className="truncate text-xs text-white/35">{currentViewCaption}</div>
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
@@ -964,14 +1075,14 @@ export default function Home() {
                 onNavigateToProject={navigateToProject}
               />
 
-              <div className="w-px h-5 bg-white/8 mx-0.5" />
+              <div className="mx-0.5 h-5 w-px bg-[var(--app-border-soft)]" />
 
               <LocaleToggle className="hidden md:inline-flex" />
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => setLogViewerOpen(true)}
-                className="text-white/40 hover:text-white hover:bg-white/10"
+                className="text-[var(--app-text-muted)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
                 aria-label={t('shell.logs')}
                 title={t('shell.logs')}
               >
@@ -982,23 +1093,13 @@ export default function Home() {
                   variant="ghost"
                   size="icon"
                   onClick={handleExportMarkdown}
-                  className="text-white/40 hover:text-white hover:bg-white/10"
+                  className="text-[var(--app-text-muted)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
                   aria-label={t('shell.export')}
                   title={t('shell.export')}
                 >
                   <Download className="h-4 w-4" />
                 </Button>
               ) : null}
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => openSettingsPanel()}
-                className={cn('text-white/40 hover:bg-white/10 hover:text-white', utilityPanel === 'settings' && 'bg-white/10 text-white')}
-                aria-label="Settings"
-                title="Settings"
-              >
-                <Settings2 className="h-4 w-4" />
-              </Button>
             </div>
           </header>
         )}
@@ -1008,6 +1109,17 @@ export default function Home() {
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                <WorkspaceHero
+                  eyebrow="Settings / Control"
+                  title="系统设置与执行偏好"
+                  metrics={(
+                    <>
+                      <WorkspaceMetricCard label="Models" value={models.length || '—'} detail="可选模型配置" tone="info" />
+                      <WorkspaceMetricCard label="Departments" value={departmentSetupValue} detail="已配置部门 / 全部部门" tone={isOpcUnconfigured ? 'warning' : 'success'} />
+                      <WorkspaceMetricCard label="Approvals" value={pendingApprovals} detail="待处理审批" tone={pendingApprovals ? 'warning' : 'success'} />
+                    </>
+                  )}
+                />
                 <SettingsPanel
                   requestedTab={settingsPanelRequest.tab}
                   focusTarget={settingsPanelRequest.focusTarget}
@@ -1016,40 +1128,65 @@ export default function Home() {
               </div>
             </ScrollArea>
           </div>
-        ) : sidebarSection === 'overview' ? (
-          <HomeOverview
-            projects={projects}
-            agentRuns={agentRuns}
-            pendingApprovals={pendingApprovals}
-            totalDepartmentCount={departmentWorkspaces.length}
-            configuredDepartmentCount={configuredDepartmentCount}
-            onOpenSection={(section) => activateSection(section)}
-            onOpenProject={(projectId) => navigateToProject(projectId)}
-            onOpenSetup={openOnboardingJourney}
-            onOpenSettings={() => openSettingsPanel()}
-          />
         ) : sidebarSection === 'projects' ? (
           <div className="agent-stage relative flex-1 overflow-hidden">
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-30" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1580px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
+                <WorkspaceHero
+                  eyebrow="OPC / Operating Center"
+                  title={selectedProject ? `项目总控：${selectedProject.name}` : '项目、部门与执行总控'}
+                  meta={(
+                    <>
+                      <StatusChip tone="accent">Projects</StatusChip>
+                      <StatusChip tone={isOpcUnconfigured ? 'warning' : 'success'}>{isOpcUnconfigured ? 'Setup incomplete' : 'Departments ready'}</StatusChip>
+                      {selectedProject ? <StatusChip tone="info">{selectedProject.status}</StatusChip> : null}
+                    </>
+                  )}
+                  actions={(
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={openOnboardingJourney}
+                        className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]"
+                      >
+                        部门设置
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => activateSection('operations')}
+                        className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]"
+                      >
+                        打开 Ops
+                      </Button>
+                    </div>
+                  )}
+                  metrics={(
+                    <>
+                      <WorkspaceMetricCard label="Projects" value={projects.length} detail={`${activeProjectCount} active · ${completedProjectCount} completed`} tone="accent" />
+                      <WorkspaceMetricCard label="Needs attention" value={failedProjectCount + pausedProjectCount} detail={`${failedProjectCount} failed · ${pausedProjectCount} paused`} tone={failedProjectCount ? 'danger' : pausedProjectCount ? 'warning' : 'success'} />
+                      <WorkspaceMetricCard label="Departments" value={departmentSetupValue} detail="CEO 派发任务依赖部门画像" tone={isOpcUnconfigured ? 'warning' : 'success'} />
+                      <WorkspaceMetricCard label="Templates" value={templates.length || '—'} detail="可用于项目派发" tone="info" />
+                    </>
+                  )}
+                />
                 {isOpcUnconfigured && !onboardingDismissed && (
-                  <div className="rounded-xl border border-indigo-500/20 bg-gradient-to-r from-indigo-500/5 to-purple-500/5 px-6 py-4">
+                  <div className="rounded-[24px] border border-amber-300/30 bg-amber-50 px-6 py-4 shadow-[0_16px_36px_rgba(28,44,73,0.06)]">
                     <div className="flex items-center justify-between gap-4">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-base">✨</span>
-                          <span className="text-sm font-semibold text-white">欢迎使用 AI 公司管理系统</span>
+                          <Sparkles className="h-4 w-4 text-amber-700" />
+                          <span className="text-sm font-semibold text-[var(--app-text)]">部门画像仍未完整</span>
                         </div>
-                        <p className="text-xs text-white/50">
+                        <p className="text-xs text-[var(--app-text-soft)]">
                           检测到 {Math.max(departmentWorkspaces.length - configuredDepartmentCount, 0)} 个工作区尚未配置部门信息。配置后 CEO Agent 可以智能派发任务。
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <Button size="sm" onClick={openOnboardingJourney}>
-                          🚀 开始配置
+                        <Button size="sm" onClick={openOnboardingJourney} className="rounded-full bg-[var(--app-accent)] text-white hover:brightness-105">
+                          开始配置
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => setOnboardingDismissed(true)}>
+                        <Button variant="ghost" size="sm" onClick={() => setOnboardingDismissed(true)} className="rounded-full text-[var(--app-text-soft)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]">
                           稍后
                         </Button>
                       </div>
@@ -1057,15 +1194,15 @@ export default function Home() {
                   </div>
                 )}
                 {isOpcUnconfigured && onboardingDismissed ? (
-                  <div className="rounded-xl border border-white/8 bg-white/[0.03] px-5 py-4">
+                  <div className="rounded-[24px] border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-5 py-4 shadow-[0_16px_36px_rgba(28,44,73,0.06)]">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div>
-                        <div className="text-sm font-semibold text-white">部门初始化仍未完成</div>
-                        <div className="mt-1 text-xs leading-6 text-white/50">
-                          当前已配置 {configuredDepartmentCount} / {departmentWorkspaces.length} 个部门。首页和 OPC 现在都保留了常驻回流入口。
+                        <div className="text-sm font-semibold text-[var(--app-text)]">部门初始化仍未完成</div>
+                        <div className="mt-1 text-xs leading-6 text-[var(--app-text-soft)]">
+                          当前已配置 {configuredDepartmentCount} / {departmentWorkspaces.length} 个部门。补齐后可以稳定派发任务。
                         </div>
                       </div>
-                      <Button variant="outline" onClick={openOnboardingJourney} className="border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.08] hover:text-white">
+                      <Button variant="outline" onClick={openOnboardingJourney} className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]">
                         继续完成设置
                       </Button>
                     </div>
@@ -1081,32 +1218,60 @@ export default function Home() {
                     setOnboardingDismissed(true);
                   }}
                 />
-                <ProjectsPanel
-                  projects={projects}
-                  agentRuns={agentRuns}
-                  workspaces={departmentWorkspaces}
-                  selectedProjectId={selectedProjectId}
-                  departments={departmentsMap}
-                  onSelectProject={navigateToProject}
-                  onOpenOperations={() => {
-                    activateSection('operations');
-                  }}
-                  onSelectRun={(runId) => {
-                    setSelectedAgentRunId(runId);
-                    // Note: NOT switching to agents section — this is only for legacy projects
-                    // Pipeline projects show run detail inline in the workbench
-                  }}
-                  templates={templates}
-                  models={models}
-                  onResume={handleResumeProject}
-                  onCancelRun={handleCancelAgentRun}
-                  onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
-                  onRefresh={() => loadAgentState(selectedAgentRunId)}
-                   onDepartmentSaved={(uri, config) => {
-                   setDepartmentsMap(prev => new Map(prev).set(uri, config));
-                   api.updateDepartment(uri, config).catch(() => { });
-                 }}
-                />
+                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                  <div className="min-w-0">
+                    <ProjectsPanel
+                      projects={projects}
+                      agentRuns={agentRuns}
+                      workspaces={departmentWorkspaces}
+                      selectedProjectId={selectedProjectId}
+                      departments={departmentsMap}
+                      onSelectProject={navigateToProject}
+                      onSelectRun={(runId) => {
+                        setSelectedAgentRunId(runId);
+                        // Note: NOT switching to agents section — this is only for legacy projects
+                        // Pipeline projects show run detail inline in the workbench
+                      }}
+                      templates={templates}
+                      models={models}
+                      onResume={handleResumeProject}
+                      onCancelRun={handleCancelAgentRun}
+                      onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
+                      onRefresh={() => loadAgentState(selectedAgentRunId)}
+                      onDepartmentSaved={(uri, config) => {
+                        setDepartmentsMap(prev => new Map(prev).set(uri, config));
+                        api.updateDepartment(uri, config).catch(() => { });
+                      }}
+                    />
+                  </div>
+
+                  <aside className="space-y-4">
+                    <WorkspaceSurface className="space-y-4">
+                      <div>
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">Execution queue</div>
+                        <div className="mt-2 text-base font-semibold text-[var(--app-text)]">风险与最近推进</div>
+                      </div>
+                      <div className="space-y-2">
+                        {(projectAttentionItems.length ? projectAttentionItems : recentProjectItems).map(project => (
+                          <WorkspaceListItem
+                            key={project.projectId}
+                            tone={project.status === 'failed' ? 'danger' : project.status === 'paused' ? 'warning' : project.status === 'active' ? 'info' : 'neutral'}
+                            icon={<FolderKanban className="h-4 w-4" />}
+                            title={project.name}
+                            description={project.goal || project.workspace || 'Project workbench'}
+                            meta={(
+                              <>
+                                <span>{project.status}</span>
+                                <span>{formatRelativeTime(project.updatedAt, locale)}</span>
+                              </>
+                            )}
+                            onClick={() => navigateToProject(project.projectId)}
+                          />
+                        ))}
+                      </div>
+                    </WorkspaceSurface>
+                  </aside>
+                </div>
               </div>
             </ScrollArea>
           </div>
@@ -1115,15 +1280,35 @@ export default function Home() {
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-
-                <KnowledgeWorkspace
-                  selectedId={selectedKnowledgeId}
-                  onTitleChange={handleKnowledgeTitleChange}
-                  onDeleted={handleKnowledgeDeleted}
+                <WorkspaceHero
+                  eyebrow="Knowledge / Memory"
+                  title={selectedKnowledgeTitle || '知识资产与部门记忆'}
+                  meta={(
+                    <>
+                      <StatusChip tone="accent">Knowledge</StatusChip>
+                      <StatusChip tone={selectedKnowledgeId ? 'info' : 'neutral'}>{selectedKnowledgeId ? 'Entry selected' : 'Overview mode'}</StatusChip>
+                    </>
+                  )}
+                  metrics={(
+                    <>
+                      <WorkspaceMetricCard label="Departments" value={departmentWorkspaces.length || '—'} detail="部门记忆来源范围" tone="accent" />
+                      <WorkspaceMetricCard label="Active runs" value={headerActiveRuns.length} detail="运行中的 agent run" tone={headerActiveRuns.length ? 'warning' : 'success'} />
+                    </>
+                  )}
                 />
+                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                  <div className="min-w-0">
+                    <KnowledgeWorkspace
+                      selectedId={selectedKnowledgeId}
+                      onTitleChange={handleKnowledgeTitleChange}
+                      onDeleted={handleKnowledgeDeleted}
+                    />
+                  </div>
 
-                {/* Department Memory — knowledge deposited by agent runs */}
-                <DepartmentMemoryPanel workspaces={departmentWorkspaces} />
+                  <aside className="space-y-4">
+                    <DepartmentMemoryPanel workspaces={departmentWorkspaces} />
+                  </aside>
+                </div>
               </div>
             </ScrollArea>
           </div>
@@ -1132,40 +1317,54 @@ export default function Home() {
             <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
             <ScrollArea className="h-full">
               <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-                <div className="rounded-[28px] border border-sky-400/15 bg-[linear-gradient(140deg,rgba(16,26,42,0.8),rgba(10,16,28,0.92))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.22)]">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="max-w-2xl">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-300/55">Third-Party Provider</div>
-                      <div className="mt-2 text-xl font-semibold text-white">添加第三方 Provider</div>
-                      <div className="mt-2 text-sm leading-6 text-white/60">
-                        从这里直接接入 DeepSeek、Groq、Ollama 或任意 OpenAI-compatible 服务，完成配置、测试连通和应用到默认/分层路由。
-                      </div>
-                    </div>
+                <WorkspaceHero
+                  eyebrow="Ops / Runtime"
+                  title="运行、资产与系统健康"
+                  meta={(
+                    <>
+                      <StatusChip tone="accent">Runtime</StatusChip>
+                      <StatusChip tone="info">Assets</StatusChip>
+                      <StatusChip tone={headerActiveRuns.length ? 'warning' : 'success'}>{headerActiveRuns.length ? 'Runs active' : 'Quiet'}</StatusChip>
+                    </>
+                  )}
+                  actions={(
                     <div className="flex flex-wrap items-center gap-2">
                       <Button
                         onClick={() => openSettingsPanel({ tab: 'provider', focusTarget: 'third-party-provider' })}
-                        className="rounded-full bg-[var(--app-accent)] px-4 text-slate-950 hover:brightness-105"
+                        className="rounded-full bg-[var(--app-accent)] px-4 text-white hover:brightness-105"
                       >
                         添加第三方 Provider
                       </Button>
                       <Button
                         variant="outline"
                         onClick={() => openSettingsPanel({ tab: 'api-keys' })}
-                        className="rounded-full border-white/10 bg-white/[0.03] text-white/75 hover:bg-white/[0.06] hover:text-white"
+                        className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]"
                       >
                         管理 API Keys
                       </Button>
                     </div>
+                  )}
+                  metrics={(
+                    <>
+                      <WorkspaceMetricCard label="Assets" value={operationsAssetCount} detail={`${workflows.length} workflows · ${skills.length} skills · ${rules.length} rules`} tone="accent" />
+                      <WorkspaceMetricCard label="Active runs" value={headerActiveRuns.length} detail="当前运行中的 agent run" tone={headerActiveRuns.length ? 'warning' : 'success'} />
+                      <WorkspaceMetricCard label="Providers" value={models.length || '—'} detail="可选模型" tone="neutral" />
+                    </>
+                  )}
+                />
+                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+                  <div className="min-w-0 space-y-5">
+                    <SchedulerPanel />
+                    <AnalyticsDashboard />
                   </div>
+
+                  <aside className="space-y-4">
+                    <TokenQuotaWidget workspaces={departmentWorkspaces} />
+                    <McpStatusWidget />
+                    <TunnelStatusWidget />
+                    <CodexWidget />
+                  </aside>
                 </div>
-                <SchedulerPanel />
-                <AnalyticsDashboard />
-                <div className="grid gap-4 md:grid-cols-2">
-                  <TokenQuotaWidget workspaces={departmentWorkspaces} />
-                  <McpStatusWidget />
-                </div>
-                <TunnelStatusWidget />
-                <CodexWidget />
                 <AssetsManager
                   workflows={workflows}
                   skills={skills}
@@ -1185,87 +1384,53 @@ export default function Home() {
           </div>
         ) : sidebarSection === 'ceo' ? (
           <div className="app-shell-stage relative flex-1 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 agent-grid opacity-25" />
-            <div className="relative flex h-full flex-col px-3 pb-3 pt-3 md:flex-row md:px-5 md:pb-5 md:pt-5 gap-5">
-              {/* Left Chat Window */}
-              <div className="chat-stage-panel relative flex-1 min-w-0 flex flex-col overflow-hidden rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(9,17,27,0.4)_0%,rgba(9,17,27,0.7)_100%)] shadow-2xl">
-                <div className="chat-stage-content relative min-h-0 flex-1">
-                  {activeId ? (
-                    <Chat
-                      steps={steps}
-                      loading={loading}
-                      currentModel={currentModel}
-                      onProceed={handleProceed}
-                      onRevert={allowInlineRevert ? handleRevert : undefined}
-                      isActive={isActive}
-                    />
-                  ) : (
-                    <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-                      <div className="max-w-md rounded-[28px] border border-white/10 bg-white/[0.03] px-6 py-6 shadow-[0_18px_50px_rgba(0,0,0,0.2)]">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">CEO Office</div>
-                        <div className="mt-3 text-xl font-semibold text-white">显式创建 CEO 会话，不再在切页时自动建对象。</div>
-                        <div className="mt-3 text-sm leading-7 text-white/55">
-                          如果你要开始 CEO 对话，请主动创建；右侧管理面板仍然可以继续看项目、模板和 Prompt 资产。
-                        </div>
-                        <div className="mt-5 flex justify-center gap-2">
-                          <Button onClick={() => void handleCreateCeoConversation('replace')} className="rounded-full">
-                            创建 CEO 对话
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => openSettingsPanel({ tab: 'profile' })}
-                            className="rounded-full border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.08] hover:text-white"
-                          >
-                            打开 Profile 偏好
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {activeId ? (
-                  <div className="shrink-0 border-t border-white/6 px-4 pb-4 pt-3 bg-black/20">
-                    <ChatInput
-                      activeId={activeId}
-                      onSend={handleSend}
-                      onCancel={handleCancel}
-                      disabled={loading}
-                      isRunning={isRunning}
-                      connected={connected}
-                      models={models}
-                      currentModel={currentModel}
-                      onModelChange={setCurrentModel}
-                      skills={skills}
-                      workflows={workflows}
-                      agenticMode={agenticMode}
-                      onAgenticModeChange={setAgenticMode}
-                    />
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Right Configuration Panel */}
-              <div className="w-full h-1/2 md:h-full md:w-[520px] lg:w-[580px] shrink-0 border border-white/10 bg-[linear-gradient(180deg,rgba(18,24,36,0.6)_0%,rgba(9,17,27,0.8)_100%)] rounded-[32px] overflow-hidden flex flex-col shadow-2xl">
-                 <CeoOfficeSettings
-                   workspaces={departmentWorkspaces}
-                   projects={projects}
-                   departments={departmentsMap}
-                   templates={templates}
-                   onDepartmentSaved={(uri, config) => {
-                     setDepartmentsMap(prev => new Map(prev).set(uri, config));
-                     api.updateDepartment(uri, config).catch(() => { });
-                   }}
-                   onNavigateToProject={navigateToProject}
-                   onOpenScheduler={() => {
-                     activateSection('operations');
-                   }}
-                   onOpenProfileSettings={() => {
-                     openSettingsPanel({ tab: 'profile' });
-                   }}
-                   onRefresh={() => loadAgentState(selectedAgentRunId)}
-                 />
-              </div>
-            </div>
+            <CeoOfficeCockpit
+              locale={locale}
+              connected={connected}
+              activeId={activeId}
+              activeTitle={activeTitle}
+              steps={steps}
+              loading={loading}
+              isActive={isActive}
+              isRunning={isRunning}
+              sendError={sendError}
+              currentModel={currentModel}
+              models={models}
+              skills={skills}
+              workflows={workflows}
+              agenticMode={agenticMode}
+              activeRuns={headerActiveRuns}
+              pendingApprovals={pendingApprovals}
+              projects={projects}
+              workspaces={departmentWorkspaces}
+              departments={departmentsMap}
+              configuredDepartmentCount={configuredDepartmentCount}
+              ceoHistory={ceoHistory}
+              ceoPriorityTasks={ceoPriorityTasks}
+              ceoRecentEvents={ceoRecentEvents}
+              onCreateCeoConversation={() => void handleCreateCeoConversation('replace')}
+              onOpenConversationWorkbench={openConversationWorkbench}
+              onOpenProjects={() => activateSection('projects')}
+              onOpenKnowledge={() => activateSection('knowledge')}
+              onNavigateToKnowledge={navigateToKnowledge}
+              onOpenOps={() => activateSection('operations')}
+              onOpenSettings={() => openSettingsPanel()}
+              onSelectConversation={(id, title, targetSection) => handleSelect(id, title, targetSection)}
+              onNavigateToProject={navigateToProject}
+              onSend={handleSend}
+              onCancel={handleCancel}
+              onProceed={handleProceed}
+              onRevert={allowInlineRevert ? handleRevert : undefined}
+              onModelChange={setCurrentModel}
+              onAgenticModeChange={setAgenticMode}
+              onDepartmentSaved={(uri, config) => {
+                setDepartmentsMap(prev => new Map(prev).set(uri, config));
+                api.updateDepartment(uri, config).catch(() => { });
+              }}
+              onRefreshDashboard={() => {
+                void loadAgentState(selectedAgentRunId);
+              }}
+            />
           </div>
         ) : (
           <div className="app-shell-stage relative flex-1 overflow-hidden">
@@ -1286,7 +1451,7 @@ export default function Home() {
                 </div>
 
                 {activeId ? (
-                  <div className="shrink-0 border-t border-white/6 bg-[linear-gradient(180deg,rgba(9,17,27,0)_0%,rgba(9,17,27,0.45)_18%,rgba(9,17,27,0.82)_100%)] px-3 pb-3 pt-3 md:px-5 md:pb-5 md:pt-4">
+                  <div className="shrink-0 border-t border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0)_0%,rgba(247,250,255,0.92)_18%,rgba(247,250,255,1)_100%)] px-3 pb-3 pt-3 md:px-5 md:pb-5 md:pt-4">
                     {sendError ? (
                       <div className="mb-3 flex justify-center">
                         <div className="rounded-full border border-red-400/18 bg-red-400/10 px-4 py-2 text-sm font-medium text-red-100 shadow-[0_18px_40px_rgba(0,0,0,0.24)]">
@@ -1320,13 +1485,13 @@ export default function Home() {
       </AppShell>
 
       {mainMenuOpen ? (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMainMenuOpen(false)} />
-          <div className="absolute inset-x-3 top-20 bottom-3 overflow-hidden rounded-[28px] border border-white/10 bg-[rgba(9,17,27,0.97)] shadow-[0_28px_80px_rgba(0,0,0,0.42)]">
-            <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
+          <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-[rgba(241,245,251,0.82)] backdrop-blur-sm" onClick={() => setMainMenuOpen(false)} />
+          <div className="absolute inset-x-3 bottom-3 top-20 overflow-hidden rounded-[28px] border border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.96)] shadow-[0_28px_80px_rgba(28,44,73,0.14)]">
+            <div className="flex items-center justify-between border-b border-[var(--app-border-soft)] px-5 py-4">
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">Primary Navigation</div>
-                <div className="mt-1 text-lg font-semibold text-white">Switch workspace</div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">Primary Navigation</div>
+                <div className="mt-1 text-lg font-semibold text-[var(--app-text)]">Switch workspace</div>
               </div>
               <Button variant="ghost" size="icon" onClick={() => setMainMenuOpen(false)}>
                 <X className="h-4 w-4" />
@@ -1335,7 +1500,9 @@ export default function Home() {
             <div className="h-full overflow-y-auto px-4 py-4 pb-10">
               <div className="space-y-3">
                 {primaryNavItems.map(item => {
-                  const active = utilityPanel === null && sidebarSection === item.value;
+                  const active = item.value === 'settings'
+                    ? utilityPanel === 'settings'
+                    : utilityPanel === null && sidebarSection === item.value;
                   return (
                     <button
                       key={item.value}
@@ -1343,36 +1510,18 @@ export default function Home() {
                       className={cn(
                         'flex w-full items-start gap-3 rounded-[22px] border px-4 py-4 text-left transition-all',
                         active
-                          ? 'border-[var(--app-border-strong)] bg-[linear-gradient(135deg,rgba(88,243,212,0.12),rgba(12,20,34,0.9))]'
-                          : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.05]',
+                          ? 'border-[var(--app-border-strong)] bg-[linear-gradient(135deg,rgba(47,109,246,0.12),rgba(255,255,255,0.96))]'
+                          : 'border-[var(--app-border-soft)] bg-[var(--app-surface)] hover:bg-[var(--app-raised)]',
                       )}
-                      onClick={() => activateSection(item.value)}
+                      onClick={() => item.value === 'settings' ? openSettingsPanel() : activateSection(item.value)}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-semibold text-white">{item.label}</div>
-                        <div className="mt-1 text-xs leading-5 text-[var(--app-text-soft)]">{item.description}</div>
+                        <div className="text-sm font-semibold text-[var(--app-text)]">{item.label}</div>
                       </div>
                     </button>
                   );
                 })}
 
-                <button
-                  type="button"
-                  className={cn(
-                    'flex w-full items-start gap-3 rounded-[22px] border px-4 py-4 text-left transition-all',
-                    utilityPanel === 'settings'
-                      ? 'border-[var(--app-border-strong)] bg-[linear-gradient(135deg,rgba(88,243,212,0.12),rgba(12,20,34,0.9))]'
-                      : 'border-white/8 bg-white/[0.03] hover:bg-white/[0.05]',
-                  )}
-                  onClick={() => openSettingsPanel()}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-semibold text-white">Settings</div>
-                    <div className="mt-1 text-xs leading-5 text-[var(--app-text-soft)]">
-                      Provider、API key、MCP、scene override 和系统配置。
-                    </div>
-                  </div>
-                </button>
               </div>
             </div>
           </div>
@@ -1381,12 +1530,7 @@ export default function Home() {
 
       <LogViewerPanel open={logViewerOpen} onClose={() => setLogViewerOpen(false)} />
       <ActiveTasksPanel
-        tasks={activeTasks
-          .filter(task => !dismissedTasks.has(task.cascadeId))
-          .map(task => {
-            const run = agentRuns.find(r => r.childConversationId === task.cascadeId);
-            return run?.supervisorReviews ? { ...task, supervisorReviews: run.supervisorReviews } : task;
-          })}
+        tasks={visibleActiveTasks}
         onSelect={(id, title) => handleSelect(id, title)}
         onDismiss={(id) => setDismissedTasks(prev => new Set(prev).add(id))}
         activeCascadeId={activeId}

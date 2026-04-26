@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow the main desktop window to open native folder selection dialogs.",
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:3000",
+      "http://localhost:3000"
+    ]
+  },
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open"
+  ]
+}

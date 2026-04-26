@@ -3,6 +3,12 @@
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import type { Workspace, Project, DepartmentConfig, DailyDigestFE } from '@/lib/types';
+import { BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  WorkspaceSurface,
+  workspaceGhostActionClassName,
+} from '@/components/ui/workspace-primitives';
+import { cn } from '@/lib/utils';
 
 interface DepartmentComparisonWidgetProps {
   workspaces: Workspace[];
@@ -64,22 +70,23 @@ export default function DepartmentComparisonWidget({ workspaces, projects, depar
     };
   });
 
-  const maxTotal = Math.max(...stats.map(s => s.total), 1);
-
   return (
-    <div className="rounded-xl border border-white/8 bg-white/[0.03] p-4">
+    <WorkspaceSurface padding="sm">
       <button
-        className="flex w-full items-center justify-between text-sm font-semibold text-white/60 hover:text-white/80 transition-colors"
+        className={cn('flex w-full items-center justify-between rounded-2xl px-2 py-1 text-sm font-semibold transition-colors', workspaceGhostActionClassName)}
         onClick={() => setExpanded(!expanded)}
       >
-        <span>📊 部门对比</span>
-        <span className="text-xs">{expanded ? '▲' : '▼'}</span>
+        <span className="flex items-center gap-2">
+          <BarChart3 className="h-4 w-4 text-[var(--app-accent)]" />
+          部门对比
+        </span>
+        {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
       </button>
 
       {expanded && (
         <div className="mt-3 space-y-1">
           {/* Header */}
-          <div className="grid grid-cols-[1fr_50px_50px_50px_60px_80px] gap-1 text-[10px] text-white/30 px-1">
+          <div className="grid grid-cols-[1fr_50px_50px_50px_60px_80px] gap-1 px-1 text-[10px] text-[var(--app-text-muted)]">
             <span>部门</span>
             <span className="text-center">活跃</span>
             <span className="text-center">完成</span>
@@ -90,24 +97,24 @@ export default function DepartmentComparisonWidget({ workspaces, projects, depar
 
           {/* Rows */}
           {stats.map(stat => (
-            <div key={stat.name} className="grid grid-cols-[1fr_50px_50px_50px_60px_80px] gap-1 items-center rounded-lg px-1 py-1.5 hover:bg-white/[0.03] text-xs">
+            <div key={stat.name} className="grid grid-cols-[1fr_50px_50px_50px_60px_80px] items-center gap-1 rounded-lg px-1 py-1.5 text-xs hover:bg-[var(--app-raised)]">
               <div className="flex items-center gap-1.5 min-w-0">
-                <span className="truncate text-white/80">{stat.name}</span>
-                <span className="text-[10px] text-white/30">{stat.type}</span>
+                <span className="truncate text-[var(--app-text)]">{stat.name}</span>
+                <span className="text-[10px] text-[var(--app-text-muted)]">{stat.type}</span>
               </div>
-              <span className="text-center text-sky-400/80 tabular-nums">{stat.active}</span>
-              <span className="text-center text-emerald-400/80 tabular-nums">{stat.completed}</span>
-              <span className="text-center text-red-400/80 tabular-nums">{stat.failed}</span>
+              <span className="text-center text-sky-700 tabular-nums">{stat.active}</span>
+              <span className="text-center text-emerald-700 tabular-nums">{stat.completed}</span>
+              <span className="text-center text-red-700 tabular-nums">{stat.failed}</span>
               <div className="flex items-center justify-center gap-1">
-                <div className="h-1.5 w-8 rounded-full bg-white/5 overflow-hidden">
+                <div className="h-1.5 w-8 overflow-hidden rounded-full bg-[var(--app-raised-2)]">
                   <div
                     className="h-full rounded-full bg-emerald-500/60"
                     style={{ width: `${stat.completionRate}%` }}
                   />
                 </div>
-                <span className="text-[10px] text-white/40 tabular-nums">{stat.completionRate}%</span>
+                <span className="text-[10px] text-[var(--app-text-muted)] tabular-nums">{stat.completionRate}%</span>
               </div>
-              <span className="text-right text-white/50 tabular-nums text-[10px]">
+              <span className="text-right text-[10px] text-[var(--app-text-soft)] tabular-nums">
                 {stat.tokenUsage
                   ? `${(stat.tokenUsage.totalTokens / 1000).toFixed(0)}k ($${stat.tokenUsage.estimatedCostUsd.toFixed(1)})`
                   : '—'}
@@ -116,13 +123,13 @@ export default function DepartmentComparisonWidget({ workspaces, projects, depar
           ))}
 
           {/* Summary bar */}
-          <div className="pt-2 border-t border-white/5 mt-1">
-            <div className="flex gap-4 text-[10px] text-white/40">
+          <div className="mt-1 border-t border-[var(--app-border-soft)] pt-2">
+            <div className="flex gap-4 text-[10px] text-[var(--app-text-muted)]">
               <span>总计: {stats.reduce((s, d) => s + d.total, 0)} 项目</span>
               <span>活跃: {stats.reduce((s, d) => s + d.active, 0)}</span>
               <span>完成: {stats.reduce((s, d) => s + d.completed, 0)}</span>
               {digestData.size > 0 && (
-                <span className="ml-auto text-amber-400/60">
+                <span className="ml-auto text-amber-700">
                   周 Token: {(Array.from(digestData.values()).reduce((s, d) => s + (d.tokenUsage?.totalTokens || 0), 0) / 1000).toFixed(0)}k
                 </span>
               )}
@@ -130,6 +137,6 @@ export default function DepartmentComparisonWidget({ workspaces, projects, depar
           </div>
         </div>
       )}
-    </div>
+    </WorkspaceSurface>
   );
 }

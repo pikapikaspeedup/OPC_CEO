@@ -8,9 +8,14 @@
  *   { action: 'approved' | 'rejected' | 'feedback', message: string }
  */
 
-import { NextResponse } from 'next/server';
-import { getApprovalRequest } from '@/lib/approval/request-store';
-import { handleApprovalResponse } from '@/lib/approval/handler';
+import {
+  handleApprovalDetailGet,
+  handleApprovalDetailPatch,
+} from '@/server/control-plane/routes/approval';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,44 +24,19 @@ interface RouteParams {
 }
 
 // GET /api/approval/[id]
-export async function GET(_req: Request, { params }: RouteParams) {
+export async function GET(req: Request, { params }: RouteParams) {
   const { id } = await params;
-  const request = getApprovalRequest(id);
-  if (!request) {
-    return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
   }
-  return NextResponse.json({ request });
+  return handleApprovalDetailGet(id);
 }
 
 // PATCH /api/approval/[id]
 export async function PATCH(req: Request, { params }: RouteParams) {
   const { id } = await params;
-
-  let body: { action: string; message?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
   }
-
-  const validActions = ['approved', 'rejected', 'feedback'];
-  if (!body.action || !validActions.includes(body.action)) {
-    return NextResponse.json(
-      { error: `Invalid action. Must be one of: ${validActions.join(', ')}` },
-      { status: 400 },
-    );
-  }
-
-  const updated = await handleApprovalResponse(
-    id,
-    body.action as 'approved' | 'rejected' | 'feedback',
-    body.message || '',
-    'web', // channel
-  );
-
-  if (!updated) {
-    return NextResponse.json({ error: 'Request not found' }, { status: 404 });
-  }
-
-  return NextResponse.json({ request: updated });
+  return handleApprovalDetailPatch(req, id);
 }

@@ -22,32 +22,37 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
-  RotateCw,
   History,
   Save,
   Undo2,
   Play,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  WorkspaceEmptyBlock,
+  WorkspaceSurface,
+  workspaceGhostActionClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 // ---------------------------------------------------------------------------
 // Health badge
 // ---------------------------------------------------------------------------
 
 const healthConfig: Record<HealthStatus, { label: string; color: string; icon: typeof Activity }> = {
-  running: { label: 'Running', color: 'text-sky-400 bg-sky-400/10', icon: Activity },
-  waiting: { label: 'Waiting', color: 'text-amber-400 bg-amber-400/10', icon: Clock },
-  blocked: { label: 'Blocked', color: 'text-orange-400 bg-orange-400/10', icon: AlertTriangle },
-  stale: { label: 'Stale', color: 'text-red-400 bg-red-400/10', icon: AlertTriangle },
-  failed: { label: 'Failed', color: 'text-red-500 bg-red-500/10', icon: XCircle },
-  completed: { label: 'Completed', color: 'text-emerald-400 bg-emerald-400/10', icon: CheckCircle2 },
+  running: { label: 'Running', color: 'border-sky-500/20 bg-sky-500/10 text-sky-700', icon: Activity },
+  waiting: { label: 'Waiting', color: 'border-amber-500/20 bg-amber-500/10 text-amber-700', icon: Clock },
+  blocked: { label: 'Blocked', color: 'border-orange-500/20 bg-orange-500/10 text-orange-700', icon: AlertTriangle },
+  stale: { label: 'Stale', color: 'border-red-500/20 bg-red-500/10 text-red-700', icon: AlertTriangle },
+  failed: { label: 'Failed', color: 'border-red-500/20 bg-red-500/10 text-red-700', icon: XCircle },
+  completed: { label: 'Completed', color: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700', icon: CheckCircle2 },
 };
 
 function HealthBadge({ health }: { health: HealthStatus }) {
   const cfg = healthConfig[health] || healthConfig.waiting;
   const Icon = cfg.icon;
   return (
-    <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium', cfg.color)}>
+    <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium', cfg.color)}>
       <Icon className="h-3 w-3" />
       {cfg.label}
     </span>
@@ -193,7 +198,7 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-white/40">
+      <div className="flex items-center justify-center py-12 text-[var(--app-text-muted)]">
         <Loader2 className="h-5 w-5 animate-spin" />
       </div>
     );
@@ -201,9 +206,7 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
 
   if (!diagnostics) {
     return (
-      <div className="py-8 text-center text-sm text-white/40">
-        No diagnostics available for this project.
-      </div>
+      <WorkspaceEmptyBlock title="No diagnostics available for this project." className="py-8" />
     );
   }
 
@@ -212,111 +215,111 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
   return (
     <div className="space-y-5">
       {/* Health overview */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
+      <WorkspaceSurface padding="sm" className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white/80">Project Health</h3>
+          <h3 className="text-sm font-semibold text-[var(--app-text)]">Project Health</h3>
           <HealthBadge health={diagnostics.health} />
         </div>
 
-        <p className="text-xs text-white/50 leading-relaxed">{diagnostics.summary}</p>
+        <p className="text-xs leading-relaxed text-[var(--app-text-soft)]">{diagnostics.summary}</p>
 
         {diagnostics.activeStageIds.length > 0 && (
-          <div className="text-xs text-white/40">
-            <span className="text-white/60">Active stages: </span>
+          <div className="text-xs text-[var(--app-text-muted)]">
+            <span className="text-[var(--app-text-soft)]">Active stages: </span>
             {diagnostics.activeStageIds.join(', ')}
           </div>
         )}
 
         {diagnostics.recommendedActions.length > 0 && (
           <div className="space-y-1">
-            <span className="text-xs text-white/50 font-medium">Recommended:</span>
+            <span className="text-xs font-medium text-[var(--app-text-soft)]">Recommended:</span>
             {diagnostics.recommendedActions.map((action, i) => (
-              <div key={i} className="text-xs text-amber-400/80 pl-3">• {action}</div>
+              <div key={i} className="pl-3 text-xs text-amber-700">• {action}</div>
             ))}
           </div>
         )}
-      </div>
+      </WorkspaceSurface>
 
       {/* Stage diagnostics */}
       {diagnostics.stages.length > 0 && (
-        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
-          <h3 className="text-sm font-semibold text-white/80">Stage Status</h3>
-          <div className="divide-y divide-white/5">
+        <WorkspaceSurface padding="sm" className="space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--app-text)]">Stage Status</h3>
+          <div className="divide-y divide-[var(--app-border-soft)]">
             {diagnostics.stages.map((stage) => (
               <div key={stage.stageId} className="py-2 first:pt-0 last:pb-0">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-white/70">{stage.stageId}</span>
+                  <span className="text-xs font-medium text-[var(--app-text)]">{stage.stageId}</span>
                   <span className={cn(
                     'text-[10px] uppercase tracking-wider font-semibold',
-                    stage.status === 'completed' ? 'text-emerald-400' :
-                    stage.status === 'running' ? 'text-sky-400' :
-                    stage.status === 'failed' ? 'text-red-400' :
-                    'text-white/40',
+                    stage.status === 'completed' ? 'text-emerald-600' :
+                    stage.status === 'running' ? 'text-sky-600' :
+                    stage.status === 'failed' ? 'text-red-600' :
+                    'text-[var(--app-text-muted)]',
                   )}>
                     {stage.status}
                   </span>
                 </div>
                 {stage.pendingReason && (
-                  <div className="text-[11px] text-white/40 mt-0.5">{stage.pendingReason}</div>
+                  <div className="mt-0.5 text-[11px] text-[var(--app-text-muted)]">{stage.pendingReason}</div>
                 )}
                 {stage.recommendedActions.length > 0 && (
-                  <div className="text-[11px] text-amber-400/70 mt-0.5">
+                  <div className="mt-0.5 text-[11px] text-amber-700">
                     {stage.recommendedActions.join('; ')}
                   </div>
                 )}
               </div>
             ))}
           </div>
-        </div>
+        </WorkspaceSurface>
       )}
 
       {/* Branch diagnostics */}
       {diagnostics.branches.length > 0 && (
-        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
-          <h3 className="text-sm font-semibold text-white/80">Branch Health</h3>
-          <div className="divide-y divide-white/5">
+        <WorkspaceSurface padding="sm" className="space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--app-text)]">Branch Health</h3>
+          <div className="divide-y divide-[var(--app-border-soft)]">
             {diagnostics.branches.map((branch) => (
               <div key={`${branch.parentStageId}-${branch.branchIndex}`} className="py-2 first:pt-0 last:pb-0">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-white/60">
+                  <span className="text-xs text-[var(--app-text-soft)]">
                     {branch.parentStageId} / branch #{branch.branchIndex}
                   </span>
                   <HealthBadge health={branch.health} />
                 </div>
                 {branch.failureReason && (
-                  <div className="text-[11px] text-red-400/70 mt-0.5">{branch.failureReason}</div>
+                  <div className="mt-0.5 text-[11px] text-red-700">{branch.failureReason}</div>
                 )}
                 {branch.staleSince && (
-                  <div className="text-[11px] text-amber-400/70 mt-0.5">Stale since {branch.staleSince}</div>
+                  <div className="mt-0.5 text-[11px] text-amber-700">Stale since {branch.staleSince}</div>
                 )}
               </div>
             ))}
           </div>
-        </div>
+        </WorkspaceSurface>
       )}
 
       {/* Reconcile */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-3">
+      <WorkspaceSurface padding="sm" className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white/80">Reconcile</h3>
+          <h3 className="text-sm font-semibold text-[var(--app-text)]">Reconcile</h3>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={handleDryRun}
               disabled={reconciling || !diagnostics.canReconcile}
-              className="h-7 text-xs"
+              className={cn('h-7 text-xs', workspaceOutlineActionClassName)}
             >
               {reconciling ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <ShieldCheck className="h-3 w-3 mr-1" />}
               Dry Run
             </Button>
             {reconcileResult && hasActions && reconcileResult.dryRun && (
               <Button
-                variant="default"
-                size="sm"
-                onClick={handleExecute}
-                disabled={reconciling}
-                className="h-7 text-xs"
+              variant="default"
+              size="sm"
+              onClick={handleExecute}
+              disabled={reconciling}
+              className="h-7 rounded-full bg-[var(--app-accent)] px-3 text-xs font-semibold text-white hover:brightness-105"
               >
                 <RefreshCw className="h-3 w-3 mr-1" />
                 Execute
@@ -326,12 +329,12 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
         </div>
 
         {!diagnostics.canReconcile && (
-          <p className="text-xs text-white/40">No reconcilable inconsistencies detected.</p>
+          <p className="text-xs text-[var(--app-text-muted)]">No reconcilable inconsistencies detected.</p>
         )}
 
         {reconcileResult && (
           <div className="space-y-1.5">
-            <div className="text-xs text-white/50">
+            <div className="text-xs text-[var(--app-text-soft)]">
               {reconcileResult.dryRun ? 'Dry run result:' : 'Execution result:'}
             </div>
             {reconcileResult.actions.map((action, i) => (
@@ -339,24 +342,24 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
             ))}
           </div>
         )}
-      </div>
+      </WorkspaceSurface>
 
       {/* Policy Compliance */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
-        <h3 className="text-sm font-semibold text-white/80">Policy Compliance</h3>
+      <WorkspaceSurface padding="sm" className="space-y-2">
+        <h3 className="text-sm font-semibold text-[var(--app-text)]">Policy Compliance</h3>
         {policyLoading ? (
-          <div className="flex items-center gap-2 text-xs text-white/40">
+          <div className="flex items-center gap-2 text-xs text-[var(--app-text-muted)]">
             <Loader2 className="h-3 w-3 animate-spin" /> Checking policies...
           </div>
         ) : policyResult ? (
           policyResult.violations.length === 0 ? (
-            <div className="flex items-center gap-2 text-xs text-emerald-400/80">
+            <div className="flex items-center gap-2 text-xs text-emerald-700">
               <CheckCircle2 className="h-3.5 w-3.5" /> All policies satisfied
             </div>
           ) : (
             <div className="space-y-1.5">
               {!policyResult.allowed && (
-                <div className="flex items-center gap-2 text-xs font-medium text-red-400">
+                <div className="flex items-center gap-2 text-xs font-medium text-red-700">
                   <XCircle className="h-3.5 w-3.5" /> Blocked by policy
                 </div>
               )}
@@ -365,14 +368,14 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
                   key={i}
                   className={cn(
                     'rounded-lg border px-3 py-2 text-[11px] leading-4',
-                    v.action === 'block' ? 'border-red-400/20 bg-red-400/[0.06] text-red-300' :
-                    v.action === 'pause' ? 'border-amber-400/20 bg-amber-400/[0.06] text-amber-300' :
-                    'border-yellow-400/20 bg-yellow-400/[0.06] text-yellow-300',
+                    v.action === 'block' ? 'border-red-500/20 bg-red-500/[0.06] text-red-700' :
+                    v.action === 'pause' ? 'border-amber-500/20 bg-amber-500/[0.06] text-amber-700' :
+                    'border-yellow-500/20 bg-yellow-500/[0.06] text-yellow-700',
                   )}
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium uppercase tracking-wide text-[10px]">{v.action}</span>
-                    <span className="text-white/30 font-mono">{v.rule.resource}: {v.currentValue}/{v.rule.limit}</span>
+                    <span className="font-mono text-[var(--app-text-muted)]">{v.rule.resource}: {v.currentValue}/{v.rule.limit}</span>
                   </div>
                   <div className="mt-0.5">{v.message}</div>
                 </div>
@@ -380,48 +383,48 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
             </div>
           )
         ) : (
-          <p className="text-xs text-white/40">No policies configured.</p>
+          <p className="text-xs text-[var(--app-text-muted)]">No policies configured.</p>
         )}
-      </div>
+      </WorkspaceSurface>
 
       {/* Execution Journal (V5.2) */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
+      <WorkspaceSurface padding="sm" className="space-y-2">
         <button
           className="flex items-center justify-between w-full text-left"
           onClick={() => setShowJournal(!showJournal)}
         >
-          <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
-            <History className="h-3.5 w-3.5 text-violet-400/70" />
+          <h3 className="text-sm font-semibold text-[var(--app-text)] flex items-center gap-2">
+            <History className="h-3.5 w-3.5 text-sky-600" />
             Execution Journal
             {journalEntries.length > 0 && (
-              <span className="text-[10px] font-normal text-white/30">({journalEntries.length})</span>
+              <span className="text-[10px] font-normal text-[var(--app-text-muted)]">({journalEntries.length})</span>
             )}
           </h3>
-          {showJournal ? <ChevronUp className="h-4 w-4 text-white/40" /> : <ChevronDown className="h-4 w-4 text-white/40" />}
+          {showJournal ? <ChevronUp className="h-4 w-4 text-[var(--app-text-muted)]" /> : <ChevronDown className="h-4 w-4 text-[var(--app-text-muted)]" />}
         </button>
 
         {showJournal && (
           journalEntries.length > 0 ? (
-            <div className="divide-y divide-white/5 max-h-64 overflow-y-auto">
+            <div className="max-h-64 divide-y divide-[var(--app-border-soft)] overflow-y-auto">
               {journalEntries.map((entry, i) => {
                 const typeColor =
-                  entry.eventType.startsWith('gate') ? 'text-amber-400' :
-                  entry.eventType.startsWith('loop') ? 'text-violet-400' :
-                  entry.eventType.startsWith('switch') ? 'text-sky-400' :
-                  entry.eventType.startsWith('checkpoint') ? 'text-emerald-400' :
-                  'text-white/50';
+                  entry.eventType.startsWith('gate') ? 'text-amber-700' :
+                  entry.eventType.startsWith('loop') ? 'text-violet-700' :
+                  entry.eventType.startsWith('switch') ? 'text-sky-700' :
+                  entry.eventType.startsWith('checkpoint') ? 'text-emerald-700' :
+                  'text-[var(--app-text-soft)]';
                 return (
                   <div key={i} className="py-1.5 first:pt-0 last:pb-0">
                     <div className="flex items-center justify-between">
                       <span className={cn('text-[11px] font-mono', typeColor)}>{entry.eventType}</span>
-                      <span className="text-[10px] text-white/30">
+                      <span className="text-[10px] text-[var(--app-text-muted)]">
                         {new Date(entry.timestamp).toLocaleString()}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[10px] font-mono text-white/30">{entry.nodeId}</span>
+                      <span className="text-[10px] font-mono text-[var(--app-text-muted)]">{entry.nodeId}</span>
                       {entry.data && Object.keys(entry.data).length > 0 && (
-                        <span className="text-[10px] text-white/25 truncate max-w-[200px]">
+                        <span className="max-w-[200px] truncate text-[10px] text-[var(--app-text-muted)]">
                           {Object.entries(entry.data).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ')}
                         </span>
                       )}
@@ -431,25 +434,25 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
               })}
             </div>
           ) : (
-            <p className="text-xs text-white/40">No journal entries recorded.</p>
+            <WorkspaceEmptyBlock title="No journal entries recorded." className="py-6" />
           )
         )}
-      </div>
+      </WorkspaceSurface>
 
       {/* Checkpoints (V5.2) */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
+      <WorkspaceSurface padding="sm" className="space-y-2">
         <button
           className="flex items-center justify-between w-full text-left"
           onClick={() => setShowCheckpoints(!showCheckpoints)}
         >
-          <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
-            <Save className="h-3.5 w-3.5 text-emerald-400/70" />
+          <h3 className="text-sm font-semibold text-[var(--app-text)] flex items-center gap-2">
+            <Save className="h-3.5 w-3.5 text-emerald-700" />
             Checkpoints
             {checkpoints.length > 0 && (
-              <span className="text-[10px] font-normal text-white/30">({checkpoints.length})</span>
+              <span className="text-[10px] font-normal text-[var(--app-text-muted)]">({checkpoints.length})</span>
             )}
           </h3>
-          {showCheckpoints ? <ChevronUp className="h-4 w-4 text-white/40" /> : <ChevronDown className="h-4 w-4 text-white/40" />}
+          {showCheckpoints ? <ChevronUp className="h-4 w-4 text-[var(--app-text-muted)]" /> : <ChevronDown className="h-4 w-4 text-[var(--app-text-muted)]" />}
         </button>
 
         {showCheckpoints && (
@@ -460,7 +463,7 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
                 size="sm"
                 onClick={handleCreateCheckpoint}
                 disabled={checkpointLoading}
-                className="h-7 text-xs"
+                className={cn('h-7 text-xs', workspaceOutlineActionClassName)}
               >
                 {checkpointLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Save className="h-3 w-3 mr-1" />}
                 Create Checkpoint
@@ -471,7 +474,7 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
                   size="sm"
                   onClick={() => handleReplay()}
                   disabled={restoring !== null}
-                  className="h-7 text-xs"
+                  className={cn('h-7 text-xs', workspaceOutlineActionClassName)}
                 >
                   {restoring === '__replay__' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Play className="h-3 w-3 mr-1" />}
                   Replay (latest)
@@ -480,19 +483,19 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
             </div>
 
             {checkpoints.length > 0 ? (
-              <div className="divide-y divide-white/5 max-h-48 overflow-y-auto">
+              <div className="max-h-48 divide-y divide-[var(--app-border-soft)] overflow-y-auto">
                 {[...checkpoints].reverse().map((cp) => (
                   <div key={cp.id} className="py-2 first:pt-0 last:pb-0">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-mono text-white/60 truncate max-w-[180px]" title={cp.id}>
+                      <span className="max-w-[180px] truncate font-mono text-[11px] text-[var(--app-text-soft)]" title={cp.id}>
                         {cp.id.slice(0, 8)}…
                       </span>
-                      <span className="text-[10px] text-white/30">
+                      <span className="text-[10px] text-[var(--app-text-muted)]">
                         {new Date(cp.createdAt).toLocaleString()}
                       </span>
                     </div>
                     <div className="flex items-center justify-between mt-1">
-                      <span className="text-[10px] text-white/40">
+                      <span className="text-[10px] text-[var(--app-text-muted)]">
                         node: {cp.nodeId} · {cp.state.stages.length} stages
                       </span>
                       <div className="flex items-center gap-1.5">
@@ -501,7 +504,7 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
                           size="sm"
                           onClick={() => handleRestoreCheckpoint(cp.id)}
                           disabled={restoring !== null}
-                          className="h-6 text-[10px] px-2"
+                          className={cn('h-6 px-2 text-[10px]', workspaceGhostActionClassName)}
                         >
                           {restoring === cp.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3 mr-0.5" />}
                           Restore
@@ -511,7 +514,7 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
                           size="sm"
                           onClick={() => handleReplay(cp.id)}
                           disabled={restoring !== null}
-                          className="h-6 text-[10px] px-2"
+                          className={cn('h-6 px-2 text-[10px]', workspaceGhostActionClassName)}
                         >
                           <Play className="h-3 w-3 mr-0.5" />
                           Replay
@@ -522,42 +525,42 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-white/40">No checkpoints created yet.</p>
+              <WorkspaceEmptyBlock title="No checkpoints created yet." className="py-6" />
             )}
           </div>
         )}
-      </div>
+      </WorkspaceSurface>
 
       {/* Audit log */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 space-y-2">
+      <WorkspaceSurface padding="sm" className="space-y-2">
         <button
           className="flex items-center justify-between w-full text-left"
           onClick={() => setShowAudit(!showAudit)}
         >
-          <h3 className="text-sm font-semibold text-white/80">Recent Audit Events</h3>
-          {showAudit ? <ChevronUp className="h-4 w-4 text-white/40" /> : <ChevronDown className="h-4 w-4 text-white/40" />}
+          <h3 className="text-sm font-semibold text-[var(--app-text)]">Recent Audit Events</h3>
+          {showAudit ? <ChevronUp className="h-4 w-4 text-[var(--app-text-muted)]" /> : <ChevronDown className="h-4 w-4 text-[var(--app-text-muted)]" />}
         </button>
 
         {showAudit && (
           auditEvents.length > 0 ? (
-            <div className="divide-y divide-white/5 max-h-60 overflow-y-auto">
+            <div className="max-h-60 divide-y divide-[var(--app-border-soft)] overflow-y-auto">
               {auditEvents.map((event, i) => (
                 <div key={i} className="py-1.5 first:pt-0 last:pb-0">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-mono text-white/50">{event.kind}</span>
-                    <span className="text-[10px] text-white/30">
+                    <span className="font-mono text-[11px] text-[var(--app-text-soft)]">{event.kind}</span>
+                    <span className="text-[10px] text-[var(--app-text-muted)]">
                       {new Date(event.timestamp).toLocaleString()}
                     </span>
                   </div>
-                  <div className="text-[11px] text-white/40">{event.message}</div>
+                  <div className="text-[11px] text-[var(--app-text-muted)]">{event.message}</div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-white/40">No audit events.</p>
+            <WorkspaceEmptyBlock title="No audit events." className="py-6" />
           )
         )}
-      </div>
+      </WorkspaceSurface>
     </div>
   );
 }
@@ -568,19 +571,19 @@ export default function ProjectOpsPanel({ projectId }: ProjectOpsPanelProps) {
 
 function ReconcileActionRow({ action }: { action: ReconcileAction }) {
   const kindColors: Record<string, string> = {
-    'dispatch-stage': 'text-sky-400',
-    'fan-out': 'text-purple-400',
-    'complete-join': 'text-emerald-400',
-    'sync-status': 'text-amber-400',
-    'noop': 'text-white/40',
+    'dispatch-stage': 'text-sky-700',
+    'fan-out': 'text-violet-700',
+    'complete-join': 'text-emerald-700',
+    'sync-status': 'text-amber-700',
+    'noop': 'text-[var(--app-text-muted)]',
   };
 
   return (
     <div className="flex items-start gap-2 text-xs">
-      <span className={cn('font-mono shrink-0', kindColors[action.kind] || 'text-white/40')}>
+      <span className={cn('font-mono shrink-0', kindColors[action.kind] || 'text-[var(--app-text-muted)]')}>
         {action.kind}
       </span>
-      <span className="text-white/50">{action.detail}</span>
+      <span className="text-[var(--app-text-soft)]">{action.detail}</span>
     </div>
   );
 }

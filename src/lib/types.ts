@@ -529,8 +529,22 @@ export interface CEORoutineSummaryFE {
   reminders: string[];
   escalations: string[];
   actions: Array<{
+    id: string;
     label: string;
     type: 'approval' | 'project' | 'scheduler' | 'knowledge' | 'focus';
+    status: 'done' | 'pending' | 'attention';
+    priority: 'low' | 'medium' | 'high';
+    meta?: string;
+    count?: number;
+    target: {
+      kind: 'approvals' | 'project' | 'scheduler' | 'knowledge' | 'ceo-focus';
+      section: 'ceo' | 'projects' | 'knowledge' | 'operations' | 'settings' | 'conversations';
+      requestId?: string;
+      projectId?: string;
+      jobId?: string;
+      knowledgeId?: string;
+      workspaceUri?: string;
+    };
   }>;
 }
 
@@ -612,6 +626,18 @@ export interface ManagementOverviewFE {
   blockedProjects: number;
   pendingApprovals: number;
   activeSchedulers: number;
+  schedulerRuntime: {
+    status: 'running' | 'idle' | 'disabled' | 'stalled';
+    loopActive: boolean;
+    configuredToStart: boolean;
+    companionServicesEnabled: boolean;
+    role: string;
+    enabledJobCount: number;
+    dueNowCount: number;
+    nextRunAt: string | null;
+    checkedAt: string;
+    message: string;
+  };
   recentKnowledge: number;
   okrProgress: number | null;
   risks: ManagementRiskFE[];
@@ -805,6 +831,510 @@ export interface AgentRun {
     outputTokens: number;
     totalTokens: number;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Company Kernel (RunCapsule / MemoryCandidate frontend projection)
+// ---------------------------------------------------------------------------
+
+export type CompanyEvidenceRefTypeFE =
+  | 'run'
+  | 'artifact'
+  | 'result-envelope'
+  | 'delivery-packet'
+  | 'log'
+  | 'api-response'
+  | 'user-feedback'
+  | 'approval'
+  | 'file'
+  | 'screenshot';
+
+export interface CompanyEvidenceRefFE {
+  id: string;
+  type: CompanyEvidenceRefTypeFE;
+  label: string;
+  runId?: string;
+  artifactPath?: string;
+  filePath?: string;
+  apiRoute?: string;
+  excerpt?: string;
+  checksum?: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type CompanyWorkingCheckpointKindFE =
+  | 'run-created'
+  | 'run-started'
+  | 'conversation-attached'
+  | 'artifact-discovered'
+  | 'result-discovered'
+  | 'verification-discovered'
+  | 'run-completed'
+  | 'run-blocked'
+  | 'run-failed'
+  | 'run-cancelled';
+
+export interface CompanyWorkingCheckpointFE {
+  id: string;
+  runId: string;
+  kind: CompanyWorkingCheckpointKindFE;
+  summary: string;
+  occurredAt: string;
+  evidenceRefs: CompanyEvidenceRefFE[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface RunCapsuleFE {
+  capsuleId: string;
+  runId: string;
+  workspaceUri: string;
+  projectId?: string;
+  providerId?: string;
+  executionTarget?: ExecutionTargetFE;
+  triggerContext?: TriggerContextFE;
+  promptResolution?: PromptModeResolutionFE;
+  goal: string;
+  prompt: string;
+  status: AgentRunStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  checkpoints: CompanyWorkingCheckpointFE[];
+  verifiedFacts: string[];
+  decisions: string[];
+  reusableSteps: string[];
+  blockers: string[];
+  changedFiles: string[];
+  outputArtifacts: CompanyEvidenceRefFE[];
+  qualitySignals: {
+    resultStatus?: AgentRunResult['status'];
+    reviewOutcome?: ReviewOutcome;
+    verificationPassed?: boolean;
+    reportedEventDate?: string;
+    reportedEventCount?: number;
+    hasResultEnvelope: boolean;
+    hasArtifactManifest: boolean;
+    hasDeliveryPacket: boolean;
+  };
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+  sourceRunUpdatedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MemoryCandidateKindFE =
+  | 'decision'
+  | 'pattern'
+  | 'lesson'
+  | 'domain-knowledge'
+  | 'workflow-proposal'
+  | 'skill-proposal';
+
+export type MemoryCandidateStatusFE =
+  | 'candidate'
+  | 'auto-promoted'
+  | 'pending-review'
+  | 'promoted'
+  | 'rejected'
+  | 'archived';
+
+export type KnowledgeVolatilityFE = 'stable' | 'time-bound' | 'volatile';
+export type KnowledgePromotionLevelFE = 'l0-candidate' | 'l1-index' | 'l2-fact' | 'l3-process' | 'l4-archive';
+
+export interface MemoryCandidateScoreFE {
+  total: number;
+  evidence: number;
+  reuse: number;
+  specificity: number;
+  stability: number;
+  novelty: number;
+  risk: number;
+}
+
+export interface MemoryCandidateConflictFE {
+  knowledgeId: string;
+  reason: string;
+  severity: 'low' | 'medium' | 'high';
+}
+
+export interface MemoryCandidateFE {
+  id: string;
+  workspaceUri?: string;
+  sourceRunId: string;
+  sourceCapsuleId: string;
+  kind: MemoryCandidateKindFE;
+  title: string;
+  content: string;
+  evidenceRefs: CompanyEvidenceRefFE[];
+  volatility: KnowledgeVolatilityFE;
+  score: MemoryCandidateScoreFE;
+  reasons: string[];
+  conflicts: MemoryCandidateConflictFE[];
+  status: MemoryCandidateStatusFE;
+  promotedKnowledgeId?: string;
+  rejectedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type OperatingSignalSourceFE = 'scheduler' | 'run' | 'approval' | 'knowledge' | 'user' | 'system' | 'external';
+export type OperatingSignalKindFE = 'opportunity' | 'risk' | 'routine' | 'failure' | 'learning' | 'decision';
+export type OperatingSignalStatusFE = 'observed' | 'triaged' | 'dismissed' | 'converted';
+
+export interface OperatingSignalFE {
+  id: string;
+  source: OperatingSignalSourceFE;
+  kind: OperatingSignalKindFE;
+  title: string;
+  summary: string;
+  evidenceRefs: CompanyEvidenceRefFE[];
+  workspaceUri?: string;
+  sourceRunId?: string;
+  sourceJobId?: string;
+  sourceCandidateId?: string;
+  sourceApprovalId?: string;
+  urgency: number;
+  value: number;
+  confidence: number;
+  risk: number;
+  estimatedCost: { tokens: number; minutes: number };
+  score: number;
+  dedupeKey: string;
+  status: OperatingSignalStatusFE;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type OperatingAgendaActionFE = 'dispatch' | 'ask_user' | 'approve' | 'observe' | 'snooze' | 'dismiss';
+export type OperatingAgendaPriorityFE = 'p0' | 'p1' | 'p2' | 'p3';
+export type OperatingAgendaStatusFE = 'triaged' | 'ready' | 'blocked' | 'dispatched' | 'completed' | 'dismissed' | 'snoozed';
+
+export interface OperatingAgendaItemFE {
+  id: string;
+  signalIds: string[];
+  title: string;
+  recommendedAction: OperatingAgendaActionFE;
+  targetDepartmentId?: string;
+  suggestedWorkflowRef?: string;
+  suggestedExecutionTargetId?: string;
+  priority: OperatingAgendaPriorityFE;
+  score: number;
+  status: OperatingAgendaStatusFE;
+  reason: string;
+  evidenceRefs: CompanyEvidenceRefFE[];
+  workspaceUri?: string;
+  estimatedCost: { tokens: number; minutes: number };
+  budgetDecisionId?: string;
+  blockedReason?: string;
+  snoozedUntil?: string;
+  dispatchedRunId?: string;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CompanyOperatingDayFE {
+  date: string;
+  timezone: string;
+  focus: string[];
+  agenda: OperatingAgendaItemFE[];
+  activeSignals: OperatingSignalFE[];
+  departmentStates: Array<{
+    workspaceUri: string;
+    name?: string;
+    activeRuns: number;
+    completedRuns: number;
+    blockedRuns: number;
+    activeSignals: number;
+    topAgendaItemIds: string[];
+    updatedAt: string;
+  }>;
+  activeRuns: string[];
+  completedRuns: string[];
+  newKnowledgeIds: string[];
+  memoryCandidateIds: string[];
+  blockedSignals: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CompanyLoopPolicyScopeFE = 'organization' | 'department';
+export type CompanyLoopAgendaActionFE = 'observe' | 'dispatch' | 'approve' | 'snooze' | 'dismiss';
+export type CompanyLoopNotificationChannelFE = 'web' | 'email' | 'webhook';
+
+export interface CompanyLoopPolicyFE {
+  id: string;
+  scope: CompanyLoopPolicyScopeFE;
+  scopeId?: string;
+  enabled: boolean;
+  timezone: string;
+  dailyReviewHour: number;
+  weeklyReviewDay: number;
+  weeklyReviewHour: number;
+  maxAgendaPerDailyLoop: number;
+  maxAutonomousDispatchesPerLoop: number;
+  allowedAgendaActions: CompanyLoopAgendaActionFE[];
+  growthReviewEnabled: boolean;
+  notificationChannels: CompanyLoopNotificationChannelFE[];
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type CompanyLoopRunKindFE = 'daily-review' | 'weekly-review' | 'growth-review' | 'risk-review';
+export type CompanyLoopRunStatusFE = 'running' | 'completed' | 'skipped' | 'failed';
+
+export interface CompanyLoopRunFE {
+  id: string;
+  policyId: string;
+  kind: CompanyLoopRunKindFE;
+  status: CompanyLoopRunStatusFE;
+  date: string;
+  timezone: string;
+  selectedAgendaIds: string[];
+  dispatchedRunIds: string[];
+  generatedProposalIds: string[];
+  notificationIds: string[];
+  budgetLedgerIds: string[];
+  summary: string;
+  skipReason?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CompanyLoopDigestFE {
+  id: string;
+  loopRunId: string;
+  date: string;
+  title: string;
+  operatingSummary: string;
+  decisionsNeeded: string[];
+  risksBlocked: string[];
+  departmentHighlights: string[];
+  capabilityGrowth: string[];
+  budgetSummary: string[];
+  linkedAgendaIds: string[];
+  linkedRunIds: string[];
+  linkedProposalIds: string[];
+  createdAt: string;
+}
+
+export type BudgetScopeFE = 'organization' | 'department' | 'scheduler-job' | 'agenda-item' | 'growth-proposal';
+export type BudgetPeriodFE = 'day' | 'week' | 'month';
+
+export interface OperatingBudgetPolicyFE {
+  id: string;
+  scope: BudgetScopeFE;
+  scopeId?: string;
+  period: BudgetPeriodFE;
+  maxTokens: number;
+  maxMinutes: number;
+  maxDispatches: number;
+  maxConcurrentRuns?: number;
+  cooldownMinutesByKind?: Record<string, number>;
+  failureBudget?: {
+    maxConsecutiveFailures: number;
+    coolDownMinutes: number;
+  };
+  warningThreshold: number;
+  hardStop: boolean;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type BudgetLedgerDecisionFE = 'reserved' | 'committed' | 'released' | 'blocked' | 'skipped';
+
+export interface BudgetLedgerEntryFE {
+  id: string;
+  scope: BudgetScopeFE;
+  scopeId?: string;
+  policyId?: string;
+  decision: BudgetLedgerDecisionFE;
+  agendaItemId?: string;
+  runId?: string;
+  schedulerJobId?: string;
+  proposalId?: string;
+  tokens: number;
+  minutes: number;
+  dispatches: number;
+  reason?: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type CircuitBreakerStatusFE = 'closed' | 'open' | 'half-open';
+
+export interface CircuitBreakerFE {
+  id: string;
+  scope: BudgetScopeFE | 'provider' | 'workflow';
+  scopeId: string;
+  status: CircuitBreakerStatusFE;
+  failureCount: number;
+  threshold: number;
+  coolDownMinutes: number;
+  openedAt?: string;
+  recoverAt?: string;
+  lastFailureAt?: string;
+  resetAt?: string;
+  reason?: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BudgetGateDecisionFE {
+  id: string;
+  allowed: boolean;
+  decision: 'allow' | 'warn' | 'block';
+  reasons: string[];
+  policy: OperatingBudgetPolicyFE;
+  usage: { tokens: number; minutes: number; dispatches: number };
+  requested: { tokens: number; minutes: number; dispatches: number };
+  circuitBreakers: CircuitBreakerFE[];
+  createdAt: string;
+}
+
+export type GrowthProposalKindFE = 'sop' | 'workflow' | 'skill' | 'script' | 'rule';
+export type GrowthProposalStatusFE = 'draft' | 'evaluated' | 'approval-required' | 'approved' | 'rejected' | 'published' | 'observing' | 'archived';
+export type GrowthProposalRiskFE = 'low' | 'medium' | 'high';
+
+export interface GrowthProposalFE {
+  id: string;
+  kind: GrowthProposalKindFE;
+  status: GrowthProposalStatusFE;
+  risk: GrowthProposalRiskFE;
+  score: number;
+  workspaceUri?: string;
+  title: string;
+  summary: string;
+  targetName: string;
+  targetRef: string;
+  content: string;
+  sourceRunIds: string[];
+  sourceCapsuleIds: string[];
+  sourceKnowledgeIds: string[];
+  sourceCandidateIds: string[];
+  evidenceRefs: CompanyEvidenceRefFE[];
+  evaluation?: {
+    evaluatedAt: string;
+    evidenceCount: number;
+    score: number;
+    recommendation: 'approve' | 'needs-approval' | 'reject' | 'observe';
+    reasons: string[];
+  };
+  approvalRequestId?: string;
+  publishedAssetRef?: string;
+  publishedAt?: string;
+  rejectedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GrowthObservationFE {
+  id: string;
+  proposalId: string;
+  publishedAssetRef?: string;
+  observedAt: string;
+  hitCount: number;
+  matchedRunIds: string[];
+  successRate: number | null;
+  estimatedTokenSaving?: number;
+  regressionSignals?: string[];
+  summary: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type SystemImprovementSignalSourceFE =
+  | 'performance'
+  | 'ux-breakpoint'
+  | 'test-failure'
+  | 'runtime-error'
+  | 'manual-feedback'
+  | 'duplicate-work'
+  | 'architecture-risk';
+
+export type SystemImprovementAreaFE =
+  | 'frontend'
+  | 'api'
+  | 'runtime'
+  | 'scheduler'
+  | 'provider'
+  | 'knowledge'
+  | 'approval'
+  | 'database'
+  | 'docs';
+
+export type SystemImprovementSeverityFE = 'low' | 'medium' | 'high' | 'critical';
+
+export interface SystemImprovementSignalFE {
+  id: string;
+  source: SystemImprovementSignalSourceFE;
+  title: string;
+  summary: string;
+  evidenceRefs: CompanyEvidenceRefFE[];
+  affectedAreas: SystemImprovementAreaFE[];
+  severity: SystemImprovementSeverityFE;
+  recurrence: number;
+  estimatedBenefit: {
+    latencyReductionMs?: number;
+    failureReduction?: number;
+    maintenanceSaving?: number;
+    uxImpact?: number;
+  };
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type SystemImprovementProposalStatusFE =
+  | 'draft'
+  | 'needs-evidence'
+  | 'approval-required'
+  | 'approved'
+  | 'in-progress'
+  | 'testing'
+  | 'ready-to-merge'
+  | 'published'
+  | 'rejected'
+  | 'rolled-back'
+  | 'observing';
+
+export type SystemImprovementRiskFE = 'low' | 'medium' | 'high' | 'critical';
+
+export interface SystemImprovementTestEvidenceFE {
+  command: string;
+  status: 'passed' | 'failed';
+  outputSummary: string;
+  createdAt: string;
+}
+
+export interface SystemImprovementProposalFE {
+  id: string;
+  status: SystemImprovementProposalStatusFE;
+  title: string;
+  summary: string;
+  sourceSignalIds: string[];
+  evidenceRefs: CompanyEvidenceRefFE[];
+  affectedFiles: string[];
+  protectedAreas: string[];
+  risk: SystemImprovementRiskFE;
+  implementationPlan: string[];
+  testPlan: string[];
+  rollbackPlan: string[];
+  branchName?: string;
+  approvalRequestId?: string;
+  linkedRunIds: string[];
+  testEvidence: SystemImprovementTestEvidenceFE[];
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1301,6 +1831,13 @@ export interface ApprovalRequestFE {
     respondedAt: string;
     channel: string;
   };
+  notifications?: Array<{
+    channel: string;
+    success: boolean;
+    messageId?: string;
+    sentAt: string;
+    error?: string;
+  }>;
 }
 
 export interface ApprovalSummaryFE {

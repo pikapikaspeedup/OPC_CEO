@@ -34,6 +34,18 @@ export interface ManagementOverview {
   blockedProjects: number;
   pendingApprovals: number;
   activeSchedulers: number;
+  schedulerRuntime: {
+    status: 'running' | 'idle' | 'disabled' | 'stalled';
+    loopActive: boolean;
+    configuredToStart: boolean;
+    companionServicesEnabled: boolean;
+    role: string;
+    enabledJobCount: number;
+    dueNowCount: number;
+    nextRunAt: string | null;
+    checkedAt: string;
+    message: string;
+  };
   recentKnowledge: number;
   okrProgress: number | null;
   risks: ManagementRisk[];

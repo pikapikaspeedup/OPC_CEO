@@ -278,13 +278,13 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
       {showMenu && (navigableItems.length > 0 || isLoadingFiles) && (
         <div
           ref={menuRef}
-          className="absolute bottom-[calc(100%+14px)] left-0 right-0 z-50 max-h-[320px] overflow-y-auto rounded-[24px] border border-white/8 bg-[rgba(11,19,31,0.97)] shadow-[0_32px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+          className="absolute bottom-[calc(100%+14px)] left-0 right-0 z-50 max-h-[320px] overflow-y-auto rounded-[24px] border border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.98)] shadow-[0_32px_80px_rgba(28,44,73,0.16)] backdrop-blur-2xl"
         >
           {triggerChar === '@' ? (
             <>
               {menuItems.length > 0 && (
                 <>
-                  <div className="border-b border-white/6 bg-white/[0.03] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--app-text-muted)]">
+                  <div className="border-b border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--app-text-muted)]">
                     {t('composer.skills')}
                   </div>
                   {menuItems.map((item, idx) => (
@@ -292,7 +292,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
                       key={`skill-${item.name}`}
                       className={cn(
                         'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
-                        idx === selectedIdx ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
+                        idx === selectedIdx ? 'bg-[var(--app-accent-soft)]' : 'hover:bg-[var(--app-raised)]',
                       )}
                       onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
                       onMouseEnter={() => setSelectedIdx(idx)}
@@ -309,7 +309,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
                 </>
               )}
 
-              <div className="border-y border-white/6 bg-white/[0.03] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--app-text-muted)]">
+              <div className="border-y border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--app-text-muted)]">
                 {t('composer.files')}
               </div>
               {fileItems.length > 0 ? (
@@ -320,7 +320,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
                       key={`file-${item.description}`}
                       className={cn(
                         'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
-                        globalIdx === selectedIdx ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
+                        globalIdx === selectedIdx ? 'bg-[var(--app-accent-soft)]' : 'hover:bg-[var(--app-raised)]',
                       )}
                       onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
                       onMouseEnter={() => setSelectedIdx(globalIdx)}
@@ -350,7 +350,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
                 key={`${item.type}-${item.name}`}
                 className={cn(
                   'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
-                  idx === selectedIdx ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
+                  idx === selectedIdx ? 'bg-[var(--app-accent-soft)]' : 'hover:bg-[var(--app-raised)]',
                 )}
                 onMouseDown={(e) => { e.preventDefault(); insertItem(item); }}
                 onMouseEnter={() => setSelectedIdx(idx)}
@@ -370,10 +370,10 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
 
       <div className="chat-composer-frame relative overflow-hidden">
         {pastedImages.length > 0 && (
-          <div className="border-b border-white/6 px-4 py-4 sm:px-5">
+          <div className="border-b border-[var(--app-border-soft)] px-4 py-4 sm:px-5">
             <div className="flex flex-wrap gap-3">
               {pastedImages.map(img => (
-                <div key={img.id} className="group relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[18px] border border-white/8 bg-[var(--app-raised)]">
+                <div key={img.id} className="group relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)]">
                   <Image
                     src={img.dataUrl}
                     alt="Pasted"
@@ -396,7 +396,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
         )}
 
         <div className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-          <div className="rounded-[24px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(19,29,46,0.94)_0%,rgba(13,21,34,0.96)_100%)] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all duration-200 focus-within:border-[var(--app-border-strong)] focus-within:shadow-[0_0_0_1px_rgba(88,243,212,0.16)] sm:px-5 sm:py-4">
+          <div className="rounded-[24px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(247,250,255,0.96)_100%)] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition-all duration-200 focus-within:border-[var(--app-border-strong)] focus-within:shadow-[0_0_0_3px_rgba(47,109,246,0.10)] sm:px-5 sm:py-4">
             <Textarea
               ref={ref}
               value={text}
@@ -426,8 +426,8 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
                   className={cn(
                     'inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[11px] font-semibold transition-all',
                     agenticMode
-                      ? 'border-indigo-400/18 bg-indigo-400/10 text-indigo-100 hover:bg-indigo-400/16'
-                      : 'border-violet-400/18 bg-violet-400/10 text-violet-100 hover:bg-violet-400/16',
+                      ? 'border-indigo-400/18 bg-indigo-400/10 text-indigo-700 hover:bg-indigo-400/16'
+                      : 'border-violet-400/18 bg-violet-400/10 text-violet-700 hover:bg-violet-400/16',
                   )}
                   onClick={() => onAgenticModeChange(!agenticMode)}
                   title={agenticMode ? t('composer.planningHint') : t('composer.fastHint')}
@@ -441,7 +441,7 @@ export default function ChatInput({ activeId, onSend, onCancel, disabled, isRunn
               )}
 
               {isRunning && (
-                <div className="inline-flex h-9 items-center gap-2 rounded-full border border-amber-400/18 bg-amber-400/10 px-3.5 text-[11px] font-medium text-amber-100">
+                <div className="inline-flex h-9 items-center gap-2 rounded-full border border-amber-400/18 bg-amber-400/10 px-3.5 text-[11px] font-medium text-amber-700">
                   <span className="relative flex h-2 w-2">
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-300 opacity-75" />
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-400" />

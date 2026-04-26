@@ -11,7 +11,6 @@
  * Output: Updated ApprovalRequest
  */
 
-import * as crypto from 'crypto';
 import { createLogger } from '../logger';
 import type {
   ApprovalRequest,
@@ -23,10 +22,26 @@ import {
   createApprovalRequest,
   getApprovalRequest,
   respondToRequest,
+  updateRequestNotifications,
 } from './request-store';
 import { dispatchNotifications, dispatchFeedbackNotification } from './dispatcher';
+import { ensureDefaultChannels } from './channels';
+import { observeApprovalRequestForAgenda } from '../company-kernel/operating-integration';
+import {
+  generateApprovalToken as generateToken,
+  verifyApprovalToken as verifyToken,
+} from './tokens';
 
 const log = createLogger('ApprovalHandler');
+
+function getDefaultApprovalChannels(): string[] {
+  const configured = process.env.APPROVAL_CHANNELS
+    ?.split(',')
+    .map((channel) => channel.trim())
+    .filter(Boolean);
+  if (configured?.length) return configured;
+  return process.env.APPROVAL_WEBHOOK_URL ? ['web', 'webhook'] : ['web'];
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -35,7 +50,7 @@ const log = createLogger('ApprovalHandler');
 let config: ApprovalConfig = {
   gatewayUrl: process.env.GATEWAY_URL || 'http://localhost:3000',
   hmacSecret: process.env.APPROVAL_HMAC_SECRET || 'default-dev-secret',
-  channels: ['web'],
+  channels: getDefaultApprovalChannels(),
   autoRequestQuotaThreshold: 0.8,
 };
 
@@ -63,11 +78,7 @@ export function getApprovalConfig(): ApprovalConfig {
  * @param action — 'approve' | 'reject' | 'feedback'
  */
 export function generateApprovalToken(requestId: string, action: string): string {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const payload = `${requestId}:${action}:${timestamp}`;
-  const hmac = crypto.createHmac('sha256', config.hmacSecret).update(payload).digest('hex');
-  // Include timestamp in token for expiry check
-  return `${timestamp}.${hmac}`;
+  return generateToken(requestId, action, config.hmacSecret);
 }
 
 /**
@@ -79,24 +90,7 @@ export function generateApprovalToken(requestId: string, action: string): string
  * @returns true if valid and not expired (24h TTL).
  */
 export function verifyApprovalToken(requestId: string, action: string, token: string): boolean {
-  const parts = token.split('.');
-  if (parts.length !== 2) return false;
-
-  const timestamp = parseInt(parts[0], 10);
-  if (isNaN(timestamp)) return false;
-
-  // Check expiry (24 hours)
-  const now = Math.floor(Date.now() / 1000);
-  if (now - timestamp > 86400) return false;
-
-  // Verify HMAC
-  const payload = `${requestId}:${action}:${timestamp}`;
-  const expected = crypto.createHmac('sha256', config.hmacSecret).update(payload).digest('hex');
-
-  return crypto.timingSafeEqual(
-    Buffer.from(parts[1], 'hex'),
-    Buffer.from(expected, 'hex'),
-  );
+  return verifyToken(requestId, action, token, config.hmacSecret);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,10 +109,23 @@ export function verifyApprovalToken(requestId: string, action: string, token: st
  */
 export async function submitApprovalRequest(input: CreateApprovalInput): Promise<ApprovalRequest> {
   const request = createApprovalRequest(input);
+  try {
+    observeApprovalRequestForAgenda(request);
+  } catch (err: unknown) {
+    log.debug({ requestId: request.id, err: err instanceof Error ? err.message : String(err) }, 'Failed to observe approval request for agenda');
+  }
+
+  ensureDefaultChannels(config.gatewayUrl);
 
   // Dispatch notifications (non-blocking)
-  const deliveries = await dispatchNotifications(request);
-  request.notifications = deliveries;
+  const deliveries = await dispatchNotifications(request, config.channels);
+  const updated = updateRequestNotifications(request.id, deliveries);
+  if (updated) {
+    request.notifications = updated.notifications;
+    request.updatedAt = updated.updatedAt;
+  } else {
+    request.notifications = deliveries;
+  }
 
   log.info({
     requestId: request.id,
@@ -169,6 +176,11 @@ export async function handleApprovalResponse(
 
   const updated = respondToRequest(requestId, response);
   if (!updated) return null;
+  try {
+    observeApprovalRequestForAgenda(updated);
+  } catch (err: unknown) {
+    log.debug({ requestId: updated.id, err: err instanceof Error ? err.message : String(err) }, 'Failed to observe approval response for agenda');
+  }
 
   // Dispatch feedback to requesting department
   await dispatchFeedbackNotification(updated);

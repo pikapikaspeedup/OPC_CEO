@@ -12,6 +12,12 @@ import type { DepartmentConfig } from '../types';
 import { createLogger } from '../logger';
 import { listProjects } from './project-registry';
 import { appendCEODecision, updateCEOActiveFocus } from '../organization';
+import type { BudgetLedgerEntry } from '../company-kernel/contracts';
+import {
+  attachRunToBudgetReservation,
+  releaseBudgetForRun,
+  reserveBudgetForOperation,
+} from '../company-kernel/budget-gate';
 
 const log = createLogger('CEO-Agent');
 
@@ -171,6 +177,38 @@ function buildImmediateProjectName(department: DepartmentEntry, goal: string): s
     : `${department.config.name} · 即时任务`;
 }
 
+function reserveCEOManualBudget(input: {
+  workspace: string;
+  goal: string;
+  kind: 'prompt' | 'template';
+}): BudgetLedgerEntry {
+  const budget = reserveBudgetForOperation({
+    scope: 'department',
+    scopeId: input.workspace,
+    estimatedCost: {
+      tokens: Math.max(500, Math.ceil(input.goal.length / 2) + 1_000),
+      minutes: input.kind === 'template' ? 10 : 5,
+    },
+    dispatches: 0,
+    operationKind: `ceo.manual.${input.kind}`,
+    reason: `CEO manual ${input.kind} dispatch`,
+  });
+  if (!budget.decision.allowed) {
+    throw new Error(budget.decision.reasons.join('; ') || 'CEO dispatch blocked by budget gate');
+  }
+  return budget.ledger;
+}
+
+function releaseCEOManualBudget(ledger: BudgetLedgerEntry | null, reason: string): void {
+  if (!ledger || ledger.decision !== 'reserved') return;
+  releaseBudgetForRun({
+    policyId: ledger.policyId,
+    scope: ledger.scope,
+    scopeId: ledger.scopeId,
+    reason,
+  });
+}
+
 async function executeImmediateDepartmentTask(input: {
   department: DepartmentEntry;
   originalCommand: string;
@@ -202,12 +240,24 @@ async function executeImmediateDepartmentTask(input: {
 
   try {
     if (templateId) {
-      const dispatchResult = await executeDispatch({
+      const budgetLedger = reserveCEOManualBudget({
         workspace: department.workspaceUri,
-        projectId: project.projectId,
-        templateId,
-        prompt: goal,
+        goal,
+        kind: 'template',
       });
+      let dispatchResult: { runId: string };
+      try {
+        dispatchResult = await executeDispatch({
+          workspace: department.workspaceUri,
+          projectId: project.projectId,
+          templateId,
+          prompt: goal,
+        });
+      } catch (err) {
+        releaseCEOManualBudget(budgetLedger, 'CEO template dispatch failed before run attach');
+        throw err;
+      }
+      attachRunToBudgetReservation(budgetLedger, dispatchResult.runId);
       return {
         success: true,
         action: 'create_project',
@@ -218,15 +268,27 @@ async function executeImmediateDepartmentTask(input: {
     }
 
     const skills: string[] = skillHint ? [skillHint] : [];
-    const promptResult = await executePrompt({
+    const budgetLedger = reserveCEOManualBudget({
       workspace: department.workspaceUri,
-      projectId: project.projectId,
-      prompt: goal,
-      executionTarget: {
-        kind: 'prompt',
-        ...(skills.length ? { skillHints: skills } : {}),
-      },
+      goal,
+      kind: 'prompt',
     });
+    let promptResult: { runId: string };
+    try {
+      promptResult = await executePrompt({
+        workspace: department.workspaceUri,
+        projectId: project.projectId,
+        prompt: goal,
+        executionTarget: {
+          kind: 'prompt',
+          ...(skills.length ? { skillHints: skills } : {}),
+        },
+      });
+    } catch (err) {
+      releaseCEOManualBudget(budgetLedger, 'CEO prompt dispatch failed before run attach');
+      throw err;
+    }
+    attachRunToBudgetReservation(budgetLedger, promptResult.runId);
     return {
       success: true,
       action: 'create_project',

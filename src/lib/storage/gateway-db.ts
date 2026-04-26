@@ -57,7 +57,7 @@ export interface WorkspaceCatalogRecord {
 }
 
 const DB_FILE = path.join(GATEWAY_HOME, 'storage.sqlite');
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 
 export interface RunRecordFilter {
   status?: RunStatus;
@@ -320,6 +320,236 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_status ON evolution_proposals(status);
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_target_name ON evolution_proposals(target_name);
     CREATE INDEX IF NOT EXISTS idx_evolution_proposals_updated_at ON evolution_proposals(updated_at);
+
+    CREATE TABLE IF NOT EXISTS run_capsules (
+      capsule_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL UNIQUE,
+      workspace TEXT NOT NULL,
+      project_id TEXT,
+      status TEXT NOT NULL,
+      provider TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      finished_at TEXT,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_capsules_run_id ON run_capsules(run_id);
+    CREATE INDEX IF NOT EXISTS idx_run_capsules_workspace ON run_capsules(workspace);
+    CREATE INDEX IF NOT EXISTS idx_run_capsules_project_id ON run_capsules(project_id);
+    CREATE INDEX IF NOT EXISTS idx_run_capsules_status ON run_capsules(status);
+    CREATE INDEX IF NOT EXISTS idx_run_capsules_provider ON run_capsules(provider);
+    CREATE INDEX IF NOT EXISTS idx_run_capsules_updated_at ON run_capsules(updated_at);
+
+    CREATE TABLE IF NOT EXISTS memory_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      workspace TEXT,
+      source_run_id TEXT NOT NULL,
+      source_capsule_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_workspace ON memory_candidates(workspace);
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_source_run_id ON memory_candidates(source_run_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_source_capsule_id ON memory_candidates(source_capsule_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_kind ON memory_candidates(kind);
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_status ON memory_candidates(status);
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_score ON memory_candidates(score);
+    CREATE INDEX IF NOT EXISTS idx_memory_candidates_updated_at ON memory_candidates(updated_at);
+
+    CREATE TABLE IF NOT EXISTS operating_signals (
+      signal_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      workspace TEXT,
+      dedupe_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_operating_signals_dedupe ON operating_signals(dedupe_key);
+    CREATE INDEX IF NOT EXISTS idx_operating_signals_status ON operating_signals(status);
+    CREATE INDEX IF NOT EXISTS idx_operating_signals_source ON operating_signals(source);
+    CREATE INDEX IF NOT EXISTS idx_operating_signals_kind ON operating_signals(kind);
+    CREATE INDEX IF NOT EXISTS idx_operating_signals_workspace ON operating_signals(workspace);
+    CREATE INDEX IF NOT EXISTS idx_operating_signals_updated_at ON operating_signals(updated_at);
+
+    CREATE TABLE IF NOT EXISTS operating_agenda (
+      agenda_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      score REAL NOT NULL,
+      workspace TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_operating_agenda_status ON operating_agenda(status);
+    CREATE INDEX IF NOT EXISTS idx_operating_agenda_priority ON operating_agenda(priority);
+    CREATE INDEX IF NOT EXISTS idx_operating_agenda_workspace ON operating_agenda(workspace);
+    CREATE INDEX IF NOT EXISTS idx_operating_agenda_updated_at ON operating_agenda(updated_at);
+
+    CREATE TABLE IF NOT EXISTS budget_policies (
+      policy_id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      scope_id TEXT,
+      period TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_budget_policies_scope ON budget_policies(scope);
+    CREATE INDEX IF NOT EXISTS idx_budget_policies_scope_id ON budget_policies(scope_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_policies_updated_at ON budget_policies(updated_at);
+
+    CREATE TABLE IF NOT EXISTS budget_ledger (
+      ledger_id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      scope_id TEXT,
+      policy_id TEXT,
+      decision TEXT NOT NULL,
+      agenda_item_id TEXT,
+      run_id TEXT,
+      scheduler_job_id TEXT,
+      proposal_id TEXT,
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_scope ON budget_ledger(scope);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_scope_id ON budget_ledger(scope_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_policy_id ON budget_ledger(policy_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_decision ON budget_ledger(decision);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_agenda_item_id ON budget_ledger(agenda_item_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_run_id ON budget_ledger(run_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_scheduler_job_id ON budget_ledger(scheduler_job_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_proposal_id ON budget_ledger(proposal_id);
+    CREATE INDEX IF NOT EXISTS idx_budget_ledger_created_at ON budget_ledger(created_at);
+
+    CREATE TABLE IF NOT EXISTS circuit_breakers (
+      breaker_id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      scope_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_circuit_breakers_scope ON circuit_breakers(scope);
+    CREATE INDEX IF NOT EXISTS idx_circuit_breakers_scope_id ON circuit_breakers(scope_id);
+    CREATE INDEX IF NOT EXISTS idx_circuit_breakers_status ON circuit_breakers(status);
+    CREATE INDEX IF NOT EXISTS idx_circuit_breakers_updated_at ON circuit_breakers(updated_at);
+
+    CREATE TABLE IF NOT EXISTS growth_proposals (
+      proposal_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      score REAL NOT NULL,
+      workspace TEXT,
+      target_name TEXT NOT NULL,
+      target_ref TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_kind ON growth_proposals(kind);
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_status ON growth_proposals(status);
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_risk ON growth_proposals(risk);
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_workspace ON growth_proposals(workspace);
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_score ON growth_proposals(score);
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_target_name ON growth_proposals(target_name);
+    CREATE INDEX IF NOT EXISTS idx_growth_proposals_updated_at ON growth_proposals(updated_at);
+
+    CREATE TABLE IF NOT EXISTS growth_observations (
+      observation_id TEXT PRIMARY KEY,
+      proposal_id TEXT NOT NULL,
+      published_asset_ref TEXT,
+      observed_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_growth_observations_proposal_id ON growth_observations(proposal_id);
+    CREATE INDEX IF NOT EXISTS idx_growth_observations_observed_at ON growth_observations(observed_at);
+
+    CREATE TABLE IF NOT EXISTS company_loop_policies (
+      policy_id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      scope_id TEXT,
+      enabled INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_company_loop_policies_scope
+      ON company_loop_policies(scope, COALESCE(scope_id, ''));
+    CREATE INDEX IF NOT EXISTS idx_company_loop_policies_enabled ON company_loop_policies(enabled);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_policies_updated_at ON company_loop_policies(updated_at);
+
+    CREATE TABLE IF NOT EXISTS company_loop_runs (
+      loop_run_id TEXT PRIMARY KEY,
+      policy_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      date TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_company_loop_runs_policy_id ON company_loop_runs(policy_id);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_runs_date ON company_loop_runs(date);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_runs_kind ON company_loop_runs(kind);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_runs_status ON company_loop_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_runs_started_at ON company_loop_runs(started_at);
+
+    CREATE TABLE IF NOT EXISTS company_loop_digests (
+      digest_id TEXT PRIMARY KEY,
+      loop_run_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_company_loop_digests_loop_run_id ON company_loop_digests(loop_run_id);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_digests_date ON company_loop_digests(date);
+    CREATE INDEX IF NOT EXISTS idx_company_loop_digests_created_at ON company_loop_digests(created_at);
+
+    CREATE TABLE IF NOT EXISTS system_improvement_signals (
+      signal_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_system_improvement_signals_source ON system_improvement_signals(source);
+    CREATE INDEX IF NOT EXISTS idx_system_improvement_signals_severity ON system_improvement_signals(severity);
+    CREATE INDEX IF NOT EXISTS idx_system_improvement_signals_created_at ON system_improvement_signals(created_at);
+
+    CREATE TABLE IF NOT EXISTS system_improvement_proposals (
+      proposal_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_system_improvement_proposals_status ON system_improvement_proposals(status);
+    CREATE INDEX IF NOT EXISTS idx_system_improvement_proposals_risk ON system_improvement_proposals(risk);
+    CREATE INDEX IF NOT EXISTS idx_system_improvement_proposals_updated_at ON system_improvement_proposals(updated_at);
 
     CREATE TABLE IF NOT EXISTS workspace_catalog (
       workspace_uri TEXT PRIMARY KEY,
@@ -1207,6 +1437,14 @@ export function listScheduledJobRecords(): ScheduledJob[] {
   `).all() as Array<{ payload_json: string }>;
 
   return rows.map((row) => JSON.parse(row.payload_json) as ScheduledJob);
+}
+
+export function deleteScheduledJobRecord(jobId: string): void {
+  const db = getGatewayDb();
+  db.prepare(`
+    DELETE FROM scheduled_jobs
+    WHERE job_id = ?
+  `).run(jobId);
 }
 
 function normalizeWorkspaceCatalogRecord(

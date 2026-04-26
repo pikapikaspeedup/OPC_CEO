@@ -7,7 +7,14 @@ import type {
 } from '../organization/contracts';
 import type { ProviderId } from '../providers/types';
 import type { PromptModeResolution } from './group-types';
-import { getCanonicalWorkflow, type CanonicalSkill, type CanonicalWorkflow } from './canonical-assets';
+import {
+  getCanonicalSkill,
+  getCanonicalWorkflow,
+  type CanonicalSkill,
+  type CanonicalWorkflow,
+} from './canonical-assets';
+import type { GrowthProposal } from '../company-kernel/contracts';
+import { listGrowthProposals } from '../company-kernel/growth-proposal-store';
 import {
   getDepartmentCapabilityView,
   getDepartmentProviderCapabilityProfile,
@@ -62,6 +69,72 @@ const CAPABILITY_FALLBACK_ORDER: ProviderId[] = [
 
 function normalizeText(value: string | undefined): string {
   return (value || '').toLowerCase().replace(/[\s/_-]+/g, '');
+}
+
+function workspaceUriFromPath(workspacePath: string): string {
+  return workspacePath.startsWith('file://') ? workspacePath : `file://${workspacePath}`;
+}
+
+function growthProposalMatchScore(proposal: GrowthProposal, promptText?: string): number {
+  const prompt = normalizeText(promptText);
+  if (!prompt) return 0;
+  const tokens = [
+    proposal.targetName,
+    proposal.title,
+    proposal.summary,
+    ...(proposal.metadata?.keywords && Array.isArray(proposal.metadata.keywords)
+      ? proposal.metadata.keywords.map(String)
+      : []),
+  ]
+    .flatMap((value) => String(value || '').split(/[\s/_-]+/))
+    .map(normalizeText)
+    .filter((token) => token.length >= 3);
+  if (tokens.length === 0) return 0;
+  const uniqueTokens = Array.from(new Set(tokens)).slice(0, 16);
+  return uniqueTokens.filter((token) => prompt.includes(token)).length / uniqueTokens.length;
+}
+
+function loadMatchingPublishedGrowthProposals(workspacePath: string, promptText?: string): GrowthProposal[] {
+  const workspaceUri = workspaceUriFromPath(workspacePath);
+  try {
+    return listGrowthProposals({
+      status: ['published', 'observing'],
+      minScore: 50,
+      limit: 50,
+    })
+      .filter((proposal) => !proposal.workspaceUri || proposal.workspaceUri === workspaceUri)
+      .map((proposal) => ({
+        proposal,
+        score: growthProposalMatchScore(proposal, promptText),
+      }))
+      .filter((entry) => entry.score > 0 || !promptText)
+      .sort((a, b) => b.score - a.score || b.proposal.score - a.proposal.score)
+      .map((entry) => entry.proposal)
+      .slice(0, 6);
+  } catch {
+    return [];
+  }
+}
+
+function loadPublishedGrowthAssets(workspacePath: string, promptText?: string): {
+  workflows: CanonicalWorkflow[];
+  skills: CanonicalSkill[];
+  proposals: GrowthProposal[];
+} {
+  const proposals = loadMatchingPublishedGrowthProposals(workspacePath, promptText);
+  const workflows = proposals
+    .filter((proposal) => proposal.kind === 'workflow')
+    .map((proposal) => getCanonicalWorkflow(`/${proposal.targetName}`))
+    .filter((entry): entry is CanonicalWorkflow => Boolean(entry));
+  const skills = proposals
+    .filter((proposal) => proposal.kind === 'skill')
+    .map((proposal) => getCanonicalSkill(proposal.targetName))
+    .filter((entry): entry is CanonicalSkill => Boolean(entry));
+  return {
+    workflows,
+    skills,
+    proposals,
+  };
 }
 
 function dedupeProviders(providers: Array<ProviderId | undefined>): ProviderId[] {
@@ -447,6 +520,17 @@ export function buildPromptModeProviderExecutionContext(
   const departmentSkills = explicitSkills.size > 0
     ? [...explicitSkills.values()]
     : view.skills.flatMap((skill) => skill.fallbackSkills);
+  const growthAssets = explicitWorkflows.length > 0
+    ? { workflows: [] as CanonicalWorkflow[], skills: [] as CanonicalSkill[], proposals: [] as GrowthProposal[] }
+    : loadPublishedGrowthAssets(workspacePath, input.promptText);
+  const effectiveWorkflows = [
+    ...departmentWorkflows,
+    ...growthAssets.workflows.filter((workflow) => !departmentWorkflows.some((item) => item.name === workflow.name)),
+  ];
+  const effectiveSkills = [
+    ...departmentSkills,
+    ...growthAssets.skills.filter((skill) => !departmentSkills.some((item) => item.name === skill.name)),
+  ];
 
   const sections = [
     ...buildSharedContext(view),
@@ -456,46 +540,50 @@ export function buildPromptModeProviderExecutionContext(
     '- 优先使用 Department Workflows。',
     '- 如果没有合适 workflow，再回退到 Department Skills。',
     '- 如果仍然没有合适资产，就按最优方法完成任务，并在结果中建议是否应沉淀新的 workflow。',
-    ...formatWorkflowSection(departmentWorkflows),
-    ...formatSkillSection(departmentSkills),
+    ...formatWorkflowSection(effectiveWorkflows),
+    ...formatSkillSection(effectiveSkills),
     '',
     '</department-capability-pack>',
   ];
 
   const promptResolution: PromptModeResolution = {
-    mode: explicitWorkflows.length > 0 || departmentWorkflows.length > 0
+    mode: explicitWorkflows.length > 0 || effectiveWorkflows.length > 0
       ? 'workflow'
-      : departmentSkills.length > 0
+      : effectiveSkills.length > 0
         ? 'skill'
         : 'prompt',
     requestedWorkflowRefs: input.promptAssetRefs ?? [],
     requestedSkillHints: input.skillHints ?? [],
-    matchedWorkflowRefs: departmentWorkflows.map((workflow) => `/${workflow.name}`),
-    matchedSkillRefs: departmentSkills.map((skill) => skill.name),
+    matchedWorkflowRefs: effectiveWorkflows.map((workflow) => `/${workflow.name}`),
+    matchedSkillRefs: effectiveSkills.map((skill) => skill.name),
     resolutionReason: explicitWorkflows.length > 0
       ? `Prompt Mode received explicit workflow refs (${explicitWorkflows.map((workflow) => workflow.name).join(', ')}); provider should prefer them.`
       : explicitSkillWorkflows.size > 0
-        ? `Prompt Mode matched ${explicitSkillWorkflows.size} workflow(s) from department skill resolution and injected ${departmentSkills.length} skill fallback(s).`
-      : departmentWorkflows.length > 0
-        ? `Prompt Mode injected ${departmentWorkflows.length} department workflow(s) and ${departmentSkills.length} skill fallback(s).`
-        : departmentSkills.length > 0
-          ? `Prompt Mode injected ${departmentSkills.length} skill fallback(s); no department workflow configured.`
+        ? `Prompt Mode matched ${explicitSkillWorkflows.size} workflow(s) from department skill resolution and injected ${effectiveSkills.length} skill fallback(s).`
+      : effectiveWorkflows.length > 0
+        ? growthAssets.workflows.length > 0
+          ? `Prompt Mode injected ${effectiveWorkflows.length} workflow(s), including ${growthAssets.workflows.length} published growth workflow(s), and ${effectiveSkills.length} skill fallback(s).`
+          : `Prompt Mode injected ${effectiveWorkflows.length} department workflow(s) and ${effectiveSkills.length} skill fallback(s).`
+        : effectiveSkills.length > 0
+          ? growthAssets.skills.length > 0
+            ? `Prompt Mode injected ${effectiveSkills.length} skill fallback(s), including ${growthAssets.skills.length} published growth skill(s); no workflow configured.`
+            : `Prompt Mode injected ${effectiveSkills.length} skill fallback(s); no department workflow configured.`
           : 'Prompt Mode injected department identity/rules only; no workflow or skill asset configured.',
-    workflowSuggestion: explicitWorkflows.length > 0 || departmentWorkflows.length > 0
+    workflowSuggestion: explicitWorkflows.length > 0 || effectiveWorkflows.length > 0
       ? undefined
       : {
           shouldCreateWorkflow: true,
-          source: departmentSkills.length > 0 ? 'skill' : 'prompt',
-          title: `${view.config.name || 'department'}-${departmentSkills[0]?.name || 'new-workflow'}`.slice(0, 80),
-          reason: departmentSkills.length > 0
+          source: effectiveSkills.length > 0 ? 'skill' : 'prompt',
+          title: `${view.config.name || 'department'}-${effectiveSkills[0]?.name || 'new-workflow'}`.slice(0, 80),
+          reason: effectiveSkills.length > 0
             ? 'Prompt Mode completed without a canonical workflow and relied on skill fallback. Consider promoting this pattern into a reusable workflow.'
             : 'Prompt Mode completed without any matched workflow asset. Consider creating a canonical workflow if this task is recurring.',
           recommendedScope: 'department',
           evidence: {
             requestedWorkflowRefs: input.promptAssetRefs ?? [],
             requestedSkillHints: input.skillHints ?? [],
-            matchedWorkflowRefs: departmentWorkflows.map((workflow) => `/${workflow.name}`),
-            matchedSkillRefs: departmentSkills.map((skill) => skill.name),
+            matchedWorkflowRefs: effectiveWorkflows.map((workflow) => `/${workflow.name}`),
+            matchedSkillRefs: effectiveSkills.map((skill) => skill.name),
           },
         },
   };
@@ -504,8 +592,8 @@ export function buildPromptModeProviderExecutionContext(
     ? `/${explicitWorkflows[0].name}`
     : explicitSkillWorkflows.size === 1
       ? `/${[...explicitSkillWorkflows.values()][0].name}`
-      : departmentWorkflows.length === 1
-        ? `/${departmentWorkflows[0].name}`
+      : effectiveWorkflows.length === 1
+        ? `/${effectiveWorkflows[0].name}`
         : undefined;
   const resolvedSkillRefs = promptResolution.matchedSkillRefs.length > 0
     ? promptResolution.matchedSkillRefs

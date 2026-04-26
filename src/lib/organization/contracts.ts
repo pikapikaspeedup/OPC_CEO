@@ -25,6 +25,31 @@ export interface CEOPendingIssue {
   createdAt: string;
 }
 
+export type CEORoutineActionType = 'approval' | 'project' | 'scheduler' | 'knowledge' | 'focus';
+export type CEORoutineActionStatus = 'done' | 'pending' | 'attention';
+export type CEORoutineActionPriority = 'low' | 'medium' | 'high';
+
+export interface CEORoutineActionTarget {
+  kind: 'approvals' | 'project' | 'scheduler' | 'knowledge' | 'ceo-focus';
+  section: 'ceo' | 'projects' | 'knowledge' | 'operations' | 'settings' | 'conversations';
+  requestId?: string;
+  projectId?: string;
+  jobId?: string;
+  knowledgeId?: string;
+  workspaceUri?: string;
+}
+
+export interface CEORoutineAction {
+  id: string;
+  label: string;
+  type: CEORoutineActionType;
+  status: CEORoutineActionStatus;
+  priority: CEORoutineActionPriority;
+  meta?: string;
+  count?: number;
+  target: CEORoutineActionTarget;
+}
+
 export interface CEOProfile {
   id: 'default-ceo';
   identity: {
@@ -126,10 +151,7 @@ export interface CEORoutineSummary {
   highlights: string[];
   reminders: string[];
   escalations: string[];
-  actions: Array<{
-    label: string;
-    type: 'approval' | 'project' | 'scheduler' | 'knowledge' | 'focus';
-  }>;
+  actions: CEORoutineAction[];
 }
 
 export interface CEOEventRecord {

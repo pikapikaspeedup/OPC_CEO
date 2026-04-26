@@ -43,6 +43,8 @@ describe('normalizeNativeCodexModel', () => {
 
 describe('nativeCodexComplete', () => {
   afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -116,5 +118,27 @@ describe('nativeCodexComplete', () => {
       },
       finishReason: 'tool_calls',
     });
+  });
+
+  it('times out native Codex requests that do not receive a response', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('NATIVE_CODEX_TIMEOUT_MS', '25');
+    mockResolveCodexAccessToken.mockResolvedValue('test-access-token');
+
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    })));
+
+    const pending = nativeCodexComplete({
+      messages: [
+        { role: 'user', content: 'hello' },
+      ],
+      model: 'gpt-5.4',
+    });
+    const assertion = expect(pending).rejects.toThrow('Native Codex request timed out after 25ms');
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await assertion;
   });
 });

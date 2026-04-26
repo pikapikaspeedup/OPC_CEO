@@ -75,8 +75,14 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 ## 核心对话接口
 
 > 列表分页约定（2026-04-20）:
-> `GET /api/conversations`、`GET /api/projects`、`GET /api/agent-runs`、`GET /api/scheduler/jobs`、`GET /api/projects/:id/checkpoints`、`GET /api/projects/:id/journal`、`GET /api/projects/:id/deliverables`、`GET /api/operations/audit` 统一支持 `page/pageSize`，响应统一为 `{ items, page, pageSize, total, hasMore }`。
+> `GET /api/conversations`、`GET /api/projects`、`GET /api/agent-runs`、`GET /api/company/run-capsules`、`GET /api/company/memory-candidates`、`GET /api/company/signals`、`GET /api/company/agenda`、`GET /api/company/budget/*`、`GET /api/company/circuit-breakers`、`GET /api/company/growth/proposals`、`GET /api/company/loops/*`、`GET /api/company/self-improvement/*`、`GET /api/scheduler/jobs`、`GET /api/projects/:id/checkpoints`、`GET /api/projects/:id/journal`、`GET /api/projects/:id/deliverables`、`GET /api/operations/audit` 统一支持 `page/pageSize`，响应统一为 `{ items, page, pageSize, total, hasMore }`。
 > `journal` / `audit` 的旧 `limit` 仍可用，但已被视为 `pageSize` 别名。
+
+> Split-mode API ownership（2026-04-21）:
+> 在 `AG_ROLE=web` 且配置了 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 时，`web` 只负责页面与 WS ingress，不再执行前端主链的控制面业务逻辑。
+> - `control-plane` 负责：`/api/approval*`、`/api/ai-config`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
+> - `runtime` 负责：`/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation send/steps/cancel、run stream/intervene 等运行时接口
+> - `api` 组合服务允许同一路径按 method 分流；例如 `GET /api/conversations` 归 control-plane，`POST /api/conversations` 归 runtime，路由器会在 405 后继续匹配后续同路径 route。
 
 ### `GET /api/conversations` — 列出所有对话
 
@@ -200,6 +206,8 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 - Antigravity conversation：异步提交给 gRPC，后续通过 WebSocket 或轮询 `/steps` 获取
 - 本地 provider conversation：Gateway 同步执行本地 provider，随后把 transcript 写回本地 steps 文件
+- 本地 provider executor 返回 `status=failed` 时，接口返回 `502 { "error": "..." }`，不再把失败内容伪装成成功 assistant 回复
+- Native Codex 请求默认 90s 超时，可通过 `NATIVE_CODEX_TIMEOUT_MS` 调整
 
 **URL 参数**: `:id` = `cascadeId`
 
@@ -481,7 +489,7 @@ GET /api/conversations/abc123/revert-preview?stepIndex=5&model=MODEL_PLACEHOLDER
 
 ### `POST /api/agent-runs` — 派发 Department Run
 
-**功能**: 创建一个新的 prompt run 或 template run，并允许调用方显式下发 Department runtime 合同。
+**功能**: 创建一个新的 prompt run 或 template run，并允许调用方显式下发 Department runtime 合同。手动派发会写入 Company Kernel token/runtime budget ledger，但不消耗 autonomous dispatch quota；scheduler 触发已由 scheduler 自己的 budget gate 负责。
 
 **Request Body**:
 
@@ -1028,6 +1036,24 @@ done
 - `highlights`
 - `actions`
 
+`actions` 是首页可执行动作列表，不再只是展示文案。每个 action 包含：
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 稳定动作 ID |
+| `type` | `approval` / `project` / `scheduler` / `knowledge` / `focus` |
+| `status` | `done` / `pending` / `attention` |
+| `priority` | `low` / `medium` / `high` |
+| `meta` | 首页副标题或当前证据 |
+| `count` | 相关对象数量 |
+| `target` | 可下钻目标，包含 `kind`、`section` 以及可选 `requestId` / `projectId` / `jobId` / `knowledgeId` / `workspaceUri` |
+
+Web 首页展示原则：
+
+- 全量 agent state 刷新为 60 秒级；审批通过 `/api/approval/events` SSE 做即时补充。
+- 首页“今日关注”按 `attention/pending/done` 显示当前需处理状态，不把 action 列表渲染成虚假的用户完成清单。
+- 指标卡不在前端合成“较昨日”趋势；没有后端历史序列时只展示当前可验证值。
+
 ### `GET /api/ceo/events` — CEO Events
 
 **功能**: 返回最近的 CEO 组织事件流。
@@ -1057,12 +1083,25 @@ done
   - `blockedProjects`
   - `pendingApprovals`
   - `activeSchedulers`
+  - `schedulerRuntime`
   - `recentKnowledge`
   - `metrics`
 - 部门级额外返回：
   - `workspaceUri`
   - `workflowHitRate`
   - `throughput30d`
+
+`schedulerRuntime` 用于区分“有启用任务”和“调度循环真的在跑”：
+
+| 字段 | 说明 |
+|------|------|
+| `status` | `running` / `idle` / `disabled` / `stalled` |
+| `loopActive` | 当前进程内 scheduler loop 是否初始化并活跃 |
+| `configuredToStart` | 当前进程配置是否允许启动 scheduler |
+| `enabledJobCount` | 启用中的 job 数 |
+| `dueNowCount` | 当前应立即触发的 job 数 |
+| `nextRunAt` | 最近一次预计触发时间 |
+| `message` | 面向 UI/运维的状态说明 |
 
 ### `GET /api/evolution/proposals` — Evolution Proposals
 
@@ -1110,9 +1149,53 @@ done
 
 ### `GET /api/approval` — 审批请求列表
 
+**Split mode owner**: `control-plane`
+
 **功能**: 获取所有审批请求。
 
-**Response** `200 OK`: 数组，每项为 `ApprovalRequest` 对象。
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `status` | `string` | 可选。按 `pending` / `approved` / `rejected` / `feedback` 过滤 |
+| `workspace` | `string` | 可选。按 workspace URI 过滤 |
+| `type` | `string` | 可选。按审批类型过滤 |
+| `summary` | `boolean` | 可选。`true` 时返回状态汇总 |
+
+**Response** `200 OK`:
+
+```json
+{
+  "requests": [
+    {
+      "id": "approval-123",
+      "type": "proposal_publish",
+      "workspace": "file:///tmp/research",
+      "title": "发布提案",
+      "description": "需要 CEO 审批",
+      "urgency": "normal",
+      "status": "pending",
+      "createdAt": "2026-04-23T00:00:00.000Z",
+      "updatedAt": "2026-04-23T00:00:00.000Z",
+      "notifications": [
+        {
+          "channel": "web",
+          "success": true,
+          "messageId": "1776981167936-1",
+          "sentAt": "2026-04-23T00:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "pending": 1,
+    "approved": 0,
+    "rejected": 0,
+    "feedback": 0,
+    "total": 1
+  }
+}
+```
 
 ### `POST /api/approval` — 提交审批请求
 
@@ -1146,19 +1229,46 @@ done
 
 ### `POST /api/approval/:id/feedback` — 审批反馈
 
-**功能**: CEO 对审批请求提供反馈（不批准也不拒绝，仅给意见）。
+**功能**: CEO 对审批请求提供反馈（不批准也不拒绝，仅给意见）。Webhook / IM 一键审批链接也会调用该入口，并使用 HMAC token 验证。
 
-**Request Body**:
+**Query 参数**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `message` | `string` | ✅ | 反馈内容 |
+| `action` | `string` | ✅ | `approve` / `reject` / `feedback` |
+| `token` | `string` | ✅ | 由审批系统生成的 HMAC token |
+| `message` | `string` | 否 | 反馈内容 |
+
+### `GET /api/approval/events` — 审批事件流
+
+**Split mode owner**: `control-plane`
+
+**功能**: Server-Sent Events 审批推送流。Web UI 使用该接口在审批请求创建或响应后即时刷新，同时保留最近事件回放，避免短暂断线漏收。
+
+**事件类型**:
+
+| 事件 | 说明 |
+|------|------|
+| `approval_request` | 新审批请求已创建，并已通过 Web 通道写入 notification event bus |
+| `approval_response` | CEO 已批准、拒绝或反馈审批请求 |
+
+**Response** `200 OK`:
+
+```text
+retry: 5000
+
+id: 1776981167936-1
+event: approval_request
+data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-123",...}
+```
 
 ---
 
 ## 部门接口
 
 ### `GET /api/departments` — 获取部门配置
+
+**Split mode owner**: `control-plane`
 
 **功能**: 获取指定 workspace 的部门配置。如果 `.department/config.json` 不存在，返回默认配置。
 
@@ -1269,6 +1379,261 @@ done
 
 ---
 
+## Company Kernel API
+
+Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选，并进一步形成经营信号、议程、预算 gate、熔断器和增长提案。它不启动 Provider，不改变 Antigravity IDE / Language Server 行为。分离部署时 `/api/company/*` 由 web 代理到 control-plane/API 服务，避免 web 进程直接读写本地 DB。
+
+### `GET /api/company/run-capsules` — RunCapsule 列表
+
+**功能**: 分页返回 run 的结构化事实胶囊。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspaceUri` / `workspace` | `string` | 可选。按 workspace URI 过滤 |
+| `projectId` | `string` | 可选。按项目过滤 |
+| `status` | `string` | 可选。按 run status 过滤 |
+| `providerId` | `string` | 可选。按 provider 过滤 |
+| `page` / `pageSize` | `number` | 分页参数，默认 `20`，最大 `100` |
+
+**Response** `200 OK`:
+
+```json
+{
+  "items": [
+    {
+      "capsuleId": "capsule-...",
+      "runId": "run-1234",
+      "workspaceUri": "file:///tmp/workspace",
+      "status": "completed",
+      "checkpoints": [],
+      "verifiedFacts": [],
+      "decisions": [],
+      "reusableSteps": [],
+      "qualitySignals": {
+        "resultStatus": "completed",
+        "hasResultEnvelope": true,
+        "hasArtifactManifest": false,
+        "hasDeliveryPacket": false
+      }
+    }
+  ],
+  "page": 1,
+  "pageSize": 20,
+  "total": 1,
+  "hasMore": false
+}
+```
+
+### `GET /api/company/run-capsules/:runId` — RunCapsule 详情
+
+**功能**: 按 run id 返回单个 RunCapsule。系统重建 capsule 时会合并既有 WorkingCheckpoint，不覆盖已追加的生命周期证据。
+
+### `GET /api/company/memory-candidates` — 记忆候选列表
+
+**功能**: 分页返回从 RunCapsule 生成的记忆候选。候选不会自动成为长期 active knowledge；Knowledge 页面也通过该接口加载候选审核队列。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspaceUri` / `workspace` | `string` | 可选。按 workspace URI 过滤 |
+| `sourceRunId` | `string` | 可选。按来源 run 过滤 |
+| `sourceCapsuleId` | `string` | 可选。按来源 capsule 过滤 |
+| `kind` | `string` | 可选。`decision` / `pattern` / `lesson` / `domain-knowledge` / `workflow-proposal` / `skill-proposal` |
+| `status` | `string` | 可选。`candidate` / `pending-review` / `promoted` / `auto-promoted` / `rejected` / `archived` |
+| `minScore` | `number` | 可选。最低评分 |
+| `page` / `pageSize` | `number` | 分页参数，默认 `20`，最大 `100` |
+
+**关键字段**:
+
+| 字段 | 说明 |
+|------|------|
+| `status` | `candidate` / `pending-review` 表示可操作；`promoted` / `auto-promoted` / `rejected` / `archived` 为闭合状态 |
+| `evidenceRefs` | 候选证据；空证据候选不会自动晋升 |
+| `score` | 结构化评分，`total >= 75` 只是晋升必要条件之一 |
+| `volatility` | `volatile` 候选不会自动晋升 |
+| `conflicts` | 存在 `high` 冲突时不会自动晋升，必须人工审核 |
+
+### `GET /api/company/memory-candidates/:id` — 记忆候选详情
+
+**功能**: 返回单个 MemoryCandidate，包含 evidence refs、score、volatility、conflicts。
+
+### `POST /api/company/memory-candidates/:id/promote` — 晋升为知识资产
+
+**功能**: 将候选显式晋升为 `KnowledgeAsset`。晋升后写入 SQLite `knowledge_assets` 并同步 filesystem mirror。只有 `candidate` / `pending-review` 状态可晋升；对 `rejected/promoted/archived` 等闭合状态操作返回 `409`。
+
+**Request Body**:
+
+```json
+{
+  "title": "可选覆盖标题",
+  "content": "可选覆盖内容",
+  "category": "decision",
+  "level": "l2-fact"
+}
+```
+
+### `POST /api/company/memory-candidates/:id/reject` — 拒绝候选
+
+只有 `candidate` / `pending-review` 状态可拒绝；已 promote 的候选不能回退为 rejected。重复 reject 已拒绝候选保持幂等。
+
+**Request Body**:
+
+```json
+{ "reason": "重复或证据不足" }
+```
+
+### `GET /api/company/signals` — 经营信号列表
+
+分页返回 `OperatingSignal`。支持 `workspaceUri` / `workspace`、`source`、`kind`、`status`、`minScore` 过滤。信号来源包括 `run`、`scheduler`、`approval`、`knowledge`、`system` 等。审批请求提交、批准、拒绝、反馈都会写入 approval signal，并由 agenda builder 形成需要 CEO 处理或观察的议程项。
+
+### `GET /api/company/signals/:id` / `POST /api/company/signals/:id/dismiss`
+
+读取或关闭单个经营信号。关闭后 dedupe upsert 不会把该信号重新打开。
+
+### `GET /api/company/agenda` — 经营议程列表
+
+分页返回 `OperatingAgendaItem`。支持 `workspaceUri`、`status`、`priority`、`minScore` 过滤。agenda 由信号确定性生成，不会自动执行任务。
+
+### `GET /api/company/agenda/:id`
+
+读取单个议程项。
+
+### `POST /api/company/agenda/:id/snooze` / `dismiss`
+
+延后或关闭议程项。
+
+```json
+{ "minutes": 60 }
+```
+
+### `POST /api/company/agenda/:id/dispatch-check`
+
+只做预算与熔断检查，不创建 run。
+
+```json
+{
+  "scope": "department",
+  "scopeId": "file:///tmp/workspace",
+  "schedulerJobId": "job-123"
+}
+```
+
+### `POST /api/company/agenda/:id/dispatch`
+
+先校验 agenda 是否具备 target workspace，再执行 budget gate；允许后创建一个 queued prompt run，并把 agenda 标记为 `dispatched`。该接口只创建 run，不直接启动新的后台 worker。创建 run 后会把 budget reservation 绑定到 `runId`；run 到达 terminal 状态后由 run registry 统一 commit / release，预算流水不会重复统计 reserved + committed。缺少 target workspace 的 agenda 会返回 `409`，且不会写入 reserved ledger。
+
+### `GET /api/company/operating-day`
+
+返回 CEO Office 使用的今日经营读模型：`agenda`、`activeSignals`、`departmentStates`、`activeRuns`、`completedRuns`、`memoryCandidateIds`。
+
+### `GET /api/company/budget/policies` / `GET|PUT /api/company/budget/policies/:id`
+
+读取或更新预算策略。策略字段包括 `scope`、`scopeId`、`period`、`maxTokens`、`maxMinutes`、`maxDispatches`、`maxConcurrentRuns`、`cooldownMinutesByKind`、`failureBudget`、`warningThreshold`、`hardStop`。
+
+### `GET /api/company/budget/ledger`
+
+分页读取预算流水。支持 `scope`、`scopeId`、`policyId`、`decision`、`agendaItemId`、`runId`、`schedulerJobId`、`proposalId` 过滤。`decision` 包括 `reserved`、`committed`、`released`、`blocked`、`skipped`；`skipped` 表示调度被 budget/circuit gate 明确拦截，未创建 run；growth generate/evaluate 也会写入 `growth-proposal` scope ledger。
+
+### `GET /api/company/circuit-breakers` / `POST /api/company/circuit-breakers/:id/reset`
+
+读取或重置熔断器。打开的熔断器会让 `dispatch-check` / `dispatch` 返回 block。真实 run 进入 `failed` / `timeout` / `blocked` 终态会更新 department、scheduler-job、provider、workflow breaker；成功终态会 reset 对应 breaker。
+
+### `GET /api/company/growth/proposals`
+
+分页读取 GrowthProposal。支持 `workspaceUri`、`kind`、`status`、`risk`、`minScore` 过滤。`kind` 为 `sop` / `workflow` / `skill` / `script` / `rule`。
+
+### `POST /api/company/growth/proposals/generate`
+
+经过 budget gate 后，从 RunCapsule、已晋升知识和 workflow/skill memory candidate 生成增长提案。三次以上同类成功 RunCapsule 会生成 `workflow` proposal；两次同类成功或单次稳定 reusable steps 会优先生成 SOP proposal；重复出现的脚本化任务和规则约束会额外生成 `script` / `rule` proposal。
+
+```json
+{ "workspaceUri": "file:///tmp/workspace", "limit": 20 }
+```
+
+### `GET /api/company/growth/proposals/:id`
+
+读取单个增长提案。
+
+### `POST /api/company/growth/proposals/:id/evaluate|approve|reject|dry-run|publish`
+
+评估、批准、拒绝、dry-run 或发布增长提案。`evaluate` 会经过 budget gate；高风险提案会创建 approval request；`script` proposal 必须先通过 `dry-run` 静态 sandbox 检查；公开 `publish` 不接受 `force` 绕过审批或 dry-run，只有满足约束后才会写入 canonical workflow/skill/rule、workflow script 或 SOP knowledge asset。已发布的 workflow/skill proposal 会参与后续 Prompt Mode 执行解析。
+
+### `GET|POST /api/company/growth/observations`
+
+读取或执行增长提案发布后的观察。只有 `published` / `observing` proposal 可以观察；观察结果包含命中 run、成功率、估算 token saving 和 regression signals。`POST` body:
+
+```json
+{ "proposalId": "growth-proposal-..." }
+```
+
+### `GET /api/company/loops/policies` / `GET|PUT /api/company/loops/policies/:id`
+
+读取或更新 `CompanyLoopPolicy`。默认组织策略 ID 为 `company-loop-policy:organization:default`，字段包括 `enabled`、`timezone`、`dailyReviewHour`、`weeklyReviewDay`、`weeklyReviewHour`、`maxAgendaPerDailyLoop`、`maxAutonomousDispatchesPerLoop`、`allowedAgendaActions`、`growthReviewEnabled`、`notificationChannels`。Settings `Autonomy 预算`页会通过该接口保存 loop policy；scheduler 内置 daily/weekly company-loop cron 会读取该策略的时间、时区和 enabled 状态。
+
+`notificationChannels` 支持 `web`、`email`、`webhook`。每个启用通道都会在 loop digest 后写入 channel-specific notification id；`webhook` 在配置 `COMPANY_LOOP_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_WEBHOOK_URL` 后异步 POST digest payload；`email` 可通过 `COMPANY_LOOP_EMAIL_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_EMAIL_WEBHOOK_URL` 接入外部邮件投递器，收件人来自 `COMPANY_LOOP_EMAIL_RECIPIENTS` 或 `AG_COMPANY_LOOP_EMAIL_RECIPIENTS`。
+
+### `GET /api/company/loops/runs` / `GET /api/company/loops/runs/:id`
+
+分页读取 `CompanyLoopRun`。支持 `policyId`、`kind`、`status`、`date` 过滤。响应记录包含 `selectedAgendaIds`、`dispatchedRunIds`、`generatedProposalIds`、`notificationIds`、`budgetLedgerIds`、`summary`、`skipReason`、`error`。`metadata.skippedAgenda` 会结构化保存每个 skipped item 的 `id`、`title`、`reason`、`status`、`priority`、`recommendedAction`、cost 和关联证据，便于 Ops 解释为什么没有执行。
+
+### `POST /api/company/loops/run-now`
+
+手动触发一次 `daily-review`、`weekly-review`、`growth-review` 或 `risk-review`。执行器只选择 Top-N agenda，`dispatch` 仍经过 budget gate / circuit breaker，默认 autonomous dispatch cap 为 1。policy disabled 时会写入 skipped loop run 并返回 `409`。
+
+```json
+{ "kind": "daily-review" }
+```
+
+### `GET /api/company/loops/digests` / `GET /api/company/loops/digests/:id`
+
+分页读取 `CompanyLoopDigest`，用于 CEO Office / Ops 展示 loop 摘要。digest 只汇总结构化事实，不替代 `CompanyLoopRun`、agenda、budget ledger 的可审计数据。
+
+### `POST /api/company/loops/runs/:id/retry`
+
+只允许重试 `failed` / `skipped` loop run；会创建新的 loop run，不覆盖原记录。
+
+### `GET|POST /api/company/self-improvement/signals`
+
+读取或创建 `SystemImprovementSignal`。第一版信号来源包括 `performance`、`ux-breakpoint`、`test-failure`、`runtime-error`、`manual-feedback`、`duplicate-work`、`architecture-risk`。
+
+```json
+{
+  "source": "performance",
+  "title": "Slow company API",
+  "summary": "Response body is too large",
+  "affectedAreas": ["api"],
+  "evidenceRefs": []
+}
+```
+
+### `GET /api/company/self-improvement/proposals`
+
+分页读取系统改进 proposal。支持 `status`、`risk` 过滤。
+
+### `POST /api/company/self-improvement/proposals/generate`
+
+从 signal 生成 `SystemImprovementProposal`，包含 `affectedFiles`、`protectedAreas`、`risk`、`implementationPlan`、`testPlan`、`rollbackPlan`。涉及 protected core 的 high/critical proposal 会自动创建 approval request。该接口不创建 git branch、不提交、不推送、不合并。
+
+```json
+{
+  "signalIds": ["system-improvement-signal-..."],
+  "affectedFiles": ["src/app/api/company/loops/runs/route.ts"]
+}
+```
+
+### `GET /api/company/self-improvement/proposals/:id`
+
+读取单个系统改进 proposal。
+
+### `POST /api/company/self-improvement/proposals/:id/evaluate|approve|reject|attach-test-evidence|observe`
+
+`evaluate` 会重新计算 protected core 风险并按需创建 approval request；`approve` 会写入持久 `metadata.approvalStatus/approvedAt`，`reject` 只更新拒绝状态；`attach-test-evidence` 记录测试命令和摘要。low/medium proposal 在最新 passed evidence 后可进入 `ready-to-merge`；high/critical proposal 必须已有持久审批事实，不能用测试证据绕过审批；已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 `ready-to-merge`。`observe` 将 proposal 标记为 `observing` 并记录观察摘要。没有 auto merge / push / deploy 入口。
+
+---
+
 ## 定时任务接口
 
 ### `GET /api/scheduler/jobs` — 定时任务列表
@@ -1277,26 +1642,43 @@ done
 
 **Response** `200 OK`:
 ```json
-[
-  {
-    "jobId": "abc-123",
-    "name": "每日代码审查",
-    "type": "cron",
-    "cronExpression": "0 9 * * 1-5",
-    "action": {
-      "kind": "dispatch-pipeline",
-      "templateId": "coding-basic",
-      "workspace": "/Users/darrel/Projects/backend",
-      "prompt": "审查昨日提交的代码"
-    },
-    "enabled": true,
-    "lastRunAt": "2026-04-04T09:00:00Z",
-    "lastRunResult": "success",
-    "departmentWorkspaceUri": "/Users/darrel/Projects/backend",
-    "createdAt": "2026-04-01T10:00:00Z"
-  }
-]
+{
+  "items": [
+    {
+      "jobId": "abc-123",
+      "name": "AI 情报日报",
+      "type": "cron",
+      "cronExpression": "0 20 * * *",
+      "timeZone": "Asia/Shanghai",
+      "action": {
+        "kind": "dispatch-execution-profile",
+        "workspace": "file:///Users/darrel/Documents/baogaoai",
+        "prompt": "生成今天的AI日报并上报",
+        "executionProfile": {
+          "kind": "workflow-run",
+          "workflowRef": "/ai_digest"
+        }
+      },
+      "enabled": true,
+      "lastRunAt": "2026-04-22T14:35:47Z",
+      "lastRunResult": "success",
+      "nextRunAt": "2026-04-23T12:00:00.000Z",
+      "departmentWorkspaceUri": "file:///Users/darrel/Documents/baogaoai",
+      "createdAt": "2026-04-22T14:17:17Z"
+    }
+  ],
+  "page": 1,
+  "pageSize": 100,
+  "total": 1,
+  "hasMore": false
+}
 ```
+
+说明：
+
+- `cron` job 支持可选 `timeZone` 字段；例如 `0 20 * * * + Asia/Shanghai` 表示每天北京时间 20:00。
+- 列表和详情读取会按 SQLite `scheduled_jobs` 主存储刷新，不再只看某个进程里的旧内存态；任务已过触发点但尚未执行时，`nextRunAt` 返回当前时间，表示应立即补跑。
+- 默认同设备部署中由 `opc-api` 承载 cron scheduler；`web` 不执行定时任务。`AG_ENABLE_SCHEDULER=0` 可显式关闭 cron，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会启动 fan-out / approval / CEO event consumer 等 companion 后台。
 
 ### `POST /api/scheduler/jobs` — 创建定时任务
 
@@ -1309,6 +1691,7 @@ done
 | `name` | `string` | ✅ | 任务名称 |
 | `type` | `string` | ✅ | `cron` / `interval` / `once` |
 | `cronExpression` | `string` | 条件 | cron 表达式（type=cron 时必填） |
+| `timeZone` | `string` | 否 | `cron` 的 IANA 时区，例如 `Asia/Shanghai`；留空则按服务端本地时区解释 |
 | `intervalMs` | `number` | 条件 | 间隔毫秒数（type=interval 时必填） |
 | `scheduledAt` | `string` | 条件 | 执行时间（type=once 时必填，ISO 8601） |
 | `action` | `object` | ✅ | 执行动作，见下方 |
@@ -1349,9 +1732,13 @@ done
 
 **功能**: 删除定时任务。
 
+说明：
+
+- 删除现在会同步移除 SQLite `scheduled_jobs` 记录，避免“页面看不见但重启后又冒出来”的脏行残留。
+
 ### `POST /api/scheduler/jobs/:id/trigger` — 手动触发任务
 
-**功能**: 立即触发一次定时任务执行（不影响下次 cron 触发时间）。
+**功能**: 立即触发一次定时任务执行（不影响下次 cron 触发时间）。触发前会生成 routine agenda 并经过 Company Kernel budget gate；如果 budget 或 circuit breaker 拦截，响应 `status` 为 `skipped`，不会创建 run，`lastRunResult` 也会记录为 `skipped`。
 
 ---
 
@@ -1454,6 +1841,8 @@ done
 
 ### `GET /api/workspaces` — 所有已知 Workspace
 
+**Split mode owner**: `control-plane`
+
 **功能**: 返回 OPC workspace catalog 中的所有已知 workspace。
 
 目录来源说明：
@@ -1492,6 +1881,8 @@ done
 
 ### `POST /api/workspaces/launch` — 启动 Workspace
 
+**Split mode owner**: `runtime`
+
 **功能**: 在 Antigravity IDE 中打开一个新的 workspace 窗口并启动其 language_server。
 
 调用时会先把目标 workspace 注册到 OPC workspace catalog，再执行 Antigravity CLI 打开动作。
@@ -1516,6 +1907,8 @@ done
 ---
 
 ### `POST /api/workspaces/close` — 隐藏 Workspace
+
+**Split mode owner**: `control-plane`
 
 **功能**: 从 React 前端侧边栏隐藏指定 workspace。**不会杀死 language_server 进程**。
 
@@ -1545,6 +1938,8 @@ done
 ---
 
 ### `POST /api/workspaces/kill` — 停止 Workspace
+
+**Split mode owner**: `runtime`
 
 **功能**: 真正停止指定 workspace 的 `language_server` 进程。
 
@@ -1602,6 +1997,8 @@ done
 
 ### `POST /api/workspaces/import` — 导入 Workspace
 
+**Split mode owner**: `control-plane`
+
 **功能**: 将一个本地目录注册到 OPC workspace catalog，**不会**启动 Antigravity，也**不会**启动 language_server。
 
 这条路由用于：
@@ -1609,6 +2006,7 @@ done
 1. 先导入项目
 2. 先配置 Department
 3. 后续再按需选择是否“在 Antigravity 中打开”
+4. Tauri 桌面壳中通过原生文件夹选择器新建部门
 
 **Request Body**:
 
@@ -1634,6 +2032,8 @@ done
 
 ### `GET /api/me` — 当前用户
 
+**Split mode owner**: `runtime`
+
 **Response** `200 OK`:
 ```json
 {
@@ -1656,6 +2056,8 @@ done
 ---
 
 ### `GET /api/models` — 可用模型与配额
+
+**Split mode owner**: `runtime`
 
 **功能**: 获取可用模型列表。
 
@@ -1966,6 +2368,8 @@ ws.on('message', (data) => {
 
 ### `GET /api/ai-config` — 读取组织级 Provider 配置
 
+**Split mode owner**: `control-plane`
+
 **功能**: 返回当前组织级 AI Provider 配置（`~/.gemini/antigravity/ai-config.json`）。
 
 **Response** `200 OK`:
@@ -2020,6 +2424,8 @@ ws.on('message', (data) => {
 ```
 
 ### `GET /api/api-keys` — Provider 凭据与本地登录状态
+
+**Split mode owner**: `control-plane`
 
 **功能**: 返回已配置的 API Key 状态，以及本机 Provider 的安装/登录检测结果。不会返回真实 key 内容。
 

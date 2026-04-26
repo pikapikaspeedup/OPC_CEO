@@ -84,24 +84,17 @@ export function isProviderAvailable(
 export function getSelectableProviderOptions(
   inventory: ProviderInventory | null | undefined,
   customProvider?: AIProviderConfig['customProvider'],
-  currentProvider?: ProviderId,
+  _currentProvider?: ProviderId,
 ): SelectableProviderOption[] {
-  const options = PROVIDER_OPTIONS
-    .filter((option) => isProviderAvailable(option.value, inventory, customProvider))
-    .map((option) => ({ ...option, disabled: false }));
-
-  if (!currentProvider || options.some((option) => option.value === currentProvider)) {
-    return options;
-  }
-
-  return [
-    {
-      value: currentProvider,
-      label: `${PROVIDER_LABELS[currentProvider]} (未配置)`,
-      disabled: true,
-    },
-    ...options,
-  ];
+  void _currentProvider;
+  return PROVIDER_OPTIONS.map((option) => {
+    const available = isProviderAvailable(option.value, inventory, customProvider);
+    return {
+      ...option,
+      label: available ? option.label : `${option.label} (未配置)`,
+      disabled: !available,
+    };
+  });
 }
 
 export function findUnavailableProviders(

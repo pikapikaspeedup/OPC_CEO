@@ -37,6 +37,7 @@ export {
   listApprovalRequests,
   getRequestSummary,
   loadPersistedRequests,
+  updateRequestNotifications,
 } from './request-store';
 
 // Dispatcher
@@ -52,7 +53,14 @@ export {
   getAllChannels,
   getEnabledChannels,
   initDefaultChannels,
+  ensureDefaultChannels,
 } from './channels';
+
+export {
+  publishApprovalNotificationEvent,
+  subscribeApprovalNotificationEvents,
+  listRecentApprovalNotificationEvents,
+} from './notification-events';
 
 // Token quota (placeholder)
 export {

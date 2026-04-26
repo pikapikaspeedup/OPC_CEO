@@ -8,7 +8,7 @@
  * 4. attach() creates non-running session that accepts append
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockClaudeCodeExecutor,
@@ -34,7 +34,7 @@ const {
 });
 
 vi.mock('../providers', () => ({
-  getExecutor: (...args: any[]) => mockGetExecutor(...args),
+  getExecutor: (...args: [string]) => mockGetExecutor(...args),
   resolveProvider: vi.fn().mockReturnValue({ provider: 'claude-code' }),
 }));
 
@@ -104,11 +104,12 @@ describe('intervention-contract', () => {
 
       expect(mockClaudeCodeExecutor.appendMessage).toHaveBeenCalledOnce();
       expect(mockClaudeCodeExecutor.appendMessage).toHaveBeenCalledWith(
-        expect.stringContaining('claude-code-'),
+        'claude-code-run-nudge',
         {
           prompt: 'Please complete the task',
           model: 'claude-sonnet-4-20250514',
           workspace: '/tmp/workspace',
+          runId: 'run-nudge',
         },
       );
 
@@ -144,6 +145,7 @@ describe('intervention-contract', () => {
           prompt: 'Follow up message',
           model: 'claude-sonnet-4-20250514',
           workspace: '/tmp/workspace',
+          runId: 'run-attach',
         },
       );
     });

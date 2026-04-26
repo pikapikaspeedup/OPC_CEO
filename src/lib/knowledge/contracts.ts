@@ -1,3 +1,8 @@
+import type {
+  KnowledgeEvidence,
+  KnowledgePromotionMetadata,
+} from '../company-kernel/contracts';
+
 export type KnowledgeScope = 'department' | 'organization';
 
 export type KnowledgeCategory =
@@ -30,6 +35,8 @@ export interface KnowledgeAsset {
   confidence?: number;
   tags?: string[];
   status?: KnowledgeStatus;
+  evidence?: KnowledgeEvidence;
+  promotion?: KnowledgePromotionMetadata;
   usageCount?: number;
   lastAccessedAt?: string;
   createdAt: string;

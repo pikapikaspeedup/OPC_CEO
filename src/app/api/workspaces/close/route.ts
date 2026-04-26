@@ -1,24 +1,14 @@
-import { NextResponse } from 'next/server';
-import { createLogger } from '@/lib/logger';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import path from 'path';
-import { minimizeAntigravityWindow } from '@/lib/window-control';
-import { GATEWAY_HOME, HIDDEN_WS_FILE } from '@/lib/agents/gateway-home';
+import {
+  handleWorkspacesCloseDelete,
+  handleWorkspacesCloseGet,
+  handleWorkspacesClosePost,
+} from '@/server/control-plane/routes/workspaces';
+import {
+  proxyToControlPlane,
+  shouldProxyControlPlaneRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
-
-const log = createLogger('Workspace');
-
-const HIDDEN_FILE = HIDDEN_WS_FILE;
-
-function readHidden(): string[] {
-  try { return JSON.parse(readFileSync(HIDDEN_FILE, 'utf-8')); } catch { return []; }
-}
-
-function writeHidden(list: string[]) {
-  mkdirSync(GATEWAY_HOME, { recursive: true });
-  writeFileSync(HIDDEN_FILE, JSON.stringify(list, null, 2));
-}
 
 /**
  * POST /api/workspaces/close — Hide a workspace from the React UI sidebar.
@@ -28,48 +18,30 @@ function writeHidden(list: string[]) {
  * The workspace is simply hidden from the React frontend's server list.
  */
 export async function POST(req: Request) {
-  const { workspace } = await req.json();
-  if (!workspace) {
-    return NextResponse.json({ error: 'Missing workspace' }, { status: 400 });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
   }
-
-  const hidden = readHidden();
-  if (!hidden.includes(workspace)) {
-    hidden.push(workspace);
-    writeHidden(hidden);
-  }
-
-  log.info({ workspace }, 'Hidden workspace from UI (server still running)');
-  
-  // Also try to minimize the actual Antigravity window so it's out of the way
-  const windowMinimized = await minimizeAntigravityWindow(workspace);
-  if (windowMinimized) {
-    log.info({ workspace }, 'Minimized Antigravity window');
-  }
-
-  return NextResponse.json({ ok: true, hidden: true, windowMinimized });
+  return handleWorkspacesClosePost(req);
 }
 
 /**
  * GET /api/workspaces/close — List currently hidden workspaces
  */
-export async function GET() {
-  return NextResponse.json(readHidden());
+const DEFAULT_REQUEST = new Request('http://localhost/api/workspaces/close');
+
+export async function GET(req: Request = DEFAULT_REQUEST) {
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
+  }
+  return handleWorkspacesCloseGet();
 }
 
 /**
  * DELETE /api/workspaces/close — Unhide a workspace (show it again in sidebar)
  */
 export async function DELETE(req: Request) {
-  const { workspace } = await req.json();
-  if (!workspace) {
-    return NextResponse.json({ error: 'Missing workspace' }, { status: 400 });
+  if (shouldProxyControlPlaneRequest()) {
+    return proxyToControlPlane(req);
   }
-
-  const hidden = readHidden().filter(w => w !== workspace);
-  writeHidden(hidden);
-
-  log.info({ workspace }, 'Unhidden workspace');
-  return NextResponse.json({ ok: true, hidden: false });
+  return handleWorkspacesCloseDelete(req);
 }
-

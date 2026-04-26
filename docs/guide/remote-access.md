@@ -2,6 +2,8 @@
 
 通过 Cloudflare Named Tunnel，你可以从手机、外网或任何地方通过**固定 HTTPS 域名**安全访问本地运行的 Antigravity Gateway。
 
+> Split 模式说明：无论后端是否拆成 `web / control-plane / runtime / scheduler`，Cloudflare Tunnel 暴露的始终是 `web` 入口地址；对外 URL 和 API 形态不变。
+
 > **原理**：`cloudflared` 在本地建立一条加密隧道到 Cloudflare 边缘网络，将你的自定义域名流量转发到 `localhost:3000`。无需开放端口、无需公网 IP。
 
 ---
@@ -138,7 +140,7 @@ curl -X POST http://localhost:3000/api/tunnel/stop
 ```
 https://ag.yourdomain.com/
 ```
-即可看到完整的 **Antigravity Agent Manager** 前端（对话列表、发消息、实时流等），与本地 `localhost:3000` 体验完全一致。
+即可看到完整的 **Gateway Web UI**（首页、对话列表、CEO Office、Settings、实时流等），与本地 `localhost:3000` 体验一致。
 
 > 💡 **推荐**：在手机 Safari/Chrome 中「添加到主屏幕」，可当作 App 使用（已启用 PWA 支持）。
 

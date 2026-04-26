@@ -5,6 +5,15 @@ import { api } from '@/lib/api';
 import type { Workflow, Skill, Rule } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { FileText, Wrench, Shield, Plus, Trash2, Edit3, Save, X, ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  WorkspaceBadge,
+  WorkspaceEmptyBlock,
+  WorkspaceSurface,
+  workspaceCodeBlockClassName,
+  workspaceFieldClassName,
+  workspaceGhostActionClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 
 interface AssetsManagerProps {
   workflows: Workflow[];
@@ -47,9 +56,9 @@ export default function AssetsManager({
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
   const tabs: { key: AssetTab; label: string; icon: typeof FileText; count: number }[] = [
-    { key: 'workflows', label: 'Workflows', icon: FileText, count: workflows.length + discoveredWorkflows.length },
-    { key: 'skills', label: 'Skills', icon: Wrench, count: skills.length + discoveredSkills.length },
-    { key: 'rules', label: 'Rules', icon: Shield, count: rules.length + discoveredRules.length },
+    { key: 'workflows', label: '工作流', icon: FileText, count: workflows.length + discoveredWorkflows.length },
+    { key: 'skills', label: '技能', icon: Wrench, count: skills.length + discoveredSkills.length },
+    { key: 'rules', label: '规则', icon: Shield, count: rules.length + discoveredRules.length },
   ];
 
   const canonicalByTab = useMemo(() => ({
@@ -218,9 +227,8 @@ export default function AssetsManager({
   const discoveredItems = discoveredByTab[activeTab];
   const canonicalItems = canonicalByTab[activeTab];
   const canonicalNames = new Set(canonicalItems.map(item => item.name));
-  const canonicalByName = new Map(canonicalItems.map(item => [item.name, item] as const));
 
-  const renderAssetItem = (item: Workflow | Skill | Rule, source: 'canonical' | 'discovered', onPrimaryAction?: () => void) => {
+  const renderAssetItem = (item: Workflow | Skill | Rule, source: 'canonical' | 'discovered') => {
     const key = getItemKey(source, item);
     const isExpanded = expandedItems.has(key);
     const isExecutable = source === 'canonical';
@@ -228,10 +236,11 @@ export default function AssetsManager({
 
     return (
       <div key={key} className="group">
-        <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.03] transition-colors">
+        <div className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[var(--app-raised)]">
           <button
             onClick={() => toggleExpand(key)}
-            className="text-white/30 hover:text-white/60"
+            className={cn('rounded-full p-1 transition-colors', workspaceGhostActionClassName)}
+            aria-label={isExpanded ? '折叠资产详情' : '展开资产详情'}
           >
             {isExpanded
               ? <ChevronDown className="w-3.5 h-3.5" />
@@ -240,42 +249,23 @@ export default function AssetsManager({
           </button>
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="text-sm font-medium text-white/70 truncate">{item.name}</div>
-              <span className={cn(
-                'rounded-full px-2 py-0.5 text-[10px] font-medium',
-                isExecutable ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300',
-              )}>
+              <div className="truncate text-sm font-medium text-[var(--app-text)]">{item.name}</div>
+              <WorkspaceBadge tone={isExecutable ? 'success' : 'warning'}>
                 {isExecutable ? '可执行' : '仅发现'}
-              </span>
+              </WorkspaceBadge>
               {source === 'discovered' && (
-                <span className={cn(
-                  'rounded-full px-2 py-0.5 text-[10px] font-medium',
-                  hasCanonicalPeer ? 'bg-sky-500/15 text-sky-300' : 'bg-white/10 text-white/45',
-                )}>
-                  {hasCanonicalPeer ? '已存在 canonical' : '未导入'}
-                </span>
-              )}
-              {item.source && (
-                <span className={cn(
-                  'rounded-full px-2 py-0.5 text-[10px] font-medium',
-                  item.source === 'canonical'
-                    ? 'bg-emerald-500/15 text-emerald-300'
-                    : 'bg-white/10 text-white/50',
-                )}>
-                  {item.source}
-                </span>
+                <WorkspaceBadge tone={hasCanonicalPeer ? 'info' : 'neutral'}>
+                  {hasCanonicalPeer ? '已有可执行版本' : '未导入'}
+                </WorkspaceBadge>
               )}
               {'scope' in item && item.scope && (
-                <span className={cn(
-                  'rounded-full px-2 py-0.5 text-[10px] font-medium',
-                  item.scope === 'global' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400',
-                )}>
+                <WorkspaceBadge tone={item.scope === 'global' ? 'warning' : 'info'}>
                   {item.scope}
-                </span>
+                </WorkspaceBadge>
               )}
             </div>
             {item.description && (
-              <div className="text-xs text-white/30 truncate mt-0.5">{item.description}</div>
+              <div className="mt-0.5 truncate text-xs text-[var(--app-text-soft)]">{item.description}</div>
             )}
           </div>
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -283,15 +273,17 @@ export default function AssetsManager({
               <>
                 <button
                   onClick={() => handleEdit(activeTab, item.name)}
-                  className="rounded-md p-1.5 text-white/30 hover:text-blue-300 hover:bg-blue-500/10"
+                  className={cn('rounded-md p-1.5', workspaceGhostActionClassName)}
                   title="编辑"
+                  aria-label={`编辑 ${item.name}`}
                 >
                   <Edit3 className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => handleDelete(activeTab, item.name)}
-                  className="rounded-md p-1.5 text-white/30 hover:text-red-300 hover:bg-red-500/10"
+                  className="rounded-md p-1.5 text-red-600 transition-colors hover:bg-red-500/10"
                   title="删除"
+                  aria-label={`删除 ${item.name}`}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -300,15 +292,15 @@ export default function AssetsManager({
               <>
                 <button
                   onClick={() => handleImport(activeTab, item.name, 'content' in item ? item.content : undefined)}
-                  className="rounded-md px-2 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/10"
-                  title="导入到 canonical"
+                  className="rounded-md px-2 py-1.5 text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-500/10"
+                  title="导入为可执行资产"
                 >
                   导入
                 </button>
                 <button
                   onClick={() => handleLocate(activeTab, item)}
-                  className="rounded-md px-2 py-1.5 text-[11px] font-medium text-sky-300 hover:bg-sky-500/10"
-                  title={hasCanonicalPeer ? '定位到 canonical 条目' : '定位到发现结果'}
+                  className="rounded-md px-2 py-1.5 text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/10"
+                  title={hasCanonicalPeer ? '定位到可执行资产' : '定位到发现结果'}
                 >
                   定位
                 </button>
@@ -318,7 +310,7 @@ export default function AssetsManager({
         </div>
         {isExpanded && 'content' in item && item.content && (
           <div className="px-12 pb-3">
-            <pre className="rounded-lg bg-black/30 border border-white/8 p-3 text-xs text-white/50 font-mono whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+            <pre className={cn('max-h-[200px] overflow-y-auto whitespace-pre-wrap', workspaceCodeBlockClassName)}>
               {item.content}
             </pre>
           </div>
@@ -335,40 +327,38 @@ export default function AssetsManager({
   ) => {
     const isCanonical = source === 'canonical';
     return (
-      <div className="rounded-2xl border border-white/8 bg-black/15">
-        <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
+      <WorkspaceSurface padding="none" className="overflow-hidden">
+        <div className="flex items-center justify-between border-b border-[var(--app-border-soft)] px-4 py-3">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-white/70">{title}</div>
-            <div className="mt-1 text-[11px] text-white/35">{subtitle}</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text)]">{title}</div>
+            <div className="mt-1 text-[11px] text-[var(--app-text-soft)]">{subtitle}</div>
           </div>
-          <span className={cn(
-            'rounded-full px-2.5 py-0.5 text-[10px] font-medium',
-            isCanonical ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300',
-          )}>
+          <WorkspaceBadge tone={isCanonical ? 'success' : 'warning'}>
             {isCanonical ? '可执行' : '仅发现'}
-          </span>
+          </WorkspaceBadge>
         </div>
-        <div className="divide-y divide-white/5">
+        <div className="divide-y divide-[var(--app-border-soft)]">
           {sectionItems.length === 0 ? (
-            <div className="py-8 text-center text-xs text-white/25">
-              {isCanonical ? '暂无可执行条目' : '暂无发现结果'}
-            </div>
+            <WorkspaceEmptyBlock
+              title={isCanonical ? '暂无可执行条目' : '暂无发现结果'}
+              className="m-4 py-6"
+            />
           ) : (
             sectionItems.map((item) => renderAssetItem(item, source))
           )}
         </div>
-      </div>
+      </WorkspaceSurface>
     );
   };
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] overflow-hidden">
+    <WorkspaceSurface padding="none" className="overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/8 px-5 py-3">
-        <h3 className="text-sm font-semibold text-white/80">Assets 管理</h3>
+      <div className="flex items-center justify-between border-b border-[var(--app-border-soft)] px-5 py-3">
+        <h3 className="text-sm font-semibold text-[var(--app-text)]">资产管理</h3>
         <button
           onClick={() => handleCreate(activeTab)}
-          className="flex items-center gap-1.5 rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-500/30 transition-colors"
+          className="flex items-center gap-1.5 rounded-full bg-[var(--app-accent)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:brightness-105"
         >
           <Plus className="w-3.5 h-3.5" />
           新建
@@ -376,7 +366,7 @@ export default function AssetsManager({
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-white/8">
+      <div className="flex border-b border-[var(--app-border-soft)]">
         {tabs.map(tab => (
           <button
             key={tab.key}
@@ -384,27 +374,27 @@ export default function AssetsManager({
             className={cn(
               'flex items-center gap-2 px-4 py-2.5 text-xs font-medium transition-colors border-b-2',
               activeTab === tab.key
-                ? 'border-blue-400 text-blue-300 bg-blue-500/5'
-                : 'border-transparent text-white/40 hover:text-white/60',
+                ? 'border-[var(--app-accent)] bg-[var(--app-accent-soft)] text-[var(--app-accent)]'
+                : 'border-transparent text-[var(--app-text-muted)] hover:text-[var(--app-text-soft)]',
             )}
           >
             <tab.icon className="w-3.5 h-3.5" />
             {tab.label}
-            <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px]">{tab.count}</span>
+            <span className="rounded-full bg-[var(--app-raised)] px-1.5 py-0.5 text-[10px]">{tab.count}</span>
           </button>
         ))}
       </div>
 
       {/* Error */}
       {error && (
-        <div className="mx-4 mt-3 rounded-lg bg-red-500/15 border border-red-500/20 px-3 py-2 text-xs text-red-300">
+        <div className="mx-4 mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-700">
           {error}
         </div>
       )}
 
       {/* Editor */}
       {editing && (
-        <div className="border-b border-white/8 bg-white/[0.02] p-4 space-y-3">
+        <div className="space-y-3 border-b border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
           <div className="flex items-center gap-3">
             <input
               type="text"
@@ -413,21 +403,22 @@ export default function AssetsManager({
               placeholder="名称（字母数字下划线）"
               disabled={!editing.isNew}
               className={cn(
-                'flex-1 rounded-lg border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-white/25 focus:border-blue-400/50 focus:outline-none',
+                'flex-1 rounded-lg px-3 py-1.5 text-sm',
+                workspaceFieldClassName,
                 !editing.isNew && 'opacity-60 cursor-not-allowed',
               )}
             />
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
               {saving ? '保存中...' : '保存'}
             </button>
             <button
               onClick={() => setEditing(null)}
-              className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/50 hover:bg-white/15"
+              className={cn('flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs', workspaceOutlineActionClassName)}
             >
               <X className="w-3.5 h-3.5" />
               取消
@@ -438,7 +429,7 @@ export default function AssetsManager({
             onChange={e => setEditing({ ...editing, content: e.target.value })}
             placeholder="内容（Markdown 格式）..."
             rows={12}
-            className="w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/80 font-mono placeholder:text-white/20 focus:border-blue-400/50 focus:outline-none resize-y"
+            className={cn('w-full resize-y rounded-lg px-3 py-2 font-mono text-sm', workspaceFieldClassName)}
           />
         </div>
       )}
@@ -446,18 +437,18 @@ export default function AssetsManager({
       {/* Item List */}
       <div className="space-y-4 p-4 max-h-[400px] overflow-y-auto">
         {renderSection(
-          'Canonical',
-          'Gateway 统一真相源，能直接被执行',
+          '可执行资产',
+          '当前可被任务调用',
           'canonical',
           items,
         )}
         {renderSection(
-          'Discovered',
-          '来自 IDE 发现结果，仅供对照与导入',
+          '发现待导入',
+          '导入后才会进入可执行资产',
           'discovered',
           discoveredItems,
         )}
       </div>
-    </div>
+    </WorkspaceSurface>
   );
 }

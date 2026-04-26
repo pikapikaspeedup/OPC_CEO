@@ -1,31 +1,16 @@
-import { NextResponse } from 'next/server';
-import { getUserInfo, getDefaultConnection, grpc } from '@/lib/bridge/gateway';
-import { loadAIConfig } from '@/lib/providers/ai-config';
-import { aggregateProviderUsage, buildProviderCreditSummaries } from '@/lib/provider-usage-analytics';
+import { handleMeGet } from '@/server/runtime/routes/user';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const user = getUserInfo();
-  const conn = await getDefaultConnection();
-  const aiConfig = loadAIConfig();
-  const providerUsage = aggregateProviderUsage(30);
-  let credits = null;
-  if (conn) {
-    try {
-      credits = await grpc.getModelConfigs(conn.port, conn.csrf, conn.apiKey);
-    } catch {}
+const DEFAULT_REQUEST = new Request('http://localhost/api/me');
+
+export async function GET(req: Request = DEFAULT_REQUEST) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
   }
-  return NextResponse.json({
-    ...user,
-    apiKey: undefined,
-    hasApiKey: !!user.apiKey,
-    credits,
-    providerCredits: buildProviderCreditSummaries(),
-    providerUsageSummary: providerUsage.summary,
-    creditSource: conn ? 'antigravity' : null,
-    providerAwareNotice: aiConfig.defaultProvider !== 'antigravity'
-      ? 'credits currently reflect Antigravity IDE runtime only'
-      : null,
-  });
+  return handleMeGet();
 }

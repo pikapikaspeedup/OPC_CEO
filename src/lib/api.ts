@@ -13,8 +13,44 @@ import type {
   ApprovalRequestFE,
   ApprovalSummaryFE,
   EvolutionProposalFE,
+  KnowledgePromotionLevelFE,
+  BudgetGateDecisionFE,
+  BudgetLedgerDecisionFE,
+  BudgetLedgerEntryFE,
+  BudgetScopeFE,
+  CircuitBreakerFE,
+  CircuitBreakerStatusFE,
+  CompanyLoopDigestFE,
+  CompanyLoopPolicyFE,
+  CompanyLoopRunFE,
+  CompanyLoopRunKindFE,
+  CompanyLoopRunStatusFE,
+  CompanyOperatingDayFE,
+  GrowthObservationFE,
+  GrowthProposalFE,
+  GrowthProposalKindFE,
+  GrowthProposalRiskFE,
+  GrowthProposalStatusFE,
+  MemoryCandidateFE,
+  MemoryCandidateKindFE,
+  MemoryCandidateStatusFE,
+  OperatingAgendaItemFE,
+  OperatingAgendaPriorityFE,
+  OperatingAgendaStatusFE,
+  OperatingBudgetPolicyFE,
+  OperatingSignalFE,
+  OperatingSignalKindFE,
+  OperatingSignalSourceFE,
+  OperatingSignalStatusFE,
   PaginatedResponse,
   PaginationQueryFE,
+  RunCapsuleFE,
+  SystemImprovementProposalFE,
+  SystemImprovementProposalStatusFE,
+  SystemImprovementRiskFE,
+  SystemImprovementSeverityFE,
+  SystemImprovementSignalFE,
+  SystemImprovementSignalSourceFE,
 } from './types';
 
 // V4.3 Operations & Observability types
@@ -110,6 +146,7 @@ export interface SchedulerJobResponse {
   jobId: string;
   name?: string;
   type?: string;
+  timeZone?: string;
   action?: { kind: string; [key: string]: unknown };
   executionProfile?: import('./types').ExecutionProfileFE;
   executionProfileSummary?: import('./types').ExecutionProfileSummaryFE;
@@ -506,6 +543,432 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
 
+  // Company Kernel
+  companyRunCapsules: (params?: {
+    workspaceUri?: string;
+    projectId?: string;
+    status?: string;
+    providerId?: string;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
+    if (params?.projectId) search.set('projectId', params.projectId);
+    if (params?.status) search.set('status', params.status);
+    if (params?.providerId) search.set('providerId', params.providerId);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<RunCapsuleFE>(`/api/company/run-capsules${qs ? `?${qs}` : ''}`);
+  },
+  companyRunCapsule: (runId: string) =>
+    fetchJson<RunCapsuleFE>(`/api/company/run-capsules/${encodeURIComponent(runId)}`),
+  companyMemoryCandidates: (params?: {
+    workspaceUri?: string;
+    sourceRunId?: string;
+    sourceCapsuleId?: string;
+    kind?: MemoryCandidateKindFE;
+    status?: MemoryCandidateStatusFE;
+    minScore?: number;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
+    if (params?.sourceRunId) search.set('sourceRunId', params.sourceRunId);
+    if (params?.sourceCapsuleId) search.set('sourceCapsuleId', params.sourceCapsuleId);
+    if (params?.kind) search.set('kind', params.kind);
+    if (params?.status) search.set('status', params.status);
+    if (typeof params?.minScore === 'number') search.set('minScore', String(params.minScore));
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<MemoryCandidateFE>(`/api/company/memory-candidates${qs ? `?${qs}` : ''}`);
+  },
+  companyMemoryCandidate: (id: string) =>
+    fetchJson<MemoryCandidateFE>(`/api/company/memory-candidates/${encodeURIComponent(id)}`),
+  promoteCompanyMemoryCandidate: (id: string, payload?: {
+    title?: string;
+    content?: string;
+    category?: MemoryCandidateKindFE;
+    level?: KnowledgePromotionLevelFE;
+  }) =>
+    fetchJson<{ knowledge: unknown }>(`/api/company/memory-candidates/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+  rejectCompanyMemoryCandidate: (id: string, reason: string) =>
+    fetchJson<{ candidate: MemoryCandidateFE }>(`/api/company/memory-candidates/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    }),
+  companySignals: (params?: {
+    workspaceUri?: string;
+    source?: OperatingSignalSourceFE;
+    kind?: OperatingSignalKindFE;
+    status?: OperatingSignalStatusFE;
+    minScore?: number;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
+    if (params?.source) search.set('source', params.source);
+    if (params?.kind) search.set('kind', params.kind);
+    if (params?.status) search.set('status', params.status);
+    if (typeof params?.minScore === 'number') search.set('minScore', String(params.minScore));
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<OperatingSignalFE>(`/api/company/signals${qs ? `?${qs}` : ''}`);
+  },
+  companySignal: (id: string) =>
+    fetchJson<OperatingSignalFE>(`/api/company/signals/${encodeURIComponent(id)}`),
+  dismissCompanySignal: (id: string) =>
+    fetchJson<{ signal: OperatingSignalFE }>(`/api/company/signals/${encodeURIComponent(id)}/dismiss`, {
+      method: 'POST',
+    }),
+  companyAgenda: (params?: {
+    workspaceUri?: string;
+    status?: OperatingAgendaStatusFE;
+    priority?: OperatingAgendaPriorityFE;
+    minScore?: number;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
+    if (params?.status) search.set('status', params.status);
+    if (params?.priority) search.set('priority', params.priority);
+    if (typeof params?.minScore === 'number') search.set('minScore', String(params.minScore));
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<OperatingAgendaItemFE>(`/api/company/agenda${qs ? `?${qs}` : ''}`);
+  },
+  companyAgendaItem: (id: string) =>
+    fetchJson<OperatingAgendaItemFE>(`/api/company/agenda/${encodeURIComponent(id)}`),
+  dismissCompanyAgendaItem: (id: string) =>
+    fetchJson<{ item: OperatingAgendaItemFE }>(`/api/company/agenda/${encodeURIComponent(id)}/dismiss`, {
+      method: 'POST',
+    }),
+  snoozeCompanyAgendaItem: (id: string, payload?: { snoozedUntil?: string; minutes?: number }) =>
+    fetchJson<{ item: OperatingAgendaItemFE }>(`/api/company/agenda/${encodeURIComponent(id)}/snooze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+  dispatchCheckCompanyAgendaItem: (id: string, payload?: {
+    scope?: BudgetScopeFE;
+    scopeId?: string;
+    schedulerJobId?: string;
+    proposalId?: string;
+  }) =>
+    fetchJson<{ decision: BudgetGateDecisionFE }>(`/api/company/agenda/${encodeURIComponent(id)}/dispatch-check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+  dispatchCompanyAgendaItem: (id: string, payload?: {
+    scope?: BudgetScopeFE;
+    scopeId?: string;
+    schedulerJobId?: string;
+    proposalId?: string;
+    prompt?: string;
+    model?: string;
+  }) =>
+    fetchJson<{
+      decision: BudgetGateDecisionFE;
+      ledger: BudgetLedgerEntryFE;
+      item: OperatingAgendaItemFE | null;
+      run: AgentRun;
+    }>(`/api/company/agenda/${encodeURIComponent(id)}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+  companyOperatingDay: (params?: { date?: string; timezone?: string; workspaceUri?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.date) search.set('date', params.date);
+    if (params?.timezone) search.set('timezone', params.timezone);
+    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
+    if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
+    const qs = search.toString();
+    return fetchJson<CompanyOperatingDayFE>(`/api/company/operating-day${qs ? `?${qs}` : ''}`);
+  },
+  companyBudgetPolicies: (params?: {
+    scope?: BudgetScopeFE;
+    scopeId?: string;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.scope) search.set('scope', params.scope);
+    if (params?.scopeId) search.set('scopeId', params.scopeId);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<OperatingBudgetPolicyFE>(`/api/company/budget/policies${qs ? `?${qs}` : ''}`);
+  },
+  updateCompanyBudgetPolicy: (id: string, payload: Partial<OperatingBudgetPolicyFE>) =>
+    fetchJson<{ policy: OperatingBudgetPolicyFE }>(`/api/company/budget/policies/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  companyBudgetLedger: (params?: {
+    scope?: BudgetScopeFE;
+    scopeId?: string;
+    policyId?: string;
+    decision?: BudgetLedgerDecisionFE;
+    agendaItemId?: string;
+    runId?: string;
+    schedulerJobId?: string;
+    proposalId?: string;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.scope) search.set('scope', params.scope);
+    if (params?.scopeId) search.set('scopeId', params.scopeId);
+    if (params?.policyId) search.set('policyId', params.policyId);
+    if (params?.decision) search.set('decision', params.decision);
+    if (params?.agendaItemId) search.set('agendaItemId', params.agendaItemId);
+    if (params?.runId) search.set('runId', params.runId);
+    if (params?.schedulerJobId) search.set('schedulerJobId', params.schedulerJobId);
+    if (params?.proposalId) search.set('proposalId', params.proposalId);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<BudgetLedgerEntryFE>(`/api/company/budget/ledger${qs ? `?${qs}` : ''}`);
+  },
+  companyCircuitBreakers: (params?: {
+    scope?: BudgetScopeFE | 'provider' | 'workflow';
+    scopeId?: string;
+    status?: CircuitBreakerStatusFE;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.scope) search.set('scope', params.scope);
+    if (params?.scopeId) search.set('scopeId', params.scopeId);
+    if (params?.status) search.set('status', params.status);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<CircuitBreakerFE>(`/api/company/circuit-breakers${qs ? `?${qs}` : ''}`);
+  },
+  resetCompanyCircuitBreaker: (id: string) =>
+    fetchJson<{ breaker: CircuitBreakerFE }>(`/api/company/circuit-breakers/${encodeURIComponent(id)}/reset`, {
+      method: 'POST',
+    }),
+  companyGrowthProposals: (params?: {
+    workspaceUri?: string;
+    kind?: GrowthProposalKindFE;
+    status?: GrowthProposalStatusFE;
+    risk?: GrowthProposalRiskFE;
+    minScore?: number;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
+    if (params?.kind) search.set('kind', params.kind);
+    if (params?.status) search.set('status', params.status);
+    if (params?.risk) search.set('risk', params.risk);
+    if (typeof params?.minScore === 'number') search.set('minScore', String(params.minScore));
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<GrowthProposalFE>(`/api/company/growth/proposals${qs ? `?${qs}` : ''}`);
+  },
+  generateCompanyGrowthProposals: (payload?: { workspaceUri?: string; limit?: number }) =>
+    fetchJson<{ proposals: GrowthProposalFE[]; decision?: BudgetGateDecisionFE; ledger?: BudgetLedgerEntryFE }>('/api/company/growth/proposals/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+  companyGrowthProposal: (id: string) =>
+    fetchJson<GrowthProposalFE>(`/api/company/growth/proposals/${encodeURIComponent(id)}`),
+  evaluateCompanyGrowthProposal: (id: string) =>
+    fetchJson<{ proposal: GrowthProposalFE; decision?: BudgetGateDecisionFE; ledger?: BudgetLedgerEntryFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/evaluate`, {
+      method: 'POST',
+    }),
+  approveCompanyGrowthProposal: (id: string) =>
+    fetchJson<{ proposal: GrowthProposalFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+    }),
+  rejectCompanyGrowthProposal: (id: string, reason?: string) =>
+    fetchJson<{ proposal: GrowthProposalFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    }),
+  dryRunCompanyGrowthProposal: (id: string) =>
+    fetchJson<{ proposal: GrowthProposalFE; dryRun?: { status?: string; reasons?: string[] } }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/dry-run`, {
+      method: 'POST',
+    }),
+  publishCompanyGrowthProposal: (id: string) =>
+    fetchJson<{ proposal: GrowthProposalFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/publish`, {
+      method: 'POST',
+    }),
+  companyGrowthObservations: (params?: { proposalId?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.proposalId) search.set('proposalId', params.proposalId);
+    if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
+    const qs = search.toString();
+    return fetchJson<{ observations: GrowthObservationFE[] }>(`/api/company/growth/observations${qs ? `?${qs}` : ''}`);
+  },
+  observeCompanyGrowthProposal: (proposalId: string) =>
+    fetchJson<{ observation: GrowthObservationFE }>('/api/company/growth/observations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposalId }),
+    }),
+  companyLoopPolicies: (params?: {
+    scope?: CompanyLoopPolicyFE['scope'];
+    scopeId?: string;
+    enabled?: boolean;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.scope) search.set('scope', params.scope);
+    if (params?.scopeId) search.set('scopeId', params.scopeId);
+    if (typeof params?.enabled === 'boolean') search.set('enabled', String(params.enabled));
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<CompanyLoopPolicyFE>(`/api/company/loops/policies${qs ? `?${qs}` : ''}`);
+  },
+  updateCompanyLoopPolicy: (id: string, payload: Partial<CompanyLoopPolicyFE>) =>
+    fetchJson<{ policy: CompanyLoopPolicyFE }>(`/api/company/loops/policies/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  companyLoopRuns: (params?: {
+    policyId?: string;
+    kind?: CompanyLoopRunKindFE;
+    status?: CompanyLoopRunStatusFE;
+    date?: string;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.policyId) search.set('policyId', params.policyId);
+    if (params?.kind) search.set('kind', params.kind);
+    if (params?.status) search.set('status', params.status);
+    if (params?.date) search.set('date', params.date);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<CompanyLoopRunFE>(`/api/company/loops/runs${qs ? `?${qs}` : ''}`);
+  },
+  companyLoopRun: (id: string) =>
+    fetchJson<CompanyLoopRunFE>(`/api/company/loops/runs/${encodeURIComponent(id)}`),
+  runCompanyLoopNow: (payload?: { policyId?: string; kind?: CompanyLoopRunKindFE; date?: string; timezone?: string }) =>
+    fetchJson<{
+      run: CompanyLoopRunFE;
+      digestId?: string;
+      selectedAgenda: OperatingAgendaItemFE[];
+      skipped: Array<{ item: OperatingAgendaItemFE; reason: string }>;
+      budgetLedger: BudgetLedgerEntryFE[];
+      generatedProposals: GrowthProposalFE[];
+    }>('/api/company/loops/run-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
+  retryCompanyLoopRun: (id: string) =>
+    fetchJson<{ run: CompanyLoopRunFE }>(`/api/company/loops/runs/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+    }),
+  companyLoopDigests: (params?: { loopRunId?: string; date?: string } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.loopRunId) search.set('loopRunId', params.loopRunId);
+    if (params?.date) search.set('date', params.date);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<CompanyLoopDigestFE>(`/api/company/loops/digests${qs ? `?${qs}` : ''}`);
+  },
+  companyLoopDigest: (id: string) =>
+    fetchJson<CompanyLoopDigestFE>(`/api/company/loops/digests/${encodeURIComponent(id)}`),
+  systemImprovementSignals: (params?: {
+    source?: SystemImprovementSignalSourceFE;
+    severity?: SystemImprovementSeverityFE;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.source) search.set('source', params.source);
+    if (params?.severity) search.set('severity', params.severity);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<SystemImprovementSignalFE>(`/api/company/self-improvement/signals${qs ? `?${qs}` : ''}`);
+  },
+  createSystemImprovementSignal: (payload: Partial<SystemImprovementSignalFE> & { title: string; summary: string; source: SystemImprovementSignalSourceFE }) =>
+    fetchJson<{ signal: SystemImprovementSignalFE }>('/api/company/self-improvement/signals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  systemImprovementProposals: (params?: {
+    status?: SystemImprovementProposalStatusFE;
+    risk?: SystemImprovementRiskFE;
+  } & PaginationQueryFE) => {
+    const search = new URLSearchParams();
+    if (params?.status) search.set('status', params.status);
+    if (params?.risk) search.set('risk', params.risk);
+    appendPaginationParams(search, {
+      page: params?.page,
+      pageSize: params?.pageSize ?? 20,
+    });
+    const qs = search.toString();
+    return fetchPaginatedJson<SystemImprovementProposalFE>(`/api/company/self-improvement/proposals${qs ? `?${qs}` : ''}`);
+  },
+  generateSystemImprovementProposal: (payload: { signalIds: string[]; title?: string; summary?: string; affectedFiles?: string[] }) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE }>('/api/company/self-improvement/proposals/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  systemImprovementProposal: (id: string) =>
+    fetchJson<SystemImprovementProposalFE>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}`),
+  evaluateSystemImprovementProposal: (id: string) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/evaluate`, {
+      method: 'POST',
+    }),
+  approveSystemImprovementProposal: (id: string) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+    }),
+  rejectSystemImprovementProposal: (id: string, reason?: string) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    }),
+  attachSystemImprovementTestEvidence: (id: string, payload: { command: string; status: 'passed' | 'failed'; outputSummary: string }) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/attach-test-evidence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  observeSystemImprovementProposal: (id: string, payload: { summary: string; linkedRunIds?: string[]; metadata?: Record<string, unknown> }) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/observe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
   // CEO / Management
   ceoProfile: () => fetchJson<import('./types').CEOProfileFE>('/api/ceo/profile'),
   updateCeoProfile: (patch: Partial<import('./types').CEOProfileFE>) =>
@@ -774,6 +1237,7 @@ export const api = {
     name: string;
     type: 'cron' | 'interval' | 'once';
     cronExpression?: string;
+    timeZone?: string;
     intervalMs?: number;
     scheduledAt?: string;
     action: { kind: string; [key: string]: unknown };
@@ -791,6 +1255,7 @@ export const api = {
     name: string;
     type: 'cron' | 'interval' | 'once';
     cronExpression?: string;
+    timeZone?: string;
     intervalMs?: number;
     scheduledAt?: string;
     action: { kind: string; [key: string]: unknown };
@@ -938,11 +1403,11 @@ export const api = {
   },
 
   respondApproval: (id: string, action: 'approved' | 'rejected' | 'feedback', message?: string) =>
-    fetchJson<ApprovalRequestFE>(`/api/approval/${encodeURIComponent(id)}`, {
+    fetchJson<{ request: ApprovalRequestFE }>(`/api/approval/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, message: message || '', channel: 'web' }),
-    }),
+    }).then((response) => response.request),
 
   evolutionProposals: (params?: { workspaceUri?: string; kind?: 'workflow' | 'skill'; status?: string }) => {
     const sp = new URLSearchParams();

@@ -1,5 +1,11 @@
-import type { TaskEnvelope } from '@/lib/agents/group-types';
+import type { ExecutionTarget, PromptExecutionTarget, TaskEnvelope, TriggerContext } from '@/lib/agents/group-types';
 import type { DepartmentRuntimeContract } from '@/lib/organization/contracts';
+import type { BudgetLedgerEntry } from '@/lib/company-kernel/contracts';
+import {
+  attachRunToBudgetReservation,
+  releaseBudgetForRun,
+  reserveBudgetForOperation,
+} from '@/lib/company-kernel/budget-gate';
 import {
   type ExecutionProfile,
   isExecutionProfile,
@@ -10,6 +16,78 @@ type RuntimeTaskEnvelopeCarrier = {
   executionProfile?: ExecutionProfile;
   departmentRuntimeContract?: DepartmentRuntimeContract & Record<string, unknown>;
 };
+
+type RuntimeDispatchBody = {
+  workspace?: string;
+  prompt?: string;
+  model?: string;
+  parentConversationId?: string;
+  taskEnvelope?: Partial<TaskEnvelope> & { goal?: string };
+  sourceRunIds?: string[];
+  projectId?: string;
+  pipelineId?: string;
+  templateId?: string;
+  stageId?: string;
+  pipelineStageId?: string;
+  pipelineStageIndex?: number;
+  templateOverrides?: Record<string, unknown>;
+  conversationMode?: 'shared' | 'isolated';
+  provider?: string;
+  executionProfile?: unknown;
+  departmentRuntimeContract?: unknown;
+  runtimeContract?: unknown;
+  executionTarget?: ExecutionTarget;
+  triggerContext?: TriggerContext;
+};
+
+function promptTextFromBody(body: RuntimeDispatchBody): string {
+  return body.prompt || body.taskEnvelope?.goal || '';
+}
+
+function manualBudgetShouldBeRecorded(body: RuntimeDispatchBody): boolean {
+  if (!body.workspace) return false;
+  if (body.triggerContext?.schedulerJobId) return false;
+  if (body.triggerContext?.source === 'scheduler') return false;
+  return true;
+}
+
+function reserveManualDispatchBudget(
+  body: RuntimeDispatchBody,
+  kind: 'prompt' | 'template',
+): BudgetLedgerEntry | null {
+  if (!manualBudgetShouldBeRecorded(body)) return null;
+  const promptText = promptTextFromBody(body);
+  const budget = reserveBudgetForOperation({
+    scope: 'department',
+    scopeId: body.workspace,
+    estimatedCost: {
+      tokens: Math.max(500, Math.ceil(promptText.length / 2) + 1_000),
+      minutes: kind === 'template' ? 10 : 5,
+    },
+    // Manual dispatches still consume token/time budget but do not spend autonomous dispatch quota.
+    dispatches: 0,
+    operationKind: `manual.${kind}`,
+    reason: `Manual ${kind} dispatch`,
+  });
+  if (!budget.decision.allowed) {
+    const err = new Error(budget.decision.reasons.join('; ') || 'Manual dispatch blocked by budget gate') as Error & { statusCode: number };
+    err.statusCode = 409;
+    throw err;
+  }
+  return budget.ledger;
+}
+
+function releaseUnattachedBudgetReservation(ledger: BudgetLedgerEntry | null, reason: string): void {
+  if (!ledger || ledger.decision !== 'reserved') return;
+  releaseBudgetForRun({
+    policyId: ledger.policyId,
+    scope: ledger.scope,
+    scopeId: ledger.scopeId,
+    schedulerJobId: ledger.schedulerJobId,
+    proposalId: ledger.proposalId,
+    reason,
+  });
+}
 
 function coerceDepartmentRuntimeContract(
   value: unknown,
@@ -41,7 +119,7 @@ function buildTaskEnvelopeWithRuntimeCarrier(
 
 export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Response> {
   try {
-    const body = await req.json();
+    const body = await req.json() as RuntimeDispatchBody;
     const executionProfile = isExecutionProfile(body.executionProfile) ? body.executionProfile : undefined;
     const departmentRuntimeContract = coerceDepartmentRuntimeContract(
       body.departmentRuntimeContract ?? body.runtimeContract,
@@ -67,19 +145,32 @@ export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Respo
           }
         : undefined);
 
-    if (executionTarget?.kind === 'prompt') {
+    const promptExecutionTarget = executionTarget?.kind === 'prompt'
+      ? executionTarget as PromptExecutionTarget
+      : undefined;
+    if (promptExecutionTarget) {
+      const budgetLedger = reserveManualDispatchBudget(body, 'prompt');
       const { executePrompt } = await import('@/lib/agents/prompt-executor');
-      const result = await executePrompt({
-        workspace: body.workspace,
-        prompt: body.prompt,
-        model: body.model,
-        parentConversationId: body.parentConversationId,
-        taskEnvelope,
-        sourceRunIds: body.sourceRunIds,
-        projectId: body.projectId,
-        executionTarget,
-        triggerContext: body.triggerContext,
-      });
+      let result: { runId: string };
+      try {
+        result = await executePrompt({
+          workspace: body.workspace || '',
+          prompt: body.prompt,
+          model: body.model,
+          parentConversationId: body.parentConversationId,
+          taskEnvelope,
+          sourceRunIds: body.sourceRunIds,
+          projectId: body.projectId,
+          executionTarget: promptExecutionTarget,
+          triggerContext: body.triggerContext,
+        });
+      } catch (err) {
+        releaseUnattachedBudgetReservation(budgetLedger, 'manual prompt dispatch failed before run attach');
+        throw err;
+      }
+      if (budgetLedger?.decision === 'reserved') {
+        attachRunToBudgetReservation(budgetLedger, result.runId);
+      }
 
       return Response.json({ runId: result.runId, status: 'starting' }, { status: 201 });
     }
@@ -89,24 +180,34 @@ export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Respo
     }
 
     const { executeDispatch } = await import('@/lib/agents/dispatch-service');
-    const result = await executeDispatch({
-      workspace: body.workspace,
-      prompt: body.prompt,
-      model: body.model,
-      parentConversationId: body.parentConversationId,
-      taskEnvelope,
-      sourceRunIds: body.sourceRunIds,
-      projectId: body.projectId,
-      pipelineId: body.pipelineId,
-      templateId: body.templateId || templateTarget?.templateId || (executionTarget?.kind === 'template' ? executionTarget.templateId : undefined),
-      stageId: body.stageId || templateTarget?.stageId || (executionTarget?.kind === 'template' ? executionTarget.stageId : undefined),
-      pipelineStageId: body.pipelineStageId,
-      pipelineStageIndex: body.pipelineStageIndex,
-      templateOverrides: body.templateOverrides,
-      conversationMode: body.conversationMode,
-      provider: body.provider,
-      triggerContext: body.triggerContext,
-    });
+    const budgetLedger = reserveManualDispatchBudget(body, 'template');
+    let result: { runId: string };
+    try {
+      result = await executeDispatch({
+        workspace: body.workspace || '',
+        prompt: body.prompt,
+        model: body.model,
+        parentConversationId: body.parentConversationId,
+        taskEnvelope,
+        sourceRunIds: body.sourceRunIds,
+        projectId: body.projectId,
+        pipelineId: body.pipelineId,
+        templateId: body.templateId || templateTarget?.templateId || (executionTarget?.kind === 'template' ? executionTarget.templateId : undefined),
+        stageId: body.stageId || templateTarget?.stageId || (executionTarget?.kind === 'template' ? executionTarget.stageId : undefined),
+        pipelineStageId: body.pipelineStageId,
+        pipelineStageIndex: body.pipelineStageIndex,
+        templateOverrides: body.templateOverrides,
+        conversationMode: body.conversationMode,
+        provider: body.provider,
+        triggerContext: body.triggerContext,
+      });
+    } catch (err) {
+      releaseUnattachedBudgetReservation(budgetLedger, 'manual template dispatch failed before run attach');
+      throw err;
+    }
+    if (budgetLedger?.decision === 'reserved') {
+      attachRunToBudgetReservation(budgetLedger, result.runId);
+    }
 
     return Response.json({ runId: result.runId, status: 'starting' }, { status: 201 });
   } catch (err: unknown) {

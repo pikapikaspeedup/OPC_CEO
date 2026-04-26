@@ -16,8 +16,13 @@ import type {
   NotificationChannel,
   NotificationResult,
 } from '../types';
+import { getApprovalFeedbackUrl, getApprovalInboxUrl } from '../approval-urls';
 
 const log = createLogger('IMChannel');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 // ---------------------------------------------------------------------------
 // IM adapter interface (pluggable per-platform)
@@ -44,11 +49,14 @@ export interface IMAdapter {
 
 export class IMChannel implements NotificationChannel {
   readonly id = 'cc-connect';
-  readonly enabled = true;
 
   private adapter: IMAdapter | null = null;
 
   constructor(private gatewayUrl: string) {}
+
+  get enabled(): boolean {
+    return !!this.adapter?.connected;
+  }
 
   /** Register an IM adapter (called when CC Connect is available). */
   setAdapter(adapter: IMAdapter): void {
@@ -64,7 +72,6 @@ export class IMChannel implements NotificationChannel {
    * - Urgency badge
    * - One-click approval/rejection links
    *
-   * TODO: Implement CC Connect ACP integration.
    */
   async send(request: ApprovalRequest): Promise<NotificationResult> {
     if (!this.adapter?.connected) {
@@ -76,8 +83,8 @@ export class IMChannel implements NotificationChannel {
       low: '🟢', normal: '🔵', high: '🟠', critical: '🔴',
     };
 
-    const approveUrl = this.getApprovalUrl(request.id) + '?action=approve';
-    const rejectUrl = this.getApprovalUrl(request.id) + '?action=reject';
+    const approveUrl = getApprovalFeedbackUrl(this.gatewayUrl, request.id, 'approve');
+    const rejectUrl = getApprovalFeedbackUrl(this.gatewayUrl, request.id, 'reject');
 
     // Try rich card first, fall back to text
     if (this.adapter.sendCard) {
@@ -97,8 +104,8 @@ export class IMChannel implements NotificationChannel {
           ],
         );
         return { success: true, channel: this.id, messageId: result.messageId };
-      } catch (err: any) {
-        log.warn({ requestId: request.id, err: err.message }, 'IM card send failed, trying text');
+      } catch (err: unknown) {
+        log.warn({ requestId: request.id, err: getErrorMessage(err) }, 'IM card send failed, trying text');
       }
     }
 
@@ -116,9 +123,10 @@ export class IMChannel implements NotificationChannel {
     try {
       const result = await this.adapter.sendMessage(text);
       return { success: true, channel: this.id, messageId: result.messageId };
-    } catch (err: any) {
-      log.error({ requestId: request.id, err: err.message }, 'IM notification failed');
-      return { success: false, channel: this.id, error: err.message };
+    } catch (err: unknown) {
+      const message = getErrorMessage(err);
+      log.error({ requestId: request.id, err: message }, 'IM notification failed');
+      return { success: false, channel: this.id, error: message };
     }
   }
 
@@ -127,6 +135,6 @@ export class IMChannel implements NotificationChannel {
    * CEO can click from IM to approve/reject in browser.
    */
   getApprovalUrl(requestId: string): string {
-    return `${this.gatewayUrl}/approval/${requestId}`;
+    return getApprovalInboxUrl(this.gatewayUrl, requestId);
   }
 }

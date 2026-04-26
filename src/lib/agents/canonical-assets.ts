@@ -8,6 +8,7 @@ type FrontmatterData = Record<string, string | string[] | boolean | number>;
 export type CanonicalWorkflowRuntimeConfig = {
   runtimeProfile?: string;
   runtimeSkill?: string;
+  runtimeScriptsDir?: string;
 };
 
 export type CanonicalAssetSource = 'canonical';
@@ -28,6 +29,7 @@ export interface CanonicalRule extends Rule {
 const WORKFLOWS_DIR = path.join(GLOBAL_ASSETS_DIR, 'workflows');
 const SKILLS_DIR = path.join(GLOBAL_ASSETS_DIR, 'skills');
 const RULES_DIR = path.join(GLOBAL_ASSETS_DIR, 'rules');
+const WORKFLOW_SCRIPTS_DIR = path.join(GLOBAL_ASSETS_DIR, 'workflow-scripts');
 
 function normalizeWorkflowName(name: string): string {
   return name.startsWith('/') ? name.slice(1) : name;
@@ -100,6 +102,7 @@ function extractRuntimeConfig(content: string): CanonicalWorkflowRuntimeConfig {
   return {
     runtimeProfile: typeof data.runtimeProfile === 'string' ? data.runtimeProfile.trim() : undefined,
     runtimeSkill: typeof data.runtimeSkill === 'string' ? data.runtimeSkill.trim() : undefined,
+    runtimeScriptsDir: typeof data.runtimeScriptsDir === 'string' ? normalizeWorkflowName(data.runtimeScriptsDir).trim() : undefined,
   };
 }
 
@@ -173,6 +176,22 @@ export function getCanonicalWorkflowRuntimeConfig(name: string): CanonicalWorkfl
     return null;
   }
   return extractRuntimeConfig(workflow.content || '');
+}
+
+export function getCanonicalWorkflowScriptsDir(name: string): string | null {
+  const normalizedName = normalizeWorkflowName(name).trim();
+  if (!normalizedName) {
+    return null;
+  }
+  const dirPath = path.join(WORKFLOW_SCRIPTS_DIR, normalizedName);
+  try {
+    if (!fs.statSync(dirPath).isDirectory()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return dirPath;
 }
 
 export function saveCanonicalWorkflow(name: string, content: string): void {
@@ -293,4 +312,18 @@ export function deleteCanonicalRule(name: string): boolean {
   if (!fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);
   return true;
+}
+
+export function saveCanonicalWorkflowScript(name: string, content: string): string {
+  const normalizedName = normalizeWorkflowName(name).trim();
+  const scriptDir = path.join(WORKFLOW_SCRIPTS_DIR, normalizedName);
+  ensureDir(scriptDir);
+  const filePath = path.join(scriptDir, 'run.sh');
+  fs.writeFileSync(filePath, content, 'utf-8');
+  try {
+    fs.chmodSync(filePath, 0o755);
+  } catch {
+    // chmod is best-effort on non-POSIX filesystems.
+  }
+  return filePath;
 }

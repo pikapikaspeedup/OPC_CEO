@@ -68,12 +68,27 @@ function getConfigPath(): string {
   return path.join(process.env.HOME || '~', '.gemini', 'antigravity', 'ai-config.json');
 }
 
+function shouldUseBuildDefaultConfig(): boolean {
+  return process.env.NEXT_PHASE === 'phase-production-build'
+    && process.env.AG_ALLOW_BUILD_HOME_CONFIG !== '1';
+}
+
 /**
  * Load AI config from disk.
  * Falls back to DEFAULT_CONFIG if file doesn't exist.
  */
 export function loadAIConfig(): AIProviderConfig {
   if (cachedConfigSource === 'override' && cachedConfig) {
+    return cachedConfig;
+  }
+
+  if (shouldUseBuildDefaultConfig()) {
+    if (cachedConfig && cachedConfigSource === 'default') {
+      return cachedConfig;
+    }
+    cachedConfig = { ...DEFAULT_CONFIG };
+    cachedConfigMtimeMs = null;
+    cachedConfigSource = 'default';
     return cachedConfig;
   }
 

@@ -53,6 +53,15 @@ const INTERNAL_MODEL_FALLBACKS: Record<string, string> = {
   MODEL_AUTO: 'gpt-5.4',
 };
 
+const DEFAULT_NATIVE_CODEX_TIMEOUT_MS = 90_000;
+
+function getNativeCodexTimeoutMs(): number {
+  const raw = process.env.NATIVE_CODEX_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_NATIVE_CODEX_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_NATIVE_CODEX_TIMEOUT_MS;
+}
+
 export function normalizeNativeCodexModel(model?: string): string {
   if (!model) {
     return DEFAULT_MODEL;
@@ -357,16 +366,32 @@ export async function nativeCodexComplete(
 
   // 3. Stream the response
   const url = `${CODEX_BASE_URL}/responses`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify(payload),
-    signal: opts.signal,
-  });
+  const timeoutMs = getNativeCodexTimeoutMs();
+  const timeoutController = opts.signal ? null : new AbortController();
+  const timeout = timeoutController
+    ? setTimeout(() => timeoutController.abort(), timeoutMs)
+    : null;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(payload),
+      signal: opts.signal || timeoutController?.signal,
+    });
+  } catch (error: unknown) {
+    if (timeoutController?.signal.aborted) {
+      throw new Error(`Native Codex request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const errBody = await response.text().catch(() => '');

@@ -30,7 +30,6 @@ import {
   Building2,
   ChevronDown,
   ChevronUp,
-  
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ProjectWorkbench from '@/components/project-workbench';
@@ -43,7 +42,14 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { NativeSelect } from '@/components/ui/native-select';
-import type { SchedulerJobResponse } from '@/lib/api';
+import {
+  WorkspaceBadge,
+  WorkspaceEmptyBlock,
+  WorkspaceMiniMetric,
+  WorkspaceSurface,
+  workspaceFieldClassName,
+  workspaceOutlineActionClassName,
+} from '@/components/ui/workspace-primitives';
 import type {
   AgentRun,
   Project,
@@ -59,7 +65,6 @@ interface ProjectsPanelProps {
   agentRuns: AgentRun[];
   workspaces: Workspace[];
   onSelectProject?: (projectId: string) => void;
-  onOpenOperations?: () => void;
   onSelectRun?: (runId: string) => void;
   selectedProjectId?: string | null;
   /** Template definitions for resolving stage names */
@@ -85,11 +90,11 @@ function StatusBadge({ status }: { status: string }) {
     active: { color: 'text-sky-400', bg: 'bg-sky-400/10', border: 'border-sky-400/20', icon: RotateCw },
     completed: { color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/20', icon: CheckCircle2 },
     failed: { color: 'text-red-400', bg: 'bg-red-400/10', border: 'border-red-400/20', icon: AlertTriangle },
-    cancelled: { color: 'text-slate-300', bg: 'bg-slate-400/10', border: 'border-slate-400/20', icon: XCircle },
+    cancelled: { color: 'text-[var(--app-text-muted)]', bg: 'bg-[var(--app-raised)]', border: 'border-[var(--app-border-soft)]', icon: XCircle },
     paused: { color: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/20', icon: Pause },
-    archived: { color: 'text-slate-400', bg: 'bg-slate-400/10', border: 'border-slate-400/20', icon: Clock },
-    skipped: { color: 'text-slate-400', bg: 'bg-slate-400/10', border: 'border-slate-400/20', icon: SkipForward },
-  }[status] || { color: 'text-slate-400', bg: 'bg-slate-400/10', border: 'border-slate-400/20', icon: Clock };
+    archived: { color: 'text-[var(--app-text-muted)]', bg: 'bg-[var(--app-raised)]', border: 'border-[var(--app-border-soft)]', icon: Clock },
+    skipped: { color: 'text-[var(--app-text-muted)]', bg: 'bg-[var(--app-raised)]', border: 'border-[var(--app-border-soft)]', icon: SkipForward },
+  }[status] || { color: 'text-[var(--app-text-muted)]', bg: 'bg-[var(--app-raised)]', border: 'border-[var(--app-border-soft)]', icon: Clock };
 
   const Icon = config.icon;
   // Use status title from i18n
@@ -103,27 +108,11 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function getJobIntervalMs(job: SchedulerJobResponse): number | null {
-  const value = (job as SchedulerJobResponse & { intervalMs?: number }).intervalMs;
-  return typeof value === 'number' && value > 0 ? value : null;
-}
-
-function formatLoopCadence(job: SchedulerJobResponse): string {
-  if (job.type !== 'interval') return job.type || 'job';
-  const intervalMs = getJobIntervalMs(job);
-  if (!intervalMs) return '循环';
-  if (intervalMs % 3_600_000 === 0) return `每 ${intervalMs / 3_600_000} 小时`;
-  if (intervalMs % 60_000 === 0) return `每 ${intervalMs / 60_000} 分钟`;
-  if (intervalMs % 1_000 === 0) return `每 ${intervalMs / 1_000} 秒`;
-  return `每 ${intervalMs} ms`;
-}
-
 export default function ProjectsPanel({
   projects,
   agentRuns,
   workspaces,
   onSelectProject,
-  onOpenOperations,
   selectedProjectId,
   templates,
   models,
@@ -194,22 +183,8 @@ export default function ProjectsPanel({
   const [lintLoading, setLintLoading] = useState(false);
   const [convertLoading, setConvertLoading] = useState(false);
   const [convertMessage, setConvertMessage] = useState<string | null>(null);
-  const [schedulerJobs, setSchedulerJobs] = useState<SchedulerJobResponse[]>([]);
-  const [schedulerLoading, setSchedulerLoading] = useState(true);
   const [detailRuns, setDetailRuns] = useState<AgentRun[]>([]);
   const [detailRunsProjectId, setDetailRunsProjectId] = useState<string | null>(null);
-
-  const fetchSchedulerJobs = useCallback(async () => {
-    setSchedulerLoading(true);
-    try {
-      const data = await api.schedulerJobs();
-      setSchedulerJobs(data);
-    } catch {
-      // handled upstream
-    } finally {
-      setSchedulerLoading(false);
-    }
-  }, []);
 
   const handleLintTemplate = async (templateId: string) => {
     setLintLoading(true);
@@ -252,63 +227,6 @@ export default function ProjectsPanel({
       .filter(p => !p.parentProjectId) // Only top-level projects
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [projects]);
-
-  useEffect(() => {
-    void fetchSchedulerJobs();
-    const interval = setInterval(() => {
-      void fetchSchedulerJobs();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [fetchSchedulerJobs]);
-
-  const intervalJobs = useMemo(() => {
-    return [...schedulerJobs]
-      .filter((job) => job.type === 'interval')
-      .sort((a, b) => {
-        if (!!a.enabled !== !!b.enabled) return a.enabled ? -1 : 1;
-        const left = a.nextRunAt || a.lastRunAt || '';
-        const right = b.nextRunAt || b.lastRunAt || '';
-        return right.localeCompare(left);
-      });
-  }, [schedulerJobs]);
-
-  const enabledIntervalCount = useMemo(
-    () => intervalJobs.filter((job) => job.enabled).length,
-    [intervalJobs],
-  );
-
-  const failedIntervalCount = useMemo(
-    () => intervalJobs.filter((job) => job.lastRunResult === 'failed').length,
-    [intervalJobs],
-  );
-
-  const loopSummaryInline = (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-8 rounded-full border border-cyan-400/18 bg-cyan-400/[0.06] px-3 text-cyan-300/85 hover:bg-cyan-400/[0.1] hover:text-cyan-200"
-        onClick={() => onOpenOperations?.()}
-      >
-        <Repeat className="mr-1.5 h-3.5 w-3.5" />
-        {schedulerLoading
-          ? '循环任务加载中'
-          : intervalJobs.length > 0
-            ? `${enabledIntervalCount}/${intervalJobs.length} loops`
-            : 'No loops'}
-      </Button>
-      {!schedulerLoading && intervalJobs.length > 0 ? (
-        <span className="text-[11px] text-white/40">
-          最近节奏：{formatLoopCadence(intervalJobs[0])}
-        </span>
-      ) : null}
-      {failedIntervalCount > 0 ? (
-        <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-300">
-          {failedIntervalCount} failed
-        </span>
-      ) : null}
-    </div>
-  );
 
   // Build lookup of child projects by parent ID
   const childProjectsByParent = useMemo(() => {
@@ -539,9 +457,9 @@ export default function ProjectsPanel({
             </div>
           )}
 
-          <div className="flex flex-col items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] py-12 text-center">
-            <FolderKanban className="mb-4 h-12 w-12 text-white/20" />
-            <h3 className="text-lg font-medium text-white/80">{t('projects.noProjects')}</h3>
+          <WorkspaceSurface className="flex flex-col items-center justify-center border-dashed py-12 text-center">
+            <FolderKanban className="mb-4 h-12 w-12 text-[var(--app-accent)]/40" />
+            <h3 className="text-lg font-medium text-[var(--app-text)]">{t('projects.noProjects')}</h3>
             <p className="mt-2 text-sm text-[var(--app-text-soft)]">
               {t('projects.createPrompt')}
             </p>
@@ -553,7 +471,7 @@ export default function ProjectsPanel({
               <Sparkles className="h-4 w-4 text-purple-400" />
               {t('generate.title')}
             </Button>
-          </div>
+          </WorkspaceSurface>
         </div>
       ) : detailProject ? (
         /* ── Detail mode: only the selected project ── */
@@ -589,14 +507,13 @@ export default function ProjectsPanel({
               {/* Back button + action bar */}
               <div className="flex items-center justify-between">
                 <button
-                  className="flex items-center gap-2 text-sm text-white/50 hover:text-white transition-colors"
+                  className="flex items-center gap-2 text-sm text-[var(--app-text-soft)] transition-colors hover:text-[var(--app-text)]"
                   onClick={() => (onSelectProject as (id: string | null) => void)?.(null)}
                 >
                   <ArrowLeft className="h-4 w-4" />
                   <span>{t('projects.title')}</span>
                 </button>
                 <div className="flex items-center gap-2">
-                  {loopSummaryInline}
                   {!project.pipelineState && (
                     <Button
                       variant="ghost"
@@ -611,7 +528,7 @@ export default function ProjectsPanel({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="gap-1.5 text-white/60 hover:bg-white/10 hover:text-white"
+                    className="gap-1.5 text-[var(--app-text-soft)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
                     onClick={(e) => openEditDialog(e, project)}
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -621,7 +538,7 @@ export default function ProjectsPanel({
                     size="sm"
                     className={cn(
                       "gap-1.5",
-                      project.status === 'archived' ? "text-amber-400 hover:bg-amber-400/10" : "text-slate-400 hover:bg-slate-400/10"
+                      project.status === 'archived' ? "text-amber-600 hover:bg-amber-400/10" : "text-[var(--app-text-muted)] hover:bg-[var(--app-raised-2)]"
                     )}
                     onClick={(e) => handleArchive(e, project.projectId, project.status !== 'archived')}
                   >
@@ -640,12 +557,12 @@ export default function ProjectsPanel({
 
               {/* Project header */}
               <div className="flex items-start gap-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] border border-white/10 text-white/80 shadow-inner">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-accent)] shadow-inner">
                   <FolderKanban className="h-6 w-6" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-3">
-                    <h2 className="text-2xl font-bold text-white">{project.name}</h2>
+                    <h2 className="text-2xl font-bold text-[var(--app-text)]">{project.name}</h2>
                     <StatusBadge status={project.status} />
                   </div>
                   <div className="mt-1 flex items-center gap-3 text-sm text-[var(--app-text-muted)]">
@@ -669,78 +586,75 @@ export default function ProjectsPanel({
               </div>
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl border border-emerald-400/14 bg-emerald-400/[0.05] px-4 py-3">
+                <WorkspaceSurface tone="success" padding="sm" className="px-4 py-3">
                   <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-300/70">最近执行</div>
                   <div className="mt-2 flex items-center gap-2">
                     {latestProjectRun ? <StatusBadge status={latestProjectRun.status} /> : <StatusBadge status={viewProject.status} />}
                   </div>
-                  <div className="mt-2 text-[12px] leading-6 text-white/50">
+                  <div className="mt-2 text-[12px] leading-6 text-[var(--app-text-soft)]">
                     {latestProjectRun
                       ? `${formatRelativeTime(latestProjectRun.createdAt, locale)}`
                       : '暂无执行记录'}
                   </div>
-                </div>
+                </WorkspaceSurface>
 
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">结果概览</div>
-                  <div className="mt-2 text-sm font-medium leading-6 text-white/85 line-clamp-2">
-                    {latestProjectRun?.result?.summary || latestProjectRun?.resultEnvelope?.summary || '暂无结果摘要'}
-                  </div>
-                  <div className="mt-2 text-[12px] leading-6 text-white/50">
-                    {completedRunCount} completed runs
-                  </div>
-                </div>
+                <WorkspaceMiniMetric
+                  label="结果概览"
+                  value={latestProjectRun?.result?.summary || latestProjectRun?.resultEnvelope?.summary || '暂无结果摘要'}
+                  detail={`${completedRunCount} completed runs`}
+                  valueClassName="line-clamp-2 text-sm leading-6 tracking-normal"
+                />
 
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Output Evidence</div>
-                  <div className="mt-2 flex items-center gap-2 text-sm font-medium text-white/85">
-                    <Package className="h-4 w-4 text-violet-300/80" />
-                    <span>{outputArtifactCount} artifacts</span>
-                  </div>
-                  <div className="mt-2 text-[12px] leading-6 text-white/50">
-                    {viewProjectRuns.length} total runs in this project
-                  </div>
-                </div>
+                <WorkspaceMiniMetric
+                  label="Output Evidence"
+                  value={(
+                    <span className="inline-flex items-center gap-2">
+                      <Package className="h-4 w-4 text-violet-300/80" />
+                      {outputArtifactCount} artifacts
+                    </span>
+                  )}
+                  detail={`${viewProjectRuns.length} total runs in this project`}
+                  tone="info"
+                  valueClassName="text-sm tracking-normal"
+                />
 
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">关注项</div>
-                  <div className="mt-2 flex items-center gap-2 text-sm font-medium text-white/85">
-                    <ShieldCheck className={cn(
-                      'h-4 w-4',
-                      latestAttentionCount === 0 && latestVerifiedRun?.verificationPassed !== false ? 'text-emerald-300/80' : 'text-amber-300/80',
-                    )} />
-                    <span>
+                <WorkspaceMiniMetric
+                  label="关注项"
+                  value={(
+                    <span className="inline-flex items-center gap-2">
+                      <ShieldCheck className={cn(
+                        'h-4 w-4',
+                        latestAttentionCount === 0 && latestVerifiedRun?.verificationPassed !== false ? 'text-emerald-300/80' : 'text-amber-300/80',
+                      )} />
                       {latestAttentionCount > 0
                         ? `${latestAttentionCount} item(s) need attention`
                         : latestVerifiedRun?.verificationPassed === false
                           ? 'Needs verification'
                           : 'No issue'}
                     </span>
-                  </div>
-                  <div className="mt-2 text-[12px] leading-6 text-white/50">
-                    {latestVerifiedRun?.reportedEventCount !== undefined && latestVerifiedRun?.reportedEventCount !== null
-                      ? `${latestVerifiedRun.reportedEventCount} verified items${latestVerifiedRun.reportedEventDate ? ` · ${latestVerifiedRun.reportedEventDate}` : ''}`
-                      : '无额外校验结果'}
-                  </div>
-                </div>
+                  )}
+                  detail={latestVerifiedRun?.reportedEventCount !== undefined && latestVerifiedRun?.reportedEventCount !== null
+                    ? `${latestVerifiedRun.reportedEventCount} verified items${latestVerifiedRun.reportedEventDate ? ` · ${latestVerifiedRun.reportedEventDate}` : ''}`
+                    : '无额外校验结果'}
+                  tone={latestAttentionCount === 0 && latestVerifiedRun?.verificationPassed !== false ? 'success' : 'warning'}
+                  valueClassName="text-sm tracking-normal"
+                />
               </div>
 
               {/* Department context */}
               {deptConfig && (
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4">
+                <WorkspaceSurface>
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/70">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-accent)]">
                           <Building2 className="h-4 w-4" />
                         </span>
-                        <span className="text-sm font-semibold text-white/85">{deptConfig.name}</span>
-                        <span className="text-[10px] rounded-full bg-white/8 px-2 py-0.5 text-white/40 uppercase">
-                          {deptConfig.type}
-                        </span>
+                        <span className="text-sm font-semibold text-[var(--app-text)]">{deptConfig.name}</span>
+                        <WorkspaceBadge>{deptConfig.type}</WorkspaceBadge>
                       </div>
                       {deptConfig.description && (
-                        <p className="mt-3 max-w-4xl text-[13px] leading-6 text-white/45 line-clamp-2">
+                        <p className="mt-3 max-w-4xl text-[13px] leading-6 text-[var(--app-text-soft)] line-clamp-2">
                           {deptConfig.description}
                         </p>
                       )}
@@ -748,7 +662,7 @@ export default function ProjectsPanel({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-9 gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-4 text-white/60 hover:bg-white/[0.06] hover:text-white"
+                      className={cn('h-9 gap-1.5 rounded-full px-4', workspaceOutlineActionClassName)}
                       onClick={() => setShowDeptContext((prev) => !prev)}
                     >
                       {showDeptContext ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -759,32 +673,32 @@ export default function ProjectsPanel({
                   {showDeptContext && (
                     <div className="mt-4 grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                       <div className="space-y-3">
-                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3">
-                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Context Role</div>
-                          <div className="mt-1 text-sm text-white/80">部门上下文只用于解释执行路径，不再占据详情页主视图。</div>
-                        </div>
-                        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 space-y-2">
-                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Context Snapshot</div>
-                          <div className="text-[12px] text-white/55">{deptConfig.skills.length} skills</div>
-                          <div className="text-[12px] text-white/55">{workflowBoundSkills} workflow-bound</div>
-                          <div className="text-[12px] text-white/55">{fallbackSkillRefs} fallback refs</div>
-                          {deptConfig.provider && <div className="text-[12px] text-white/55">provider: {deptConfig.provider}</div>}
-                        </div>
+                        <WorkspaceSurface padding="sm">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Context Role</div>
+                          <div className="mt-1 text-sm text-[var(--app-text)]">Skills / workflows / provider</div>
+                        </WorkspaceSurface>
+                        <WorkspaceSurface padding="sm" className="space-y-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Context Snapshot</div>
+                          <div className="text-[12px] text-[var(--app-text-soft)]">{deptConfig.skills.length} skills</div>
+                          <div className="text-[12px] text-[var(--app-text-soft)]">{workflowBoundSkills} workflow-bound</div>
+                          <div className="text-[12px] text-[var(--app-text-soft)]">{fallbackSkillRefs} fallback refs</div>
+                          {deptConfig.provider && <div className="text-[12px] text-[var(--app-text-soft)]">provider: {deptConfig.provider}</div>}
+                        </WorkspaceSurface>
                         {deptConfig.okr && deptConfig.okr.objectives.length > 0 && (
-                          <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 space-y-3">
-                            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">OKR Snapshot</div>
+                          <WorkspaceSurface padding="sm" className="space-y-3">
+                            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">OKR Snapshot</div>
                             {deptConfig.okr.objectives.slice(0, 2).map((obj, i) => (
                               <div key={i} className="space-y-1.5">
-                                <div className="text-[12px] text-white/70">{obj.title}</div>
+                                <div className="text-[12px] text-[var(--app-text)]">{obj.title}</div>
                                 {obj.keyResults.slice(0, 2).map((kr, j) => {
                                   const pct = kr.target > 0 ? Math.round((kr.current / kr.target) * 100) : 0;
                                   return (
                                     <div key={j} className="space-y-1">
-                                      <div className="flex items-center justify-between gap-3 text-[10px] text-white/45">
+                                      <div className="flex items-center justify-between gap-3 text-[10px] text-[var(--app-text-soft)]">
                                         <span className="truncate">{kr.description}</span>
                                         <span className="tabular-nums">{pct}%</span>
                                       </div>
-                                      <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+                                      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--app-raised-2)]">
                                         <div
                                           className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400"
                                           style={{ width: `${Math.min(pct, 100)}%` }}
@@ -795,39 +709,30 @@ export default function ProjectsPanel({
                                 })}
                               </div>
                             ))}
-                          </div>
+                          </WorkspaceSurface>
                         )}
                       </div>
                       <div className="min-w-0">
                         {deptConfig.skills.length > 0 ? (
                           <SkillBrowser skills={deptConfig.skills} />
                         ) : (
-                          <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-8 text-center text-sm text-white/35">
-                            暂无部门技能定义
-                          </div>
+                          <WorkspaceEmptyBlock title="暂无部门技能定义" />
                         )}
                       </div>
                     </div>
                   )}
-                </div>
+                </WorkspaceSurface>
               )}
 
               {/* ── CEO Decision Card (Phase 6) ── */}
               {viewProject.ceoDecision && (
-                <div className={cn(
-                  'rounded-xl border p-4 space-y-3',
-                  viewProject.ceoDecision.resolved
-                    ? 'border-white/8 bg-white/[0.02]'
-                    : 'border-amber-500/20 bg-amber-500/5',
-                )}>
+                <WorkspaceSurface tone={viewProject.ceoDecision.resolved ? 'neutral' : 'warning'} className="space-y-3">
                   <div className="flex items-center gap-2">
                     <span className="text-base">{viewProject.ceoDecision.resolved ? '🤖' : '⚠️'}</span>
-                    <span className="text-sm font-semibold text-white/80">
+                    <span className="text-sm font-semibold text-[var(--app-text)]">
                       {viewProject.ceoDecision.resolved ? 'AI 决策记录' : '等待 CEO 审批'}
                     </span>
-                    <span className="text-[10px] rounded-full bg-white/8 px-2 py-0.5 text-white/40">
-                      {viewProject.ceoDecision.action}
-                    </span>
+                    <WorkspaceBadge>{viewProject.ceoDecision.action}</WorkspaceBadge>
                     {viewProject.ceoDecision.resolved && (
                       <span className="text-[10px] text-emerald-400/60 ml-auto">✓ 已执行</span>
                     )}
@@ -837,34 +742,34 @@ export default function ProjectsPanel({
                   </div>
 
                   {/* Original command */}
-                  <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
-                    <div className="text-[10px] text-white/30 mb-1">CEO 指令</div>
-                    <div className="text-sm text-white/70 italic">&ldquo;{viewProject.ceoDecision.command}&rdquo;</div>
-                  </div>
+                  <WorkspaceSurface padding="sm">
+                    <div className="text-[10px] text-[var(--app-text-muted)] mb-1">CEO 指令</div>
+                    <div className="text-sm text-[var(--app-text-soft)] italic">&ldquo;{viewProject.ceoDecision.command}&rdquo;</div>
+                  </WorkspaceSurface>
 
                   {/* AI reasoning */}
-                  <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
-                    <div className="text-[10px] text-white/30 mb-1">🧠 AI 决策依据</div>
-                    <div className="text-[12px] text-white/60 leading-relaxed">{viewProject.ceoDecision.reasoning}</div>
-                  </div>
+                  <WorkspaceSurface padding="sm">
+                    <div className="text-[10px] text-[var(--app-text-muted)] mb-1">AI 决策依据</div>
+                    <div className="text-[12px] text-[var(--app-text-soft)] leading-relaxed">{viewProject.ceoDecision.reasoning}</div>
+                  </WorkspaceSurface>
 
                   {/* Decision metadata */}
-                  <div className="flex flex-wrap gap-3 text-[11px] text-white/40">
+                  <div className="flex flex-wrap gap-3 text-[11px] text-[var(--app-text-muted)]">
                     {viewProject.ceoDecision.departmentName && (
                       <div className="flex items-center gap-1">
-                        <span className="text-white/25">部门:</span>
-                        <span className="text-white/60">{viewProject.ceoDecision.departmentName}</span>
+                        <span>部门:</span>
+                        <span className="text-[var(--app-text-soft)]">{viewProject.ceoDecision.departmentName}</span>
                       </div>
                     )}
                     {viewProject.ceoDecision.templateId && (
                       <div className="flex items-center gap-1">
-                        <span className="text-white/25">模板:</span>
+                        <span>模板:</span>
                         <span className="text-sky-400/60">{viewProject.ceoDecision.templateId}</span>
                       </div>
                     )}
                     <div className="flex items-center gap-1">
-                      <span className="text-white/25">决策时间:</span>
-                      <span className="text-white/50">{new Date(viewProject.ceoDecision.decidedAt).toLocaleString()}</span>
+                      <span>决策时间:</span>
+                      <span className="text-[var(--app-text-soft)]">{new Date(viewProject.ceoDecision.decidedAt).toLocaleString()}</span>
                     </div>
                   </div>
 
@@ -875,7 +780,7 @@ export default function ProjectsPanel({
                       {viewProject.ceoDecision.suggestions.map((s, i) => (
                         <button
                           key={i}
-                          className="flex w-full items-start gap-3 rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 text-left hover:bg-white/[0.06] hover:border-amber-500/30 transition-all group"
+                          className="group flex w-full items-start gap-3 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-3 text-left transition-all hover:border-amber-500/30 hover:bg-[var(--app-raised)]"
                           onClick={async () => {
                             if (s.type === 'suggest_add_template' && s.payload?.workspace) {
                               try {
@@ -953,16 +858,16 @@ export default function ProjectsPanel({
                             }
                           }}
                         >
-                          <span className="mt-0.5 text-white/30 group-hover:text-amber-400 transition-colors">→</span>
+                          <span className="mt-0.5 text-[var(--app-text-muted)] transition-colors group-hover:text-amber-600">→</span>
                           <div className="flex-1">
-                            <span className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">{s.label}</span>
-                            <p className="text-[11px] text-white/40 mt-0.5">{s.description}</p>
+                            <span className="text-sm font-medium text-[var(--app-text)] transition-colors group-hover:text-amber-700">{s.label}</span>
+                            <p className="mt-0.5 text-[11px] text-[var(--app-text-soft)]">{s.description}</p>
                           </div>
                         </button>
                       ))}
                     </div>
                   )}
-                </div>
+                </WorkspaceSurface>
               )}
 
               {/* Branch tabs (if has children) */}
@@ -973,7 +878,7 @@ export default function ProjectsPanel({
                       "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
                       !activeChildId
                         ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.1)]"
-                        : "bg-white/[0.03] text-white/40 border border-white/6 hover:text-white/60 hover:border-white/12"
+                        : "border border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text-muted)] hover:border-[var(--app-border-strong)] hover:text-[var(--app-text-soft)]"
                     )}
                     onClick={() => onSelectProject?.(project.projectId)}
                   >
@@ -992,7 +897,7 @@ export default function ProjectsPanel({
                           "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
                           isActive
                             ? "bg-violet-500/15 text-violet-300 border border-violet-500/30 shadow-[0_0_8px_rgba(139,92,246,0.1)]"
-                            : "bg-white/[0.03] text-white/40 border border-white/6 hover:text-white/60 hover:border-white/12"
+                            : "border border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text-muted)] hover:border-[var(--app-border-strong)] hover:text-[var(--app-text-soft)]"
                         )}
                         onClick={() => onSelectProject?.(child.projectId)}
                       >
@@ -1001,7 +906,7 @@ export default function ProjectsPanel({
                         {cTotal > 0 && (
                           <span className={cn(
                             "text-[10px] tabular-nums",
-                            cDone === cTotal ? "text-emerald-400/60" : "text-white/25"
+                            cDone === cTotal ? "text-emerald-500" : "text-[var(--app-text-muted)]"
                           )}>
                             {cDone}/{cTotal}
                           </span>
@@ -1009,10 +914,10 @@ export default function ProjectsPanel({
                         <span className={cn(
                           "h-2 w-2 rounded-full shrink-0",
                           child.status === 'completed' ? 'bg-emerald-400' :
-                            child.status === 'active' ? 'bg-sky-400 animate-pulse' :
-                              child.status === 'failed' ? 'bg-red-400' :
-                                child.status === 'paused' ? 'bg-amber-400' :
-                                  'bg-slate-400'
+                          child.status === 'active' ? 'bg-sky-400 animate-pulse' :
+                            child.status === 'failed' ? 'bg-red-400' :
+                              child.status === 'paused' ? 'bg-amber-400' :
+                                  'bg-[var(--app-text-muted)]'
                         )} title={child.status} />
                       </button>
                     );
@@ -1053,16 +958,16 @@ export default function ProjectsPanel({
                   return (
                     <div className="space-y-4">
                       {/* Project status */}
-                      <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-5">
+                      <WorkspaceSurface tone="warning" className="space-y-3">
                         <div className="flex items-center gap-3 mb-3">
-                          <div className="h-8 w-8 rounded-full bg-amber-500/10 flex items-center justify-center">
-                            <span className="text-lg">📋</span>
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/10 text-amber-600">
+                            <AlertTriangle className="h-4 w-4" />
                           </div>
                           <div>
-                            <h3 className="text-sm font-semibold text-white/90">
+                            <h3 className="text-sm font-semibold text-[var(--app-text)]">
                               {hasNeedsDecision ? '需要您的决策' : '待派发'}
                             </h3>
-                            <p className="text-xs text-white/40">
+                            <p className="text-xs text-[var(--app-text-soft)]">
                               {hasNeedsDecision
                                 ? '系统未找到合适的执行模板，请选择以下操作之一'
                                 : '项目已创建，选择模板后可立即开始执行'}
@@ -1071,13 +976,13 @@ export default function ProjectsPanel({
                         </div>
 
                         {/* Task info */}
-                        <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3 mb-3">
-                          <div className="text-xs text-white/40 mb-1">任务目标</div>
-                          <div className="text-sm text-white/80">{viewProject.goal || viewProject.name}</div>
+                        <div className="mb-3 rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-surface)] p-3">
+                          <div className="mb-1 text-xs text-[var(--app-text-muted)]">任务目标</div>
+                          <div className="text-sm text-[var(--app-text)]">{viewProject.goal || viewProject.name}</div>
                           {viewProject.workspace && (
-                            <div className="flex items-center gap-2 mt-2">
-                              <span className="text-xs text-white/30">工作区:</span>
-                              <span className="text-xs text-white/50">{viewProject.workspace.split('/').pop()}</span>
+                            <div className="mt-2 flex items-center gap-2">
+                              <span className="text-xs text-[var(--app-text-muted)]">工作区:</span>
+                              <span className="text-xs text-[var(--app-text-soft)]">{viewProject.workspace.split('/').pop()}</span>
                             </div>
                           )}
                         </div>
@@ -1085,11 +990,11 @@ export default function ProjectsPanel({
                         {/* CEO suggestions (needs_decision) */}
                         {hasNeedsDecision && (
                           <div className="space-y-2">
-                            <div className="text-xs font-medium text-amber-300/80 mb-2">可选操作：</div>
+                            <div className="mb-2 text-xs font-medium text-amber-700">可选操作：</div>
                             {projectSuggestions.map((s, i) => (
                               <button
                                 key={i}
-                                className="flex w-full items-start gap-3 rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 text-left hover:bg-white/[0.06] hover:border-white/12 transition-all group"
+                                className="group flex w-full items-start gap-3 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-3 text-left transition-all hover:border-sky-400/30 hover:bg-[var(--app-raised)]"
                                 onClick={async () => {
                                   if (s.type === 'reassign_department' && s.payload?.workspace) {
                                     try {
@@ -1173,20 +1078,20 @@ export default function ProjectsPanel({
                                   }
                                 }}
                               >
-                                <span className="mt-0.5 text-white/30 group-hover:text-sky-400 transition-colors">→</span>
+                                <span className="mt-0.5 text-[var(--app-text-muted)] transition-colors group-hover:text-sky-600">→</span>
                                 <div className="flex-1">
-                                  <span className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">{s.label}</span>
-                                  <p className="text-[11px] text-white/40 mt-0.5">{s.description}</p>
+                                  <span className="text-sm font-medium text-[var(--app-text)] transition-colors group-hover:text-sky-700">{s.label}</span>
+                                  <p className="mt-0.5 text-[11px] text-[var(--app-text-soft)]">{s.description}</p>
                                 </div>
                               </button>
                             ))}
                           </div>
                         )}
-                      </div>
+                      </WorkspaceSurface>
 
                       {/* Manual dispatch panel */}
-                      <div className="rounded-xl border border-white/8 bg-white/[0.02] p-5">
-                        <h4 className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">手动选择模板派发</h4>
+                      <WorkspaceSurface className="space-y-3" padding="lg">
+                        <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--app-text-muted)]">手动选择模板派发</h4>
                         <div className="flex gap-3">
                           <NativeSelect
                             value={dispatchData.templateId}
@@ -1227,10 +1132,10 @@ export default function ProjectsPanel({
                             派发
                           </Button>
                         </div>
-                        <p className="text-[11px] text-white/30 mt-2">
+                        <p className="mt-2 text-[11px] text-[var(--app-text-soft)]">
                           或者 <button onClick={() => setIsGenerateDialogOpen(true)} className="text-sky-400 hover:underline">用 AI 生成新模板</button>
                         </p>
-                      </div>
+                      </WorkspaceSurface>
                     </div>
                   );
                 })()
@@ -1243,10 +1148,9 @@ export default function ProjectsPanel({
         <div className="space-y-6">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-white">{t('projects.title')}</h2>
+              <h2 className="text-2xl font-bold text-[var(--app-text)]">{t('projects.title')}</h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {loopSummaryInline}
               <Button variant="ghost" onClick={() => setIsGenerateDialogOpen(true)} className="gap-2 rounded-full px-3 sm:px-4">
                 <Sparkles className="h-4 w-4 text-purple-400" />
                 <span className="hidden sm:inline">{t('generate.title')}</span>
@@ -1287,7 +1191,7 @@ export default function ProjectsPanel({
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g. My Website Redesign"
-                className="bg-white/5"
+                className={workspaceFieldClassName}
               />
             </div>
             <div className="space-y-2">
@@ -1296,7 +1200,7 @@ export default function ProjectsPanel({
                 value={formData.goal}
                 onChange={(e) => setFormData({ ...formData, goal: e.target.value })}
                 placeholder="What are we building?"
-                className="bg-white/5 min-h-[100px]"
+                className={cn('min-h-[100px]', workspaceFieldClassName)}
               />
             </div>
             <div className="space-y-2">
@@ -1304,7 +1208,7 @@ export default function ProjectsPanel({
               <NativeSelect
                 value={formData.workspace || ''}
                 onChange={(e) => setFormData({ ...formData, workspace: e.target.value })}
-                className="bg-white/5"
+                className={workspaceFieldClassName}
               >
                 {workspaces.map((w) => (
                   <option key={w.uri} value={w.uri}>{w.name}</option>
@@ -1316,7 +1220,7 @@ export default function ProjectsPanel({
               <NativeSelect
                 value={formData.templateId || 'none'}
                 onChange={(e) => setFormData({ ...formData, templateId: e.target.value === 'none' ? '' : e.target.value })}
-                className="bg-white/5"
+                className={workspaceFieldClassName}
               >
                 <option value="none">No template</option>
                 {templates?.map((t) => (
@@ -1345,7 +1249,7 @@ export default function ProjectsPanel({
               <Input
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="bg-white/5"
+                className={workspaceFieldClassName}
               />
             </div>
             <div className="space-y-2">
@@ -1353,7 +1257,7 @@ export default function ProjectsPanel({
               <Textarea
                 value={formData.goal}
                 onChange={(e) => setFormData({ ...formData, goal: e.target.value })}
-                className="bg-white/5 min-h-[100px]"
+                className={cn('min-h-[100px]', workspaceFieldClassName)}
               />
             </div>
           </div>
@@ -1378,7 +1282,7 @@ export default function ProjectsPanel({
                 <NativeSelect
                   value={dispatchData.templateId || ''}
                   onChange={(e) => { if (e.target.value) { setDispatchData({ ...dispatchData, templateId: e.target.value }); setLintResult(null); } }}
-                  className="flex-1 bg-white/5"
+                  className={cn('flex-1', workspaceFieldClassName)}
                 >
                   <option value="" disabled>Select template</option>
                   {templates?.map((t) => (
@@ -1404,7 +1308,7 @@ export default function ProjectsPanel({
                     <div className="flex items-center gap-1.5 text-xs text-emerald-400">
                       <CheckCircle2 className="h-3.5 w-3.5" /> Template is valid
                       {lintResult.format && (
-                        <span className="text-[10px] text-white/40 font-mono ml-1">({lintResult.format})</span>
+                        <span className="ml-1 font-mono text-[10px] text-[var(--app-text-muted)]">({lintResult.format})</span>
                       )}
                     </div>
                   ) : (
@@ -1439,7 +1343,7 @@ export default function ProjectsPanel({
                     Convert to {lintResult.format === 'pipeline' ? 'graphPipeline' : 'pipeline'}
                   </Button>
                   {convertMessage && (
-                    <span className="text-[10px] text-white/40">{convertMessage}</span>
+                    <span className="text-[10px] text-[var(--app-text-muted)]">{convertMessage}</span>
                   )}
                 </div>
               )}
@@ -1450,7 +1354,7 @@ export default function ProjectsPanel({
                 value={dispatchData.prompt}
                 onChange={(e) => setDispatchData({ ...dispatchData, prompt: e.target.value })}
                 placeholder="What should this pipeline achieve?"
-                className="bg-white/5 min-h-[120px]"
+                className={cn('min-h-[120px]', workspaceFieldClassName)}
               />
             </div>
           </div>

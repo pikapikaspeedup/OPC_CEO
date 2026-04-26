@@ -1,3 +1,5 @@
+import { appendAuditEvent } from './ops-audit';
+
 export type ProjectEvent =
   | { type: 'stage:completed'; projectId: string; stageId: string; runId: string; nodeKind?: 'stage' | 'fan-out' | 'join' }
   | { type: 'stage:failed'; projectId: string; stageId: string; runId: string; status: 'failed' | 'timeout' | 'blocked'; error?: string }
@@ -23,7 +25,6 @@ export function onProjectEvent(listenerId: string, listener: Listener): void {
 export function emitProjectEvent(event: ProjectEvent): void {
   // Auto-record audit event
   try {
-    const { appendAuditEvent } = require('./ops-audit');
     if (event.type === 'stage:completed') {
       appendAuditEvent({
         kind: 'stage:completed',

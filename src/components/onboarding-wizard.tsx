@@ -196,9 +196,9 @@ export default function OnboardingWizard({
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground leading-relaxed">
-                Onboarding 负责部门身份初始化；更细的能力声明会在部门配置里维护，并按
+                部门能力按
                 <span className="text-foreground font-medium"> skill → workflowRef → skillRefs </span>
-                的顺序执行。
+                顺序执行。
               </div>
               <div className="flex justify-between pt-2">
                 <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => onOpenChange(false)}>

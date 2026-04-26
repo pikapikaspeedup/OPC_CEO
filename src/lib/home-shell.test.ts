@@ -52,39 +52,40 @@ describe('home-shell', () => {
     expect(getSidebarLoadPlan('projects')).toEqual({
       conversations: false,
       knowledge: false,
-      runtimeStatus: true,
+      runtimeStatus: false,
       operationsAssets: false,
     });
 
     expect(getSidebarLoadPlan('operations')).toEqual({
       conversations: false,
       knowledge: false,
-      runtimeStatus: true,
-      operationsAssets: true,
+      runtimeStatus: false,
+      operationsAssets: false,
     });
 
     expect(getSidebarLoadPlan('knowledge')).toEqual({
       conversations: false,
-      knowledge: true,
+      knowledge: false,
       runtimeStatus: false,
       operationsAssets: false,
     });
   });
 
-  it('slows down global polling for overview and settings', () => {
-    expect(getAgentStateRefreshMs('overview', null)).toBe(15_000);
-    expect(getAgentStateRefreshMs('projects', null)).toBe(5_000);
-    expect(getAgentStateRefreshMs('projects', 'settings')).toBe(30_000);
+  it('uses minute-level refresh for global agent state polling', () => {
+    expect(getAgentStateRefreshMs('ceo', null)).toBe(60_000);
+    expect(getAgentStateRefreshMs('knowledge', null)).toBe(60_000);
+    expect(getAgentStateRefreshMs('projects', null)).toBe(60_000);
+    expect(getAgentStateRefreshMs('projects', 'settings')).toBe(60_000);
   });
 
   it('uses slower sidebar polling for lower-change sections', () => {
     expect(getSidebarPollMs('conversations')).toBe(8_000);
-    expect(getSidebarPollMs('projects')).toBe(15_000);
-    expect(getSidebarPollMs('knowledge')).toBe(20_000);
+    expect(getSidebarPollMs('projects')).toBe(60_000);
+    expect(getSidebarPollMs('knowledge')).toBe(60_000);
   });
 
-  it('hides the shell sidebar for overview and settings', () => {
-    expect(shouldShowShellSidebar('overview', null)).toBe(false);
+  it('keeps the shell sidebar visible for work surfaces and hides it for settings', () => {
+    expect(shouldShowShellSidebar('ceo', null)).toBe(true);
     expect(shouldShowShellSidebar('projects', 'settings')).toBe(false);
     expect(shouldShowShellSidebar('projects', null)).toBe(true);
   });

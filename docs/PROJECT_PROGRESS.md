@@ -1,3 +1,3193 @@
+# 任务：Company Kernel P7 自改审批恢复状态机修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. `SystemImprovementProposal` 审批事实持久化：`approveSystemImprovementProposal()` 写入 `metadata.approvalStatus`、`metadata.approvedAt`、`metadata.approvedBy`，不再只依赖瞬时 `status=approved`。
+2. `attachSystemImprovementTestEvidence()` 改为以最新 test evidence 决定当前测试态，历史 failed/passed evidence 只作为审计记录保留。
+3. high/critical proposal 未审批时，passed evidence 仍不能绕过 approval 进入 `ready-to-merge`。
+4. 已审批 high/critical proposal 支持真实开发路径：先 failed evidence 进入 `testing`，修复后追加最新 passed evidence 可恢复到 `ready-to-merge`。
+5. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-store.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement.test.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement.test.ts
+```
+
+结果：`1 file passed`，`5 tests passed`。
+
+```bash
+npx vitest run src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：`5 files passed`，`16 tests passed`；`src/server/control-plane/server.test.ts` 约 `806ms`。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：类型检查通过。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/self-improvement/*` route table 保持完整。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
+3. `:3999` 未监听；现有 `:3000` PID 93261 为本轮前既有服务，未被本轮启动或回收。
+
+# 任务：Company Kernel Phase 6-7 Review Findings 收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. Scheduler 内置 daily/weekly company-loop cron 改为读取 `CompanyLoopPolicy` 的 `dailyReviewHour`、`weeklyReviewDay`、`weeklyReviewHour`、`timezone` 和 `enabled`，不再硬编码 20:05 / Friday 20:30。
+2. `CompanyLoopRun.metadata.skippedAgenda` 持久化每个 skipped item 的结构化原因，Ops 可解释 budget blocked、digest-only、no-target-workspace、growth-budget-blocked 等断点。
+3. `notificationChannels` 收口为 channel-specific notification id：`web` 写 CEO event，`email` 写可追踪 queued/not-configured event 并可通过 `COMPANY_LOOP_EMAIL_WEBHOOK_URL` / `AG_COMPANY_LOOP_EMAIL_WEBHOOK_URL` 投递，`webhook` 在配置 `COMPANY_LOOP_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_WEBHOOK_URL` 后异步 POST digest payload。
+4. `SystemImprovementProposal` 高风险/critical 审批边界补强：passed test evidence 不能绕过 approval；只有 approved 后追加通过证据才可进入 `ready-to-merge`。
+5. CEO Office 增加 pause/resume autonomous loop 操作；Ops Self Improvement 卡片补充 evidence、test evidence、rollback plan、approval status、affected files 等审计信息。
+6. Settings `Autonomy 预算` 增加 loop notification channels 配置，允许保存空通知通道。
+7. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/agents/scheduler.ts src/lib/company-kernel/self-improvement-store.ts src/lib/company-kernel/company-loop-executor.ts src/lib/company-kernel/company-loop-notifier.ts src/components/settings-panel.tsx src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx 'src/app/api/company/loops/policies/[id]/route.ts' src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts
+```
+
+```bash
+npx vitest run src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：`5 files passed`，`15 tests passed`。
+
+```bash
+npx vitest run src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts
+```
+
+结果：`3 files passed`，`11 tests passed`。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：类型检查通过。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/loops/*` 与 `/api/company/self-improvement/*` route table 保持完整。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
+
+# 任务：Company Kernel Phase 6-7 自主公司循环与受控自我改进收尾
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. P6 Company Loop 收口：`CompanyLoopPolicy` / `CompanyLoopRun` / `CompanyLoopDigest` 已接入 Company Kernel、SQLite schema、API、control-plane 懒加载 route、Scheduler 内置 cron、CEO Office、Ops 和 Settings。
+2. Loop selector 修复 Top-N 硬限制：approval / high-risk 这类 digest-only selected agenda 也会计入 `maxAgendaPerDailyLoop`，不会继续越界选择更多 agenda。
+3. Settings `Autonomy 预算`补齐 loop policy 编辑：organization budget、department default budget、loop enabled、daily hour、weekly day/hour、Top-N、dispatch cap、allowed actions 与 growth review 可配置。
+4. P7 Guarded Self-Improvement 收口：`SystemImprovementSignal` / `SystemImprovementProposal` / `ProtectedCorePolicy` 已接入风险分级、proposal plan、approval request、test evidence、observe 和 Ops/CEO 摘要。
+5. 保持安全边界：第一版没有 auto branch、auto commit、auto push、auto merge、auto deploy API；protected core 仍必须经审批和普通开发流程。
+6. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel src/app/api/company src/lib/agents/scheduler.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler-company-loop.test.ts src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx src/components/settings-panel.tsx src/lib/api.ts src/lib/types.ts src/server/control-plane/company-routes.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/scheduler-company-loop.test.ts src/lib/agents/scheduler.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：`13 files passed`，`71 tests passed`；`src/server/control-plane/server.test.ts` 约 `466ms`。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：类型检查通过。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/loops/*` 与 `/api/company/self-improvement/*` 均进入 Next route table。
+
+真实 API / 页面 smoke：
+
+1. 现有 `localhost:3000` 是本轮前已存在的旧服务，`/api/company/loops/runs?pageSize=1` 返回 `200`，约 `0.100s`；`/api/company/self-improvement/proposals?pageSize=1` 仍返回 `404`，判断为旧 route manifest 未重启。
+2. 为验证当前代码，临时启动隔离 `localhost:3999` smoke 服务，并显式禁用 `AG_ENABLE_SCHEDULER`、`AG_ENABLE_SCHEDULER_COMPANIONS`、`AG_DISABLE_BRIDGE_WORKER`。
+3. `GET http://127.0.0.1:3999/api/company/loops/runs?pageSize=1` 返回 `200`，约 `0.402s`。
+4. `GET http://127.0.0.1:3999/api/company/self-improvement/proposals?pageSize=1` 返回 `200`，约 `0.410s`。
+5. `GET http://127.0.0.1:3999/` 返回 `200`，约 `0.414s`。
+6. `bb-browser` 打开 `http://127.0.0.1:3999/` 后检查 JS errors，未发现新增 JS error。
+
+进程确认：
+
+1. 临时 `:3999` smoke 服务已停止，端口已释放。
+2. 本轮未留下新的 dev/start/watch/worker 进程。
+3. 现有 `:3000` 监听进程 PID 93261 为本轮前已存在服务，未被本轮重启或回收；要让新 route 在 3000 生效，需要重启该既有服务。
+
+# 任务：Company Kernel Phase 3-5 最终缺口二次收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. CircuitBreaker 补齐 `recoverAt` / `half-open` 生命周期：open breaker 冷却到期后会持久化为 half-open，half-open 失败会重新 open，成功终态仍 reset。
+2. Settings `Autonomy 预算`补齐 Department budget defaults；未配置专属策略的新部门会从 `budget:department:default:day` 继承默认预算。
+3. Crystallizer 补齐 promoted `pattern/lesson` KnowledgeAsset 到 SOP GrowthProposal 的生成路径，保留 promotion sourceCandidate、sourceCapsule 和 evidence refs。
+4. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/lib/company-kernel/circuit-breaker.ts src/lib/company-kernel/budget-policy.ts src/lib/company-kernel/crystallizer.ts src/lib/company-kernel/operating-kernel.test.ts src/lib/company-kernel/contracts.ts src/lib/types.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts src/lib/providers/provider-availability.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：`13 files passed`，`92 tests passed`；`src/server/control-plane/server.test.ts` 本轮约 `488ms`。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：类型检查通过。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/*` route table 保持完整，构建输出未出现真实 HOME AI config 读取日志。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
+
+# 任务：Company Kernel Phase 3-5 最终 Review 缺口收尾
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. Settings 新增 `Autonomy 预算`页签，组织级预算、并发、失败预算、operation cooldown 与 high-risk approval threshold 可在前端配置并保存到 budget policy。
+2. 新增 `autonomy-policy`，GrowthProposal 审批判定不再写死：高风险和 script 强制审批，中风险可按组织阈值进入 approval-required。
+3. Knowledge 深层增长旅程补齐：MemoryCandidate 详情可生成 linked GrowthProposal，KnowledgeAsset 详情展示关联 GrowthProposal，`pattern` candidate 可生成 SOP proposal。
+4. control-plane company routes 从主 server 拆出为 `company-routes` 并按请求懒加载 Next App Route handler，降低控制面导入和默认并发测试成本。
+5. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/components/knowledge-panel.tsx src/lib/company-kernel/autonomy-policy.ts src/lib/company-kernel/growth-evaluator.ts src/lib/company-kernel/crystallizer.ts src/lib/company-kernel/index.ts src/lib/company-kernel/operating-kernel.test.ts src/server/control-plane/company-routes.ts src/server/control-plane/server.ts src/server/control-plane/server.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts src/lib/providers/provider-availability.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：`13 files passed`，`89 tests passed`；`src/server/control-plane/server.test.ts` 降至约 `1.319s`。
+
+最终收尾后追加回归：
+
+```bash
+npx vitest run src/server/control-plane/server.test.ts src/lib/company-kernel/operating-kernel.test.ts
+```
+
+结果：`2 files passed`，`12 tests passed`；`src/server/control-plane/server.test.ts` 当前约 `204ms`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/*` route table 保持完整，构建输出未出现真实 HOME AI config 读取日志。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. `eslint`、`tsc`、`vitest`、`next build` 均已退出。
+
+# 任务：Company Kernel Phase 3-5 Review Findings 修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. P4 budget cooldown 正式执行：`cooldownMinutesByKind` 进入 budget gate 判定，同类 operation 在冷却期内会返回 skipped/block 原因。
+2. 手动 CEO / `/api/agent-runs` 派发补齐 budget ledger：手动任务可绕过 autonomous dispatch cap，但会记录 runtime/tokens 账本，且不误消耗 autonomous dispatch quota。
+3. Growth proposal publish 移除公开 `force` 绕过：公开 API 不再接受 force；script proposal 必须先通过 dry-run 才能 publish。
+4. 新增 script proposal dry-run 能力：提供静态 sandbox dry-run API，并在 Knowledge 增长提案 UI 中加入 Dry-run 动作和 publish 前置约束。
+5. Crystallizer 补齐 `script` / `rule` proposal 生成路径：从 repeated run cluster 的脚本化、自动化、规则化信号生成对应 proposal。
+6. 稳定 P0-P5 默认测试：提高 import-heavy control-plane/company route 测试余量，并降低 Vitest 并发监听器误报噪音。
+7. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/budget-gate.ts src/server/runtime/agent-runs-dispatch.ts src/lib/agents/ceo-agent.ts src/lib/company-kernel/crystallizer.ts src/lib/company-kernel/growth-publisher.ts src/lib/company-kernel/growth-script-dry-run.ts 'src/app/api/company/growth/proposals/[id]/publish/route.ts' 'src/app/api/company/growth/proposals/[id]/dry-run/route.ts' src/server/control-plane/server.ts src/lib/api.ts src/components/knowledge-panel.tsx src/lib/company-kernel/operating-kernel.test.ts src/app/api/agent-runs/route.test.ts src/app/api/company/operating-kernel.route.test.ts src/server/control-plane/server.test.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts src/lib/providers/provider-availability.test.ts
+```
+
+结果：`12 files passed`，`82 tests passed`。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：类型检查通过。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/growth/proposals/[id]/dry-run` 已进入 Next route table，构建输出未再出现真实 HOME AI config 读取日志。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
+
+# 任务：Company Kernel Phase 3-5 二次复核缺口补齐
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. Agenda dispatch 修复预算泄漏：缺少 target workspace 时先返回 `409`，不再创建 `reserved` budget ledger。
+2. Budget gate 扩展为通用运营动作门控：growth proposal generate / evaluate 会写入 `growth-proposal` scope ledger，被预算拦截时返回 `409` 且不执行生成/评估。
+3. Circuit breaker 接入真实 run terminal 链路：`failed/timeout/blocked` 会更新 department、scheduler-job、provider、workflow breaker；`completed` 会 reset 对应 breaker。
+4. GrowthProposal 高风险审批链补齐：evaluate / publish 需要审批时创建 `proposal_publish` approval request，approval callback 可 publish / reject growth proposal。
+5. GrowthProposal 发布后复用闭环补齐：published / observing 的 workflow/skill proposal 会进入 Prompt Mode 执行解析，后续相似 prompt 可注入 canonical workflow/skill。
+6. GrowthProposal 合约扩展到 `sop/workflow/skill/script/rule`；Observation 增加命中 run、成功率、估算 token saving 和 regression signals。
+7. CEO Office 决策队列补齐 agenda 详情态，展示 linked signals、evidence refs、run/workflow/budget 关联。
+8. Ops Scheduler 面板新增 Operating Signals 可筛选列表，支持 source / kind / status 过滤并显示 dedupeKey。
+9. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel src/app/api/company src/lib/agents/run-registry.ts src/lib/agents/department-execution-resolver.ts src/lib/agents/department-execution-resolver.test.ts src/lib/approval/dispatcher.ts src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx src/lib/types.ts src/lib/api.ts src/lib/agents/canonical-assets.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts
+```
+
+结果：`9 files passed`，`62 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/*` routes 仍全部进入 Next route table。
+
+真实 API / 页面验证：
+
+1. 复用既有 `localhost:3000`，未新开 dev/start/watch/worker 服务。
+2. `GET /api/company/operating-day?limit=3` 返回 `200`，约 `0.622s`。
+3. `GET /api/company/growth/proposals?pageSize=3` 返回 `200`，约 `0.057s`。
+4. `GET /api/company/signals?source=scheduler&pageSize=3` 返回 `200`，约 `1.060s`。
+5. `bb-browser` 打开 `http://127.0.0.1:3000/` 后检查 `bb-browser errors`，未发现 JS error。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. 现有 `:3000` 监听进程 PID 8302 为既有服务，非本轮启动，未回收。
+3. `eslint`、`vitest`、`next build` 均已退出。
+
+# 任务：Company Kernel Phase 3-5 复核缺口收尾
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. Approval lifecycle 接入 Company Kernel：审批提交、批准、拒绝、反馈都会生成经营信号并进入 agenda。
+2. Scheduler 到点执行接入 budget gate：触发前生成 routine agenda，预算或熔断拦截时返回 `skipped`，不创建 run，并写入 ledger。
+3. Agenda dispatch / Scheduler run 创建后会把 budget reservation 绑定到 `runId`；run terminal 后统一 commit / release，ledger summary 避免 reserved + committed 重复计数。
+4. Growth Crystallizer 对三次以上同类成功 RunCapsule 生成 `workflow` proposal，两次同类成功仍生成 SOP。
+5. CEO Office 增加增长提案摘要和高风险决策入口；Knowledge 增长提案区支持 evaluate / approve / publish / observe / reject。
+6. Ops Scheduler 面板显示关联 operating signal 摘要，便于解释调度任务为什么运行或跳过。
+7. `control-plane` company route 组合测试的默认并发超时风险已收口。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts src/lib/agents/run-registry.ts src/lib/approval/handler.ts 'src/app/api/company/agenda/[id]/dispatch/route.ts' src/components/knowledge-panel.tsx src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx src/server/control-plane/server.test.ts src/lib/types.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/scheduler.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：`9 files passed`，`48 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+真实 API / 页面验证：
+
+1. 复用既有 `localhost:3000`，未新开 dev/start/watch/worker 服务。
+2. `GET /api/company/operating-day?limit=3` 返回 `200`，约 `0.176s`。
+3. `GET /api/company/growth/proposals?pageSize=3` 返回 `200`，约 `0.078s`。
+4. `bb-browser` 打开 `http://127.0.0.1:3000/`，随后 `bb-browser errors --clear` 未发现新增 JS error。
+
+进程确认：
+
+1. 本轮未启动新的长期 Node / scheduler / worker 后台。
+2. 现有 `:3000` 监听进程 PID 8302 为既有 `server.ts`，非本轮启动，未回收。
+3. `eslint`、`vitest`、`next build` 均已退出。
+
+# 任务：Company Kernel Phase 3-5 自增长内核落地
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. Phase 3 Signal / Agenda
+   - 新增 `OperatingSignal`、`OperatingAgendaItem`、`CompanyOperatingDay`
+   - run / scheduler / memory candidate 可转为经营信号并生成 agenda
+   - CEO Office 接入真实 `/api/company/operating-day` agenda
+2. Phase 4 Budget / Circuit Breaker
+   - 新增 `OperatingBudgetPolicy`、`BudgetLedgerEntry`、`CircuitBreaker`
+   - agenda dispatch 前先执行 budget gate，返回 allow / warn / block 与明确原因
+   - Ops 调度页展示 budget ledger / open breaker 摘要
+3. Phase 5 Growth Proposal
+   - 新增 `GrowthProposal`、`GrowthObservation`
+   - 从 RunCapsule、promoted knowledge、workflow/skill memory candidate 生成 SOP / workflow / skill proposal
+   - 支持 evaluate / approve / reject / publish / observe
+   - 高风险 proposal 默认必须 approve 后 publish
+4. API / split control-plane
+   - 新增 `/api/company/signals*`
+   - 新增 `/api/company/agenda*`
+   - 新增 `/api/company/operating-day`
+   - 新增 `/api/company/budget/*`
+   - 新增 `/api/company/circuit-breakers*`
+   - 新增 `/api/company/growth/*`
+   - 所有新增 company routes 已挂到 Next App Route 和 split `control-plane` route table；`AG_ROLE=web` 继续代理
+5. 构建期隔离
+   - `NEXT_PHASE=phase-production-build` 默认不读取真实 HOME AI config
+   - 如确需构建期读取，可显式设置 `AG_ALLOW_BUILD_HOME_CONFIG=1`
+6. 文档同步
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel src/app/api/company src/lib/api.ts src/lib/types.ts src/components/ceo-office-cockpit.tsx src/components/knowledge-panel.tsx src/components/scheduler-panel.tsx src/lib/agents/run-registry.ts src/lib/agents/scheduler.ts src/lib/knowledge/index.ts src/server/control-plane/server.ts
+```
+
+```bash
+npx vitest run src/lib/providers/provider-availability.test.ts src/lib/company-kernel src/app/api/company src/server/control-plane/server.test.ts
+```
+
+结果：`9 files passed`，`31 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，新增 `/api/company/*` routes 全部进入 Next route table，且构建阶段不再打印真实 HOME AI config 读取日志。
+
+真实 API / 页面验证：
+
+1. 复用既有 `localhost:3000`，未新开 dev/start/watch 服务
+2. `GET /api/company/operating-day?limit=3` 返回 `200 0.215191`
+3. `GET /api/company/growth/proposals?pageSize=1` 返回 `200 0.221538`
+4. `bb-browser` 打开 `http://127.0.0.1:3000/`，页面标题为 `Antigravity Agent Manager`
+5. `bb-browser errors --clear` 未发现新增 JS error
+
+进程确认：
+
+1. 本轮未启动新的长期 Node / scheduler / worker 后台
+2. 现有 `:3000` 监听进程 PID 8302 为既有 `server.ts`，非本轮启动，未回收
+3. `eslint`、`vitest`、`next build` 均已退出
+
+## 任务：Knowledge 候选记忆详情态收尾
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 本轮实施
+
+已完成：
+
+1. Knowledge overview 的“候选记忆”从单纯卡片列表升级为列表 + 详情审核工作面。
+2. 详情态展示候选内容、总分、分项评分、evidence refs、signals、conflicts、source run/capsule、promoted/rejected 元数据。
+3. Promote / Reject 按钮迁移到详情态，仍只对 `candidate` / `pending-review` 开放。
+4. 保持手动 Refresh，不新增轮询、不新增 scheduler/job/worker、不修改后端 API。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/knowledge-panel.tsx
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/*` routes 仍在 Next route table。
+
+真实页面验证：
+
+1. 复用既有 `localhost:3000`，未新开 dev/start/watch 服务。
+2. `curl http://127.0.0.1:3000/api/company/memory-candidates?pageSize=1` 返回 `200`，当前真实库候选数为 0。
+3. `bb-browser` 打开 Knowledge 页面，DOM 确认出现 `候选记忆 / No memory candidates`。
+4. `bb-browser errors --clear` 未发现新增 JS error。
+
+## 任务：Company Kernel Phase 0-2 缺口补齐
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 本轮实施
+
+已完成：
+
+1. 导出补齐
+   - `src/lib/company-kernel/index.ts` 导出 `appendWorkingCheckpoint()` 与 `rebuildRunCapsuleFromRun()`
+2. MemoryCandidate 安全晋升补齐
+   - auto-promote 增加 evidence guard：空 `evidenceRefs` 或 `score.evidence=0` 不会自动晋升
+   - 高冲突、volatile、低分候选继续保持人工审核
+3. Knowledge UI 管理入口
+   - Knowledge overview 新增“候选记忆”审核区
+   - 支持手动 refresh、promote、reject
+   - 不新增轮询、不新增 scheduler/job/worker
+4. 前端契约补齐
+   - `src/lib/types.ts` 增加 RunCapsule / WorkingCheckpoint / MemoryCandidate 前端投影类型
+   - `src/lib/api.ts` 增加 `/api/company/run-capsules*` 与 `/api/company/memory-candidates*` client methods
+5. 测试补齐
+   - 覆盖 `blocked/failed/cancelled` terminal capsule checkpoint
+   - 覆盖空证据不自动晋升
+   - 覆盖高冲突不自动晋升
+   - 覆盖 promoted workflow candidate 能进入 evolution proposal generator
+6. 文档同步
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/index.ts src/lib/company-kernel/memory-promotion.ts src/lib/company-kernel/run-capsule.test.ts src/lib/company-kernel/memory-promotion.test.ts src/lib/api.ts src/lib/types.ts src/components/knowledge-panel.tsx
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/server/control-plane/server.test.ts src/lib/evolution/__tests__/generator.test.ts
+```
+
+结果：`7 files passed`，`22 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/*` routes 仍出现在 Next route table。
+
+真实页面/API 验证：
+
+1. 复用既有 `localhost:3000`，未新开 dev/start/watch 服务
+2. `bb-browser` 进入 Knowledge 页面，DOM 确认出现 `候选记忆 / Refresh / No memory candidates`
+3. `bb-browser errors --clear` 未发现新增 JS error
+4. `curl http://127.0.0.1:3000/api/company/memory-candidates?pageSize=1` 返回 `200`
+
+进程确认：
+
+1. 本轮未启动新的长期 Node / scheduler / worker 后台
+2. 现有 `:3000` 监听进程不是本轮启动，未回收
+3. `eslint`、`vitest`、`next build` 均已退出
+
+## 任务：Company Kernel Phase 0-2 复核收尾
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+复核发现 Phase 0-2 之前只能算单体路径 MVP 完成，仍有 4 个缺口：
+
+1. `/api/company/*` 只在 Next App Route 存在，未接入 split `api/control-plane` route table。
+2. `AG_ROLE=web` 下 `/api/company/*` 没有代理到 control-plane，可能由 web 进程直连本地 DB。
+3. `persistKnowledgeForRun()` 重建 RunCapsule 时没有合并既有 checkpoints，存在覆盖历史生命周期证据的风险。
+4. MemoryCandidate 缺少闭合状态机，已 `promoted/rejected/archived` 的候选可能被再次操作或被候选重生成回滚。
+
+### 本轮实施
+
+已完成：
+
+1. Split API 路由补齐
+   - `src/server/control-plane/server.ts` 注册全部 `/api/company/run-capsules*` 与 `/api/company/memory-candidates*` routes
+   - 所有 `src/app/api/company/*` route 在 `AG_ROLE=web` 时代理到 control-plane
+2. RunCapsule 完整性修复
+   - `run-capsule-store.ts` 新增 `rebuildRunCapsuleFromRun()`
+   - 新增 `appendWorkingCheckpoint()`
+   - `persistKnowledgeForRun()` 改为 rebuild + merge，避免覆盖既有 WorkingCheckpoint
+3. MemoryCandidate 状态机修复
+   - `promote` / `reject` 只允许 `candidate` / `pending-review`
+   - `promoted/auto-promoted/rejected/archived` 闭合状态不会被后续候选重生成回滚
+   - 非法状态转换 API 返回 `409 Conflict`
+4. 文档同步
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/api/company src/lib/company-kernel src/lib/knowledge/index.ts src/server/control-plane/server.ts src/server/control-plane/server.test.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/server/control-plane/server.test.ts src/lib/knowledge/__tests__/extractor.test.ts src/lib/agents/department-memory.test.ts src/lib/storage/gateway-db.test.ts
+```
+
+结果：`9 files passed`，`32 tests passed`。
+
+```bash
+npx vitest run src/lib/agents/run-registry.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：`5 files passed`，`32 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，`/api/company/*` routes 出现在 Next route table。
+
+真实临时 API 验证：
+
+1. 临时 `api:3201` 使用 `AG_ROLE=api AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1`
+2. `GET /health` 返回 `200`，`role=api`
+3. `GET /api/company/run-capsules?pageSize=1` 返回 `200`
+4. `GET /api/company/memory-candidates?pageSize=1` 返回 `200`
+
+进程确认：
+
+1. 临时 `3201` API 进程已停止
+2. 端口 `3201` 已释放
+3. 本轮未启动 dev/start/watch/scheduler 长期后台
+
+## 任务：Company Kernel Phase 0-2 落地
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+OPC 已有 run、knowledge、memory hook、evolution proposal，但 run 完成后的经验沉淀仍缺少统一公司内核：旧路径会从 summary/changedFiles 直接抽取并写入长期记忆或 `.department/memory`，证据链弱，也不利于后续自运营、自生长和受控演进。
+
+### 本轮实施
+
+已完成：
+
+1. Phase 0 边界审计
+   - 新增 `docs/design/company-kernel-boundary-audit-2026-04-25.md`
+   - 明确 run lifecycle、memory/knowledge、evolution、scheduler、API 副作用、测试隔离和 Antigravity IDE 不可破坏边界
+2. Phase 1 RunCapsule / WorkingCheckpoint
+   - 新增 `src/lib/company-kernel/*`
+   - 新增 `RunCapsule`、`WorkingCheckpoint`、`EvidenceRef` 类型
+   - `createRun()` 与关键 `updateRun()` 字段变化会写入 capsule snapshot
+   - 新增 SQLite `run_capsules` 表
+3. Phase 2 MemoryCandidate / Promotion
+   - 新增 `MemoryCandidate`、评分、volatility、conflict metadata
+   - 新增 SQLite `memory_candidates` 表
+   - `persistKnowledgeForRun()` 改为 `RunCapsule -> MemoryCandidate`，默认不自动 promote
+   - 显式 promote 后才写入 `KnowledgeAsset`，并带 `evidence` / `promotion` 元数据
+   - `finalization.ts` 停止自动调用 `extractAndPersistMemory()`，不再从 run 完成路径 append `.department/memory/*.md`
+4. API
+   - `GET /api/company/run-capsules`
+   - `GET /api/company/run-capsules/:runId`
+   - `GET /api/company/memory-candidates`
+   - `GET /api/company/memory-candidates/:id`
+   - `POST /api/company/memory-candidates/:id/promote`
+   - `POST /api/company/memory-candidates/:id/reject`
+5. 文档同步
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel src/lib/knowledge/index.ts src/lib/knowledge/contracts.ts src/lib/agents/finalization.ts src/lib/agents/run-registry.ts src/lib/storage/gateway-db.ts src/app/api/company
+```
+
+```bash
+npx vitest run src/lib/company-kernel src/app/api/company src/lib/knowledge/__tests__/extractor.test.ts src/lib/agents/department-memory.test.ts src/lib/storage/gateway-db.test.ts
+```
+
+结果：`8 files passed`，`26 tests passed`。
+
+```bash
+npx vitest run src/lib/agents/run-registry.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/app/api/agent-runs/route.test.ts
+```
+
+结果：`4 files passed`，`31 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功，新增 `/api/company/*` routes 已进入 Next route table。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch 服务。
+2. `eslint`、`vitest`、`next build` 均已退出。
+3. 检测到既有 `tsx watch` 进程仍在运行，非本轮启动，未做回收。
+
+## 任务：Tauri 桌面壳与原生新建部门入口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+普通 Web API 不能可靠打开 macOS 原生文件夹选择器。CEO Office 的“添加部门”只能用 `prompt()` 输入路径，导致没有 Antigravity recent workspace 时，新建部门旅程不自然。
+
+### 本轮实施
+
+已完成：
+
+1. `src-tauri/`
+   - 新增 Tauri v2 桌面壳
+   - 开发态加载 `http://127.0.0.1:3000`
+   - 启用 `tauri-plugin-dialog` 的 `dialog:allow-open` 权限
+   - capability 显式允许 `127.0.0.1:3000` / `localhost:3000` devUrl 调用 native dialog
+   - 新增最小应用图标 `src-tauri/icons/icon.png`
+2. `package.json`
+   - 新增 `desktop:dev`
+   - 新增 `desktop:check`
+   - `desktop:dev` 不自动启动新的 Node 后台，避免重复拉起 scheduler / worker
+3. `src/lib/desktop-folder-picker.ts`
+   - 新增 Tauri runtime 检测
+   - 新增原生目录选择 helper
+   - Web 环境返回 `null`，不加载 Tauri native dialog binding
+4. `src/components/ceo-dashboard.tsx`
+   - “+ 添加部门”改为“+ 新建部门”
+   - Tauri 桌面壳内优先打开 macOS 原生文件夹选择器
+   - 普通浏览器保留手动路径输入兜底
+   - 导入成功后继续打开部门配置弹窗
+   - 导入失败改为页面内错误提示，不再使用 `alert`
+5. 文档同步：
+   - `README.md`
+   - `README_EN.md`
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/desktop-folder-picker.ts src/lib/desktop-folder-picker.test.ts src/components/ceo-dashboard.tsx
+```
+
+```bash
+npx vitest run src/lib/desktop-folder-picker.test.ts
+```
+
+结果：`1 file passed`，`3 tests passed`。
+
+```bash
+npm run desktop:check
+```
+
+结果：`Finished dev profile`，Tauri/Rust 编译检查通过。
+
+```bash
+npm run build
+```
+
+结果：Next 生产构建成功。
+
+进程确认：
+
+1. 本轮未运行 `npm run dev` / `npm run start` / `npm run desktop:dev`。
+2. 未启动新的长期 Node / scheduler / worker 后台。
+3. Rust `target/` 构建产物已清理，并加入 `.gitignore`。
+
+## 任务：首页刷新与展示语义收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+CEO Office 首页仍存在几类使用体验问题：
+
+1. 首页 agent state 仍以 5 秒周期全量拉取 projects / runs / servers / workspaces。
+2. 顶部指标存在前端合成的“较昨日”趋势，缺少真实历史数据支撑。
+3. “今日例行任务 x/y 已完成”容易被理解成用户完成清单，但实际是后端 action 状态。
+4. 顶部“搜索... ⌘K”和“语音指令”没有对应真实能力。
+5. 最新日报只取前 6 个 workspace 的第一个可用 digest，结果不稳定。
+6. 最近信号直接展示原始 audit kind，重复噪音偏多。
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/home-shell.ts`
+   - 全局 agent state 刷新周期统一改为 `60_000ms`
+   - 避免首页继续 5 秒全量轮询 projects / runs / servers / workspaces
+2. `src/lib/ceo-office-home.ts`
+   - 新增 `pickLatestDailyDigest()`
+   - 新增 `dedupeAuditEvents()`
+   - 最新部门日报按日期与活动量选择，不再固定取前 6 个 workspace 的第一个结果
+   - 最近信号按 kind/message 去重，并限制同类信号刷屏
+3. `src/components/ceo-office-cockpit.tsx`
+   - 去掉前端伪造的“较昨日”趋势
+   - “最新交付 / 今日新增”改为“今日完成 / 完成项目记录”
+   - “今日例行任务”改为“今日关注”，显示需处理/待确认数量
+   - “搜索... ⌘K”改为真实的“打开知识库”
+   - “语音指令”改为真实的“对话线程”
+   - 系统状态拆分为 `API 服务` 与 `实时通道`
+   - “下钻工作面”改为更中性的“工作台”
+   - 最近信号展示中文化 kind
+4. `src/app/page.tsx`
+   - header approval/audit 兜底 poll 改为 60 秒
+   - CEO 最近信号使用去重后的列表
+5. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/home-shell.ts src/lib/home-shell.test.ts src/lib/ceo-office-home.ts src/lib/ceo-office-home.test.ts src/app/page.tsx src/components/ceo-office-cockpit.tsx
+```
+
+```bash
+npx vitest run src/lib/home-shell.test.ts src/lib/ceo-office-home.test.ts
+```
+
+结果：`2 files passed`，`10 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+真实接口验证：
+
+1. `GET /api/agent-runs?pageSize=100`：`200`，约 `0.10s`
+2. `GET /api/projects?pageSize=200`：`200`，约 `0.02s`
+3. `GET /api/workspaces`：`200`，约 `0.08s`
+4. `GET /api/management/overview`：`200`
+5. `GET /api/ceo/routine`：`200`
+
+浏览器验证（`bb-browser`）：
+
+1. 首页显示 `打开知识库`，不再显示假 `⌘K` 搜索。
+2. 首页显示 `对话线程`，不再显示未实现的“语音指令”。
+3. 指标卡不再显示“较昨日 +N”。
+4. 右侧显示 `今日关注` 与 `2 项需处理`。
+5. 系统状态显示 `API 服务 / 实时通道 / 定时任务调度`。
+6. `bb-browser errors` 无 JS 错误，最终 console 无错误消息。
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务。
+2. `npm run build` 的构建 worker 已退出。
+3. 仅使用既有 `3000/3101` 服务与 `bb-browser` 做验证。
+
+## 任务：首页任务断点闭环修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+CEO Office 首页存在多个“看起来是任务，但没有真实闭环”的断点：
+
+1. `activeSchedulers` 只表示库里有启用 job，不能证明 scheduler loop 正在运行。
+2. `GET /api/ceo/routine` 的 `actions` 只有 `label/type`，前端只能自己编造完成态与跳转。
+3. 首页例行任务、审批铃铛、部门脉搏、最新日报都缺少明确下钻目标。
+4. 最近信号用 `timestamp-kind` 做 React key，重复 audit event 会触发 key 冲突。
+5. CEO Office 顶部时间直接参与 SSR/CSR 首屏渲染，刷新时可能产生 hydration mismatch。
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/agents/scheduler.ts`
+   - 新增 `getSchedulerRuntimeStatus()`
+   - 输出 `running / idle / disabled / stalled`
+   - 区分“启用 job 数”和“当前进程 scheduler loop 是否真的活跃”
+2. `src/lib/management/metrics.ts`
+   - `GET /api/management/overview` 增加 `schedulerRuntime`
+3. `src/lib/organization/ceo-routine.ts`
+   - `actions[]` 改为结构化 action contract
+   - 每个 action 包含 `id/status/priority/meta/count/target`
+   - target 可指向 approval inbox、project、scheduler、knowledge、CEO focus
+   - 去掉 routine 读取时注册 CEO event consumer 的副作用
+4. `src/components/ceo-office-cockpit.tsx`
+   - 今日例行任务改为真实 action 驱动
+   - 审批 action 展开 `ApprovalPanel`
+   - scheduler action 下钻 Ops
+   - project/knowledge/focus action 下钻对应工作面
+   - 部门脉搏与最新日报可打开部门详情
+   - 系统状态显示真实 scheduler runtime，不再把 disabled 显示为正常
+   - 修复最近信号重复 key
+   - 修复时间导致的 hydration mismatch
+5. `src/components/department-detail-drawer.tsx`
+   - 补齐 `DialogDescription`，消除弹窗可访问性警告
+6. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts src/lib/organization/contracts.ts src/lib/organization/index.ts src/lib/organization/ceo-routine.ts src/lib/organization/ceo-routine.test.ts src/lib/management/contracts.ts src/lib/management/metrics.ts src/lib/types.ts src/components/ceo-office-cockpit.tsx src/app/page.tsx
+```
+
+```bash
+npx vitest run src/lib/agents/scheduler.test.ts src/lib/organization/ceo-routine.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/management/overview/route.test.ts
+```
+
+结果：`4 files passed`，`21 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+真实接口验证：
+
+1. `GET /api/management/overview`
+   - `activeSchedulers=1`
+   - `schedulerRuntime.status=disabled`
+   - `loopActive=false`
+   - `configuredToStart=false`
+2. `GET /api/ceo/routine`
+   - 返回 5 个结构化 action
+   - scheduler action 为 `status=attention`
+   - target 指向真实 job `2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f`
+
+浏览器验证（`bb-browser`）：
+
+1. CEO Office 首屏显示 `定时任务 1 / 调度未启动`
+2. 今日例行任务显示 `恢复定时任务调度`
+3. 点击 scheduler action 成功跳转 `?section=operations`
+4. 点击审批 action 展开审批列表
+5. 点击部门脉搏打开部门详情弹窗
+6. 刷新后 `bb-browser errors` 无 JS 错误
+7. 弹窗打开后控制台无 `DialogDescription` 警告
+
+进程确认：
+
+1. 本轮未启动新的长期 dev/start/watch/worker 服务
+2. 仅使用既有 `3000/3101` 服务和 `bb-browser` 做验证
+3. `npm run build` 的构建 worker 已退出
+
+## 任务：AI 日报循环任务未运行修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+真实库中的 AI 日报 cron job `2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f` 处于启用状态，cron 为 `0 20 * * *` + `Asia/Shanghai`，但当前 `opc-api` 运行进程仍以旧脚本环境 `AG_ENABLE_SCHEDULER=0` 启动，因此只提供 scheduler API，不启动 cron tick。该 job 上次自动记录停在 `2026-04-22T14:35:47.443Z`，4 月 23/24/25 的北京时间 20:00 触发均未由后台循环执行。
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/gateway-role.ts`
+   - `AG_ROLE=api` 默认启用 cron scheduler
+   - 新增 `AG_ENABLE_SCHEDULER_COMPANIONS`，将 fan-out / approval / CEO event consumer 等 companion 后台从 cron scheduler 中拆开
+2. `src/server/workers/scheduler-worker.ts`
+   - scheduler worker 默认只启动 cron loop
+   - companion 后台仅在 `AG_ENABLE_SCHEDULER_COMPANIONS=1` 或 legacy `all/scheduler` 角色下启动
+3. `src/lib/agents/scheduler.ts`
+   - scheduler tick 仅在 companion 启用时执行 fan-out health scan
+   - overdue job 的 `nextRunAt` 返回当前时间，避免 UI/API 把已过期未执行的任务误显示成明天
+4. `package.json`
+   - `dev:api` / `start:api` 改为 `AG_ENABLE_SCHEDULER=1 AG_ENABLE_SCHEDULER_COMPANIONS=0`
+   - 保持 `AG_DISABLE_BRIDGE_WORKER=1`
+5. 文档同步：
+   - `README.md`
+   - `README_EN.md`
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/gateway-api.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/server/workers/scheduler-worker.ts src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts
+```
+
+```bash
+npx vitest run src/lib/gateway-role.test.ts src/lib/agents/scheduler.test.ts
+```
+
+结果：`2 files passed`，`23 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+真实链路验证：
+
+1. `AG_ROLE=api` 判定结果：`apiScheduler=true`、`apiCompanions=false`、`webScheduler=false`
+2. 真实 AI 日报 job 在补跑前 `dueNow=true`
+3. `GET /api/scheduler/jobs` 对该 overdue job 的 `nextRunAt` 已返回当前时间，而不是明天
+4. 手动补跑 `POST /api/scheduler/jobs/2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/trigger` 成功创建 run：
+   - `2297bb78-6488-4588-aa44-ea0ad9710fc1`
+5. run 终态：`completed`
+6. 上报验证文件 `daily-digest-verification.json`：
+   - `status=ok`
+   - `verifyApiUrl=https://api.aitrend.us/digest?date=2026-04-25`
+   - `verifyPageStatus=200`
+   - 后端 digest run id `38`
+7. scheduler job 已更新：
+   - `lastRunAt=2026-04-25T12:59:27.748Z`
+   - `lastRunResult=success`
+   - `nextRunAt=2026-04-26T12:00:00.000Z`
+
+进程确认：
+
+1. 本轮没有启动新的长期 dev/start/watch 服务
+2. 当前既有 `3101` 进程仍是用户先前启动的旧环境，进程环境含 `AG_ENABLE_SCHEDULER=0`
+3. 新默认脚本已修复，下一次通过 `npm run dev` / `npm run start` 启动时 `opc-api` 会运行 cron scheduler
+
+## 任务：测试环境真实库污染修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+`ceo-agent.test.ts` 曾直接调用 `processCEOCommand('每隔5秒让市场部分析竞品动态')`，但测试环境没有统一隔离 `AG_GATEWAY_HOME` / `HOME`，且该测试没有 mock scheduler，导致测试创建的 5s interval job 写入真实 `~/.gemini/antigravity/gateway/storage.sqlite`。
+
+### 本轮实施
+
+已完成：
+
+1. 新增 `vitest.setup.ts`
+   - 根目录 Vitest 默认把 `HOME`、`AG_GATEWAY_HOME`、`CODEX_HOME`、`CLAUDE_HOME` 指向临时目录
+   - 默认禁用 scheduler / bridge worker / importer 类后台副作用
+   - 测试结束自动清理临时目录
+2. `vitest.config.ts`
+   - 接入统一 `setupFiles`
+3. `src/lib/agents/gateway-home.ts`
+   - 在 `VITEST` / `NODE_ENV=test` 下，即使没有显式 `AG_GATEWAY_HOME`，也回落到 `/tmp` 测试目录，不再使用真实用户 gateway home
+4. `ceo-agent.test.ts` / `scheduler.test.ts`
+   - 每个测试后清理 scheduler 内存状态和临时 job
+5. 同步修复全量测试中已过期的断言与一个真实 converter bug：
+   - `graph-pipeline-converter.ts` 保留 `groupId`，不再错误写成 node/stage id
+   - 更新 intervention / department sync / generation context / risk assessor / subgraph 相关测试契约
+6. 清理真实库中已确认由测试污染产生的两个 5s job：
+   - `d1e696c4-99df-4829-bc16-291665a369de`
+   - `aa5a092e-cdac-434a-aa38-d92add95418c`
+
+### 本轮验证
+
+通过：
+
+```bash
+npm test
+```
+
+结果：根目录 `125 test files passed`，`1570 tests passed`。
+
+```bash
+npm test
+```
+
+执行目录：`plugins/obsidian-antigravity`
+
+结果：插件侧 `7 test files passed`，`84 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+真实库验证：
+
+1. 测试前后没有新增 scheduler job
+2. 已删除两个测试污染 5s job
+3. `/api/scheduler/jobs` 查询确认当前启用中的 `<60s` interval job 为 `[]`
+4. `/tmp` 下本轮 Vitest 临时目录已清理
+
+## 任务：CEO Native Codex 对话链路修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+用户在管控中心尝试和 CEO 对话时报错。排查发现当前配置确实以 `native-codex` 为主引擎，但请求在进入 Codex Native 前先被 `api` 组合服务路由截断：`GET /api/conversations` 属于 control-plane，`POST /api/conversations` 属于 runtime；组合服务按 path 优先匹配 control-plane route，导致 POST 被 405 拦截。
+
+### 本轮实施
+
+已完成：
+
+1. `src/server/shared/http-server.ts`
+   - 路由器在同路径 route 返回 405 时继续匹配后续 route
+   - 修复 control-plane / runtime 按 HTTP method 拆分时的组合服务冲突
+2. `src/app/api/conversations/[id]/send/route.ts`
+   - 本地 provider executor 返回 `status=failed` 时改为 HTTP 502
+   - 避免 Native Codex / API provider 失败被伪装成成功 assistant 回复
+3. `src/lib/bridge/native-codex-adapter.ts`
+   - Native Codex fetch 增加默认 90s 超时
+   - 支持 `NATIVE_CODEX_TIMEOUT_MS` 覆盖，避免浏览器长期 pending
+4. 测试与文档同步：
+   - 新增 `src/server/shared/http-server.test.ts`
+   - 更新 send route / Native Codex adapter 测试
+   - 同步 `ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/server/shared/http-server.ts src/server/shared/http-server.test.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/send/route.test.ts' src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts
+```
+
+```bash
+npx vitest run src/server/shared/http-server.test.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' src/lib/bridge/native-codex-adapter.test.ts
+```
+
+结果：`4 files passed`，`16 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+真实链路验证：
+
+1. 当前 `~/.gemini/antigravity/ai-config.json`：`defaultProvider` 与四个 layer 均为 `native-codex`
+2. `/api/models` 返回 `Native Codex · GPT-5.4` / `Native Codex · GPT-5.4 Mini`
+3. `POST http://127.0.0.1:3000/api/conversations` 创建 CEO local native-codex conversation：`200`，耗时约 `0.109s`
+4. `POST /api/conversations/:id/send` 发送最小 CEO 对话：`200`，耗时约 `1.498s`
+5. `GET /api/conversations/:id/steps` 返回 2 条 step：用户输入与 `FINAL_OK`
+
+进程确认：
+
+1. 本轮没有额外启动长期 dev/start/watch 服务
+2. 现有 `3000` / `3101` 为既有 `run-local-services.mjs dev` 进程树，`tsx watch` 已加载本轮代码
+3. `npm run build` worker 已退出
+4. 本轮使用的 `bb-browser daemon` 已停止
+
+## 任务：CEO Office 概念稿规格化收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+上一轮 CEO Office 2.0 只完成了“驾驶舱化”，但仍嵌在通用 `AppShell` 的 Header / Sidebar 里，页面内部又重复展示 CEO 标题、指令区和下钻工作面，实际视觉仍像长 feed，没有严格贴近概念稿。
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/page.tsx`
+   - CEO 页面在非 Settings 状态下不再渲染通用 Header / Sidebar
+   - CEO 分支改由 `CeoOfficeCockpit` 自带页面 shell，避免两套导航和两层标题叠加
+2. `src/components/ceo-office-cockpit.tsx`
+   - 重构为概念稿结构：左侧轻导航、问候头、紧凑指标 strip、CEO 指令中心、决策队列、部门 / 项目脉搏、右侧例行任务 / 最新日报 / 系统状态
+   - 默认首屏不再直接展开完整聊天流和 `CEODashboard`
+   - 保留线程查看、指令发送、模型/Skill/Workflow composer、Projects / Knowledge / Ops / Settings 下钻、CEO 深层 Dashboard
+   - `最新交付` 使用今日完成口径，不再把累计完成数伪装成今日新增
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/chat-input.tsx
+```
+
+```bash
+npm run build
+```
+
+浏览器态验证：
+
+1. `bb-browser` 指向既有 `http://localhost:3000`，未启动新的 dev/start 服务
+2. 页面可见 `CEO 指令中心` / `决策队列` / `部门 / 项目脉搏` / `今日例行任务` / `最新日报` / `系统状态`
+3. 旧标题 `CEO 驾驶舱` / `CEO OFFICE 2.0` 已不可见
+4. 通用 Header nav 不再叠加到 CEO 页面，CEO 左侧轻导航宽度为 216px
+5. 点击 `查看线程` 后完整线程入口和 Chat composer 正常挂载
+6. JS error 记录为空
+7. 截图留存：`tmp/ui-audit/ceo-office-concept-shell-verified-2026-04-25.png`
+
+进程确认：
+
+1. 本轮没有启动新的长期 dev/start/watch 服务
+2. `npm run build` 的构建 worker 已退出
+3. 本轮使用的 `bb-browser daemon` 已停止
+4. 既有 `3000` / `3101` 监听进程非本轮启动，未做回收
+
+## 任务：CEO Office 2.0 驾驶舱交互落地
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+CEO Office 虽然已移除部分重复入口，但页面仍然是 `WorkspaceHero + 大聊天面板 + CEODashboard 长列表` 的纵向 feed，首屏缺少概念稿里的 cockpit 层级，导致信息从上到下平铺、指令中心下沉、右侧即时状态缺位。
+
+### 本轮实施
+
+已完成：
+
+1. 新增 `src/components/ceo-office-cockpit.tsx`
+   - 将 CEO 首屏重排为 `紧凑状态头 + KPI strip + Command Center + Decision Queue + Department Pulse + 右侧 Daily Rhythm / Digest / System Status / Recent Threads`
+   - `CEODashboard` 不删除，降级到“管理与复盘工作面”的展开区，避免默认首屏继续拉成长 feed
+   - 保留 CEO 线程、发送消息、查看线程、OPC / Knowledge / Ops / Settings 下钻入口
+2. `src/app/page.tsx`
+   - CEO 分支改为挂载独立 cockpit 组件
+   - 删除 CEO 分支内联大块 UI，保留数据与回调编排
+3. `src/components/chat-input.tsx`
+   - Chat composer 从旧暗色输入框调整为 Apple-style 浅色玻璃输入区
+   - 自动补全菜单同步改为浅色体系，避免 CEO Office 2.0 里出现旧视觉断层
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/chat-input.tsx
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+浏览器态验证：
+
+1. `bb-browser` 打开既有 `http://localhost:3000`
+2. CEO Office 可见 `CEO OFFICE 2.0` / `统一指令入口` / `管理与复盘工作面`
+3. 旧 hero 文案 `公司驾驶舱、决策队列与统一指令` 已不可见
+4. 页面内 API 数据正常加载：`OPC 5/26 departments · 163 projects`
+5. 手动点击“展开”后，管理与复盘工作面成功挂载，未产生浏览器 JS error
+6. 截图留存：`tmp/ui-audit/ceo-office-2-final.png`
+
+进程确认：
+
+1. 本轮没有启动新的长期 dev/start/watch 服务
+2. `npm run build` 的 Next build worker 已退出
+3. `3001` / `3002` 未监听
+4. 本轮用于验收的 `bb-browser daemon` 已停止
+5. 检测到既有 `3000` / `3101` 监听进程，非本轮命令启动，未做回收
+
+## 任务：主页面 UI 信息架构去重
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-25
+
+### 问题
+
+首页改成 CEO Office 后，主页面仍存在多层重复：Header / Sidebar / WorkspaceHero / 子组件同时解释当前页面；Sidebar 承载 project tree、knowledge entries、ops assets 等业务列表；CEO 和 Projects 自己重复轮询 Scheduler；Settings Provider、API Keys、运行配置层级表达不清。
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/sidebar.tsx` / `src/lib/home-shell.ts`
+   - Sidebar 降级为纯导航和 Conversations 线程入口
+   - 非 Conversations 分区不再拉 Knowledge / Runtime / Ops assets 数据
+   - Sidebar 当前分区不再展示说明文案
+2. `src/app/page.tsx`
+   - Header 删除 `currentViewCaption`
+   - 移动端主菜单删除入口说明文案
+   - CEO Office 只保留 Command Center 的一个主创建入口
+3. `src/components/ceo-dashboard.tsx`
+   - 删除内部 Scheduler 列表、audit 轮询和第二个 CEO 指令中心
+   - Scheduler 完整管理回归 Ops
+4. `src/components/projects-panel.tsx`
+   - 删除项目页对 `api.schedulerJobs()` 的轮询和循环任务摘要
+5. `src/components/settings-panel.tsx`
+   - 第三方配置改为“第三方连接信息”
+   - 生效选择改为“运行 Provider”
+   - Provider 诊断矩阵默认折叠
+   - API Key 卡片抽为通用 `ApiKeyCard`
+6. `src/lib/providers/provider-availability.ts`
+   - Provider 下拉展示全部 provider，未配置项禁用但可见
+7. `src/components/assets-manager.tsx`
+   - `Canonical / Discovered` 改为 `可执行资产 / 发现待导入`
+8. `src/components/ceo-profile-settings-tab.tsx`
+   - 删除 Journey / 设计解释类长文案，只保留字段和操作反馈
+
+### 本轮验证
+
+通过：
+
+```bash
+npm run lint -- src/components/ceo-dashboard.tsx src/app/page.tsx src/components/sidebar.tsx src/lib/home-shell.ts src/lib/home-shell.test.ts src/components/projects-panel.tsx src/components/settings-panel.tsx src/lib/providers/provider-availability.ts src/lib/providers/provider-availability.test.ts src/components/ceo-office-settings.tsx src/components/assets-manager.tsx src/components/ceo-profile-settings-tab.tsx
+```
+
+```bash
+npm test -- src/lib/providers/provider-availability.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`11 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+进程确认：
+
+1. 本轮没有启动长期 dev/start/watch 服务
+2. 构建 worker 已随 `npm run build` 退出
+3. 检测到已有 `localhost:3000` / `3101` 监听来自既有 `run-local-services/dev watch` 进程树，未由本轮命令直接启动，未做回收
+
+## 任务：Settings Provider 运行配置去重
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-24
+
+### 问题
+
+Settings Provider 页存在重复配置入口：`应用到运行配置` 与下方 `默认配置 / 层级配置` 实际写入同一份 AI provider 配置，且错误地把运行配置选择绑定到 OpenAI-compatible 第三方 Provider，导致用户误以为不能直接选择 Antigravity / Codex Native / Codex CLI。
+
+### 本轮实施
+
+已完成：
+
+1. 删除 `src/components/settings-panel.tsx` 中第三方 Provider 卡片里的 `应用到运行配置` 面板
+2. 删除对应的 `handleApplyThirdPartyAsDefault` / `handleApplyThirdPartyToLayer` 快捷写入逻辑
+3. 保留唯一正式入口：
+   - `默认配置`：组织级 fallback provider
+   - `层级配置`：Executive / Management / Execution / Utility 覆盖
+4. OpenAI-compatible 区块只负责第三方 profile 的连接、测试和保存，不再承担运行配置选择
+5. `层级配置` 改为默认折叠的 `层级覆盖`，避免 4 个 layer 在继承同一默认 Provider 时制造视觉重复
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx
+```
+
+```bash
+npm run build
+```
+
+浏览器态验证：
+
+1. Settings Provider 页不再包含 `应用到运行配置`
+2. 页面仍包含 `默认配置` / `层级配置`
+3. 页面可见 `native-codex`
+4. Provider 支持矩阵可见 `Codex (MCP)`
+5. `层级覆盖` 默认折叠，未展开时不显示 4 个 layer 表单
+
+## 任务：同设备前后端两服务部署收敛
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-24
+
+### 问题
+
+用户确认 Docker 不适合作为默认部署方式，因为项目和宿主机文件系统、Antigravity IDE、Language Server、workspace、`~/.gemini` 结合很深。同时，多角色部署概念过重，应收敛成同设备前端 + 后端两个服务。
+
+### 本轮实施
+
+已完成：
+
+1. 新增 `AG_ROLE=api`
+   - `src/server/api/server.ts` 组合 control-plane routes 和 runtime routes
+   - `/health` 返回 `role=api`
+   - 默认不启动 scheduler，不启动 bridge worker
+   - `AG_ENABLE_SCHEDULER=1` / `AG_ENABLE_IMPORTERS=1` 保留为高级内部开关
+2. `package.json`
+   - `npm run dev` 改为同时启动 `dev:api` 和 `dev:web`
+   - `npm run dev:api`：`PORT=3101 AG_ROLE=api`
+   - `npm run dev:web`：`PORT=3000 AG_ROLE=web`，control-plane/runtime URL 均指向 `http://127.0.0.1:3101`
+   - `npm run start` / `start:api` / `start:web` 同步收敛
+   - 默认 npm scripts 不再暴露 `control-plane/runtime/scheduler` 多角色部署入口
+3. `server.ts`
+   - 支持 `api` 后端组合角色
+4. `src/server/control-plane/server.ts` / `src/server/runtime/server.ts`
+   - 拆出可复用 route factory，供 `api` 组合服务复用
+5. 新增 `scripts/run-local-services.mjs`
+   - 一键启动同设备 `api + web`
+   - 转发 SIGINT / SIGTERM，避免遗留子进程
+   - 任一子服务退出时会回收另一侧服务，避免半边残留
+6. 文档同步：
+   - `README.md`
+   - `README_EN.md`
+   - `ARCHITECTURE.md`
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint server.ts src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/server/control-plane/server.ts src/server/runtime/server.ts src/server/api/server.ts scripts/run-local-services.mjs
+```
+
+```bash
+npx vitest run src/lib/gateway-role.test.ts src/lib/home-shell.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：`3 files passed`，`20 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+接口验证：
+
+1. 临时 `api:3101`
+   - `/health` 返回 `200`
+   - `/api/projects?page=1&pageSize=1` 返回 `200`
+   - `/api/agent-runs?page=1&pageSize=1` 返回 `200`
+   - `/api/workspaces?page=1&pageSize=1` 返回 `200`
+   - `/api/models` 返回 `200`
+2. 临时 `web:3002 -> api:3101`
+   - `/api/projects?page=1&pageSize=1` 经 web 代理返回 `200`
+   - `/api/agent-runs?page=1&pageSize=1` 经 web 代理返回 `200`
+   - `/api/models` 经 web 代理返回 `200`
+   - `/api/ai-config` 经 web 代理返回 `200`
+
+进程回收：
+
+1. 临时 `3101` API 服务已停止
+2. 临时 `3002` Web 服务已停止
+3. 端口 `3101` / `3002` 已释放
+
+## 任务：默认本地启动 API 恢复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-24
+
+### 问题
+
+页面无数据的直接原因不是视觉 CSS，而是默认 `npm run dev` / `npm run start` 使用了裸 `AG_ROLE=web`。在 split 架构里，`web` 未配置 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 时会阻断 `/api/*` 并返回 503。
+
+### 本轮实施
+
+已完成：
+
+1. `package.json`
+   - `dev` 改为 `AG_ROLE=all AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1`
+   - `start` 改为同样的本地一体化安全模式
+   - 保留 `dev:split:web` / `start:split:web` 用于显式前后端拆分部署
+2. 文档同步：
+   - `README.md`
+   - `README_EN.md`
+   - `ARCHITECTURE.md`
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+3. 顺手清理 `src/components/platform-manager.tsx` 本轮视觉中间态产生的未使用 import / state，保证构建不过半成品。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/gateway-role.ts src/proxy.ts src/app/page.tsx src/components/ui/workspace-primitives.tsx src/components/analytics-dashboard.tsx src/components/token-quota-widget.tsx src/components/platform-manager.tsx
+```
+
+```bash
+npx vitest run src/lib/gateway-role.test.ts src/lib/home-shell.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：`3 files passed`，`20 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功。
+
+接口验证：
+
+1. 临时 `3001` 本地一体化服务：
+   - `/api/projects?page=1&pageSize=5` 返回 `200`，`total=163`
+   - `/api/agent-runs?page=1&pageSize=5` 返回 `200`，`total=4762`
+   - `/api/workspaces?page=1&pageSize=5` 返回 `200`，`workspaces=26`
+   - `/api/ai-config` 返回 `200`
+2. 现有 `localhost:3000`：
+   - `/api/projects?page=1&pageSize=1` 返回 `200`
+   - `/api/agent-runs?page=1&pageSize=1` 返回 `200`
+   - `/api/workspaces?page=1&pageSize=1` 返回 `200`
+3. `bb-browser` 页面态验证：
+   - 页面内 fetch `/api/projects`、`/api/agent-runs`、`/api/workspaces` 均返回 `200`
+   - 页面没有出现 `AG_ROLE=web` / `503` API 错误文案
+
+进程回收：
+
+1. 临时 `3001` 服务已停止，端口已释放
+2. `bb-browser daemon` 已停止
+3. 现有 `3000` 服务保持运行
+
+## 任务：Apple-style 新 UI 深层视觉收尾
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-24
+
+### 本轮目标
+
+继续收尾 Apple-style 主页面参考图落地后的深层断点：
+
+1. 核心下钻卡片、列表、表单、tab、弹窗不能继续保留明显旧暗色视觉
+2. 前端组件继续向公共 primitives 收敛，避免每个页面复制一套样式
+3. Portal 弹窗和抽屉不能逃出浅色 shell 后变成暗色旧 UI
+4. 不删除原功能入口，不影响 Antigravity 原生 IDE / Language Server / workspace runtime 逻辑
+5. 验收时不额外启动第二套本地服务，避免 scheduler / worker / Node CPU 放大
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/ui/workspace-primitives.tsx`
+   - 新增 `workspaceGhostActionClassName`
+   - 新增 `workspaceCodeBlockClassName`
+   - 新增 `WorkspaceIconFrame`
+   - 新增 `WorkspaceStatusDot`
+   - 新增 `WorkspaceSectionHeader`
+2. Ops 深层组件收口
+   - `src/components/mcp-status-widget.tsx`
+   - `src/components/codex-widget.tsx`
+   - `src/components/tunnel-status-widget.tsx`
+   - `src/components/assets-manager.tsx`
+3. OPC / CEO 深层组件收口
+   - `src/components/project-ops-panel.tsx`
+   - `src/components/chat.tsx`
+   - `src/components/ceo-scheduler-command-card.tsx`
+   - `src/components/ceo-dashboard.tsx`
+4. Settings / 部门 / Portal 收口
+   - `src/components/ceo-profile-settings-tab.tsx`
+   - `src/components/department-comparison-widget.tsx`
+   - `src/components/department-memory-panel.tsx`
+   - `src/components/department-detail-drawer.tsx`
+   - `src/components/notification-indicators.tsx`
+   - `src/components/template-browser.tsx`
+5. 文档同步：
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮结果
+
+本轮完成后：
+
+1. CEO / OPC / Ops / Settings 的主工作面、核心下钻弹窗、运行抽屉和资产面板已统一到浅色 Apple-style token
+2. `MCP / Tunnel / Codex / Assets` 不再使用旧暗色卡片作为主要视觉
+3. `ProjectOpsPanel` 的 health、stage、branch、reconcile、policy、journal、checkpoint、audit 已完成浅色化
+4. `Chat` 的 planner/notify/empty state 已完成浅色气泡和浅色空态
+5. `NotificationIndicators` 与 `DepartmentDetailDrawer` 这类 body portal 组件已改为浅色，不再依赖 `.apple-reference-shell` 兜底
+6. 明显 emoji 标题已从部门、部门记忆、部门对比、部门详情和 CEO 调度结果中移除，改为 lucide 图标
+7. 原功能入口保留：
+   - CEO 指令与线程
+   - OPC 项目与部门
+   - Ops Scheduler / Assets / MCP / Tunnel / Codex
+   - Settings Profile / Provider / API Keys / Scenes / MCP / Messaging
+   - Template clone/delete/add node/add edge dialog
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/components/ui/workspace-primitives.tsx src/components/mcp-status-widget.tsx src/components/codex-widget.tsx src/components/tunnel-status-widget.tsx src/components/assets-manager.tsx src/components/project-ops-panel.tsx src/components/chat.tsx src/components/ceo-profile-settings-tab.tsx src/components/department-comparison-widget.tsx src/components/department-memory-panel.tsx src/components/ceo-dashboard.tsx src/components/ceo-scheduler-command-card.tsx src/components/notification-indicators.tsx src/components/department-detail-drawer.tsx src/components/template-browser.tsx
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `20 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+结果：
+
+1. 生产构建成功
+2. Route table 正常生成
+
+#### 浏览器验证
+
+使用现有 `localhost:3000` 服务验证，没有启动第二套 dev/start/watch 服务。
+
+通过：
+
+1. CEO 首页可打开，`darkClassCount=6`
+2. Ops 可打开，`darkClassCount=5`
+3. Settings web-only 降级页可打开，`darkClassCount=1`
+4. OPC 可打开，`darkClassCount=1`
+5. `bb-browser errors` 返回无 JS 错误
+
+截图：
+
+1. `/tmp/opc-ui-finish-ceo-2026-04-24.png`
+2. `/tmp/opc-ui-finish-ops-2026-04-24.png`
+3. `/tmp/opc-ui-finish-settings-2026-04-24.png`
+4. `/tmp/opc-ui-finish-projects-2026-04-24.png`
+
+#### 进程回收
+
+通过：
+
+1. 本轮没有启动第二套本地服务
+2. `bb-browser daemon` 已停止
+3. 端口 `3321` 无监听
+4. 端口 `3000` 仍为任务开始前已存在的服务进程
+
+## 任务：Settings web-only 降级与 Approval 推送链路独立化
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+继续收尾前后端拆分后的独立边界：
+
+1. Settings 在 web-only 且未配置后端 URL 时不能再表现成普通加载失败
+2. Approval 通知链路不能只是日志占位，要能被 Web UI 实时感知
+3. Webhook / IM 一键审批链接要走签名 URL，不把业务耦合进页面
+4. 改动保持 control-plane / web / channel 各自独立
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/api-response.ts`
+   - 新增统一 API 响应错误解析
+   - 识别 `AG_ROLE=web` 未配置后端 URL 时的 503 结构
+2. `src/components/settings-panel.tsx`
+   - Settings 加载 AI config 时使用结构化错误
+   - web-only backend unavailable 时显示明确的 Control Plane / Runtime 连接要求
+   - 保持只读降级，不穿透本地 route handler
+3. Approval 推送链路
+   - 新增 `src/lib/approval/notification-events.ts`
+   - 新增 `/api/approval/events` SSE
+   - `src/app/page.tsx` 订阅 `approval_request` / `approval_response` 后刷新待审批列表
+4. Approval channel 独立化
+   - `web` channel 发布 Web event bus 事件
+   - `webhook` channel 执行真实 POST，并支持 signed approve/reject URL
+   - `im` channel 使用 signed approve/reject URL，未连接 adapter 时不产生失败 delivery
+   - 默认 channel registry 会根据环境变量初始化，不再依赖未调用的占位函数
+5. Approval 持久化
+   - 审批创建后持久化 notification delivery 结果
+   - 审批响应后发布 `approval_response` 事件
+6. `src/lib/types.ts`
+   - 补齐前端 `ApprovalRequestFE.notifications` 字段契约
+7. 文档同步：
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+   - `ARCHITECTURE.md`
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮结果
+
+本轮完成后：
+
+1. `AG_ROLE=web` 无后端 URL 时，Settings 会明确提示需要连接 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL`
+2. `/api/approval/events` 已成为 control-plane 拥有的审批 SSE 事件流
+3. Approval 创建会发布 `approval_request` 并持久化 delivery
+4. CEO 批准/拒绝/反馈后会发布 `approval_response`
+5. Webhook / IM 的一键操作 URL 统一通过 HMAC token 验证
+6. 前端页面不直接承担通知业务逻辑，只订阅事件并刷新列表
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/lib/types.ts src/lib/api.ts src/lib/api-response.ts src/components/settings-panel.tsx src/lib/approval/tokens.ts src/lib/approval/approval-urls.ts src/lib/approval/notification-events.ts src/lib/approval/channels/web.ts src/lib/approval/channels/im.ts src/lib/approval/channels/webhook.ts src/lib/approval/channels/index.ts src/lib/approval/dispatcher.ts src/lib/approval/handler.ts src/lib/approval/request-store.ts src/lib/approval/index.ts src/lib/approval/__tests__/notification-events.test.ts src/app/page.tsx src/app/api/approval/events/route.ts src/server/control-plane/routes/approval-events.ts src/server/control-plane/server.ts
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/approval/__tests__/notification-events.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/gateway-role.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `5 files passed`
+2. `19 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+结果：
+
+1. 生产构建成功
+2. `/api/approval/events` 已进入 Next route table
+
+#### 运行态验证
+
+通过：
+
+1. web-only Settings：
+   - 单服务启动：`PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts`
+   - `/api/ai-config` 返回 `503`
+   - `bb-browser` 页面验证显示“Settings 需要连接 Control Plane / Runtime”
+   - `bb-browser errors --clear` 无 JS 错误
+2. Approval SSE：
+   - 使用临时 HOME / AG_GATEWAY_HOME 启动单个 all-in-one 验证服务
+   - `POST /api/approval` 创建审批后，SSE 回放 `approval_request`
+   - `PATCH /api/approval/:id` 批准后，SSE 回放 `approval_response`
+   - `GET /api/approval?summary=true` 可看到 notification delivery 为 `web success=true`
+3. 验证结束后：
+   - 预览服务已停止
+   - `bb-browser daemon` 已停止
+   - 端口 `3321` 已释放
+
+## 任务：UX Shell Phase 8 完成深层视觉收口并清掉 run-registry 构建 warning
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+继续完成 Apple-style main page references 的未完成目标：
+
+1. 深层卡片、列表、表单、tab 不再大量依赖旧深色 utility
+2. Settings / OPC / Sidebar 继续复用公共 primitives，方便后续页面内部一致化
+3. 消除既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+4. 保留原业务功能和 web-only 后台隔离原则
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/ui/workspace-primitives.tsx`
+   - 新增 `WorkspaceBadge`
+   - 新增 `WorkspaceEmptyBlock`
+   - 新增 `workspaceFieldClassName`
+   - 新增 `workspaceOutlineActionClassName`
+2. `src/components/settings-panel.tsx`
+   - Provider 默认配置、layer 配置、API Keys、本地登录态、Scenes、MCP server 管理改为浅色 token / 公共 field / 公共 outline action
+   - 只保留主行动按钮的蓝底白字
+3. `src/components/projects-panel.tsx`
+   - 项目详情、CEO 决策建议、分支 tab、待派发状态、手动派发区和项目弹窗表单改为浅色语义
+   - `ProjectsPanel` 已无 `text-white / bg-white / border-white / text-slate / bg-slate / dark:` 旧关键字命中
+4. `src/components/sidebar.tsx`
+   - 会话、项目、知识、Ops asset、workspace 列表里的 badge、空态、hover 和 workspace row 改为浅色 token
+5. `src/components/ui/app-shell.tsx` 与 `src/app/page.tsx`
+   - 清掉非主按钮场景的旧白底 hover 残留
+6. `src/lib/agents/run-registry.ts`
+   - 删除动态 `require`
+   - 删除触发 Turbopack broad pattern warning 的 `path.join(dynamic, dynamic, dynamic)`
+   - 改为受控 artifact path 拼接和 Node runtime builtin fs 访问
+7. `src/lib/agents/project-registry.ts`
+   - 清掉 `require('fs')` 与 `require('./run-registry')`
+   - 补齐 touched path 的 unknown error handling 和 deep merge 类型
+8. `src/lib/agents/project-events.ts`
+   - 清掉 `require('./ops-audit')`
+9. `src/lib/agents/run-registry.test.ts`
+   - 补齐静态 import 后需要的 gateway-home mock 字段
+10. 文档同步：
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮结果
+
+本轮完成后：
+
+1. Settings / OPC / Sidebar 深层视觉已经从“兼容层兜底”推进到“公共 primitive + token”状态
+2. `ceo-dashboard.tsx` 已无旧深色关键字命中
+3. 当前旧关键字扫描只剩主行动按钮的 `text-white`：
+   - `settings-panel.tsx`: 5
+   - `app/page.tsx`: 5
+   - `ceo-office-settings.tsx`: 2
+   - `sidebar.tsx`: 1
+4. `run-registry.ts` 的 Turbopack broad pattern warning 已消除
+5. `AG_ROLE=web` 无后端 URL 的 API 隔离仍然有效
+6. 本轮没有删除原功能入口：
+   - CEO Office
+   - OPC / ProjectsPanel
+   - Knowledge
+   - Ops / Scheduler / Assets
+   - Settings / Provider / API Keys / Scenes / MCP
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/projects-panel.tsx src/components/sidebar.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-settings.tsx src/components/ui/app-shell.tsx src/components/ui/workspace-primitives.tsx src/lib/agents/run-registry.ts src/lib/agents/run-registry.test.ts src/lib/agents/project-registry.ts src/lib/agents/project-events.ts
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/scheduler.test.ts src/lib/storage/gateway-db.test.ts
+```
+
+结果：
+
+1. `6 files passed`
+2. `42 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+结果：
+
+1. 生产构建成功
+2. 没有再出现 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+
+#### 浏览器与 web-only 验证
+
+通过：
+
+1. 使用单个 web-only 预览服务：
+
+```bash
+PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
+```
+
+2. HTTP 验证：
+   - `/` 返回 `200`
+   - `/api/projects` 返回 `503`
+   - `/api/scheduler/jobs` 返回 `503`
+3. `bb-browser` 页面验证：
+   - `CEO Office`
+   - `OPC`
+   - `Knowledge`
+   - `Ops`
+   - `Settings`
+4. 截图保存到：
+   - `/tmp/opc-ceo-main-phase8-ceo-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase8-opc-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase8-knowledge-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase8-ops-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase8-settings-provider-2026-04-23.png`
+5. `bb-browser errors` 返回：
+   - `没有 JS 错误`
+6. 预览完成后：
+   - `bb-browser daemon` 已停止
+   - 端口 `3321` 已释放
+   - `demolong/projects` 无污染
+
+## 任务：UX Shell Phase 7 收口深层暗色断点并完成页面级验证
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+继续推进 Apple-style main page references 的真实落地，重点处理 Phase 6 后仍残留的深层视觉断裂：
+
+1. 深层旧组件里的暗色 `text-white/*`、`bg-white/*`、`border-white/*` 不再破坏浅色主页面
+2. 主按钮白字不能被兼容层误伤
+3. Scheduler 弹窗这类 portal 场景不能依赖页面作用域兜底
+4. 保留原业务功能和原组件入口
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/globals.css`
+   - 扩展 `.apple-reference-shell` 浅色兼容层
+   - 补齐 `text-white/15`、`text-white/20`、`bg-white/8`、`bg-white/10`、`border-white/12` 等旧暗色 utility 映射
+   - 对蓝色/红色/绿色/黄色主行动按钮恢复白字，避免兼容层误伤按钮可读性
+2. `src/components/settings-panel.tsx`
+   - 第三方 Provider onboarding 主卡片从旧深色渐变改为浅色 Apple-style 渐变
+3. `src/components/scheduler-panel.tsx`
+   - Scheduler 新建/编辑任务弹窗 label 与 hint 改为 `--app-*` 浅色语义
+4. `src/components/projects-panel.tsx`
+   - 循环任务入口、空态、项目详情返回按钮、项目 header 等显性暗色断点改为浅色语义
+5. `src/components/knowledge-panel.tsx`
+   - 删除按钮改为浅色可读红色语义
+6. `src/app/page.tsx`
+   - Ops 主行动按钮统一为蓝底白字
+7. 文档同步：
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮结果
+
+本轮完成后：
+
+1. 深层卡片、列表、表单、弹窗的显性暗色断点继续收口
+2. 新增结构继续复用 `WorkspaceSurface / WorkspaceMiniMetric / WorkspaceListItem` 等公共 primitives
+3. 原业务能力未删除：
+   - ProjectsPanel
+   - KnowledgeWorkspace
+   - DepartmentMemoryPanel
+   - SchedulerPanel
+   - AnalyticsDashboard
+   - Token / MCP / Tunnel / Codex
+   - AssetsManager
+   - SettingsPanel 全部 tab
+4. `AG_ROLE=web` 无后端 URL 的 API 隔离仍然有效
+5. 预览没有留下 `demolong/projects` 数据污染
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/knowledge-panel.tsx src/components/scheduler-panel.tsx src/components/settings-panel.tsx src/components/ui/workspace-primitives.tsx src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/proxy.ts server.ts
+```
+
+备注：
+
+1. `src/app/globals.css` 被当前 ESLint 配置忽略，只返回 ignored warning
+2. TS/TSX 检查通过，无 error
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `20 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell Phase 7 引入的新问题
+
+#### 浏览器与 web-only 验证
+
+通过：
+
+1. 使用 `bb-browser` 点击验证：
+   - `OPC`
+   - `Knowledge`
+   - `Ops`
+   - `Settings`
+2. 关键结构检查结果：
+   - `OPC`: `hasOpcHero=true`, `hasQueue=true`, `hasShortcuts=true`
+   - `Knowledge`: `hasMemory=true`, `hasDepartmentMemory=true`
+   - `Ops`: `hasOpsHero=true`, `hasRuntimeStack=true`, `hasScheduler=true`
+   - `Settings`: `hasSettingsHero=true`, `hasConfigIndex=true`, `hasSettingsPanel=true`
+3. 截图保存到：
+   - `/tmp/opc-ceo-main-phase7-ceo-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase7-opc-click-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase7-knowledge-click-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase7-ops-click-2026-04-23.png`
+   - `/tmp/opc-ceo-main-phase7-settings-2026-04-23.png`
+4. `bb-browser errors` 返回：
+   - `没有 JS 错误`
+5. web-only 隔离验证：
+
+```bash
+PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
+curl -sS -i http://127.0.0.1:3321/api/projects
+curl -sS -i http://127.0.0.1:3321/api/scheduler/jobs
+```
+
+结果：
+
+1. `/api/projects` 返回 `503`
+2. `/api/scheduler/jobs` 返回 `503`
+3. web-only 日志没有再出现 scheduler/project registry 刷新
+4. 预览完成后已关闭端口 `3321`
+5. `bb-browser daemon` 已停止
+
+## 任务：UX Shell Phase 6 完成主页面结构收口并封住 web-only API 副作用
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+继续推进 Apple-style main page references 的真实开发落地，并补上 Phase 5 验证暴露的 web 角色副作用问题：
+
+1. `OPC / Knowledge / Ops / Settings` 不再只是 Hero 下堆旧组件
+2. 保留现有业务面板和操作能力
+3. `AG_ROLE=web` 在没有后端 URL 时不再让 `/api/*` 直接进入本地控制面 route handler
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/page.tsx`
+   - `OPC` 改为 `ProjectsPanel + Execution queue + Control shortcuts`
+   - `Knowledge` 改为 `KnowledgeWorkspace + Memory posture + DepartmentMemoryPanel`
+   - `Ops` 改为 `Scheduler/Analytics 主舞台 + Runtime stack 右轨 + Assets 全宽工作面`
+   - `Settings` 改为 `Configuration index + Readiness + SettingsPanel`
+2. `src/components/settings-panel.tsx`
+   - 外层容器、标题、字段 label、Provider select 从深色残留切到浅色 Apple-style 语义
+3. `src/components/scheduler-panel.tsx`
+   - Scheduler 顶部、job meta、expanded runs 区域清理明显深色残留
+4. `src/proxy.ts`
+   - `AG_ROLE=web` 且缺少 `AG_CONTROL_PLANE_URL` 或 `AG_RUNTIME_URL` 时，`/api/*` 直接返回 `503`
+   - 避免 web-only 进程通过 `/api/projects`、`/api/scheduler/jobs` 触发 scheduler/project registry 本地副作用
+5. `src/lib/gateway-role.ts`
+   - 新增 `hasCompleteWebApiBackend()`
+   - 新增 `shouldBlockUnconfiguredWebApi()`
+6. `server.ts`
+   - web-only cleanup 不再无条件 import scheduler worker
+7. 文档同步：
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+   - `ARCHITECTURE.md`
+
+### 本轮结果
+
+本轮完成后：
+
+1. 五个一级主页面已经形成更一致的 Apple-style 工作台结构
+2. `OPC / Knowledge / Ops / Settings` 的主页面结构已经从“旧面板堆叠”改成“主舞台 + 右侧状态/控制轨”
+3. 原业务能力没有删除：
+   - ProjectsPanel
+   - KnowledgeWorkspace
+   - DepartmentMemoryPanel
+   - SchedulerPanel
+   - AnalyticsDashboard
+   - Token / MCP / Tunnel / Codex
+   - AssetsManager
+   - SettingsPanel 全部 tab
+4. `AG_ROLE=web` 无后端 URL 时，API 不再误穿透到本地 route handler
+5. 验证过程中产生的 `demolong/projects/*/project.json updatedAt` 预览污染已恢复，当前 `demolong/projects` 无差异
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/scheduler-panel.tsx src/components/projects-panel.tsx src/components/knowledge-panel.tsx src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/proxy.ts server.ts
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `20 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell Phase 6 引入的新问题
+
+#### 浏览器与 web-only 验证
+
+通过：
+
+1. 使用 `bb-browser` 验证五个主页面关键 DOM：
+   - `CEO Office`
+   - `OPC`
+   - `Knowledge`
+   - `Ops`
+   - `Settings`
+2. 截图保存到：
+   - `/tmp/opc-ceo-main-pages-phase6-ceo-2026-04-23.png`
+   - `/tmp/opc-ceo-main-pages-phase6-opc-2026-04-23.png`
+   - `/tmp/opc-ceo-main-pages-phase6-knowledge-2026-04-23.png`
+   - `/tmp/opc-ceo-main-pages-phase6-ops-2026-04-23.png`
+   - `/tmp/opc-ceo-main-pages-phase6-settings-2026-04-23.png`
+3. `bb-browser errors` 返回：
+   - `没有 JS 错误`
+4. web-only 隔离验证：
+
+```bash
+PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
+curl -sS -o /tmp/opc-web-root.out -w '%{http_code}\n' http://127.0.0.1:3321
+curl -sS -i http://127.0.0.1:3321/api/projects
+curl -sS -i http://127.0.0.1:3321/api/scheduler/jobs
+```
+
+结果：
+
+1. 根页面返回 `200`
+2. `/api/projects` 返回 `503`
+3. `/api/scheduler/jobs` 返回 `503`
+4. web-only 日志没有再出现 scheduler/project registry 刷新
+5. 预览完成后已关闭端口 `3321`
+
+## 任务：UX Shell Phase 5 将 CEO Office 从 chat-first 重构为 dashboard-first
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+把上一轮已经确认的结构问题真正做掉，而不是继续做浅层美化：
+
+1. `CEO Office` 不再以聊天线程作为首页主舞台
+2. CEO 侧栏不再承载线程历史
+3. 右侧控制区不再重复塞一份 dashboard
+4. 保留原线程、模板、项目摘要、Prompt 资产和调度入口能力
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/page.tsx`
+   - `CEO Office` 主布局改为 `WorkspaceHero + Command Center + Company Cockpit + Recent Threads + Control Center`
+   - 命令线程缩成中等高度的 `Command Center` 卡片，不再独占整页
+   - `CEODashboard` 提升到主舞台，作为 `Company Cockpit`
+   - 新增 `Recent Threads` 右侧控制面，支持在 `CEO Office` 内快速切换最近 CEO 线程
+   - 新增 `ceoHistory` 页面级轮询，只拉取 `CEO_WORKSPACE_URI` 最近线程
+   - `CEO Office` 页头标题固定为页面名，不再被单条线程标题替换
+   - `ActiveTasksPanel` 与页面内 `Priority queue` 共用同一批过滤后的 active tasks 数据
+2. `src/components/sidebar.tsx`
+   - CEO 侧栏删除历史线程列表
+   - 改为 `Cockpit mode` 摘要卡
+   - 新增三个快速跳转：
+     - `打开线程工作台`
+     - `查看 OPC 项目工作台`
+     - `打开 Ops`
+3. `src/lib/home-shell.ts`
+   - CEO 侧栏不再请求 conversations 数据
+   - CEO 侧栏轮询周期调整为 `20s`
+4. `src/components/ceo-office-settings.tsx`
+   - 删除重复的 `dashboard` tab
+   - 重排为：
+     - `项目摘要`
+     - `模板`
+     - `Prompt 资产`
+   - 头部语义改成 `CEO Office Control Center`
+   - 增加 control posture 摘要与快捷入口
+
+### 本轮结果
+
+本轮完成后：
+
+1. `CEO Office` 已从“聊天页带右栏”转为更接近参考图的 `dashboard-first` 驾驶舱
+2. CEO 线程历史仍然保留，但位置从一级侧栏迁回主工作面右侧
+3. CEO 侧栏已经回到“导航 + 快速跳转”职责
+4. `Control Center` 与 `Company Cockpit` 的职责开始分离
+5. 原功能未删除：
+   - `Chat`
+   - `ChatInput`
+   - `revert / proceed / cancel`
+   - model / workflow / skill 选择
+   - 模板浏览
+   - 项目摘要
+   - Persona / Playbook Prompt 编辑
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/sidebar.tsx src/components/ceo-office-settings.tsx src/lib/home-shell.ts
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `2 files passed`
+2. `13 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell Phase 5 引入的新问题
+
+#### 隔离预览
+
+通过：
+
+1. 使用 `PORT=3321 NODE_ENV=production AG_ROLE=web ./node_modules/.bin/tsx server.ts` 启动隔离预览
+2. 使用 `bb-browser` 打开 `http://127.0.0.1:3321`
+3. DOM 快照确认页面已包含：
+   - `Command Center`
+   - `Company cockpit`
+   - `Recent threads`
+   - `项目摘要 / 模板 / Prompt 资产`
+4. 截图保存到：
+   - `/tmp/opc-ceo-office-structure-2026-04-23.png`
+   - `/tmp/opc-ceo-office-structure-2026-04-23-fold2.png`
+5. 预览完成后已关闭占用端口 `3321` 的进程
+
+## 任务：UX Shell Phase 4 纠偏参考图方向，壳层从深色 Antigravity 主题切回浅色 Apple-style
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+修正一个已经验证的偏差：参考图是浅色 Apple enterprise dashboard，但实际实现仍然沿用深色 Antigravity shell，导致“看起来完全不像参考图”。
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/layout.tsx`
+   - 去掉强制 `className="dark"`
+   - `themeColor` 改为浅色壳层
+2. `src/app/globals.css`
+   - 重写 `app` / `agent` 主题 token 为浅色 Apple-style enterprise dashboard 体系
+   - `agent-stage / app-shell-stage / app-pane / chat-stage-panel / chat-composer-frame` 改为浅色背景和阴影
+   - 新增 `.apple-reference-shell` 覆盖层，把旧的深色文本/边框/卡片 class 拉回浅色参考图语义
+3. `src/components/ui/app-shell.tsx`
+   - AppShell 根节点增加 `apple-reference-shell`
+   - `StatusChip / WorkspaceMetricCard` 调整为浅色语义
+4. `src/components/ui/workspace-primitives.tsx`
+   - `WorkspaceSurface / WorkspaceInteractiveSurface / WorkspaceMiniMetric / WorkspaceListItem / WorkspaceTabsList / WorkspaceTabsTrigger / WorkspaceEditorFrame` 全部切到浅色 Apple-style 语义
+5. `src/app/page.tsx`
+   - 顶部 header 改成浅色导航条
+   - `CEO Office` 主工作面里写死的深色 panel 改成浅色
+   - mobile menu 改成浅色弹层
+6. `src/components/sidebar.tsx`
+   - 左侧壳层改成浅色侧栏
+   - rail item / profile / current project / launcher card 调整为浅色语义
+7. `docs/design/ux-shell-convergence-2026-04-23.md`
+   - 补充 Phase 4 根因与结果说明
+
+### 本轮结果
+
+本轮完成后：
+
+1. 当前实现已经不再是深色 Antigravity 壳层
+2. 整体观感已回到参考图的大方向：
+   - 白底浅灰
+   - 蓝色强调
+   - 轻玻璃态卡片
+   - 浅色导航与侧栏
+3. 已识别并记录仍未收口的差距：
+   - `CEO Office` 仍然是 chat-first，不是参考图的 dashboard-first
+   - 左侧仍然保留大量线程历史，不是纯一级导航侧栏
+   - 其他主页面内部排布还没有做到参考图级别的 1:1 对齐
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/layout.tsx src/app/page.tsx src/components/ui/app-shell.tsx src/components/ui/workspace-primitives.tsx src/components/sidebar.tsx
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `2 files passed`
+2. `13 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+#### 隔离预览
+
+通过：
+
+1. 使用 `PORT=3321 AG_ROLE=web ./node_modules/.bin/tsx server.ts` 启动隔离 web 预览
+2. 使用 `bb-browser` 打开 `http://127.0.0.1:3321`
+3. 预览截图保存到：
+   - `/tmp/opc-ceo-office-2026-04-23.png`
+4. 预览完成后已关闭占用端口 `3321` 的进程
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell Phase 4 引入的新问题
+
+## 任务：UX Shell Phase 3 抽公共 workspace primitives 并开始深层视觉精修
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+继续推进 Apple-style main page references 的真实开发落地，重点解决两个问题：
+
+1. 页面内部卡片、列表、tab、编辑器外框仍然散落写死样式
+2. 前端组件需要解耦成公共组件，方便五个主页面继续复用
+
+### 本轮实施
+
+已完成：
+
+1. 新增公共 UI primitives：
+   - `src/components/ui/workspace-primitives.tsx`
+2. 新增公共组件：
+   - `WorkspaceSurface`
+   - `WorkspaceInteractiveSurface`
+   - `WorkspaceMiniMetric`
+   - `WorkspaceListItem`
+   - `WorkspaceTabsList`
+   - `WorkspaceTabsTrigger`
+   - `WorkspaceEditorFrame`
+3. `src/components/ceo-office-settings.tsx`
+   - 主 tabs 改用公共 `WorkspaceTabsList / WorkspaceTabsTrigger`
+   - project summary 指标改用 `WorkspaceMiniMetric`
+   - active / failed / paused project list 改用 `WorkspaceListItem`
+   - Prompt 资产提示卡改用 `WorkspaceSurface`
+   - Persona / Playbook 编辑器外框改用 `WorkspaceEditorFrame`
+4. `src/components/ceo-dashboard.tsx`
+   - KPI 指标改用 `WorkspaceMiniMetric`
+   - OKR / Risk / Routine / Evolution 容器改用 `WorkspaceSurface`
+   - 风险项和 scheduler 摘要列表改用 `WorkspaceListItem`
+   - 部门卡改用 `WorkspaceInteractiveSurface`
+5. `src/components/knowledge-panel.tsx`
+   - Knowledge overview list card 改用 `WorkspaceSurface`
+   - Knowledge item 改用 `WorkspaceListItem`
+6. `src/components/scheduler-panel.tsx`
+   - Scheduler empty state 改用 `WorkspaceSurface`
+   - Job card 改用 `WorkspaceSurface`
+   - Job title row 改用 `WorkspaceListItem`
+   - Next / Last 时间块改用 `WorkspaceMiniMetric`
+7. `src/components/settings-panel.tsx`
+   - Settings 外层 panel 改用 `WorkspaceSurface`
+   - Settings 主 tabs 改用 `WorkspaceTabsList / WorkspaceTabsTrigger`
+   - Settings 内部 `Card` 基座改为复用 `WorkspaceSurface`
+8. `src/components/projects-panel.tsx`
+   - Project detail metrics 改用 `WorkspaceMiniMetric`
+   - Department context 外层改用 `WorkspaceSurface`
+   - 空状态改用 `WorkspaceSurface`
+   - CEO decision card 改用 `WorkspaceSurface`
+   - CEO command / AI reasoning 子卡片改用 `WorkspaceSurface`
+9. `src/components/scheduler-panel.tsx`
+   - 展开的 recent runs 容器与 run item 改用 `WorkspaceSurface`
+10. `docs/design/ux-shell-convergence-2026-04-23.md`
+   - 补充 Phase 3 公共组件边界
+   - 记录已开始替换的页面内部区域
+
+### 本轮结果
+
+本轮完成后：
+
+1. Apple-style deep UI 不再只停留在主页面 Hero
+2. 内部卡片、列表、tabs、mini metrics、编辑器外框开始收敛到公共 primitives
+3. `CEO Office / OPC / Knowledge / Ops / Settings` 都已有内部区域开始复用公共组件
+4. 原业务能力没有删除：
+   - 没有删除 panels
+   - 没有删除 API
+   - 没有迁移业务状态
+   - 没有改变 Scheduler / Runtime / Language Server 启动逻辑
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/components/ui/workspace-primitives.tsx src/components/ceo-office-settings.tsx src/components/ceo-dashboard.tsx src/components/knowledge-panel.tsx src/components/scheduler-panel.tsx src/components/settings-panel.tsx src/components/projects-panel.tsx
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `2 files passed`
+2. `13 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell Phase 3 引入的新问题
+
+## 任务：UX Shell Phase 2 统一五个主页面承载，保留全部业务功能
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+在 Phase 1 去掉 `Home` 之后，继续把 `CEO Office / OPC / Knowledge / Ops / Settings` 收口成统一的主页面体验，同时明确不丢功能：
+
+1. 不删除原业务组件
+2. 不迁移业务数据
+3. 不删除已有 API
+4. 不影响 Antigravity 原生 IDE 的 Language Server / workspace runtime 逻辑
+5. 只改页面承载、视觉层次和入口语义
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/ui/app-shell.tsx`
+   - 新增 `WorkspaceHero`
+   - 新增 `WorkspaceMetricCard`
+   - 作为五个主页面共用的 Hero / 指标带框架
+2. `src/app/page.tsx`
+   - `Settings` 增加统一页面 Hero 和指标带
+   - `OPC` 增加统一页面 Hero 和指标带
+   - `Knowledge` 增加统一页面 Hero 和指标带
+   - `Ops` 增加统一页面 Hero 和指标带
+   - `CEO Office` 增加 executive cockpit Hero
+   - `CEO Office` 改成“顶部公司态势 + 下方 CEO command thread + 右侧控制面板”的结构
+   - 保留原 `Chat / ChatInput / ProjectsPanel / KnowledgeWorkspace / DepartmentMemoryPanel / SchedulerPanel / AnalyticsDashboard / TokenQuotaWidget / McpStatusWidget / TunnelStatusWidget / CodexWidget / AssetsManager / SettingsPanel / CeoOfficeSettings`
+3. `src/components/ceo-office-settings.tsx`
+   - 调整右侧控制面板头部和 tab 视觉
+   - 保留 Dashboard / Templates / Projects / Prompt 资产四个 tab
+   - 保留 Persona / Playbook prompt 编辑与保存能力
+4. `docs/design/ux-shell-convergence-2026-04-23.md`
+   - 补充 Phase 2 实现范围
+   - 明确本轮不删除功能、不动 Antigravity 原生 IDE runtime 逻辑
+
+### 本轮结果
+
+本轮完成后：
+
+1. 五个主页面都有统一的 Apple-style glass 页面 Hero 和指标带
+2. 默认 `CEO Office` 不再像“聊天旁边塞配置”，而是更像 CEO cockpit
+3. `OPC / Knowledge / Ops / Settings` 都保留原功能组件，只在上层增加清晰入口和状态摘要
+4. 第三方 Provider / API Keys 入口仍在 `Ops`，同时跳转到 `Settings`
+5. `Chats / conversations` 仍保留线程工作态，没有被移除
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/ui/app-shell.tsx src/components/ceo-office-settings.tsx
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `2 files passed`
+2. `13 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell Phase 2 引入的新问题
+
+## 任务：UX Shell Phase 1 收口为 CEO Office 默认首页，移除 Home 过渡态
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-23
+
+### 本轮目标
+
+把前端壳层从“过渡态 Home 分流页”收口到更稳定的最终态信息架构：
+
+1. 去掉 `Home / overview` 作为一级主页面
+2. 默认落点切到 `CEO Office`
+3. `Settings` 从右上角快捷入口提升为一级导航目的地
+4. `Chats` 保留线程工作态，但不再和主页面并列叙事
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/home-shell.ts`
+   - 移除 `overview` section
+   - `shouldShowShellSidebar()` 改为除 `settings` 外均显示壳层侧栏
+   - `getSidebarLoadPlan()` 默认回退改为 `ceo` 语义
+2. `src/lib/app-url-state.ts`
+   - 默认 section 从 `overview` 改为 `ceo`
+   - 根 URL `/` 现在直接代表 `CEO Office`
+   - 仅当 section 非 `ceo` 时才写入 `section` query
+3. `src/app/page.tsx`
+   - 初始 `sidebarSection` 改为 `ceo`
+   - 顶部一级导航移除 `Home`
+   - `Settings` 提升到主导航，不再只剩齿轮快捷入口
+   - `conversations` 从主导航里降级，仍保留线程工作态和直接访问能力
+   - 页面主分支移除 `overview` 渲染逻辑
+   - `CEO Office` 成为默认主页面
+   - `Projects` 中的回流文案从“首页和 OPC”改为“CEO Office 和 OPC”
+4. `src/components/sidebar.tsx`
+   - 移除 `overview / Company Home` 的 section meta
+5. 删除死代码：
+   - 删除 `src/components/home-overview.tsx`
+6. 设计文档同步：
+   - 新增 `docs/design/ux-shell-convergence-2026-04-23.md`
+   - 新增 `docs/design/apple-reference-pages-2026-04-23.md`
+   - 删除已过时的 `docs/design/homepage-overview-shell-optimization-2026-04-21.md`
+7. 设计示意图归档：
+   - `docs/design/mockups/apple-reference-pages-2026-04-23/ceo-office.png`
+   - `docs/design/mockups/apple-reference-pages-2026-04-23/projects.png`
+   - `docs/design/mockups/apple-reference-pages-2026-04-23/knowledge.png`
+   - `docs/design/mockups/apple-reference-pages-2026-04-23/ops.png`
+   - `docs/design/mockups/apple-reference-pages-2026-04-23/settings.png`
+
+### 本轮结果
+
+本轮完成后：
+
+1. 产品根入口 `/` 已切为 `CEO Office`
+2. `Home` 不再作为一级页面存在
+3. 一级页面现在收口为：
+   - `CEO Office`
+   - `OPC`
+   - `Knowledge`
+   - `Ops`
+   - `Settings`
+4. `Chats / conversations` 继续保留，但定位收紧为线程工作态
+5. 壳层侧栏现在会在 `CEO Office` 默认显示，更符合最终态左侧主导航体验
+
+### 本轮验证
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：
+
+1. `2 files passed`
+2. `13 tests passed`
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/sidebar.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/lib/home-shell.ts src/lib/home-shell.test.ts
+```
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 UX shell 收口引入的新问题
+
+## 任务：把 AI 日报改成每天北京时间 20:00 的真实可用定时任务
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-22
+
+### 本轮目标
+
+把 `AI情报工作室` 的日报定时任务从“能建 job 但不够可靠”收口成真实可用状态，要求同时满足：
+
+1. `cron` 能表达“每天北京时间 20:00”
+2. scheduler 列表 / 删除和 SQLite 主存储一致，Web UI 不再看不到新任务或删不干净
+3. `ai_digest` 在 prompt run 结束后自动执行上报，不再只落 `digest_output.json`
+4. 真实触发一次并完成外部日报发布回读
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/agents/scheduler-types.ts`
+   - 为 `ScheduledJob` 新增可选 `timeZone`
+2. `src/lib/agents/scheduler.ts`
+   - `cron` 调度改为支持 IANA 时区
+   - `list/get/update/delete/trigger/tick` 改为按 SQLite 主存储刷新
+   - `DELETE` 不再只删内存态，改为真正删除持久化记录
+3. `src/lib/storage/gateway-db.ts`
+   - 新增 `deleteScheduledJobRecord(jobId)`
+4. `src/components/scheduler-panel.tsx`
+   - Scheduler UI 新增 `Cron Time Zone` 输入和展示
+5. `src/lib/agents/workflow-runtime-hooks.ts`
+   - `daily-digest` preflight 对齐为 `20:00 -> 20:00` 北京时间窗口
+   - 新增 `finalizeAiDigestRun()`
+   - 自动执行 `report_digest.py`
+   - 生成：
+     - `daily-digest-report-payload.json`
+     - `daily-digest-verification.json`
+6. 测试补齐：
+   - `src/lib/agents/workflow-runtime-hooks.test.ts`
+   - `src/lib/agents/scheduler.test.ts`
+   - `src/lib/storage/gateway-db.test.ts`
+7. 文档同步：
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/agent-user-guide.md`
+   - `ARCHITECTURE.md`
+8. 真实库清理：
+   - 删除历史单元测试遗留的 `45` 个 `name = test` 的脏 scheduler rows
+   - 保留真实任务后，库里当前只剩 `3` 条 scheduler job
+9. 真实日报任务更新：
+   - `jobId = 2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f`
+   - `cronExpression = 0 20 * * *`
+   - `timeZone = Asia/Shanghai`
+   - `enabled = true`
+
+### 本轮结果
+
+当前 `AI情报工作室日报 · 每天北京时间20:00` 已成为真实可用的定时任务：
+
+1. Web API `GET /api/scheduler/jobs` 现在返回 `3` 条真实 job，不再混入历史 `test` 垃圾记录
+2. 日报任务会按 `Asia/Shanghai` 解释 `0 20 * * *`
+3. 下一次触发时间为：
+   - `2026-04-23T12:00:00.000Z`
+   - 即 `2026-04-23 20:00:00 +08:00`
+4. 真实手动触发后，run 会自动走完：
+   - `preflight context -> digest_output.json -> report_digest.py -> verify API/page`
+5. 当天日报 `2026-04-22` 已真实发布成功：
+   - `run.id = 37`
+   - 标题：
+     - `谷歌突击队、600万颗假Star与104B高能效模型：AI开始比拼真实产能`
+
+### 本轮验证
+
+#### lint
+
+通过：
+
+```bash
+npx eslint src/lib/storage/gateway-db.ts src/lib/storage/gateway-db.test.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/workflow-runtime-hooks.test.ts src/lib/api.ts src/components/scheduler-panel.tsx
+```
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/storage/gateway-db.test.ts src/lib/agents/workflow-runtime-hooks.test.ts
+npx vitest run src/lib/agents/scheduler.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `21 tests passed`
+
+#### Scheduler 列表回读
+
+通过：
+
+```bash
+curl -sS 'http://127.0.0.1:3000/api/scheduler/jobs?page=1&pageSize=100'
+```
+
+结果：
+
+1. `count = 3`
+2. 日报任务返回：
+   - `jobId = 2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f`
+   - `cronExpression = 0 20 * * *`
+   - `timeZone = Asia/Shanghai`
+   - `nextRunAt = 2026-04-23T12:00:00.000Z`
+
+#### 真实触发
+
+通过：
+
+```bash
+curl -X POST 'http://127.0.0.1:3000/api/scheduler/jobs/2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/trigger'
+```
+
+结果：
+
+1. `status = success`
+2. `runId = 6f3c370c-f23c-4c7b-89a6-3d20ae27c745`
+
+#### Run 完成态
+
+通过：
+
+```bash
+curl -sS 'http://127.0.0.1:3000/api/agent-runs/6f3c370c-f23c-4c7b-89a6-3d20ae27c745'
+```
+
+结果：
+
+1. `status = completed`
+2. `resolvedWorkflowRef = /ai_digest`
+3. `reportedEventDate = 2026-04-22`
+4. `reportedEventCount = 12`
+5. `verificationPassed = true`
+6. 新增产物：
+   - `demolong/runs/6f3c370c-f23c-4c7b-89a6-3d20ae27c745/daily-digest-report-payload.json`
+   - `demolong/runs/6f3c370c-f23c-4c7b-89a6-3d20ae27c745/daily-digest-verification.json`
+
+#### 外部回读
+
+通过：
+
+```bash
+curl -sS 'https://api.aitrend.us/digest?date=2026-04-22'
+curl -sS -o /dev/null -w '%{http_code}\n' 'https://www.aitrend.us/digest/2026-04-22'
+```
+
+结果：
+
+1. API：
+   - `exists = true`
+   - `run.id = 37`
+   - `digestDate = 2026-04-22`
+2. 页面：
+   - `HTTP 200`
+
+## 任务：补跑并上报 2026-04-21 AI 日报
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-22
+
+### 本轮目标
+
+在当前 `ai_digest` canonical 资产已经收口到 `workflow-scripts` 之后，真实补跑并上报 `2026-04-21` 的 AI 日报，确认：
+
+1. 历史日期补跑可以得到正确窗口的数据
+2. `report_digest.py` 真实上报成功
+3. API 与页面回读都通过
+
+### 本轮实施
+
+已完成：
+
+1. 使用真实 workflow 参数抓取 `2026-04-21` 上下文：
+   - `--window-start-hour 20`
+   - `--window-end-hour 20`
+2. 基于当日 `38` 篇文章生成正式日报 JSON
+3. 先执行 `report_digest.py --dry-run`
+4. 再执行真实 `report_digest.py` 上报与回读验证
+
+### 本轮结果
+
+已成功补跑并发布：
+
+1. `digestDate = 2026-04-21`
+2. 标题：
+   - `50亿美元再投Anthropic，Kimi K2.6开源冲刺，GitHub Copilot开始限流`
+3. 上报后回读：
+   - API `exists = true`
+   - 页面 `https://www.aitrend.us/digest/2026-04-21` 返回 `200`
+
+### 本轮验证
+
+#### 上下文校验
+
+通过：
+
+```bash
+python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py --date 2026-04-21 --limit 50 --max-pages 2 --window-start-hour 20 --window-end-hour 20 --out /tmp/ai-digest-2026-04-21-context.json --insecure
+```
+
+结果：
+
+1. `status = ok`
+2. `articleCount = 38`
+3. 窗口为 `2026-04-20 20:00:00+08:00 -> 2026-04-21 20:00:00+08:00`
+4. 最早 / 最晚文章时间都落在 `2026-04-21`
+
+#### payload dry-run
+
+通过：
+
+```bash
+python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py --input /tmp/ai-digest-2026-04-21-output.json --context /tmp/ai-digest-2026-04-21-context.json --digest-date 2026-04-21 --ai-model codex-manual-rerun --dry-run --insecure
+```
+
+结果：
+
+1. `digestDate = 2026-04-21`
+2. `articleCount = 25`
+3. payload 校验通过
+
+#### 真实上报
+
+通过：
+
+```bash
+python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py --input /tmp/ai-digest-2026-04-21-output.json --context /tmp/ai-digest-2026-04-21-context.json --digest-date 2026-04-21 --ai-model codex-manual-rerun --insecure
+```
+
+结果：
+
+1. `status = ok`
+2. `reportUrl = https://api.aitrend.us/admin/digest/report`
+3. `verifyApiUrl = https://api.aitrend.us/digest?date=2026-04-21`
+4. `verifyPageUrl = https://www.aitrend.us/digest/2026-04-21`
+5. `verifyPageStatus = 200`
+6. 服务端返回 `run.id = 36`
+
+## 任务：AI 日报 canonical 资产收口到 workflow-scripts，全局 skill 改成可选能力入口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-21
+
+### 本轮目标
+
+把 `ai_digest` 从“必须依赖某个 skill 挂脚本”的隐式耦合里解出来，收口为：
+
+1. workflow 仍是 canonical 全局资产
+2. runtime helper scripts 进入全局 `workflow-scripts`
+3. digest skill 保留为全局可选能力入口，但不再是运行时必需宿主
+4. 不影响现有 `runtimeSkill` 主线与原生 Antigravity 其他 workflow
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/agents/gateway-home.ts`
+   - 新增 repo `.agents/workflow-scripts` -> canonical `gateway/assets/workflow-scripts` 同步
+2. `src/lib/agents/canonical-assets.ts`
+   - canonical workflow frontmatter 新增 `runtimeScriptsDir`
+   - 新增 `getCanonicalWorkflowScriptsDir()`
+3. `src/lib/agents/workflow-runtime-hooks.ts`
+   - runtime helper 解析改成：
+     - 优先 `runtimeScriptsDir`
+     - 缺失时 fallback `runtimeSkill`
+   - `daily-digest` / `daily-events` 都兼容这套 helper 解析
+4. `.agents/workflows/ai_digest.md`
+   - 去掉 `runtimeSkill`
+   - 改为 `runtimeScriptsDir: ai_digest`
+   - Step 1 / Step 3 路径改到 `gateway/assets/workflow-scripts/ai_digest/*`
+5. 新增 canonical workflow helper scripts：
+   - `.agents/workflow-scripts/ai_digest/fetch_context.py`
+   - `.agents/workflow-scripts/ai_digest/report_digest.py`
+6. 保留 digest skill，但改成可选能力说明：
+   - `.agents/skills/baogaoai-ai-digest-generator/SKILL.md`
+   - 不再承担 `ai_digest` 的必需脚本宿主职责
+7. 同步校正文档：
+   - `docs/research/provider-runtime-hardening-2026-04-17.md`
+   - `docs/research/antigravity-daily-digest-adhoc-project-run-2026-04-17.md`
+   - `docs/research/native-codex-daily-report-success-2026-04-17.md`
+
+### 本轮结果
+
+本轮完成后，日报链路的 canonical 资产边界明确为：
+
+1. workflow：`gateway/assets/workflows/ai_digest.md`
+2. workflow helper scripts：`gateway/assets/workflow-scripts/ai_digest/*`
+3. optional skill：`gateway/assets/skills/baogaoai-ai-digest-generator/SKILL.md`
+
+这意味着：
+
+1. workflow 可以像 skill 一样直接挂全局 helper 脚本
+2. skill 仍然可以继续保留并被其他地方引用
+3. `ai_digest` 不再因为 skill 丢失或路径漂移而失去运行时脚本
+4. `ai_bigevent` 等仍走 `runtimeSkill` 的链路不受影响
+5. 当前机器上旧的 digest skill `scripts/` 残留与 legacy skill 镜像也已清理，目录状态和当前架构保持一致
+
+### 本轮验证
+
+#### Python 脚本编译
+
+通过：
+
+```bash
+python3 -m py_compile .agents/workflow-scripts/ai_digest/fetch_context.py .agents/workflow-scripts/ai_digest/report_digest.py
+```
+
+#### lint
+
+通过（仅剩既有 warning）：
+
+```bash
+npx eslint src/lib/agents/gateway-home.ts src/lib/agents/canonical-assets.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/gateway-home.test.ts src/lib/agents/workflow-runtime-hooks.test.ts
+```
+
+结果：
+
+1. 无 error
+2. 仅剩既有 `gateway-home.ts` unused `initialized` warning
+
+#### 单元测试
+
+通过：
+
+```bash
+npx vitest run src/lib/agents/gateway-home.test.ts src/lib/agents/workflow-runtime-hooks.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/agents/department-execution-resolver.test.ts
+```
+
+结果：
+
+1. `4 files passed`
+2. `16 tests passed`
+
+#### 真实 canonical sync 与 smoke
+
+通过：
+
+```bash
+./node_modules/.bin/tsx -e "import { syncAssetsToGlobal } from './src/lib/agents/gateway-home'; syncAssetsToGlobal(); console.log('synced')"
+```
+
+已确认：
+
+1. `~/.gemini/antigravity/gateway/assets/workflows/ai_digest.md` 已切到 `runtimeScriptsDir: ai_digest`
+2. `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py` 存在
+3. `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py` 存在
+4. `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/SKILL.md` 存在，且描述为可选能力入口
+5. 已清理：
+   - `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/scripts`
+   - `~/.gemini/antigravity/skills/baogaoai-ai-digest-generator`
+
+#### 全局脚本真路径 smoke
+
+通过：
+
+```bash
+python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py --date 2026-04-21 --limit 5 --max-pages 1 --out /tmp/ai-digest-context-smoke.json --insecure
+python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py --input /tmp/ai-digest-output-smoke.json --context /tmp/ai-digest-context-smoke-min.json --dry-run --insecure
+```
+
+结果：
+
+1. `fetch_context.py` 返回：
+   - `status = ok`
+   - `targetDate = 2026-04-21`
+   - `articleCount = 5`
+2. `report_digest.py --dry-run` 成功构建 payload：
+   - `digestDate = 2026-04-21`
+   - `articleCount = 2`
+
+## 任务：完成前后端 split 的最后收尾，清掉前端主链残留直连 route 逻辑
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-21
+
+### 本轮目标
+
+在上一轮完成 `web / control-plane / runtime / scheduler` 角色拆分后，继续把前端真实主链里仍残留在 Next route handler 中的业务逻辑收干净，目标是：
+
+1. `web` 在 split 模式下真正退回成壳层
+2. `CEO / Department / Workspace / Settings / Approval` 不再由 `web` 直接执行业务逻辑
+3. `me / models / workspace launch|kill` 这类 runtime 感知接口明确归到 runtime
+
+### 本轮实施
+
+已完成：
+
+1. 新增共享 handler：
+   - `src/server/control-plane/routes/ceo.ts`
+   - `src/server/control-plane/routes/departments.ts`
+   - `src/server/control-plane/routes/workspaces.ts`
+   - `src/server/control-plane/routes/settings.ts`
+   - `src/server/control-plane/routes/approval.ts`
+   - `src/server/runtime/routes/workspaces.ts`
+   - `src/server/runtime/routes/user.ts`
+2. `src/server/control-plane/server.ts`
+   - 新增接管：
+     - `/api/approval*`
+     - `/api/ai-config`
+     - `/api/api-keys*`
+     - `/api/ceo/*`
+     - `/api/departments/*`
+     - `/api/mcp*`
+     - `/api/workspaces`
+     - `/api/workspaces/import`
+     - `/api/workspaces/close`
+3. `src/server/runtime/server.ts`
+   - 新增接管：
+     - `/api/me`
+     - `/api/models`
+     - `/api/workspaces/launch`
+     - `/api/workspaces/kill`
+4. 下列 Next route handler 已改成“proxy 或共享 handler 委派”的薄层：
+   - `src/app/api/approval/*`
+   - `src/app/api/ai-config/route.ts`
+   - `src/app/api/api-keys/*`
+   - `src/app/api/ceo/*`
+   - `src/app/api/departments/*`
+   - `src/app/api/mcp/*`
+   - `src/app/api/me/route.ts`
+   - `src/app/api/models/route.ts`
+   - `src/app/api/workspaces/*`
+
+### 本轮结果
+
+本轮完成后：
+
+1. `AG_ROLE=web` + `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 模式下，首页/设置/CEO/部门/审批/工作区主链不再在 `web` 进程里直接执行
+2. `control-plane` 负责控制面配置与组织接口；`runtime` 负责 runtime 感知接口与 workspace launch/kill
+3. 残留在前端主链 route handler 里的厚业务逻辑已被清掉，`web` 角色只剩页面 ingress、WS ingress 与代理职责
+
+### 本轮验证
+
+#### 自动化测试
+
+通过：
+
+```bash
+npm test -- src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/departments/route.test.ts src/app/api/workspaces/import/route.test.ts src/app/api/ai-config/route.test.ts src/app/api/me/route.test.ts src/app/api/models/route.test.ts src/lib/gateway-role.test.ts
+```
+
+结果：
+
+1. `9 files passed`
+2. `18 tests passed`
+
+#### 构建
+
+通过：
+
+```bash
+npm run build
+```
+
+备注：
+
+1. 仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
+2. 该 warning 不是本轮 split 收尾引入的新问题
+
+#### Split Smoke
+
+已完成三进程分离验证：
+
+1. `control-plane`
+
+```bash
+NODE_ENV=production PORT=3310 AG_ROLE=control-plane AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
+```
+
+2. `runtime`
+
+```bash
+NODE_ENV=production PORT=3311 AG_ROLE=runtime AG_ENABLE_IMPORTERS=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
+```
+
+3. `web`
+
+```bash
+NODE_ENV=production PORT=3312 AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3310 AG_RUNTIME_URL=http://127.0.0.1:3311 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
+```
+
+实测通过：
+
+1. `GET /api/ceo/profile`
+2. `GET /api/ai-config`
+3. `POST /api/workspaces/import`
+4. `GET /api/departments?workspace=...`
+5. `GET /api/me`
+6. `GET /api/models`
+7. `GET /api/approval?summary=true`
+
+另外做了两条无副作用 runtime 接线校验：
+
+1. `POST /api/workspaces/launch` 空 body 返回 `{"error":"Missing workspace path"}`
+2. `POST /api/workspaces/kill` 空 body 返回 `{"error":"Missing workspace"}`
+
+这说明 runtime 路由已经接通，但没有在验收期误启动或误杀真实 Antigravity 进程。
+
+#### 进程回收
+
+已确认：
+
+1. 本轮启动的 `3310 / 3311 / 3312` 监听端口已全部释放
+2. 无残留 `server.ts` split smoke 进程
+
 ## 任务：首页壳层优化 Phase 1：引入真实 Home、按 section 惰性加载、去掉 CEO 自动建会话
 
 **状态**: ✅ 已完成

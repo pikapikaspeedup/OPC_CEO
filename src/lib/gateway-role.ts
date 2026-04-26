@@ -1,4 +1,4 @@
-export type GatewayServerRole = 'all' | 'web' | 'control-plane' | 'runtime' | 'scheduler';
+export type GatewayServerRole = 'all' | 'web' | 'api' | 'control-plane' | 'runtime' | 'scheduler';
 
 type EnvLike = Record<string, string | undefined>;
 
@@ -30,7 +30,7 @@ function trimUrl(value: string | undefined): string | null {
 
 export function getGatewayServerRole(env: EnvLike = process.env): GatewayServerRole {
   const value = env.AG_ROLE?.trim().toLowerCase();
-  if (value === 'web' || value === 'control-plane' || value === 'runtime' || value === 'scheduler' || value === 'all') {
+  if (value === 'web' || value === 'api' || value === 'control-plane' || value === 'runtime' || value === 'scheduler' || value === 'all') {
     return value;
   }
   return 'all';
@@ -53,9 +53,23 @@ export function shouldProxyToRuntime(env: EnvLike = process.env): boolean {
   return (role === 'web' || role === 'control-plane') && !!getRuntimeBaseUrl(env);
 }
 
+export function hasCompleteWebApiBackend(env: EnvLike = process.env): boolean {
+  if (getGatewayServerRole(env) !== 'web') {
+    return true;
+  }
+  return !!getControlPlaneBaseUrl(env) && !!getRuntimeBaseUrl(env);
+}
+
+export function shouldBlockUnconfiguredWebApi(env: EnvLike = process.env): boolean {
+  return getGatewayServerRole(env) === 'web' && !hasCompleteWebApiBackend(env);
+}
+
 export function shouldStartSchedulerServices(env: EnvLike = process.env): boolean {
   const role = getGatewayServerRole(env);
   if (role === 'scheduler') {
+    return normalizeFlag(env.AG_ENABLE_SCHEDULER, true);
+  }
+  if (role === 'api') {
     return normalizeFlag(env.AG_ENABLE_SCHEDULER, true);
   }
   if (role === 'all') {
@@ -64,10 +78,19 @@ export function shouldStartSchedulerServices(env: EnvLike = process.env): boolea
   return false;
 }
 
+export function shouldStartSchedulerCompanionServices(env: EnvLike = process.env): boolean {
+  const role = getGatewayServerRole(env);
+  const legacyDefault = role === 'scheduler' || role === 'all';
+  return normalizeFlag(env.AG_ENABLE_SCHEDULER_COMPANIONS, legacyDefault);
+}
+
 export function shouldStartImporters(env: EnvLike = process.env): boolean {
   const role = getGatewayServerRole(env);
   if (role === 'runtime') {
     return normalizeFlag(env.AG_ENABLE_IMPORTERS, true);
+  }
+  if (role === 'api') {
+    return normalizeFlag(env.AG_ENABLE_IMPORTERS, false);
   }
   if (role === 'all') {
     return normalizeFlag(env.AG_ENABLE_IMPORTERS, true);

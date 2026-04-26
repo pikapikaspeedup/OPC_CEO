@@ -8,7 +8,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../logger';
 import { getRun, updateRun } from './run-registry';
-import { extractAndPersistMemory } from './department-memory';
 import { persistKnowledgeForRun } from '../knowledge';
 import {
   readDeliveryPacket,
@@ -68,9 +67,7 @@ export function finalizeAdvisoryRun(
     if (decision === 'approved' && result) {
       const run = getRun(runId);
       if (run?.workspace) {
-        const wsPath = run.workspace.replace(/^file:\/\//, '');
         try {
-          extractAndPersistMemory(wsPath, runId, result.summary, result.changedFiles);
           persistKnowledgeForRun({
             runId,
             workspaceUri: run.workspace,
@@ -173,12 +170,6 @@ export function finalizeDeliveryRun(
 
     if (finalStatus === 'completed' && run?.workspace) {
       try {
-        extractAndPersistMemory(
-          run.workspace.replace(/^file:\/\//, ''),
-          runId,
-          deliveryPacket?.summary || result.summary,
-          result.changedFiles,
-        );
         persistKnowledgeForRun({
           runId,
           workspaceUri: run.workspace,

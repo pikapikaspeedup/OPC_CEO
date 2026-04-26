@@ -5,6 +5,8 @@ export type {
   CEODecisionRecord,
   CEOFeedbackSignal,
   CEOPendingIssue,
+  CEORoutineAction,
+  CEORoutineActionTarget,
 } from './contracts';
 export {
   appendCEODecision,

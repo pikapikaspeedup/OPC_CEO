@@ -4,8 +4,10 @@ import type { BackendRunConfig } from '../backends/types';
 const mockGetDepartmentCapabilityView = vi.fn();
 const mockGetTemplateWorkflowRefs = vi.fn();
 const mockGetCanonicalWorkflow = vi.fn();
+const mockGetCanonicalSkill = vi.fn();
 const mockGetDepartmentProviderCapabilityProfile = vi.fn();
 const mockGetDepartmentProviderExecutionSupport = vi.fn();
+const mockListGrowthProposals = vi.fn();
 
 vi.mock('./department-capability-registry', () => ({
   getDepartmentCapabilityView: (...args: unknown[]) => mockGetDepartmentCapabilityView(...args),
@@ -16,6 +18,11 @@ vi.mock('./department-capability-registry', () => ({
 
 vi.mock('./canonical-assets', () => ({
   getCanonicalWorkflow: (...args: unknown[]) => mockGetCanonicalWorkflow(...args),
+  getCanonicalSkill: (...args: unknown[]) => mockGetCanonicalSkill(...args),
+}));
+
+vi.mock('../company-kernel/growth-proposal-store', () => ({
+  listGrowthProposals: (...args: unknown[]) => mockListGrowthProposals(...args),
 }));
 
 import {
@@ -83,9 +90,12 @@ describe('department-execution-resolver', () => {
     mockGetDepartmentCapabilityView.mockReset();
     mockGetTemplateWorkflowRefs.mockReset();
     mockGetCanonicalWorkflow.mockReset();
+    mockGetCanonicalSkill.mockReset();
+    mockListGrowthProposals.mockReset();
     mockGetDepartmentProviderCapabilityProfile.mockReset();
     mockGetDepartmentProviderExecutionSupport.mockReset();
     mockGetDepartmentCapabilityView.mockReturnValue(makeCapabilityView());
+    mockListGrowthProposals.mockReturnValue([]);
     mockGetDepartmentProviderCapabilityProfile.mockImplementation((providerId: string) => ({
       providerId,
       runtimeFamily: providerId === 'native-codex' ? 'local-light' : 'claude-engine',
@@ -342,6 +352,50 @@ describe('department-execution-resolver', () => {
     expect(context.promptResolution?.mode).toBe('workflow');
     expect(context.promptResolution?.matchedWorkflowRefs).toEqual(['/ai_bigevent']);
     expect(context.promptResolution?.matchedSkillRefs).toEqual(['baogaoai-ai-bigevent-generator']);
+  });
+
+  it('injects published growth workflow proposals into prompt mode resolution', () => {
+    mockGetDepartmentCapabilityView.mockReturnValue(makeCapabilityView());
+    mockListGrowthProposals.mockReturnValue([{
+      id: 'growth-proposal-1',
+      kind: 'workflow',
+      status: 'published',
+      risk: 'medium',
+      score: 82,
+      workspaceUri: 'file:///tmp/ws',
+      title: 'AI digest operating workflow',
+      summary: 'Use this workflow for AI digest reports',
+      targetName: 'ai-digest-operating-workflow',
+      targetRef: 'workflow:/ai-digest-operating-workflow',
+      content: '# AI DIGEST GROWTH WORKFLOW',
+      sourceRunIds: ['run-1', 'run-2', 'run-3'],
+      sourceCapsuleIds: [],
+      sourceKnowledgeIds: [],
+      sourceCandidateIds: [],
+      evidenceRefs: [],
+      publishedAssetRef: '/tmp/ai-digest-operating-workflow.md',
+      createdAt: '2026-04-26T00:00:00.000Z',
+      updatedAt: '2026-04-26T00:00:00.000Z',
+    }]);
+    mockGetCanonicalWorkflow.mockReturnValue({
+      name: 'ai-digest-operating-workflow',
+      description: '日报',
+      content: '# AI DIGEST GROWTH WORKFLOW',
+      path: '/tmp/ai-digest-operating-workflow.md',
+      baseDir: '/tmp',
+      scope: 'global',
+      source: 'canonical',
+    });
+
+    const context = buildPromptModeProviderExecutionContext('/tmp/ws', {
+      promptText: '请生成 AI digest report',
+    });
+
+    expect(context.resolvedWorkflowRef).toBe('/ai-digest-operating-workflow');
+    expect(context.promptResolution?.mode).toBe('workflow');
+    expect(context.promptResolution?.workflowSuggestion).toBeUndefined();
+    expect(context.resolutionReason).toContain('published growth workflow');
+    expect(context.promptPreamble).toContain('AI DIGEST GROWTH WORKFLOW');
   });
 
   it('prepends department context without mutating the base prompt semantics', () => {

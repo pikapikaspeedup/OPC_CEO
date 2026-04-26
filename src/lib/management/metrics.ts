@@ -1,7 +1,7 @@
 import { readDepartmentConfig } from '../agents/department-capability-registry';
 import { listApprovalRequests } from '../approval/request-store';
 import { listProjects } from '../agents/project-registry';
-import { listScheduledJobsEnriched } from '../agents/scheduler';
+import { getSchedulerRuntimeStatus, listScheduledJobsEnriched } from '../agents/scheduler';
 import { listRunRecords } from '../storage/gateway-db';
 import { listRecentKnowledgeAssets } from '../knowledge';
 import type { DepartmentManagementOverview, ManagementMetric, ManagementOverview, ManagementRisk } from './contracts';
@@ -97,6 +97,7 @@ export function buildManagementOverview(): ManagementOverview {
   const runs = listRunRecords();
   const approvals = listApprovalRequests({ status: 'pending' });
   const schedulers = listScheduledJobsEnriched().filter((job) => job.enabled !== false);
+  const schedulerRuntime = getSchedulerRuntimeStatus(schedulers);
   const knowledge = listRecentKnowledgeAssets(50);
 
   const activeProjects = projects.filter((project) => project.status === 'active').length;
@@ -127,6 +128,7 @@ export function buildManagementOverview(): ManagementOverview {
     blockedProjects,
     pendingApprovals: approvals.length,
     activeSchedulers: schedulers.length,
+    schedulerRuntime,
     recentKnowledge: knowledge.length,
     okrProgress,
     risks,
@@ -139,6 +141,7 @@ export function buildDepartmentManagementOverview(workspaceUri: string): Departm
   const runs = listRunRecords().filter((run) => run.workspace === workspaceUri);
   const approvals = listApprovalRequests({ status: 'pending', workspace: workspaceUri });
   const schedulers = listScheduledJobsEnriched().filter((job) => job.enabled !== false && job.departmentWorkspaceUri === workspaceUri);
+  const schedulerRuntime = getSchedulerRuntimeStatus(schedulers);
   const knowledge = listRecentKnowledgeAssets(50, workspaceUri);
 
   const activeProjects = projects.filter((project) => project.status === 'active').length;
@@ -193,6 +196,7 @@ export function buildDepartmentManagementOverview(workspaceUri: string): Departm
     blockedProjects,
     pendingApprovals: approvals.length,
     activeSchedulers: schedulers.length,
+    schedulerRuntime,
     recentKnowledge: knowledge.length,
     okrProgress,
     risks,

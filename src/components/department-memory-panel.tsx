@@ -6,6 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import type { KnowledgeItem, Workspace } from '@/lib/types';
+import { Brain, BookOpen, GitBranch, Repeat2 } from 'lucide-react';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -17,10 +18,10 @@ interface DepartmentMemoryPanelProps {
   selectedWorkspace?: string;
 }
 
-const CATEGORY_META: Record<MemoryCategory, { icon: string; label: string; desc: string }> = {
-  knowledge: { icon: '📚', label: '知识', desc: '项目经验、代码位置、技术栈' },
-  decisions: { icon: '🎯', label: '决策', desc: '技术选型、架构决策、方案选择' },
-  patterns: { icon: '🔄', label: '模式', desc: '代码模式、最佳实践、常见问题' },
+const CATEGORY_META: Record<MemoryCategory, { icon: typeof BookOpen; label: string; desc: string }> = {
+  knowledge: { icon: BookOpen, label: '知识', desc: '项目经验、代码位置、技术栈' },
+  decisions: { icon: GitBranch, label: '决策', desc: '技术选型、架构决策、方案选择' },
+  patterns: { icon: Repeat2, label: '模式', desc: '代码模式、最佳实践、常见问题' },
 };
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@ export default function DepartmentMemoryPanel({
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
-            <span>🧠</span> 部门记忆
+            <Brain className="h-5 w-5 text-[var(--app-accent)]" /> 部门记忆
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             Agent 执行任务后自动沉淀的知识、决策和模式
@@ -124,7 +125,7 @@ export default function DepartmentMemoryPanel({
               onClick={() => setActiveWorkspace(ws.uri)}
               className={`rounded-lg border px-3 py-1.5 text-xs transition-all cursor-pointer ${
                 activeWorkspace === ws.uri
-                  ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
+                  ? 'border-indigo-500 bg-indigo-500/10 text-indigo-700'
                   : 'border-border text-muted-foreground hover:border-muted-foreground/40'
               }`}
             >
@@ -171,9 +172,10 @@ export default function DepartmentMemoryPanel({
           <TabsList className="w-full">
             {(Object.entries(CATEGORY_META) as [MemoryCategory, typeof CATEGORY_META[MemoryCategory]][]).map(([key, meta]) => {
               const count = memory[key] ? (memory[key].match(/^### /gm)?.length || 0) : 0;
+              const Icon = meta.icon;
               return (
                 <TabsTrigger key={key} value={key} className="text-xs gap-1.5">
-                  <span>{meta.icon}</span>
+                  <Icon className="h-3.5 w-3.5" />
                   <span>{meta.label}</span>
                   {count > 0 && (
                     <span className="ml-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
