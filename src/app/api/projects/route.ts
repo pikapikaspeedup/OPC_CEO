@@ -16,14 +16,14 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { name, goal, templateId, workspace, projectType, skillHint } = body;
+    const { name, goal, templateId, workspace, projectType, skillHint, governance } = body;
 
     if (!name || !goal || !workspace) {
       return NextResponse.json({ error: 'Missing required fields: name, goal, workspace' }, { status: 400 });
     }
 
     const { createProject } = await import('@/lib/agents/project-registry');
-    const project = createProject({ name, goal, templateId, workspace, projectType, skillHint });
+    const project = createProject({ name, goal, templateId, workspace, projectType, skillHint, governance });
     return NextResponse.json(project, { status: 201 });
   } catch (err: unknown) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 });

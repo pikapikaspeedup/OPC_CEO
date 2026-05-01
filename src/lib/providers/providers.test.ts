@@ -160,14 +160,13 @@ describe('getExecutor', () => {
     expect(executor.providerId).toBe('codex');
   });
 
-  it('returns NativeCodexExecutor for "native-codex"', () => {
-    const executor = getExecutor('native-codex');
-    expect(executor.providerId).toBe('native-codex');
-  });
-
   it('returns AntigravityExecutor for "antigravity"', () => {
     const executor = getExecutor('antigravity');
     expect(executor.providerId).toBe('antigravity');
+  });
+
+  it('rejects native-codex because the direct executor path has been removed', () => {
+    expect(() => getExecutor('native-codex' as never)).toThrow('Unknown provider');
   });
 
   it('returns singleton instances', () => {

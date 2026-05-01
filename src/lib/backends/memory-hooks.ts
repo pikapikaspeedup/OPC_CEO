@@ -1,4 +1,4 @@
-import type { ProviderId } from '../providers';
+import type { AgentBackendId } from '../providers';
 import type {
   BackendRunConfig,
   CancelledAgentEvent,
@@ -11,13 +11,13 @@ type TerminalAgentEvent = CompletedAgentEvent | FailedAgentEvent | CancelledAgen
 
 export interface BackendMemoryHook {
   id: string;
-  providers?: ProviderId[];
-  beforeRun?(context: { providerId: ProviderId; config: BackendRunConfig }):
+  providers?: AgentBackendId[];
+  beforeRun?(context: { providerId: AgentBackendId; config: BackendRunConfig }):
     | Partial<MemoryContext>
     | void
     | Promise<Partial<MemoryContext> | void>;
   afterRun?(context: {
-    providerId: ProviderId;
+    providerId: AgentBackendId;
     config: BackendRunConfig;
     event: TerminalAgentEvent;
   }): void | Promise<void>;
@@ -33,7 +33,7 @@ if (process.env.NODE_ENV !== 'production') {
   globalForMemoryHooks.__AGENT_MEMORY_HOOKS__ = memoryHooks;
 }
 
-function matchesProvider(hook: BackendMemoryHook, providerId: ProviderId): boolean {
+function matchesProvider(hook: BackendMemoryHook, providerId: AgentBackendId): boolean {
   return !hook.providers || hook.providers.includes(providerId);
 }
 
@@ -75,7 +75,7 @@ export function clearMemoryHooks(): void {
 }
 
 export async function applyBeforeRunMemoryHooks(
-  providerId: ProviderId,
+  providerId: AgentBackendId,
   config: BackendRunConfig,
 ): Promise<BackendRunConfig> {
   let nextConfig = { ...config };
@@ -96,7 +96,7 @@ export async function applyBeforeRunMemoryHooks(
 }
 
 export async function applyAfterRunMemoryHooks(
-  providerId: ProviderId,
+  providerId: AgentBackendId,
   config: BackendRunConfig,
   event: TerminalAgentEvent,
 ): Promise<void> {

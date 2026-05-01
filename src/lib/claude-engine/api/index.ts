@@ -1,5 +1,5 @@
 export * from './types';
-export { streamQuery, query, APIClientError } from './client';
+export { APIClientError } from './api-client-error';
 export { streamQueryWithRetry, detectProvider, FallbackTriggeredError } from './retry';
 export { toolToAPISchema, toolsToAPISchemas } from './tool-schema';
 export { UsageTracker, MODEL_PRICING } from './usage';
@@ -37,15 +37,6 @@ export {
   type TokenStorage,
   type RefreshResult,
 } from './auth';
-
-// Multi-provider exports
-export { streamQueryOpenAI, isOpenAIThinkingEnabled } from './openai';
-export { streamQueryGemini } from './gemini';
-export { streamQueryGrok } from './grok';
-export { streamQueryNativeCodex } from './native-codex';
-export { resolveOpenAIModel } from './openai/modelMapping';
-export { resolveGeminiModel } from './gemini/modelMapping';
-export { resolveGrokModel } from './grok/modelMapping';
 
 // Provider fallback
 export {

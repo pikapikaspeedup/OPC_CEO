@@ -126,6 +126,38 @@ describe('department-capability-registry', () => {
     );
   });
 
+  it('injects bound workspaces and context documents into the runtime contract', () => {
+    const sharedDocs = fs.mkdtempSync(path.join(os.tmpdir(), 'dept-capability-shared-'));
+    fs.writeFileSync(
+      path.join(workspace, '.department', 'config.json'),
+      JSON.stringify({
+        name: 'AI 情报中心',
+        type: 'research',
+        skills: [],
+        okr: null,
+        workspaceBindings: [
+          { workspaceUri: `file://${workspace}`, role: 'primary', writeAccess: true },
+          { workspaceUri: `file://${sharedDocs}`, role: 'context', writeAccess: false },
+        ],
+        executionPolicy: {
+          defaultWorkspaceUri: `file://${workspace}`,
+          contextDocumentPaths: ['docs/brief.md'],
+        },
+      }),
+      'utf-8',
+    );
+
+    const view = getDepartmentCapabilityView(workspace);
+
+    expect(view.runtimeContract.additionalWorkingDirectories).toContain(sharedDocs);
+    expect(view.runtimeContract.readRoots).toEqual(
+      expect.arrayContaining([sharedDocs, path.join(workspace, 'docs/brief.md')]),
+    );
+    expect(view.runtimeContract.writeRoots).not.toContain(sharedDocs);
+
+    fs.rmSync(sharedDocs, { recursive: true, force: true });
+  });
+
   it('collects workflow refs from templates', () => {
     mockGetTemplate.mockReturnValue({
       id: 'morning-brief-template',

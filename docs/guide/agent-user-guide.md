@@ -64,6 +64,19 @@ curl -X POST http://localhost:3000/api/projects \
   }'
 ```
 
+如果要把项目纳入平台工程部观察并允许自动提案，可以在创建时附带：
+
+```json
+{
+  "governance": {
+    "platformEngineering": {
+      "observe": true,
+      "allowProposal": true
+    }
+  }
+}
+```
+
 Project 适合：
 
 1. 多阶段交付
@@ -83,11 +96,18 @@ npm run desktop:dev  # 打开 Tauri 桌面壳，加载本机 3000
 
 1. 进入 CEO Office。
 2. 点击“新建部门”。
-3. 选择 macOS 本机文件夹。
-4. 系统调用 `/api/workspaces/import` 注册 workspace。
-5. 自动打开部门配置弹窗，继续补齐部门名称、类型、skills、OKR 和运行偏好。
+3. 先选择一个主目录，系统调用 `/api/workspaces/import` 注册主 workspace。
+4. 自动打开部门配置弹窗。
+5. 在弹窗里继续补齐部门名称、类型、skills、OKR、运行偏好。
+6. 如有需要，再为该部门继续绑定更多执行目录、上下文目录和潜在上下文文档。
 
 这个流程不会启动 Antigravity，也不会触发 Language Server；它只是把目录加入 OPC workspace catalog。后续是否走 Antigravity / Codex Native / Codex CLI，仍由部门配置和执行 provider 决定。
+
+补充说明：
+
+1. Web 模式下不会再弹浏览器原生 `prompt`。
+2. 当前改为产品内路径输入对话框。
+3. 如果需要系统原生文件夹选择器，仍建议从 Tauri 桌面壳进入。
 
 ---
 
@@ -112,7 +132,7 @@ npm run desktop:dev  # 打开 Tauri 桌面壳，加载本机 3000
 | `SystemImprovementSignal` | 性能、UX、测试失败、运行错误、用户反馈等系统改进信号 |
 | `SystemImprovementProposal` | 带风险分级、实施计划、测试计划、回滚计划和审批状态的系统改进 proposal |
 | `Project` | 多个 Run 的容器，承载 pipelineState、journal、checkpoint、deliverables |
-| `Department` | 一个 workspace 对应的组织单元，带 provider、skills、token quota 等配置 |
+| `Department` | 一个组织单元，可绑定一个或多个 workspace，带 provider、skills、token quota、执行目录编排和上下文文档配置 |
 
 当前最重要的理解是：
 
@@ -143,8 +163,11 @@ Company Kernel 约束：
 15. 候选记忆详情可以直接触发 GrowthProposal 生成；KnowledgeAsset 详情会展示 linked GrowthProposal，避免增长提案和来源证据脱节。
 16. Company Loop 只处理 Top-N agenda，默认每轮最多 autonomous dispatch 1 个；`approve` 不会被自动批准，高风险 dispatch 只进 digest / approval。
 17. Scheduler 内置 company daily/weekly loop 使用 cron job，不创建 5 秒 interval，不启动第二套 worker。
-18. SystemImprovement 只生成 signal / proposal / approval / test evidence / observe；第一版没有 auto merge、auto push、auto deploy API。
+18. SystemImprovement 在 proposal 被 approve 后，会自动在内置平台工程部创建受控开发 Project，并派发 `development-template-1` 首跑；proposal 之后会沿着 `approved -> in-progress -> testing -> ready-to-merge` 随平台工程项目状态和测试证据自动收口；第一版仍然没有 auto merge、auto push、auto deploy API。
 19. Settings 的 `Autonomy 预算` 是自治策略入口，用于维护组织级 budget、部门默认 budget、loop policy、并发、失败预算、operation cooldown 与 high-risk approval threshold。
+20. 平台工程部是内置 Department 实例，workspace 位于 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`；它继续复用 Project / Company Kernel / Approval / Scheduler，不引入第二套自进化机制。
+21. 平台工程部项目默认开启 `governance.platformEngineering.observe = true` 与 `allowProposal = true`；这类项目出现 `failed / blocked / timeout` run 时，系统会自动生成 `SystemImprovementSignal`，并可继续自动生成 proposal 给 CEO。
+22. `User Story` 中的 `[不支持]` 场景会被同步成平台工程部的长期改进信号池；第一版默认不批量自动生成 proposal，避免直接淹没 CEO 决策面。
 
 ---
 
@@ -361,6 +384,11 @@ GrowthProposal 生成口径：
 | `testEvidence` | 已实际执行的测试证据 |
 | `approvalRequestId` | 高风险/critical proposal 的审批请求；未审批前 passed test evidence 不会把状态推进到 `ready-to-merge` |
 | `metadata.approvalStatus` / `metadata.approvedAt` | 持久审批事实；已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 `ready-to-merge` |
+| `metadata.improvementProjectId` / `metadata.improvementRunId` | approve 后自动创建的平台工程 Project 与首个执行 Run |
+| `metadata.improvementTemplateId` / `metadata.launchStatus` | 自动执行所选模板与当前派发状态 |
+| `exitEvidence.project` / `latestRun` | 当前平台工程 Project 与最新 Run 的执行快照 |
+| `exitEvidence.testing` | 测试计划、已提交证据、最近一次测试状态 |
+| `exitEvidence.mergeGate` | 准出 gate 汇总，明确 approval / delivery / tests / rollback 是否齐备 |
 
 ### 4.4 审批
 
@@ -447,12 +475,23 @@ POST /api/scheduler/jobs/:id/trigger
 
 | 字段 | 说明 |
 |------|------|
+| `departmentId` | 部门稳定 ID，同一部门会镜像写入多个已绑定 workspace |
 | `name` | 部门名 |
 | `type` | `build` / `research` / `operations` / `ceo` |
 | `templateIds` | 该部门允许使用的模板 |
 | `skills` | 技能声明 |
 | `provider` | 默认 provider |
 | `tokenQuota` | 每日 / 每月额度与申请策略 |
+| `workspaceBindings` | 绑定的 workspace 列表，`role` 支持 `primary` / `execution` / `context` |
+| `executionPolicy.defaultWorkspaceUri` | 默认主执行目录 |
+| `executionPolicy.contextDocumentPaths` | 任务执行时附加的潜在上下文文档路径 |
+
+当前 Department 不再等于“单一 workspace”，而是：
+
+1. 至少有一个 `primary` workspace
+2. 可以附加多个 `execution` workspace
+3. 可以附加多个 `context` workspace
+4. 任务默认只在主执行目录写入，其他目录更适合作为补充上下文
 
 相关 API：
 
@@ -463,6 +502,30 @@ GET /api/departments/quota
 GET /api/departments/memory
 POST /api/departments/sync
 ```
+
+说明：
+
+1. `GET /api/departments` 会返回归一化后的 `workspaceBindings` 与 `executionPolicy`
+2. `PUT /api/departments` 会把同一份部门配置镜像写入所有已绑定 workspace 的 `.department/config.json`
+
+内置平台工程部补充约束：
+
+1. `departmentId = department:platform-engineering`
+2. workspace 固定在 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`
+3. 基础记忆放在 `.department/memory/shared|codex|claude-engine/`
+4. 平台工程部自身 workspace 创建出来的项目，会默认开启平台工程治理字段
+
+### 6.1 Project 治理字段
+
+`Project` 当前新增平台工程治理字段：
+
+| 字段 | 含义 |
+|------|------|
+| `governance.platformEngineering.observe` | 是否纳入平台工程部观察 |
+| `governance.platformEngineering.allowProposal` | 是否允许平台工程部基于真实运行自动生成系统改进 proposal |
+| `governance.platformEngineering.departmentId` | 当前治理归属的稳定部门 ID |
+| `governance.platformEngineering.source` | 字段来源，当前支持 `default` / `manual` / `proposal-created` |
+| `governance.platformEngineering.updatedAt` | 最近一次治理配置更新时间 |
 
 CEO 命令的当前职责：
 
@@ -506,7 +569,7 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 它既支持：
 
 1. Antigravity 真正的 Cascade conversation
-2. Gateway 本地 provider conversation
+2. Gateway 本地 conversation
 
 ### Agent Run
 
@@ -524,21 +587,120 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 
 ---
 
-## 8. Provider 模型
+## 8. AI Provider 与本机执行工具
+
+### 8.0 AI Provider
 
 | Provider | 适用场景 | 说明 |
 |----------|----------|------|
-| `antigravity` | IDE 原生路径 | 走 language server / gRPC |
-| `codex` | 轻量本地任务 | 当前更适合 light task |
-| `native-codex` | 无 IDE 的本地/云执行 | Department 主链已走 Claude Engine runtime |
+| `antigravity` | IDE 原生路径 | 走 language server / gRPC；这是当前 `Native` 的真实语义 |
+| `native-codex` | 无 IDE 的本地/云执行 | Department 主链和本地 conversation 都已走 Claude Engine runtime；文本 / tool 主线 transport 固定为 `pi-ai` |
 | `claude-api` | 进程内 API 执行 | 由 Gateway 自管 transcript 与工具链 |
-| `openai-api` / `gemini-api` / `grok-api` / `custom` | 云端 provider | 统一接到 Department runtime contract |
+| `openai-api` / `gemini-api` / `grok-api` / `custom` | 云端 provider | 统一接到 Department runtime contract；transport/profile 由组织级配置决定 |
+
+### 8.0.1 本机执行工具
+
+| Tool | 适用场景 | 说明 |
+|------|----------|------|
+| `codex` | 本机 coding / shell / 文件改动 | 由 Claude Engine `ExecutionTool` 统一调用；底层可按 session 续接 |
+| `claude-code` | 本机 Claude Code CLI 执行 | 同样走 `ExecutionTool` 合同，不参与 Provider 选择 |
 
 当前实现边界：
 
 1. `native-codex` 的 Department / `agent-runs` 主链已经走新 runtime
-2. 本地 conversation / chat shell 仍保留旧本地 executor 路径
-3. `codex` 仍偏向 light/local 路径，高约束任务会被 capability-aware routing 回退
+2. `native-codex` 的本地 conversation 也已统一走 `api-provider-conversations` / Claude Engine transcript
+3. `codex / claude-code` 现在属于执行工具层，不再作为 provider fallback 轨道暴露；是否调用它们由 Claude Engine toolset 与运行时策略决定
+4. `Native` 不再表示“我们手写的一般 provider transport”；它只保留给 `Antigravity IDE/runtime` 这类平台专有路径
+
+### 8.1 Provider transport 与模型目录
+
+组织级配置现在除了 `defaultProvider / layers / scenes`，还支持 `providerProfiles`：
+
+```json
+{
+  "defaultProvider": "antigravity",
+  "activeCustomProviderId": "baogaoai-glm",
+  "customProviders": [
+    {
+      "id": "baogaoai-glm",
+      "name": "BaogaoAI GLM",
+      "baseUrl": "https://new.baogaoai.com/v1",
+      "defaultModel": "glm-4-flash-250414"
+    }
+  ],
+  "providerProfiles": {
+    "antigravity": { "transport": "native", "authMode": "runtime" },
+    "native-codex": {
+      "transport": "pi-ai",
+      "authMode": "codex-oauth",
+      "supportsImageGeneration": true,
+      "enableImageGeneration": true,
+      "imageGenerationModel": "gpt-5.5"
+    },
+    "openai-api": {
+      "transport": "pi-ai",
+      "authMode": "api-key",
+      "supportsImageGeneration": true,
+      "enableImageGeneration": true,
+      "imageGenerationModel": "gpt-image-1"
+    }
+  }
+}
+```
+
+使用规则：
+
+1. `defaultProvider / layers / scenes` 只决定“业务路由到哪个 provider/model”。
+2. `providerProfiles` 负责 provider 的认证与能力细节；除 `antigravity` 外，API-backed provider 在 Claude Engine 主线上固定走 `pi-ai`。
+3. `providerProfiles[provider].enabled = false` 表示“从当前系统移除这个已检测到的本机 Provider”，不会删除机器上的 CLI / OAuth 登录态。
+4. `customProviders[]` 保存多个兼容端点；运行时只把 `activeCustomProviderId` 对应的接入物化到 `customProvider`，保持旧模块兼容。
+5. `Settings -> Provider 配置` 与 `Scene 覆盖` 现在都会消费 provider model catalog。
+6. 模型目录优先来自 `pi-ai registry`、`custom /v1/models` 或运行时发现，无法发现时才回退到手动模型。
+7. 遗留 `codex / claude-code` 配置值会在保存和加载时自动归一为 `native-codex`；CLI coder 不再属于组织级 Provider 配置。
+8. Claude Engine 的 `coding / full` toolset 会自动挂载统一的 `ExecutionTool`；它对上只暴露“列出 / 调用执行工具”，单轮与多轮差异由底层 executor 自己处理。
+
+### 8.2 Settings 模型选择器
+
+`Settings` 里的默认模型、layer 模型、scene 模型不再只靠手填字符串；并且首次接入 provider 的主旅程已经收敛到同一页。
+
+当前行为：
+
+1. `Settings -> Provider 配置` 现在收敛成两段主旅程：
+   - `AI 接入`：添加或管理可用接入
+   - `默认配置`：选择默认 Provider / 默认模型，并在同一卡里展开 `高级设置`
+2. `AI 接入` 放在最上面：
+   - API provider 直接在这里填写 `API Key`、测试连接、保存接入
+   - 自定义服务在这里填写 `name / baseUrl / apiKey / defaultModel`
+   - 本机已检测到的 `native-codex` 会直接出现在“已接入”列表
+   - `codex / claude-code` 会出现在单独的“本机执行工具”区块，只表示运行时可调用，不参与 Provider 选择
+   - 本机 Provider 支持 `移除 / 恢复`，但只影响当前系统显示，不会删除本机登录态
+   - 不再要求用户在 `Provider 配置` 和 `凭证中心` 两个入口之间来回跳
+3. `默认配置` 只负责“使用哪一个”：
+   - 默认 Provider
+   - 默认模型
+   - 同卡内折叠的 `高级设置`
+4. 默认配置首屏不再重复露出 `刷新模型`；模型目录会随 provider 变化自动读取，主页面只保留选择行为。
+5. 模型目录仍按内部来源工作：
+   - `pi-ai registry`
+   - `remote-discovery`
+   - `manual`
+6. 图像 Model 选择器会按 capability 过滤模型；例如 `native-codex` 当前会显示 `GPT-5.2 / GPT-5.4 Mini / GPT-5.5` 这类已标记图像能力的模型。
+7. `custom` provider 在 `baseUrl/apiKey` 缺失时，允许继续手动输入 `defaultModel` 作为目录回退。
+8. `native-codex / claude-api / openai-api / gemini-api / grok-api / custom` 的运行时主链固定走 `pi-ai` transport；transport 属于底层实现细节，当前不再在 Settings 主界面暴露。
+9. `图像生成` 与 `按层覆盖` 统一收进 `默认配置` 卡内的折叠 `高级设置`。首次接入 provider 时，用户只需要完成 `添加接入 -> 选择默认 Provider / 模型 -> 保存默认配置`。
+10. `AI 接入` 现在有完整的已接入管理闭环：
+   - 已保存的 API Provider 可以 `编辑 / 复测 / 删除`
+   - 兼容端点可以保存多个接入，并且支持 `设为当前 / 编辑 / 复测 / 删除`
+   - 不完整的兼容端点草稿会显示为 `待完成`，不会被计入已接入，也不会进入默认 Provider 选择。
+
+### 8.3 Knowledge 与图像生成
+
+同一套 provider routing 已经延伸到非对话型 AI 动作：
+
+1. `POST /api/knowledge/:id/summary` 通过 `knowledge-summary` scene 生成并回写 Knowledge 摘要。
+2. `Settings -> 图像生成` 通过 `POST /api/provider-image-generation` 对已配置的图像 provider 做 smoke test；当前已接通 `native-codex`、`openai-api`、`custom`。
+3. `native-codex` 图像链通过 Codex subscription auth 走 Responses `image_generation` tool；如果 UI 传入较小尺寸，provider 层会自动提升到 `1024x1024` 以满足上游最小像素预算。
+4. `knowledge-summary / knowledge-image` scene 继续复用同一份 provider model catalog，不存在独立的 Knowledge provider 配置页。
 
 ---
 
@@ -582,6 +744,11 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 5. `grok-api`
 6. `custom`
 
+补充边界：
+
+1. `coding / full` toolset 会在 Claude Engine session 上附加 `ExecutionTool`
+2. `codex / claude-code` 通过这层进入运行时，不再单独作为 provider/backend 出现在组织级配置平面
+
 ---
 
 ## 10. 关键路径
@@ -595,6 +762,7 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 | Run 历史 | `~/.gemini/antigravity/gateway/runs/{runId}/run-history.jsonl` |
 | 部门配置 | `workspace/.department/config.json` |
 | AI Provider 配置 | `~/.gemini/antigravity/ai-config.json` |
+| Provider 模型目录缓存 | `~/.gemini/antigravity/provider-model-catalog.json` |
 
 构建期配置隔离：
 

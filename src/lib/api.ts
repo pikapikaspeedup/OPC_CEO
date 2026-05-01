@@ -48,6 +48,7 @@ import type {
   SystemImprovementProposalFE,
   SystemImprovementProposalStatusFE,
   SystemImprovementRiskFE,
+  SystemImprovementLaunchResultFE,
   SystemImprovementSeverityFE,
   SystemImprovementSignalFE,
   SystemImprovementSignalSourceFE,
@@ -519,15 +520,42 @@ export const api = {
     }),
 
   // Knowledge Items
-  knowledge: (params?: { workspace?: string; category?: string; limit?: number }) => {
+  knowledge: (params?: {
+    workspace?: string;
+    category?: string;
+    status?: string;
+    scope?: 'department' | 'organization';
+    tag?: string;
+    q?: string;
+    sort?: 'recent' | 'created' | 'updated' | 'alpha' | 'reuse';
+    limit?: number;
+  }) => {
     const search = new URLSearchParams();
     if (params?.workspace) search.set('workspace', params.workspace);
     if (params?.category) search.set('category', params.category);
+    if (params?.status) search.set('status', params.status);
+    if (params?.scope) search.set('scope', params.scope);
+    if (params?.tag) search.set('tag', params.tag);
+    if (params?.q) search.set('q', params.q);
+    if (params?.sort) search.set('sort', params.sort);
     if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
     const qs = search.toString();
     return fetchJson<KnowledgeItem[]>(`/api/knowledge${qs ? `?${qs}` : ''}`);
   },
   knowledgeDetail: (id: string) => fetchJson<KnowledgeDetail>(`/api/knowledge/${encodeURIComponent(id)}`),
+  createKnowledge: (data: {
+    title?: string;
+    summary?: string;
+    content?: string;
+    workspaceUri?: string;
+    category?: string;
+    tags?: string[];
+  }) =>
+    fetchJson<KnowledgeDetail>(`/api/knowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
   updateKnowledge: (id: string, data: { title?: string; summary?: string }) =>
     fetchJson<{ ok: boolean }>(`/api/knowledge/${encodeURIComponent(id)}`, {
       method: 'PUT',
@@ -542,6 +570,11 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     }),
+  generateKnowledgeSummary: (id: string) =>
+    fetchJson<{ ok: boolean; summary: string; provider: string; model?: string; source: string; scene: string }>(
+      `/api/knowledge/${encodeURIComponent(id)}/summary`,
+      { method: 'POST' },
+    ),
 
   // Company Kernel
   companyRunCapsules: (params?: {
@@ -947,7 +980,7 @@ export const api = {
       method: 'POST',
     }),
   approveSystemImprovementProposal: (id: string) =>
-    fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/approve`, {
+    fetchJson<{ proposal: SystemImprovementProposalFE; launch: SystemImprovementLaunchResultFE | null }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
     }),
   rejectSystemImprovementProposal: (id: string, reason?: string) =>
@@ -1161,7 +1194,7 @@ export const api = {
     }),
 
   // Project Management
-  createProject: (data: { name: string; goal: string; templateId?: string; workspace: string; projectType?: 'coordinated' | 'adhoc' | 'strategic'; skillHint?: string }) =>
+  createProject: (data: { name: string; goal: string; templateId?: string; workspace: string; projectType?: 'coordinated' | 'adhoc' | 'strategic'; skillHint?: string; governance?: Project['governance'] }) =>
     fetchJson<Project>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -4,6 +4,20 @@ export { askUserQuestionTool } from "./ask-user";
 export { bashTool } from "./bash";
 export { configTool, getConfigValue, setConfigValue, resetConfig, getConfigSchemas } from "./config";
 export type { ConfigSchema } from "./config";
+export {
+	executionTool,
+	createDefaultExecutionToolRuntime,
+	getExecutionToolRuntime,
+	setExecutionToolRuntime,
+	bindExecutionToolRuntime,
+	unbindExecutionToolRuntime,
+} from "./execution-tool";
+export type {
+	AvailableExecutionTool,
+	ExecutionToolRunRequest,
+	ExecutionToolRunResult,
+	ExecutionToolRuntime,
+} from "./execution-tool";
 export { fileEditTool } from "./file-edit";
 export { fileReadTool } from "./file-read";
 export { fileWriteTool } from "./file-write";

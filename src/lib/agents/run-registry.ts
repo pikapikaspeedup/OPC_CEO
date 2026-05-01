@@ -24,6 +24,8 @@ import { createLogger } from '../logger';
 import { appendRunHistoryEntry } from './run-history';
 import { listRunRecords, syncRunArtifactsToDeliverables, upsertRunRecord } from '../storage/gateway-db';
 import { observeRunCapsuleForAgenda } from '../company-kernel/operating-integration';
+import { observeRunFailureForPlatformEngineering } from '../company-kernel/platform-engineering-observer';
+import { syncSystemImprovementProposalsForRun } from '../company-kernel/self-improvement-runtime-state';
 import { finalizeBudgetForTerminalRun } from '../company-kernel/budget-gate';
 import { recordRunTerminalForCircuitBreakers } from '../company-kernel/circuit-breaker';
 import { buildRunCapsuleFromRun } from '../company-kernel/run-capsule';
@@ -408,6 +410,14 @@ export function updateRun(
     } catch (err: unknown) {
       log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to update run circuit breakers');
     }
+    try {
+      observeRunFailureForPlatformEngineering(run);
+    } catch (err: unknown) {
+      log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to observe platform engineering signal from terminal run');
+    }
+    void syncSystemImprovementProposalsForRun(run).catch((err: unknown) => {
+      log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to sync system improvement runtime state from terminal run');
+    });
   }
 
   if (updates.status && updates.status !== prevStatus) {

@@ -3,6 +3,8 @@ import {
   getSystemImprovementProposal,
   patchSystemImprovementProposal,
 } from './self-improvement-store';
+import { ensureSystemImprovementProjectLaunched } from './self-improvement-execution';
+import { syncSystemImprovementProposalRuntimeState } from './self-improvement-runtime-state';
 
 function buildApprovalMetadata(input: {
   existingMetadata?: Record<string, unknown>;
@@ -76,7 +78,10 @@ export async function ensureSystemImprovementApprovalRequest(id: string) {
   }) || proposal;
 }
 
-export function approveSystemImprovementProposal(id: string) {
+export async function approveSystemImprovementProposal(
+  id: string,
+  options: { launchExecution?: boolean } = {},
+) {
   const existing = getSystemImprovementProposal(id);
   const proposal = patchSystemImprovementProposal(id, {
     status: 'approved',
@@ -88,7 +93,17 @@ export function approveSystemImprovementProposal(id: string) {
   if (!proposal) {
     throw new Error(`System improvement proposal not found: ${id}`);
   }
-  return proposal;
+  if (!options.launchExecution) {
+    return {
+      proposal: await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal }) || proposal,
+      launch: null,
+    };
+  }
+  const launched = await ensureSystemImprovementProjectLaunched(proposal.id);
+  return {
+    ...launched,
+    proposal: await syncSystemImprovementProposalRuntimeState(launched.proposal.id, { proposal: launched.proposal }) || launched.proposal,
+  };
 }
 
 export function rejectSystemImprovementProposal(id: string, reason?: string) {

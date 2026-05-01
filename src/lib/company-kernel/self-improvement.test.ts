@@ -50,7 +50,7 @@ describe('guarded self-improvement kernel', () => {
     expect(modules.risk.evaluateSystemImprovementRisk({
       affectedFiles: ['src/lib/agents/scheduler.ts'],
     }).risk).toBe('high');
-  });
+  }, 15_000);
 
   it('generates proposals with evidence gate, test plan, rollback plan, and approval requirement', async () => {
     const modules = await loadModules();
@@ -141,7 +141,7 @@ describe('guarded self-improvement kernel', () => {
     expect(testedBeforeApproval?.status).toBe('approval-required');
 
     const approved = await modules.approval.approveSystemImprovementProposal(proposal.id);
-    expect(approved?.status).toBe('approved');
+    expect(approved.proposal.status).toBe('approved');
 
     const testedAfterApproval = modules.store.attachSystemImprovementTestEvidence(proposal.id, {
       command: 'npx tsc --noEmit --pretty false',
@@ -173,9 +173,9 @@ describe('guarded self-improvement kernel', () => {
     });
 
     const approved = await modules.approval.approveSystemImprovementProposal(proposal.id);
-    expect(approved.status).toBe('approved');
-    expect(approved.metadata?.approvalStatus).toBe('approved');
-    expect(typeof approved.metadata?.approvedAt).toBe('string');
+    expect(approved.proposal.status).toBe('approved');
+    expect(approved.proposal.metadata?.approvalStatus).toBe('approved');
+    expect(typeof approved.proposal.metadata?.approvedAt).toBe('string');
 
     const failed = modules.store.attachSystemImprovementTestEvidence(proposal.id, {
       command: 'npx vitest run src/lib/agents/scheduler.test.ts',

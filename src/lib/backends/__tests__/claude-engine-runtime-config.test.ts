@@ -61,6 +61,7 @@ vi.mock('../../logger', () => ({
 
 import { ClaudeEngineAgentBackend } from '../claude-engine-backend';
 import type { BackendRunConfig } from '../types';
+import { loadAIConfig } from '../../providers/ai-config';
 
 function makeConfig(overrides: Record<string, unknown> = {}): BackendRunConfig {
   return {
@@ -97,6 +98,81 @@ describe('ClaudeEngine runtime config forwarding', () => {
       toolContext: expect.objectContaining({
         workspacePath: '/tmp/claude-engine-runtime-config',
         additionalWorkingDirectories,
+      }),
+    }));
+
+    await session.cancel('stop');
+  });
+
+  it('forwards provider transport into ClaudeEngine model config', async () => {
+    vi.mocked(loadAIConfig).mockReturnValue({
+      defaultProvider: 'native-codex',
+      providerProfiles: {
+        'openai-api': { transport: 'pi-ai' },
+      },
+    });
+
+    const backend = new ClaudeEngineAgentBackend('openai-api');
+    const session = await backend.start(makeConfig({ model: 'gpt-5-mini' }));
+
+    expect(engineOptions).toHaveLength(1);
+    expect(engineOptions[0]).toEqual(expect.objectContaining({
+      model: expect.objectContaining({
+        provider: 'openai',
+        providerId: 'openai-api',
+        transport: 'pi-ai',
+      }),
+    }));
+
+    await session.cancel('stop');
+  });
+
+  it('forwards native-codex transport into ClaudeEngine model config', async () => {
+    vi.mocked(loadAIConfig).mockReturnValue({
+      defaultProvider: 'native-codex',
+      providerProfiles: {
+        'native-codex': { transport: 'pi-ai' },
+      },
+    });
+
+    const backend = new ClaudeEngineAgentBackend('native-codex');
+    const session = await backend.start(makeConfig({ model: 'gpt-5.4' }));
+
+    expect(engineOptions).toHaveLength(1);
+    expect(engineOptions[0]).toEqual(expect.objectContaining({
+      model: expect.objectContaining({
+        provider: 'native-codex',
+        providerId: 'native-codex',
+        transport: 'pi-ai',
+      }),
+    }));
+
+    await session.cancel('stop');
+  });
+
+  it('preserves custom provider identity for transport-aware routing', async () => {
+    vi.mocked(loadAIConfig).mockReturnValue({
+      defaultProvider: 'custom',
+      customProvider: {
+        baseUrl: 'https://proxy.example.com',
+        apiKey: 'proxy-key',
+        defaultModel: 'deepseek-chat',
+      },
+      providerProfiles: {
+        custom: { transport: 'pi-ai' },
+      },
+    });
+
+    const backend = new ClaudeEngineAgentBackend('custom');
+    const session = await backend.start(makeConfig({ model: 'deepseek-chat' }));
+
+    expect(engineOptions).toHaveLength(1);
+    expect(engineOptions[0]).toEqual(expect.objectContaining({
+      model: expect.objectContaining({
+        provider: 'custom',
+        providerId: 'custom',
+        transport: 'pi-ai',
+        baseUrl: 'https://proxy.example.com',
       }),
     }));
 

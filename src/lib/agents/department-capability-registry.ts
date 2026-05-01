@@ -3,7 +3,12 @@ import path from 'path';
 
 import { ensureBuiltInAgentBackends, getAgentBackend } from '../backends';
 import type { AgentBackendCapabilities } from '../backends/types';
-import type { ProviderId } from '../providers/types';
+import {
+  getDepartmentContextDocumentPaths,
+  getDepartmentWorkspaceBindings,
+  normalizeDepartmentConfig,
+} from '../department-config';
+import type { AgentBackendId } from '../providers/types';
 import type { DepartmentConfig, DepartmentSkill } from '../types';
 import type {
   DepartmentContract,
@@ -38,7 +43,7 @@ export interface DepartmentCapabilityView {
 }
 
 export interface DepartmentProviderCapabilityProfile {
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   runtimeFamily: 'ide-backed' | 'claude-engine' | 'local-light';
   departmentMainline: 'native' | 'claude-engine' | 'not-applicable';
   runtimeCapabilities: DepartmentRuntimeCapabilities;
@@ -55,7 +60,7 @@ type ExecutionClassRequirement = {
 };
 
 export interface DepartmentProviderExecutionSupport {
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   executionClass: DepartmentExecutionClass;
   supported: boolean;
   missingCapabilities: DepartmentRuntimeCapabilityKey[];
@@ -122,7 +127,7 @@ const EXECUTION_CLASS_REQUIREMENTS: Record<DepartmentExecutionClass, ExecutionCl
 };
 
 function createStaticProviderCapabilityProfile(
-  providerId: ProviderId,
+  providerId: AgentBackendId,
   options: {
     runtimeFamily: DepartmentProviderCapabilityProfile['runtimeFamily'];
     departmentMainline?: DepartmentProviderCapabilityProfile['departmentMainline'];
@@ -141,7 +146,7 @@ function createStaticProviderCapabilityProfile(
   };
 }
 
-const STATIC_PROVIDER_CAPABILITY_PROFILES: Record<ProviderId, DepartmentProviderCapabilityProfile> = {
+const STATIC_PROVIDER_CAPABILITY_PROFILES: Record<AgentBackendId, DepartmentProviderCapabilityProfile> = {
   antigravity: createStaticProviderCapabilityProfile('antigravity', {
     runtimeFamily: 'ide-backed',
     runtimeCapabilities: CLAUDE_ENGINE_RUNTIME_CAPABILITIES,
@@ -152,7 +157,7 @@ const STATIC_PROVIDER_CAPABILITY_PROFILES: Record<ProviderId, DepartmentProvider
     runtimeFamily: 'ide-backed',
     runtimeCapabilities: CLAUDE_ENGINE_RUNTIME_CAPABILITIES,
     supportedExecutionClasses: ['light', 'artifact-heavy', 'review-loop', 'delivery'],
-    notes: ['IDE-backed runtime with strong Department execution support.'],
+    notes: ['Claude Code CLI is exposed to Claude Engine as an ExecutionTool; this backend entry remains for compatibility/manual sessions.'],
   }),
   'claude-api': createStaticProviderCapabilityProfile('claude-api', {
     runtimeFamily: 'claude-engine',
@@ -193,16 +198,16 @@ const STATIC_PROVIDER_CAPABILITY_PROFILES: Record<ProviderId, DepartmentProvider
     runtimeFamily: 'local-light',
     runtimeCapabilities: LOCAL_LIGHT_RUNTIME_CAPABILITIES,
     supportedExecutionClasses: ['light'],
-    notes: ['Local conversation/runtime path only; not suitable for Department review-loop, artifact-heavy, or delivery tasks.'],
+    notes: ['Codex CLI is an ExecutionTool, not a model provider; this backend entry remains only for local/manual conversation compatibility.'],
   }),
   'native-codex': createStaticProviderCapabilityProfile('native-codex', {
-    runtimeFamily: 'local-light',
-    departmentMainline: 'native',
-    runtimeCapabilities: LOCAL_LIGHT_RUNTIME_CAPABILITIES,
-    supportedExecutionClasses: ['light'],
+    runtimeFamily: 'claude-engine',
+    departmentMainline: 'claude-engine',
+    runtimeCapabilities: CLAUDE_ENGINE_RUNTIME_CAPABILITIES,
+    supportedExecutionClasses: ['light', 'artifact-heavy', 'review-loop', 'delivery'],
     notes: [
-      'Department mainline is still on the lightweight native-codex backend.',
-      'Local conversation/chat shell support does not qualify native-codex as a Department runtime provider.',
+      'native-codex Department mainline is routed through Claude Engine via pi-ai.',
+      'Provider-level reasoning stays in Claude Engine; coding actions should still go through ExecutionTool when external CLI execution is needed.',
     ],
   }),
 };
@@ -279,7 +284,7 @@ export function getExecutionClassRequirement(
 }
 
 export function getDepartmentProviderCapabilityProfile(
-  providerId: ProviderId,
+  providerId: AgentBackendId,
 ): DepartmentProviderCapabilityProfile {
   if (providerId === 'native-codex') {
     return getNativeCodexCapabilityProfile();
@@ -289,7 +294,7 @@ export function getDepartmentProviderCapabilityProfile(
 }
 
 export function getDepartmentProviderExecutionSupport(
-  providerId: ProviderId,
+  providerId: AgentBackendId,
   executionClass: DepartmentExecutionClass,
 ): DepartmentProviderExecutionSupport {
   const profile = getDepartmentProviderCapabilityProfile(providerId);
@@ -309,12 +314,12 @@ export function getDepartmentProviderExecutionSupport(
 }
 
 function defaultDepartmentConfig(workspacePath: string): DepartmentConfig {
-  return {
+  return normalizeDepartmentConfig({
     name: path.basename(workspacePath),
     type: 'build',
     skills: [],
     okr: null,
-  };
+  }, `file://${workspacePath}`, path.basename(workspacePath));
 }
 
 export function readDepartmentConfig(workspacePath: string): DepartmentConfig {
@@ -325,12 +330,12 @@ export function readDepartmentConfig(workspacePath: string): DepartmentConfig {
 
   try {
     const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as DepartmentConfig;
-    return {
+    return normalizeDepartmentConfig({
       ...defaultDepartmentConfig(workspacePath),
       ...raw,
       skills: raw.skills ?? [],
       okr: raw.okr ?? null,
-    };
+    }, `file://${workspacePath}`, path.basename(workspacePath));
   } catch {
     return defaultDepartmentConfig(workspacePath);
   }
@@ -525,6 +530,15 @@ export function buildDepartmentContract(
       organization: true,
       providerSpecific: false,
     },
+    ...(config.workspaceBindings?.length
+      ? {
+          routinePolicies: {
+            allowDailyDigest: true,
+            allowWeeklyReview: true,
+            allowAutonomousPatrol: config.workspaceBindings.some((binding) => binding.role === 'context'),
+          },
+        }
+      : {}),
     ...(config.tokenQuota
       ? {
           tokenQuota: {
@@ -555,19 +569,33 @@ export function buildDepartmentRuntimeContract(
   config: DepartmentConfig,
   overrides: DepartmentRuntimeContractOverrides = {},
 ): DepartmentRuntimeContract {
+  const workspaceUri = toWorkspaceUri(workspacePath);
   const artifactRoot = overrides.artifactRoot
     ? path.resolve(overrides.artifactRoot)
     : path.join(workspacePath, ARTIFACT_ROOT_DIR);
-  const additionalWorkingDirectories = dedupePaths(overrides.additionalWorkingDirectories ?? []);
+  const boundWorkspaceBindings = getDepartmentWorkspaceBindings(config, workspaceUri)
+    .filter((binding) => binding.workspaceUri !== workspaceUri);
+  const boundWorkspacePaths = boundWorkspaceBindings
+    .map((binding) => binding.workspaceUri.replace(/^file:\/\//, ''));
+  const writableWorkspacePaths = boundWorkspaceBindings
+    .filter((binding) => binding.writeAccess !== false)
+    .map((binding) => binding.workspaceUri.replace(/^file:\/\//, ''));
+  const contextDocumentPaths = getDepartmentContextDocumentPaths(config);
+  const additionalWorkingDirectories = dedupePaths([
+    ...boundWorkspacePaths,
+    ...(overrides.additionalWorkingDirectories ?? []),
+  ]);
   const readRoots = dedupePaths([
     workspacePath,
     artifactRoot,
+    ...contextDocumentPaths.map((entry) => path.isAbsolute(entry) ? entry : path.join(workspacePath, entry)),
     ...(overrides.readRoots ?? []),
     ...additionalWorkingDirectories,
   ]);
   const writeRoots = dedupePaths([
     artifactRoot,
     workspacePath,
+    ...writableWorkspacePaths,
     ...(overrides.writeRoots ?? []),
   ]);
 

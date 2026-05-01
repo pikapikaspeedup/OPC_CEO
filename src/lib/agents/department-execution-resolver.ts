@@ -5,7 +5,7 @@ import type {
   DepartmentRequiredArtifact,
   DepartmentRuntimeContract,
 } from '../organization/contracts';
-import type { ProviderId } from '../providers/types';
+import type { AIProviderId } from '../providers/types';
 import type { PromptModeResolution } from './group-types';
 import {
   getCanonicalSkill,
@@ -35,8 +35,8 @@ export interface ProviderExecutionContext {
 }
 
 export interface CapabilityAwareProviderRoutingDecision {
-  requestedProvider: ProviderId;
-  selectedProvider: ProviderId;
+  requestedProvider: AIProviderId;
+  selectedProvider: AIProviderId;
   requestedModel?: string;
   selectedModel?: string;
   requiredExecutionClass: DepartmentExecutionClass;
@@ -47,7 +47,7 @@ export interface CapabilityAwareProviderRoutingDecision {
 
 type CapabilityAwareProviderRoutingOptions = {
   workspacePath: string;
-  requestedProvider: ProviderId;
+  requestedProvider: AIProviderId;
   requestedModel?: string;
   explicitModel?: boolean;
   runtimeContract?: DepartmentRuntimeContract;
@@ -55,15 +55,13 @@ type CapabilityAwareProviderRoutingOptions = {
   requiredExecutionClass?: DepartmentExecutionClass;
 };
 
-const CAPABILITY_FALLBACK_ORDER: ProviderId[] = [
+const CAPABILITY_FALLBACK_ORDER: AIProviderId[] = [
   'claude-api',
   'openai-api',
   'gemini-api',
   'grok-api',
   'custom',
   'antigravity',
-  'claude-code',
-  'codex',
   'native-codex',
 ];
 
@@ -137,9 +135,9 @@ function loadPublishedGrowthAssets(workspacePath: string, promptText?: string): 
   };
 }
 
-function dedupeProviders(providers: Array<ProviderId | undefined>): ProviderId[] {
-  const seen = new Set<ProviderId>();
-  const result: ProviderId[] = [];
+function dedupeProviders(providers: Array<AIProviderId | undefined>): AIProviderId[] {
+  const seen = new Set<AIProviderId>();
+  const result: AIProviderId[] = [];
 
   for (const provider of providers) {
     if (!provider || seen.has(provider)) {
@@ -180,7 +178,7 @@ function inferRequiredExecutionClass(
   return 'light';
 }
 
-function defaultModelForProvider(provider: ProviderId): string | undefined {
+function defaultModelForProvider(provider: AIProviderId): string | undefined {
   switch (provider) {
     case 'native-codex':
       return 'gpt-5.4';
@@ -202,8 +200,8 @@ function formatMissingCapabilities(missingCapabilities: string[]): string {
 }
 
 function buildCapabilityRoutingReason(
-  requestedProvider: ProviderId,
-  selectedProvider: ProviderId,
+  requestedProvider: AIProviderId,
+  selectedProvider: AIProviderId,
   requiredExecutionClass: DepartmentExecutionClass,
   missingCapabilities: string[],
 ): string {
@@ -255,8 +253,8 @@ export function resolveCapabilityAwareProvider(
   }
 
   const departmentPreferredProviders = dedupeProviders([
-    view.departmentContract.providerPolicy.defaultProvider as ProviderId | undefined,
-    ...((view.departmentContract.providerPolicy.allowedProviders ?? []) as ProviderId[]),
+    view.departmentContract.providerPolicy.defaultProvider as AIProviderId | undefined,
+    ...((view.departmentContract.providerPolicy.allowedProviders ?? []) as AIProviderId[]),
   ]);
   const candidateProviders = dedupeProviders([
     options.requestedProvider,

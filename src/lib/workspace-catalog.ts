@@ -3,6 +3,8 @@ import path from 'path';
 
 import { getCEOWorkspacePath } from './agents/ceo-environment';
 import { getWorkspaces as getAntigravityRecentWorkspaces } from './bridge/statedb';
+import { syncPlatformEngineeringUserStoryGapSignals } from './company-kernel/platform-engineering-observer';
+import { ensurePlatformEngineeringWorkspaceSkeleton } from './platform-engineering';
 import {
   getWorkspaceCatalogRecordByUri,
   listWorkspaceCatalogRecords,
@@ -129,9 +131,22 @@ export function ensureCEOWorkspaceRegistered(): KnownWorkspace {
   });
 }
 
+export function ensurePlatformEngineeringWorkspaceRegistered(): KnownWorkspace {
+  const { workspacePath } = ensurePlatformEngineeringWorkspaceSkeleton();
+  const workspace = registerWorkspace({
+    workspace: workspacePath,
+    sourceKind: 'system-bootstrap',
+    workspaceKind: 'folder',
+    allowMissing: true,
+  });
+  syncPlatformEngineeringUserStoryGapSignals();
+  return workspace;
+}
+
 export function listKnownWorkspaces(): KnownWorkspace[] {
   syncWorkspaceCatalogFromAntigravityRecent();
   ensureCEOWorkspaceRegistered();
+  ensurePlatformEngineeringWorkspaceRegistered();
   return listWorkspaceCatalogRecords({ statuses: ['active', 'hidden'] }).map(toKnownWorkspace);
 }
 

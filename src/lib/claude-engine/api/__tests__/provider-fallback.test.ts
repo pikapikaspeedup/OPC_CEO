@@ -20,13 +20,28 @@ async function collect(gen: AsyncGenerator<ProviderStreamEvent>): Promise<Provid
   return items;
 }
 
+function getFallbackEvents(events: ProviderStreamEvent[]): Array<Extract<ProviderStreamEvent, { type: 'provider_fallback' }>> {
+  return events.filter(
+    (event): event is Extract<ProviderStreamEvent, { type: 'provider_fallback' }> => event.type === 'provider_fallback',
+  );
+}
+
 function makeProvider(name: string, model: string = 'test-model'): ProviderEntry {
+  const providerIdMap = {
+    anthropic: 'claude-api',
+    openai: 'openai-api',
+    gemini: 'gemini-api',
+    grok: 'grok-api',
+  } as const;
+
   return {
     name,
     model: {
       model,
       apiKey: `key-${name}`,
       provider: name as 'anthropic' | 'openai' | 'gemini' | 'grok',
+      providerId: providerIdMap[name as keyof typeof providerIdMap],
+      transport: 'pi-ai',
     },
   };
 }
@@ -128,12 +143,12 @@ describe('streamQueryWithProviderFallback', () => {
     const result = await collect(streamQueryWithProviderFallback(baseQueryOptions, config));
 
     // Two fallback events + message_stop
-    const fallbacks = result.filter(e => e.type === 'provider_fallback');
+    const fallbacks = getFallbackEvents(result);
     expect(fallbacks).toHaveLength(2);
-    expect((fallbacks[0] as any).fromProvider).toBe('anthropic');
-    expect((fallbacks[0] as any).toProvider).toBe('openai');
-    expect((fallbacks[1] as any).fromProvider).toBe('openai');
-    expect((fallbacks[1] as any).toProvider).toBe('gemini');
+    expect(fallbacks[0]?.fromProvider).toBe('anthropic');
+    expect(fallbacks[0]?.toProvider).toBe('openai');
+    expect(fallbacks[1]?.fromProvider).toBe('openai');
+    expect(fallbacks[1]?.toProvider).toBe('gemini');
   });
 
   test('throws when all providers are exhausted', async () => {
@@ -167,9 +182,9 @@ describe('streamQueryWithProviderFallback', () => {
 
     const result = await collect(streamQueryWithProviderFallback(baseQueryOptions, config));
 
-    const fallbacks = result.filter(e => e.type === 'provider_fallback');
+    const fallbacks = getFallbackEvents(result);
     expect(fallbacks).toHaveLength(1);
-    expect((fallbacks[0] as any).reason).toContain('overloaded');
+    expect(fallbacks[0]?.reason).toContain('overloaded');
   });
 
   test('does not catch FallbackTriggeredError when catchModelFallback is false', async () => {
@@ -240,8 +255,6 @@ describe('streamQueryWithProviderFallback', () => {
 });
 
 describe('buildProviderChainFromEnv', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
     vi.stubEnv('ANTHROPIC_API_KEY', '');
     vi.stubEnv('OPENAI_API_KEY', '');
@@ -267,6 +280,7 @@ describe('buildProviderChainFromEnv', () => {
     const chain = buildProviderChainFromEnv();
     expect(chain).toHaveLength(1);
     expect(chain[0]!.name).toBe('anthropic');
+    expect(chain[0]!.model.transport).toBe('pi-ai');
   });
 
   test('returns multiple providers ordered by priority', () => {
@@ -301,5 +315,42 @@ describe('buildProviderChainFromEnv', () => {
 
     expect(chain).toHaveLength(1);
     expect(chain[0]!.name).toBe('grok');
+  });
+});
+
+describe('retry helpers', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  test('detectProvider defaults to anthropic', async () => {
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
+    delete process.env.CLAUDE_CODE_USE_GEMINI;
+    delete process.env.CLAUDE_CODE_USE_GROK;
+    const { detectProvider } = await import('../retry');
+    expect(detectProvider()).toBe('anthropic');
+  });
+
+  test('detectProvider honors OPENAI/GEMINI/GROK env flags', async () => {
+    const { detectProvider } = await import('../retry');
+    process.env.CLAUDE_CODE_USE_OPENAI = '1';
+    expect(detectProvider()).toBe('openai');
+    delete process.env.CLAUDE_CODE_USE_OPENAI;
+
+    process.env.CLAUDE_CODE_USE_GEMINI = '1';
+    expect(detectProvider()).toBe('gemini');
+    delete process.env.CLAUDE_CODE_USE_GEMINI;
+
+    process.env.CLAUDE_CODE_USE_GROK = '1';
+    expect(detectProvider()).toBe('grok');
+  });
+
+  test('FallbackTriggeredError carries original and fallback model ids', () => {
+    const err = new FallbackTriggeredError('claude-opus-4-20250514', 'claude-sonnet-4-20250514');
+    expect(err.originalModel).toBe('claude-opus-4-20250514');
+    expect(err.fallbackModel).toBe('claude-sonnet-4-20250514');
+    expect(err.name).toBe('FallbackTriggeredError');
   });
 });

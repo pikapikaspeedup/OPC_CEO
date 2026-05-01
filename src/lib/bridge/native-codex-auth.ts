@@ -1,276 +1,211 @@
 /**
- * Native Codex OAuth Token Manager
+ * Native Codex OAuth storage adapter
  *
- * Reads and refreshes OpenAI Codex OAuth tokens from ~/.codex/auth.json
- * (shared with the official Codex CLI and VS Code extension).
- *
- * This module enables "native login" — using the user's ChatGPT Plus/Pro
- * subscription instead of burning API credits through OPENAI_API_KEY.
- *
- * Token lifecycle:
- *   1. User runs `codex` once in their terminal → tokens stored in ~/.codex/auth.json
- *   2. We read access_token + refresh_token from that file
- *   3. Before expiry (JWT exp claim), we POST to auth.openai.com/oauth/token
- *      to rotate the access_token
- *   4. Refreshed tokens are written back to ~/.codex/auth.json so the
- *      Codex CLI stays in sync
- *
- * Reference: hermes-agent/hermes_cli/auth.py (Codex OAuth section)
+ * `pi-ai/oauth` owns the OAuth protocol and refresh lifecycle.
+ * We only own storage + compatibility with `~/.codex/auth.json`,
+ * so the Codex CLI and this app can share the same login state.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import type { OAuthCredentials } from '@mariozechner/pi-ai/oauth';
+
 import { createLogger } from '../logger';
 
 const log = createLogger('NativeCodexAuth');
 
-// ─── Constants ─────────────────────────────────────────────────────────────
-
-/** OpenAI's official OAuth Client ID (shared by Codex CLI, web, VS Code). */
-const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-
-/** OpenAI's token refresh endpoint. */
-const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
-
-/** Refresh access_token this many seconds before JWT expiry. */
-const REFRESH_SKEW_SECONDS = 120;
-
-// ─── Types ─────────────────────────────────────────────────────────────────
-
-export interface CodexTokens {
-  access_token: string;
-  refresh_token: string;
-}
-
-interface CodexAuthFile {
+type CodexAuthFile = {
   tokens?: {
     access_token?: string;
     refresh_token?: string;
+    expires_at?: number;
   };
   last_refresh?: string;
-}
+  'openai-codex'?: OAuthCredentials;
+};
 
-// ─── Token Storage ─────────────────────────────────────────────────────────
+type CodexStoredCredentials = {
+  credentials: OAuthCredentials;
+  source: 'legacy' | 'pi-ai';
+  raw: CodexAuthFile;
+};
 
-/**
- * Resolve the path to the Codex auth file.
- * Respects CODEX_HOME env var, falls back to ~/.codex/auth.json.
- */
 function getCodexAuthPath(): string {
   const codexHome = process.env.CODEX_HOME?.trim() || path.join(process.env.HOME || '~', '.codex');
   return path.join(codexHome, 'auth.json');
 }
 
-/**
- * Read tokens from ~/.codex/auth.json.
- * Returns null if the file doesn't exist or tokens are missing.
- */
-export function readCodexTokens(): CodexTokens | null {
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function coercePositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function decodeJwtExpiryMs(accessToken: string): number | null {
+  try {
+    const parts = accessToken.split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+    const payload = parts[1];
+    if (!payload) {
+      return null;
+    }
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as {
+      exp?: unknown;
+    };
+    return typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)
+      ? decoded.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readCodexAuthFile(): CodexAuthFile | null {
   const authPath = getCodexAuthPath();
   try {
     if (!fs.existsSync(authPath)) {
       log.debug({ authPath }, 'Codex auth file not found');
       return null;
     }
-    const raw: CodexAuthFile = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
-    const accessToken = raw.tokens?.access_token?.trim();
-    const refreshToken = raw.tokens?.refresh_token?.trim();
-
-    if (!accessToken || !refreshToken) {
-      log.debug({ authPath }, 'Codex auth file missing access_token or refresh_token');
-      return null;
-    }
-
-    return { access_token: accessToken, refresh_token: refreshToken };
-  } catch (err: any) {
-    log.warn({ err: err.message, authPath }, 'Failed to read Codex auth file');
-    return null;
-  }
-}
-
-/**
- * Write refreshed tokens back to ~/.codex/auth.json.
- * This keeps the Codex CLI and VS Code extension in sync.
- */
-function writeCodexTokens(tokens: CodexTokens): void {
-  const authPath = getCodexAuthPath();
-  try {
-    let existing: Record<string, any> = {};
-    if (fs.existsSync(authPath)) {
-      existing = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
-    }
-    if (!existing.tokens || typeof existing.tokens !== 'object') {
-      existing.tokens = {};
-    }
-    existing.tokens.access_token = tokens.access_token;
-    existing.tokens.refresh_token = tokens.refresh_token;
-    existing.last_refresh = new Date().toISOString();
-
-    const dir = path.dirname(authPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    fs.writeFileSync(authPath, JSON.stringify(existing, null, 2), 'utf-8');
-    fs.chmodSync(authPath, 0o600);
-    log.debug({ authPath }, 'Wrote refreshed tokens back to Codex auth file');
-  } catch (err: any) {
-    log.warn({ err: err.message }, 'Failed to write tokens back to Codex auth file');
-  }
-}
-
-// ─── JWT Expiry Check ──────────────────────────────────────────────────────
-
-/**
- * Check if a JWT access token is expired or about to expire.
- * Returns true if the token should be refreshed.
- */
-function isTokenExpiring(accessToken: string): boolean {
-  try {
-    const parts = accessToken.split('.');
-    if (parts.length !== 3) return false; // Not a JWT, use as-is
-
-    // Decode the payload (Base64URL → JSON)
-    let payload = parts[1];
-    payload += '='.repeat((4 - (payload.length % 4)) % 4);
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-
-    const exp = decoded.exp;
-    if (!exp || typeof exp !== 'number') return false;
-
-    const now = Math.floor(Date.now() / 1000);
-    const remaining = exp - now;
-
-    if (remaining <= 0) {
-      log.info({ exp, remaining }, 'Codex access token is expired');
-      return true;
-    }
-    if (remaining < REFRESH_SKEW_SECONDS) {
-      log.info({ exp, remaining }, 'Codex access token expiring soon, will refresh');
-      return true;
-    }
-
-    return false;
-  } catch {
-    // If we can't parse, don't force a refresh — use the token as-is
-    return false;
-  }
-}
-
-// ─── Token Refresh ─────────────────────────────────────────────────────────
-
-/**
- * Refresh the Codex OAuth access token using the refresh token.
- * Returns the updated token pair, or null on failure.
- *
- * IMPORTANT: OpenAI refresh tokens are single-use. Once consumed,
- * the response includes a new refresh_token that must be stored.
- */
-async function refreshTokens(currentTokens: CodexTokens): Promise<CodexTokens | null> {
-  log.info('Refreshing Codex OAuth access token...');
-
-  try {
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: currentTokens.refresh_token,
-      client_id: CODEX_OAUTH_CLIENT_ID,
-    });
-
-    const response = await fetch(CODEX_OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
+    return JSON.parse(fs.readFileSync(authPath, 'utf-8')) as CodexAuthFile;
+  } catch (error: unknown) {
+    log.warn(
+      {
+        authPath,
+        error: error instanceof Error ? error.message : String(error),
       },
-      body: body.toString(),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      log.error(
-        { status: response.status, body: errText.slice(0, 300) },
-        'Codex token refresh failed'
-      );
-
-      // Check for unrecoverable errors
-      try {
-        const errJson = JSON.parse(errText);
-        if (
-          errJson.error === 'invalid_grant' ||
-          errJson.error === 'refresh_token_reused'
-        ) {
-          log.error(
-            'Codex refresh token was invalidated. Run `codex` in your terminal to re-authenticate.'
-          );
-        }
-      } catch {}
-
-      return null;
-    }
-
-    const payload = await response.json();
-    const newAccessToken = payload.access_token?.trim();
-    if (!newAccessToken) {
-      log.error('Codex token refresh response missing access_token');
-      return null;
-    }
-
-    const newRefreshToken = payload.refresh_token?.trim() || currentTokens.refresh_token;
-
-    const updated: CodexTokens = {
-      access_token: newAccessToken,
-      refresh_token: newRefreshToken,
-    };
-
-    // Write back to keep Codex CLI in sync
-    writeCodexTokens(updated);
-
-    log.info('Codex OAuth tokens refreshed successfully');
-    return updated;
-  } catch (err: any) {
-    log.error({ err: err.message }, 'Codex token refresh failed with exception');
+      'Failed to read Codex auth file',
+    );
     return null;
   }
 }
 
-// ─── Public API ────────────────────────────────────────────────────────────
-
-/**
- * Resolve a valid Codex access token, refreshing if necessary.
- *
- * Returns the access_token string ready for use as a Bearer token,
- * or null if no valid Codex credentials are available.
- *
- * Usage:
- * ```ts
- * const token = await resolveCodexAccessToken();
- * if (!token) throw new Error('No Codex auth — run `codex` to login');
- * ```
- */
-export async function resolveCodexAccessToken(): Promise<string | null> {
-  let tokens = readCodexTokens();
-  if (!tokens) return null;
-
-  // Check if the access token needs refreshing
-  if (isTokenExpiring(tokens.access_token)) {
-    const refreshed = await refreshTokens(tokens);
-    if (!refreshed) {
-      // Refresh failed — but the current token might still be valid
-      // (maybe expiry check was aggressive)
-      if (isTokenExpiring(tokens.access_token)) {
-        log.warn('Codex access token is expired and refresh failed');
-        return null;
-      }
-      // Current token still has some life, use it
-      return tokens.access_token;
-    }
-    tokens = refreshed;
+function readPiAiCredentials(raw: CodexAuthFile): OAuthCredentials | null {
+  const stored = raw['openai-codex'];
+  if (!stored || typeof stored !== 'object') {
+    return null;
   }
-
-  return tokens.access_token;
+  return hasText(stored.access)
+    && hasText(stored.refresh)
+    && typeof stored.expires === 'number'
+    && Number.isFinite(stored.expires)
+    ? stored
+    : null;
 }
 
-/**
- * Check if Codex native auth is available (tokens exist on disk).
- */
+function readLegacyCredentials(raw: CodexAuthFile): OAuthCredentials | null {
+  const access = raw.tokens?.access_token?.trim();
+  const refresh = raw.tokens?.refresh_token?.trim();
+  if (!access || !refresh) {
+    return null;
+  }
+  const expires = coercePositiveNumber(raw.tokens?.expires_at) ?? decodeJwtExpiryMs(access);
+  return expires
+    ? { access, refresh, expires }
+    : null;
+}
+
+function readStoredCredentials(): CodexStoredCredentials | null {
+  const raw = readCodexAuthFile();
+  if (!raw) {
+    return null;
+  }
+
+  const piAiCredentials = readPiAiCredentials(raw);
+  if (piAiCredentials) {
+    return {
+      credentials: piAiCredentials,
+      source: 'pi-ai',
+      raw,
+    };
+  }
+
+  const legacyCredentials = readLegacyCredentials(raw);
+  if (legacyCredentials) {
+    return {
+      credentials: legacyCredentials,
+      source: 'legacy',
+      raw,
+    };
+  }
+
+  log.debug({ authPath: getCodexAuthPath() }, 'Codex auth file missing usable OAuth credentials');
+  return null;
+}
+
+function writeStoredCredentials(
+  previous: CodexAuthFile | null,
+  credentials: OAuthCredentials,
+): void {
+  const authPath = getCodexAuthPath();
+  const next: CodexAuthFile = previous && typeof previous === 'object'
+    ? { ...previous }
+    : {};
+
+  next.tokens = {
+    ...(next.tokens ?? {}),
+    access_token: credentials.access,
+    refresh_token: credentials.refresh,
+    expires_at: credentials.expires,
+  };
+  next['openai-codex'] = credentials;
+  next.last_refresh = new Date().toISOString();
+
+  try {
+    const dir = path.dirname(authPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(authPath, JSON.stringify(next, null, 2), 'utf-8');
+    fs.chmodSync(authPath, 0o600);
+  } catch (error: unknown) {
+    log.warn(
+      {
+        authPath,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Failed to persist Codex OAuth credentials',
+    );
+  }
+}
+
+async function getOAuthApiKeyFromPiAi(
+  providerId: string,
+  credentials: Record<string, OAuthCredentials>,
+) {
+  const { getOAuthApiKey } = await import('@mariozechner/pi-ai/oauth');
+  return getOAuthApiKey(providerId, credentials);
+}
+
+export async function resolveCodexAccessToken(): Promise<string | null> {
+  const stored = readStoredCredentials();
+  if (!stored) {
+    return null;
+  }
+
+  const result = await getOAuthApiKeyFromPiAi('openai-codex', {
+    'openai-codex': stored.credentials,
+  });
+  if (!result) {
+    return null;
+  }
+
+  const credentialsChanged =
+    result.newCredentials.access !== stored.credentials.access
+    || result.newCredentials.refresh !== stored.credentials.refresh
+    || result.newCredentials.expires !== stored.credentials.expires;
+  if (credentialsChanged || stored.source !== 'pi-ai') {
+    writeStoredCredentials(stored.raw, result.newCredentials);
+  }
+
+  return result.apiKey;
+}
+
 export function isNativeCodexAvailable(): boolean {
-  return readCodexTokens() !== null;
+  return readStoredCredentials() !== null;
 }

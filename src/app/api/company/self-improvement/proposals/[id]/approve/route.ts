@@ -18,7 +18,8 @@ export async function POST(
 
   const { id } = await params;
   try {
-    return NextResponse.json({ proposal: approveSystemImprovementProposal(id) });
+    const result = await approveSystemImprovementProposal(id, { launchExecution: true });
+    return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({
       error: err instanceof Error ? err.message : String(err),

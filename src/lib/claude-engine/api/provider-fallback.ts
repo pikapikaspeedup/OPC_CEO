@@ -1,6 +1,7 @@
 import { streamQueryWithRetry, type RetryOptions, FallbackTriggeredError } from './retry';
 import type { QueryOptions, StreamEvent, ModelConfig } from './types';
 import type { RetryEvent } from './retry';
+import type { ProviderId } from '../../providers/types';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -182,6 +183,13 @@ function detectPrimaryProvider(): string {
 }
 
 function buildProviderEntry(provider: string): ProviderEntry | null {
+  const providerIdMap: Partial<Record<string, ProviderId>> = {
+    anthropic: 'claude-api',
+    openai: 'openai-api',
+    gemini: 'gemini-api',
+    grok: 'grok-api',
+  };
+
   switch (provider) {
     case 'anthropic': {
       const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -192,6 +200,8 @@ function buildProviderEntry(provider: string): ProviderEntry | null {
           model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514',
           apiKey,
           provider: 'anthropic',
+          providerId: providerIdMap.anthropic,
+          transport: 'pi-ai',
         },
       };
     }
@@ -205,6 +215,8 @@ function buildProviderEntry(provider: string): ProviderEntry | null {
           apiKey,
           baseUrl: process.env.OPENAI_BASE_URL,
           provider: 'openai',
+          providerId: providerIdMap.openai,
+          transport: 'pi-ai',
         },
       };
     }
@@ -217,6 +229,8 @@ function buildProviderEntry(provider: string): ProviderEntry | null {
           model: process.env.GEMINI_MODEL ?? 'gemini-2.5-pro',
           apiKey,
           provider: 'gemini',
+          providerId: providerIdMap.gemini,
+          transport: 'pi-ai',
         },
       };
     }
@@ -229,6 +243,8 @@ function buildProviderEntry(provider: string): ProviderEntry | null {
           model: process.env.GROK_MODEL ?? 'grok-3',
           apiKey,
           provider: 'grok',
+          providerId: providerIdMap.grok,
+          transport: 'pi-ai',
         },
       };
     }

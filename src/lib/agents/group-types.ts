@@ -6,7 +6,7 @@
  * V2.5: adds execution mode routing, source contract, delivery capability.
  */
 
-import type { ProviderId } from '../providers/types';
+import type { AgentBackendId } from '../providers/types';
 
 // ---------------------------------------------------------------------------
 // Group Definition
@@ -323,7 +323,7 @@ export interface SessionProvenance {
   /** Current or last session handle (cascade ID, thread ID, etc.) */
   handle: string;
   /** Which backend produced this session */
-  backendId: ProviderId;
+  backendId: AgentBackendId;
   /** How the handle was obtained */
   handleKind: 'started' | 'attached' | 'resumed';
   /** Workspace path at session creation time */

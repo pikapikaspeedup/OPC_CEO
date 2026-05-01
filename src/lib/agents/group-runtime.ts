@@ -70,7 +70,9 @@ import {
 import { compactCodingResult } from './result-parser';
 import { finalizeAdvisoryRun, finalizeDeliveryRun } from './finalization';
 import { checkWriteScopeConflicts } from './scope-governor';
-import { resolveProvider, type ProviderId } from '../providers';
+import { resolveProvider } from '../providers';
+import type { AIProviderId, ProviderId } from '../providers';
+import { coerceConfigProviderId } from '../providers/types';
 import { canActivateStage, filterSourcesByContract, getDownstreamStages } from './pipeline/pipeline-registry';
 import { getStageDefinition } from './stage-resolver';
 import {
@@ -196,19 +198,19 @@ function bindRuntimeContractToArtifactRoot(
 
 function resolveDepartmentExecutionProvider(options: {
   workspacePath: string;
-  requestedProvider?: ProviderId;
+  requestedProvider?: AIProviderId;
   requestedModel?: string;
   explicitModel?: boolean;
   taskEnvelope?: TaskEnvelope;
   requiredExecutionClass?: 'light' | 'artifact-heavy' | 'review-loop' | 'delivery';
 }): {
-  provider: ProviderId;
+  provider: AIProviderId;
   model?: string;
   routingReason: string;
-  requestedProvider: ProviderId;
+  requestedProvider: AIProviderId;
   requiredExecutionClass: 'light' | 'artifact-heavy' | 'review-loop' | 'delivery';
 } {
-  const preferredProvider = (options.requestedProvider || resolveProvider('execution', options.workspacePath).provider) as ProviderId;
+  const preferredProvider = (options.requestedProvider || resolveProvider('execution', options.workspacePath).provider) as AIProviderId;
   const runtimeCarrier = extractRuntimeCarrier(options.taskEnvelope);
   const routing = resolveCapabilityAwareProvider({
     workspacePath: options.workspacePath,
@@ -1097,7 +1099,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
 
   const providerRouting = resolveDepartmentExecutionProvider({
     workspacePath,
-    requestedProvider: input.provider as ProviderId | undefined,
+    requestedProvider: input.provider ? coerceConfigProviderId(input.provider) : undefined,
     requestedModel: input.model || group.defaultModel,
     explicitModel: Boolean(input.model),
     taskEnvelope: envelope as TaskEnvelope,

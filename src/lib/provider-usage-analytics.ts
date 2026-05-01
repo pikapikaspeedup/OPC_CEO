@@ -1,7 +1,7 @@
 import { listRuns } from './agents/run-registry';
 import { loadAIConfig } from './providers/ai-config';
 import { getProviderInventory } from './providers/provider-inventory';
-import type { ProviderId } from './providers/types';
+import type { AIProviderId } from './providers/types';
 
 export type ProviderUsageEntry = {
   provider: string;
@@ -104,7 +104,7 @@ export function aggregateProviderUsage(windowDays = 30): {
   };
 }
 
-function hasApiKeyProviderConfig(provider: ProviderId, inventory: ReturnType<typeof getProviderInventory>): boolean {
+function hasApiKeyProviderConfig(provider: AIProviderId, inventory: ReturnType<typeof getProviderInventory>): boolean {
   switch (provider) {
     case 'claude-api':
       return inventory.anthropic.set;
@@ -140,7 +140,7 @@ export function buildProviderCreditSummaries(): ProviderCreditSummary[] {
     },
   ];
 
-  const apiProviders: ProviderId[] = ['claude-api', 'openai-api', 'gemini-api', 'grok-api'];
+  const apiProviders: AIProviderId[] = ['claude-api', 'openai-api', 'gemini-api', 'grok-api'];
   for (const provider of apiProviders) {
     summaries.push({
       provider,

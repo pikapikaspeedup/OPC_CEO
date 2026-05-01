@@ -58,11 +58,15 @@ export { consumeAgentSession } from './session-consumer';
 
 export {
   AntigravityAgentBackend,
-  ClaudeCodeAgentBackend,
   ClaudeEngineAgentBackend,
-  CodexAgentBackend,
+  LegacyClaudeCodeManualBackend,
+  LegacyCodexManualBackend,
   ensureBuiltInAgentBackends,
 } from './builtin-backends';
+
+// Deprecated compatibility aliases. Prefer Legacy*ManualBackend names or,
+// on the Claude Engine mainline, ExecutionTool instead of direct CLI backends.
+export { ClaudeCodeAgentBackend, CodexAgentBackend } from './builtin-backends';
 
 export type { AntigravityRuntimeConnection } from './antigravity-runtime-resolver';
 

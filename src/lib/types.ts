@@ -1,3 +1,5 @@
+import type { AIProviderId } from './providers/types';
+
 // === API Response Types ===
 
 export interface UserInfo {
@@ -123,7 +125,22 @@ export interface RoomLayoutItem {
   rotation?: number;          // rotation in degrees (default 0)
 }
 
+export type DepartmentWorkspaceRole = 'primary' | 'execution' | 'context';
+
+export interface DepartmentWorkspaceBinding {
+  workspaceUri: string;
+  alias?: string;
+  role: DepartmentWorkspaceRole;
+  writeAccess?: boolean;
+}
+
+export interface DepartmentExecutionPolicy {
+  defaultWorkspaceUri?: string;
+  contextDocumentPaths?: string[];
+}
+
 export interface DepartmentConfig {
+  departmentId?: string;
   name: string;
   type: string;                   // e.g. 'build', 'research', 'operations', 'ceo', or user-defined
   typeIcon?: string;              // emoji icon for the department type, e.g. '🔧'
@@ -135,9 +152,11 @@ export interface DepartmentConfig {
   roomLayout?: RoomLayoutItem[];  // preserved for backward compat
   roomBg?: string;                // preserved for backward compat
   /** V6: Default provider for this department's agent tasks */
-  provider?: 'antigravity' | 'codex' | 'native-codex' | 'claude-code' | 'claude-api' | 'openai-api' | 'gemini-api' | 'grok-api' | 'custom';
+  provider?: AIProviderId;
   /** V6: Token quota for this department */
   tokenQuota?: TokenQuota | null;
+  workspaceBindings?: DepartmentWorkspaceBinding[];
+  executionPolicy?: DepartmentExecutionPolicy;
 }
 
 /** V6: Token quota for a department */
@@ -456,6 +475,18 @@ export interface CEODecisionRecordFE {
   decidedAt: string;
 }
 
+export interface PlatformEngineeringProjectGovernanceFE {
+  observe: boolean;
+  allowProposal: boolean;
+  departmentId?: string;
+  source?: 'default' | 'manual' | 'proposal-created';
+  updatedAt?: string;
+}
+
+export interface ProjectGovernanceFE {
+  platformEngineering?: PlatformEngineeringProjectGovernanceFE;
+}
+
 export interface Project {
   projectId: string;
   name: string;
@@ -475,6 +506,7 @@ export interface Project {
   skillHint?: string;
   /** Phase 6: CEO AI decision record */
   ceoDecision?: CEODecisionRecordFE;
+  governance?: ProjectGovernanceFE;
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,7 +1291,8 @@ export type SystemImprovementSignalSourceFE =
   | 'runtime-error'
   | 'manual-feedback'
   | 'duplicate-work'
-  | 'architecture-risk';
+  | 'architecture-risk'
+  | 'user-story-gap';
 
 export type SystemImprovementAreaFE =
   | 'frontend'
@@ -1315,6 +1348,56 @@ export interface SystemImprovementTestEvidenceFE {
   createdAt: string;
 }
 
+export interface SystemImprovementExecutionProjectSnapshotFE {
+  projectId: string;
+  name: string;
+  status: string;
+  workspaceUri?: string;
+  templateId?: string;
+  runCount: number;
+  updatedAt: string;
+}
+
+export interface SystemImprovementExecutionRunSnapshotFE {
+  runId: string;
+  status: string;
+  stageId: string;
+  summary?: string;
+  lastError?: string;
+  changedFilesCount: number;
+  blockerCount: number;
+  finishedAt?: string;
+  updatedAt: string;
+}
+
+export interface SystemImprovementExecutionTestSummaryFE {
+  plannedCount: number;
+  evidenceCount: number;
+  passedCount: number;
+  failedCount: number;
+  latestStatus?: 'passed' | 'failed';
+  latestCommand?: string;
+  latestSummary?: string;
+  latestAt?: string;
+}
+
+export interface SystemImprovementMergeGateSummaryFE {
+  status: 'pending' | 'ready-to-merge' | 'blocked';
+  approvalReady: boolean;
+  deliveryReady: boolean;
+  testsReady: boolean;
+  rollbackReady: boolean;
+  reasons: string[];
+}
+
+export interface SystemImprovementExitEvidenceBundleFE {
+  project?: SystemImprovementExecutionProjectSnapshotFE;
+  latestRun?: SystemImprovementExecutionRunSnapshotFE;
+  testing: SystemImprovementExecutionTestSummaryFE;
+  mergeGate: SystemImprovementMergeGateSummaryFE;
+  updatedAt: string;
+}
+
 export interface SystemImprovementProposalFE {
   id: string;
   status: SystemImprovementProposalStatusFE;
@@ -1332,9 +1415,20 @@ export interface SystemImprovementProposalFE {
   approvalRequestId?: string;
   linkedRunIds: string[];
   testEvidence: SystemImprovementTestEvidenceFE[];
+  exitEvidence?: SystemImprovementExitEvidenceBundleFE;
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface SystemImprovementLaunchResultFE {
+  status: 'already-running' | 'dispatched' | 'dispatch-failed';
+  projectId?: string;
+  runId?: string;
+  createdProject: boolean;
+  templateId: string;
+  workspaceUri: string;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1576,6 +1670,15 @@ export interface KnowledgeItem {
   status?: string;
   usageCount?: number;
   lastAccessedAt?: string;
+  tags?: string[];
+  scope?: 'department' | 'organization';
+  sourceType?: 'run' | 'manual' | 'ceo' | 'system';
+  sourceRunId?: string;
+  sourceArtifactPath?: string;
+  confidence?: number;
+  evidenceCount?: number;
+  promotionLevel?: string;
+  promotionSourceCandidateId?: string;
 }
 
 export interface KnowledgeDetail extends KnowledgeItem {

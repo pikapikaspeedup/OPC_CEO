@@ -10,12 +10,15 @@ import {
   getApiKey,
   grpc,
 } from '../bridge/gateway';
+import {
+  buildClaudeEngineSystemPrompt,
+  createClaudeEngineToolContext,
+  resolveApiBackedModelConfig,
+} from '../backends/claude-engine-backend';
+import { ClaudeEngine } from '../claude-engine/engine/claude-engine';
 import { createLogger } from '../logger';
 import { resolveProvider, getExecutor } from '../providers';
-import type { AILayer, AIScene } from '../providers/types';
-import * as os from 'os';
-import * as path from 'path';
-import * as fs from 'fs';
+import type { AIProviderId, AILayer, AIScene } from '../providers/types';
 import { getCEOWorkspacePath } from './ceo-environment';
 
 const log = createLogger('LLM-Oneshot');
@@ -23,6 +26,15 @@ const log = createLogger('LLM-Oneshot');
 const DEFAULT_MODEL = 'MODEL_PLACEHOLDER_M47'; // Gemini 3 Flash
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 120_000; // 2 minutes
+
+const API_BACKED_PROVIDERS = new Set<AIProviderId>([
+  'native-codex',
+  'claude-api',
+  'openai-api',
+  'gemini-api',
+  'grok-api',
+  'custom',
+]);
 
 
 
@@ -46,18 +58,36 @@ export async function callLLMOneshot(
 
   log.info({ provider, targetModel, source, promptLen: prompt.length }, 'callLLMOneshot dispatching via provider');
 
-  const executor = getExecutor(provider);
-
-  // If the provider supports synchronous blocking execution (e.g., Codex)
-  if (provider === 'codex' || provider !== 'antigravity') {
-    const res = await executor.executeTask({
-      workspace: wsPath,
-      prompt,
-      model: targetModel,
-      timeout: POLL_TIMEOUT_MS,
+  if (API_BACKED_PROVIDERS.has(provider)) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+    const engine = new ClaudeEngine({
+      model: resolveApiBackedModelConfig(provider, targetModel),
+      systemPrompt: buildClaudeEngineSystemPrompt({
+        runId: `oneshot-${provider}-${Date.now()}`,
+        workspacePath: wsPath,
+        prompt,
+        model: targetModel,
+        executionTarget: { kind: 'prompt' },
+      }),
+      toolContext: createClaudeEngineToolContext(wsPath, controller.signal),
+      maxTurns: 8,
     });
-    return res.content;
+
+    try {
+      await engine.init();
+      return await engine.chatSimple(prompt);
+    } finally {
+      clearTimeout(timeoutId);
+      await engine.close();
+    }
   }
+
+  if (provider !== 'antigravity') {
+    throw new Error(`Unsupported direct executor provider: ${provider}`);
+  }
+
+  const executor = getExecutor(provider);
 
   // Fallback for antigravity (requires manual polling since executeTask returns immediately in Phase 1)
   const servers = await discoverLanguageServers();
@@ -91,13 +121,17 @@ export async function callLLMOneshot(
 
     try {
       const stepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, cascadeId);
-      const steps = (stepsResp?.steps || []).filter((s: any) => s != null);
+      const steps = ((stepsResp?.steps || []) as Array<Record<string, unknown> | null | undefined>)
+        .filter((step): step is Record<string, unknown> => step != null);
 
       // Look for planner response steps after our prompt
       for (let j = steps.length - 1; j >= 0; j--) {
         const step = steps[j];
         if (step?.type === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
-          const planner = step.plannerResponse || step.response || {};
+          const planner = (step.plannerResponse || step.response || {}) as {
+            modifiedResponse?: string;
+            response?: string;
+          };
           const text = planner.modifiedResponse || planner.response || '';
           if (text) {
             responseText = text;

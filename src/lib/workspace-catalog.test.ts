@@ -7,6 +7,7 @@ const tempGatewayHome = path.join(tempRoot, 'gateway-home');
 const tempRecentWorkspace = path.join(tempRoot, 'recent-workspace');
 const tempManualWorkspace = path.join(tempRoot, 'manual-workspace');
 const tempCeoWorkspace = path.join(tempRoot, 'ceo-workspace');
+const tempSystemWorkspace = path.join(tempGatewayHome, 'system-workspaces', 'platform-engineering');
 
 let previousGatewayHome: string | undefined;
 
@@ -74,10 +75,12 @@ describe('workspace-catalog', () => {
     const ceoWorkspace = catalog.normalizeWorkspaceIdentity(tempCeoWorkspace);
 
     const workspaces = catalog.listKnownWorkspaces();
+    const workspaceUris = workspaces.map((workspace) => workspace.uri);
 
-    expect(workspaces.map((workspace) => workspace.uri)).toEqual(expect.arrayContaining([
+    expect(workspaceUris).toEqual(expect.arrayContaining([
       recentWorkspace.uri,
       ceoWorkspace.uri,
     ]));
+    expect(workspaceUris.some((workspaceUri) => workspaceUri.endsWith('/gateway-home/system-workspaces/platform-engineering'))).toBe(true);
   });
 });

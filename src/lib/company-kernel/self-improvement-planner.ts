@@ -13,11 +13,14 @@ import { evaluateSystemImprovementRisk } from './self-improvement-risk';
 
 export interface GenerateSystemImprovementProposalInput {
   signalIds: string[];
+  proposalId?: string;
   title?: string;
   summary?: string;
   affectedFiles?: string[];
   affectedAreas?: SystemImprovementArea[];
   branchName?: string;
+  linkedRunIds?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 function uniq<T>(values: T[]): T[] {
@@ -98,7 +101,7 @@ export function generateSystemImprovementProposal(input: GenerateSystemImproveme
   const summary = input.summary?.trim() || signals.map((signal) => signal.summary).join('\n');
 
   const proposal: SystemImprovementProposal = {
-    id: `system-improvement-proposal-${randomUUID()}`,
+    id: input.proposalId || `system-improvement-proposal-${randomUUID()}`,
     status: proposalStatus({ evidenceCount: evidenceRefs.length, risk: risk.risk }),
     title,
     summary,
@@ -115,12 +118,13 @@ export function generateSystemImprovementProposal(input: GenerateSystemImproveme
       'Record rollback evidence in the proposal before closing.',
     ],
     ...(input.branchName ? { branchName: input.branchName } : {}),
-    linkedRunIds: [],
+    linkedRunIds: input.linkedRunIds ? uniq(input.linkedRunIds) : [],
     testEvidence: [],
     createdAt: now,
     updatedAt: now,
     metadata: {
       riskReasons: risk.reasons,
+      ...(input.metadata || {}),
     },
   };
 

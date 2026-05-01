@@ -1,3 +1,2826 @@
+# 任务：收口 Provider / ExecutionTool 边界并试跑平台工程部
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-01
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/providers/types.ts`、`src/lib/providers/index.ts`
+   - 引入更清晰的运行时身份边界：
+     - `AIProviderId`
+     - `ExecutionToolId`
+     - `AgentBackendId`
+     - `TaskExecutorId`
+   - `getExecutor()` 现在只接受真正的直接执行器，不再把 model provider 和 CLI coder 混成一个概念
+2. `src/lib/backends/types.ts`、`src/lib/backends/registry.ts`、`src/lib/backends/run-session-hooks.ts`、`src/lib/backends/memory-hooks.ts`、`src/lib/agents/group-types.ts`
+   - backend/session/provenance 主线统一改成使用 `AgentBackendId`
+   - 明确 backend 路由语义不同于 model provider 语义
+3. `src/lib/agents/department-execution-resolver.ts`、`src/lib/backends/claude-engine-backend.ts`
+   - Department provider 路由与 Claude Engine API-backed model config 改为使用 `AIProviderId`
+   - `native-codex` 继续作为 Claude Engine 主线上的 pi-ai provider，而不是单独旁路
+4. `src/lib/agents/department-capability-registry.ts`
+   - 更新 `native-codex` capability profile：
+     - `runtimeFamily = claude-engine`
+     - `departmentMainline = claude-engine`
+     - 支持 `light / artifact-heavy / review-loop / delivery`
+   - 同时把 `codex / claude-code` 的注释语义收口为 `ExecutionTool / 兼容手工 backend`
+5. `src/lib/claude-engine/tools/execution-tool.ts`、`src/lib/claude-engine/tools/toolsets.ts`、`ARCHITECTURE.md`
+   - 明确 `ExecutionTool` 只包装高权限外部 coder（`Codex CLI / Claude Code CLI`）
+   - `shell / file / search / MCP resources` 仍是 Claude Engine 普通工具，不属于 `ExecutionTool`
+6. `src/lib/bridge/native-codex-auth.ts`
+   - 修复 `tsx`/CJS 运行入口下对 `@mariozechner/pi-ai/oauth` 的顶层导入崩溃
+   - 改成动态 `import()`，使平台工程部试跑能够真正进入 `native-codex -> pi-ai -> Claude Engine` 主链
+7. 平台工程部真实试跑
+   - 通过 `executePrompt()` 对内置 `platform-engineering` workspace 发起一次真实 run
+   - 结果成功完成，run id:
+     - `8c61b5d2-4631-4438-87de-9b71b789e62b`
+   - 真实主链已经确认：
+     - workspace bootstrap
+     - Department memory injection
+     - `native-codex` 经 `pi-ai` 进入 Claude Engine mainline
+     - run/result/artifact 持久化
+
+### 试跑观察
+
+平台工程部这次真实 run 暴露出的主要剩余问题：
+
+1. `executionPolicy.contextDocumentPaths` 当前主要体现在 `readRoots`，但没有被确定性地镜像/注入为 in-workspace context artifact
+2. 因此部门虽然能跑通，但架构意图仍部分依赖外部 repo 文档在运行时可被发现和读取
+3. 这说明当前系统最大的剩余结构问题已经不再是 provider 路由，而是：
+   - `department context documents`
+   - `runtime read access`
+   - `deterministic context injection`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/agents/department-capability-registry.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/providers/providers.test.ts src/lib/platform-engineering.test.ts src/lib/company-kernel/self-improvement-execution.test.ts
+```
+
+结果：`5 files passed, 26 tests passed`
+
+```bash
+npx vitest run src/lib/bridge/native-codex-auth.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/platform-engineering.test.ts
+```
+
+结果：`4 files passed, 15 tests passed`
+
+```bash
+npx eslint src/lib/providers/types.ts src/lib/providers/index.ts src/lib/provider-usage-analytics.ts src/lib/agents/department-execution-resolver.ts src/lib/agents/department-capability-registry.ts src/lib/agents/llm-oneshot.ts src/lib/agents/group-types.ts src/lib/agents/prompt-executor.ts src/lib/backends/types.ts src/lib/backends/registry.ts src/lib/backends/run-session-hooks.ts src/lib/backends/memory-hooks.ts src/lib/backends/claude-engine-backend.ts src/lib/claude-engine/tools/execution-tool.ts src/lib/claude-engine/tools/toolsets.ts
+```
+
+```bash
+npx tsc --noEmit
+```
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：删除 Claude Engine API 子系统未使用的直连 provider shim
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/claude-engine/api/`
+   - 删除已不再属于 Claude Engine 主线的直连实现与测试专用 shim：
+     - `client.ts`
+     - `openai/index.ts`
+     - `openai/modelMapping.ts`
+     - `openai/convertMessages.ts`
+     - `openai/convertTools.ts`
+     - `openai/streamAdapter.ts`
+     - `gemini/index.ts`
+     - `gemini/modelMapping.ts`
+     - `gemini/streamAdapter.ts`
+     - `grok/index.ts`
+     - `grok/modelMapping.ts`
+2. `src/lib/claude-engine/api/index.ts`
+   - 删除对上述直连 provider helper 的导出
+   - `M6` API 层现在只保留：
+     - `APIClientError`
+     - `pi-ai` 主线 transport
+     - retry / error / tool-schema / usage / provider-fallback
+3. `src/lib/claude-engine/api/api-client-error.ts`
+   - 新增独立 `APIClientError`
+   - 从已删除的 `client.ts` 中抽出错误类型，供 `errors.ts` / `pi-transport.ts` / 测试复用
+4. `src/lib/claude-engine/api/retry.ts`
+   - 删除对 `client.ts` 的依赖
+   - 未知 provider 不再尝试走历史直连路径，而是直接抛出 `APIClientError`
+5. `src/lib/claude-engine/api/__tests__/`
+   - 删除：
+     - `api.test.ts`
+     - `multi-provider.test.ts`
+   - 保留并扩展：
+     - `errors-and-caching.test.ts`
+     - `provider-fallback.test.ts`
+     - `pi-transport-routing.test.ts`
+   - `detectProvider / FallbackTriggeredError` 的断言已迁入 `provider-fallback.test.ts`
+6. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/claude-engine/api/__tests__/errors-and-caching.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/bridge/native-codex-auth.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/providers/ai-config.test.ts src/lib/claude-engine/engine/__tests__/compactor.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/provider-model-catalog.test.ts
+```
+
+结果：`9 files passed, 125 tests passed`
+
+```bash
+npx eslint src/lib/claude-engine/api/api-client-error.ts src/lib/claude-engine/api/errors.ts src/lib/claude-engine/api/pi-transport.ts src/lib/claude-engine/api/retry.ts src/lib/claude-engine/api/provider-fallback.ts src/lib/claude-engine/api/index.ts src/lib/claude-engine/api/__tests__/errors-and-caching.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/claude-engine/engine/compactor.ts src/lib/bridge/native-codex-auth.ts src/lib/bridge/native-codex-auth.test.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/backends/claude-engine-backend.ts
+```
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：Claude Engine Provider Adapter 收口为 pi-ai only
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/claude-engine/api/retry.ts`
+   - 删除 `streamQueryWithPiFallback()` 主线回退逻辑
+   - `native-codex / claude-api / openai-api / gemini-api / grok-api / custom` 现在统一强制走 `streamQueryViaPi()`
+   - 遗留 `transport: 'native'` 输入在 Claude Engine 主线上会被强制归一为 `pi-ai`
+2. `src/lib/claude-engine/engine/compactor.ts`
+   - compaction 摘要生成不再直接走 `streamQuery()`，改为复用 `streamQueryWithRetry()` 主线
+   - `native-codex` 即使不显式携带 API key，也会走同一条 `pi-ai` 主线
+3. `src/lib/bridge/native-codex-auth.ts`
+   - 删掉自维护的 Codex token refresh HTTP 逻辑
+   - 改为复用 `@mariozechner/pi-ai/oauth` 的 `getOAuthApiKey()`
+   - 本地只保留 `~/.codex/auth.json` 的读写、兼容与同步策略
+4. `src/lib/claude-engine/api/pi-transport.ts`
+   - `native-codex` 主线现在显式通过统一的 Codex OAuth resolver 注入 `apiKey`
+   - 没有可用 Codex 凭据时会直接报错，不再隐式依赖混合认证路径
+5. `src/lib/providers/ai-config.ts`
+   - `providerProfiles` 对 `antigravity` 之外的 AI provider 统一归一为 `transport: 'pi-ai'`
+   - 组织级配置不再允许把 `native-codex / claude-api / openai-api / gemini-api / grok-api / custom` 切回 native transport
+6. `src/lib/claude-engine/api/provider-fallback.ts`
+   - provider fallback chain 构造出的 model config 也统一带 `transport: 'pi-ai'`
+7. `src/lib/claude-engine/api/native-codex/index.ts`
+   - 已删除 `streamQueryNativeCodex()` 这一层 Claude Engine special path
+8. 测试同步：
+   - 新增 `src/lib/bridge/native-codex-auth.test.ts`
+   - 更新 `src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts`
+   - 更新 `src/lib/claude-engine/api/__tests__/provider-fallback.test.ts`
+   - 更新 `src/lib/claude-engine/api/__tests__/api.test.ts`
+   - 更新 `src/lib/providers/ai-config.test.ts`
+   - 删除 `src/lib/claude-engine/api/__tests__/native-codex.test.ts`
+9. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/bridge/native-codex-auth.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/providers/ai-config.test.ts src/lib/claude-engine/api/__tests__/api.test.ts
+```
+
+结果：`6 files passed, 82 tests passed`
+
+```bash
+npx vitest run src/lib/claude-engine/engine/__tests__/compactor.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/provider-model-catalog.test.ts
+```
+
+结果：`3 files passed, 17 tests passed`
+
+```bash
+npx eslint src/lib/bridge/native-codex-auth.ts src/lib/bridge/native-codex-auth.test.ts src/lib/claude-engine/api/pi-transport.ts src/lib/claude-engine/api/retry.ts src/lib/claude-engine/api/provider-fallback.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/claude-engine/api/__tests__/api.test.ts src/lib/claude-engine/engine/compactor.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/backends/claude-engine-backend.ts
+```
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：codex / claude-code backend 降级为 legacy manual path
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/backends/builtin-backends.ts`
+   - 将 CLI 直连 backend 的 canonical 命名改为：
+     - `LegacyCodexManualBackend`
+     - `LegacyClaudeCodeManualBackend`
+   - 明确它们只服务于兼容/手工入口，不再代表 Claude Engine 主线
+   - 保留 `CodexAgentBackend / ClaudeCodeAgentBackend` 兼容别名，并显式标注 deprecated
+   - `ensureBuiltInAgentBackends()` 中为 `codex / claude-code` 增加 manual-only 注释，避免后续继续被误用为主线 backend
+2. `src/lib/backends/index.ts`
+   - 顶层导出切到 `Legacy*ManualBackend` 为 canonical 名称
+   - 旧名称改成单独的 deprecated compatibility alias 导出
+3. 测试同步：
+   - `src/lib/backends/builtin-backends.test.ts`
+   - `src/lib/backends/intervention-contract.test.ts`
+4. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/backends/builtin-backends.test.ts src/lib/backends/intervention-contract.test.ts src/lib/claude-engine/tools/__tests__/execution-tool.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
+```
+
+结果：`4 files passed, 43 tests passed`
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/lib/backends/builtin-backends.ts src/lib/backends/index.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/intervention-contract.test.ts
+```
+
+说明：`builtin-backends*` 文件本身带有既有 `no-explicit-any` lint 债；本轮用规则豁免验证语法、导入与新增命名改动未引入新的 lint 问题。
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：Claude Engine 统一 ExecutionTool 抽象接入 codex / claude-code
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/claude-engine/tools/execution-tool.ts`
+   - 新增统一 `ExecutionTool`
+   - 对上只暴露 `list / run` 两个动作
+   - `codex / claude-code` 统一按执行工具处理，不再要求主线显式区分单轮 / 多轮
+   - 底层通过 `sessionHandle` 续接已有会话；是否支持多轮由各 executor 自己声明
+2. `src/lib/claude-engine/tools/registry.ts`
+   - 把 `ExecutionTool` 注册进默认 registry
+3. `src/lib/claude-engine/tools/toolsets.ts`
+   - 新增 `execution` toolset
+   - `coding / full` toolset 默认包含 `ExecutionTool`
+4. `src/lib/claude-engine/tools/index.ts`
+   - 导出 `ExecutionTool` 与 runtime 绑定 API
+5. `src/lib/backends/claude-engine-backend.ts`
+   - Claude Engine session 创建时默认绑定 `ExecutionTool` runtime
+   - 主线 Claude Engine 编排现在可直接调用 `codex / claude-code`
+6. 测试同步：
+   - `src/lib/claude-engine/tools/__tests__/execution-tool.test.ts`
+   - `src/lib/claude-engine/tools/__tests__/tools.test.ts`
+   - `src/lib/backends/__tests__/claude-engine-backend.test.ts`
+7. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/claude-engine/tools/execution-tool.ts src/lib/claude-engine/tools/index.ts src/lib/claude-engine/tools/registry.ts src/lib/claude-engine/tools/toolsets.ts src/lib/claude-engine/tools/__tests__/execution-tool.test.ts src/lib/claude-engine/tools/__tests__/tools.test.ts src/lib/backends/claude-engine-backend.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
+```
+
+```bash
+npx vitest run src/lib/claude-engine/tools/__tests__/execution-tool.test.ts src/lib/claude-engine/tools/__tests__/tools.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
+```
+
+结果：`3 files passed, 53 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：AI Provider 配置面收口，CLI coder 退出 Provider 平面
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/providers/types.ts`
+   - 引入 `AIProviderId` 与 `ExecutionToolId` 分层
+   - `AIProviderConfig.defaultProvider / layers / scenes / providerProfiles` 只允许真实 AI provider
+   - `codex / claude-code` 保留为执行工具，不再属于组织级 Provider 配置类型
+2. `src/lib/providers/ai-config.ts`
+   - 组织级 `ai-config` 在加载与保存时会把遗留 `codex / claude-code` 自动归一为 `native-codex`
+   - `providerProfiles` 只保留 AI provider 真相，不再接受 CLI coder profile
+3. `src/lib/providers/provider-availability.ts`
+   - Settings Provider 选择器只暴露 `antigravity / native-codex / claude-api / openai-api / gemini-api / grok-api / custom`
+   - `codex / claude-code` 不再出现在 provider 下拉与可用性校验里
+4. `src/components/settings-panel.tsx`
+   - `Provider 配置`、`高级设置`、`Scene 覆盖` 全部切到 `AIProviderId`
+   - 新增“本机执行工具”展示区，单独显示 `Codex CLI / Claude Code CLI`
+   - `codex / claude-code` 不再可作为默认 Provider、按层覆盖或 Scene 覆盖选择
+5. `src/components/department-setup-dialog.tsx`
+   - 部门 `AI Provider` 下拉移除 `codex / claude-code`
+   - 文案明确 CLI 只作为运行时执行工具存在
+6. `src/components/quick-task-input.tsx`
+   - 快速任务的 Provider 选择移除 `codex / claude-code`
+7. `src/lib/provider-model-catalog.ts`
+   - 模型目录只聚合 AI provider，不再把 CLI coder 当成 provider catalog 来源
+8. `src/lib/provider-image-generation.ts`
+   - 图像生成请求与 capability 列表只接受 AI provider
+9. `src/lib/backends/claude-engine-backend.ts`
+   - API-backed model config 读取 `providerProfiles` 时只索引 AI provider
+10. `src/lib/agents/llm-oneshot.ts`
+    - 一次性 LLM 路径改为按 AI provider 走 Claude Engine / API-backed 主链，不再把 `codex` 当成可配置 provider 分支
+11. `src/lib/agents/department-execution-resolver.ts`
+    - capability-aware fallback 顺序移除 `codex / claude-code`
+12. 测试同步：
+    - `src/lib/providers/ai-config.test.ts`
+    - `src/lib/providers/provider-availability.test.ts`
+    - `src/app/api/ai-config/route.test.ts`
+    - `src/lib/provider-model-catalog.test.ts`
+    - `src/lib/provider-image-generation.test.ts`
+13. 文档同步：
+    - `ARCHITECTURE.md`
+    - `docs/guide/agent-user-guide.md`
+    - `docs/guide/gateway-api.md`
+    - `docs/guide/cli-api-reference.md`
+    - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/app/api/ai-config/route.test.ts src/lib/provider-model-catalog.test.ts src/lib/provider-image-generation.test.ts
+```
+
+结果：`5 files passed, 32 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：native-codex 直连路径清理与本地会话统一到 Claude Engine
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/bridge/native-codex-adapter.ts`
+   - `nativeCodexComplete()` 的文本 / tool 路径现在固定只走 `pi-ai`
+   - 删除 `pi-ai -> native fetch` fallback，避免 `native-codex` 再出现主线混合态
+   - `native-codex` 的 native fetch 只保留给图像生成 `image_generation` 专用路径
+2. `src/lib/providers/index.ts`
+   - 移除 `getExecutor('native-codex')`
+   - `native-codex` 不再作为本地直连 `TaskExecutor` 暴露
+3. `src/lib/providers/native-codex-executor.ts`
+   - 已删除
+4. `src/lib/api-provider-conversations.ts`
+   - `native-codex` 纳入 `ApiConversationProvider`
+   - 本地 `native-codex` 会话改由 Claude Engine conversation / transcript 承载
+   - 新增 resume session 检查：只有真实存在的 Claude Engine transcript session 才会 resume，避免旧直连 handle 误续接
+5. `src/app/api/conversations/[id]/send/route.ts`
+   - 本地 `native-codex` 对话不再走 direct executor
+   - 统一走 `runApiConversationTurn()` / `readApiConversationSteps()`
+   - 旧 `native-codex-*` handle URL 首次续聊时会自动补一条本地 conversation record，绑定新的 Claude Engine session handle
+6. `src/app/api/conversations/[id]/steps/route.ts`
+   - `native-codex` steps 默认读取 Claude Engine transcript
+   - 对历史直连会话保留只读兼容：当没有 API transcript 时，回退到旧 run-history transcript reconstruction
+7. `src/lib/run-conversation-transcript.ts`
+   - 删除对 `NativeCodexExecutor` 内存会话的依赖
+   - `native-codex` 历史兼容回放统一从 run-history 读取
+8. `src/lib/backends/builtin-backends.ts`
+   - 删除未再使用的 `NativeCodexAgentSession / NativeCodexAgentBackend` 直连残留
+   - 内置 backend 口径统一为 `native-codex -> ClaudeEngineAgentBackend`
+9. 测试同步：
+   - `src/lib/bridge/native-codex-adapter.test.ts`
+   - `src/lib/providers/providers.test.ts`
+   - `src/app/api/conversations/[id]/send/route.test.ts`
+   - `src/app/api/conversations/[id]/steps/route.test.ts`
+10. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/api-provider-conversations.ts src/lib/run-conversation-transcript.ts src/lib/providers/index.ts src/lib/providers/providers.test.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.ts' 'src/app/api/conversations/[id]/steps/route.test.ts'
+```
+
+```bash
+npx vitest run src/lib/bridge/native-codex-adapter.test.ts src/lib/providers/providers.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts
+```
+
+结果：`7 files passed, 38 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：native-codex Claude Engine 主线路由收口到 pi-ai
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/claude-engine/api/retry.ts`
+   - 调整 `selectProviderStream()`：
+     - 当 `provider = native-codex` 且 `transport = pi-ai` 时，主线现在直接进入 `streamQueryViaPi()`
+     - 不再让 `native-codex` 在 Claude Engine Department / scheduler / prompt-run 主线上继续走 special native provider stream 分支
+   - 作用域刻意收紧到 Claude Engine 主线，不改本地 conversation / direct executor / 图像生成路径
+2. 测试补齐：
+   - `src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts`
+     - 新增 `native-codex` 主线命中 `pi-ai` 且不走 `streamQueryNativeCodex()` 的断言
+   - `src/lib/claude-engine/api/__tests__/native-codex.test.ts`
+     - 修正主线测试输入，显式带上 `providerId = native-codex` 与 `transport = pi-ai`
+     - 断言 `streamQueryWithRetry()` 主线走 `pi-ai`，不再误测默认 `native` 分支
+   - `src/lib/backends/__tests__/claude-engine-runtime-config.test.ts`
+     - 新增 `native-codex -> transport = pi-ai` 的 Claude Engine runtime config forwarding 断言
+3. 运行时注释同步：
+   - `src/lib/providers/index.ts`
+     - 明确 `getExecutor('native-codex')` 返回的是 legacy/direct path
+     - Department / agent-runs 主线仍由 `ClaudeEngineAgentBackend('native-codex')` 承载
+4. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
+
+### 本轮边界
+
+本轮明确未动：
+
+1. `NativeCodexExecutor` 本地直连路径
+2. `/api/conversations` 本地会话产品链路
+3. `native-codex` 图像生成路径
+4. `workflow-runtime-hooks.ts` 的 worker 拆分
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/claude-engine/api/retry.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/providers/index.ts
+```
+
+```bash
+npx vitest run src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/providers/providers.test.ts src/lib/backends/builtin-backends.test.ts src/lib/agents/department-capability-registry.test.ts
+```
+
+结果：`5 files passed, 47 tests passed`
+
+```bash
+npx vitest run src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts
+```
+
+结果：`3 files passed, 11 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：系统改进 Proposal 运行态同步与 CEO/Ops 准出证据包可见
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - 新增运行态同步层
+   - 基于平台工程 `Project + latest Run + testEvidence + approval metadata` 生成统一 `exitEvidence`
+   - `exitEvidence` 包含四段：
+     - `project`
+     - `latestRun`
+     - `testing`
+     - `mergeGate`
+   - proposal 状态现在会随执行态自动推进：
+     - `approved`
+     - `in-progress`
+     - `testing`
+     - `ready-to-merge`
+   - 不再只看测试证据，也会看平台工程项目是否真的完成交付
+2. `src/lib/agents/run-registry.ts`
+   - terminal run 现在会自动同步关联的系统改进 proposal 运行态
+   - 平台工程项目某个 run 结束后，proposal 会自动刷新 `exitEvidence` 与下一状态
+3. `src/app/api/company/self-improvement/proposals/route.ts`
+   - proposal 列表读取前会同步 active proposal 的运行态
+   - 列表返回的 proposal 现在自带 runtime-synced `exitEvidence`
+4. `src/app/api/company/self-improvement/proposals/[id]/route.ts`
+   - proposal 详情读取时会同步最新运行态，避免 CEO/Ops 看到旧状态
+5. `src/app/api/company/self-improvement/proposals/[id]/attach-test-evidence/route.ts`
+   - 追加测试证据后会立刻按当前平台工程项目状态重新计算 proposal 状态
+   - 只有平台工程项目已完成交付且测试通过时，才会进入 `ready-to-merge`
+6. `src/components/ops-dashboard.tsx`
+   - 新增 `准出证据` 面板
+   - Ops 现在可以直接看到每条系统改进 proposal 的：
+     - project 状态
+     - latest run 状态
+     - 测试证据概况
+     - merge gate 状态与首条阻塞原因
+7. `src/components/ceo-office-cockpit.tsx`
+   - CEO Office 的系统改进卡不再只显示数量
+   - 现在直接显示前两条 proposal 的执行摘要和准出状态，可跳转到关联 Project
+8. 类型与接口同步：
+   - `src/lib/company-kernel/contracts.ts`
+   - `src/lib/types.ts`
+   - `src/lib/api.ts`
+9. 文档同步：
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/agents/run-registry.ts 'src/app/api/company/self-improvement/proposals/route.ts' 'src/app/api/company/self-improvement/proposals/[id]/route.ts' 'src/app/api/company/self-improvement/proposals/[id]/attach-test-evidence/route.ts' src/components/ops-dashboard.tsx src/components/ceo-office-cockpit.tsx src/lib/api.ts src/lib/types.ts src/lib/company-kernel/contracts.ts src/lib/company-kernel/self-improvement.test.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts
+```
+
+结果：`5 files passed, 14 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：系统改进 Proposal 批准后自动立项并进入平台工程 AI Loop
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/self-improvement-execution.ts`
+   - 新增系统改进执行编排层
+   - `approve` 后会自动把 proposal 映射成平台工程部 Project
+   - 默认使用内置平台工程 workspace 与 `development-template-1`
+   - 自动构造首轮 goal / taskEnvelope，把 proposal 的风险、影响文件、实施计划、测试计划、回滚计划注入执行上下文
+   - 自动记录：
+     - `metadata.improvementProjectId`
+     - `metadata.improvementRunId`
+     - `metadata.improvementTemplateId`
+     - `metadata.launchStatus`
+   - 内置幂等保护：已存在 improvement run 时不会重复派发
+2. `src/lib/company-kernel/self-improvement-approval.ts`
+   - `approveSystemImprovementProposal()` 新增 `launchExecution` 选项
+   - 保留纯审批模式；审批路由和审批回调则默认开启自动执行
+3. `src/app/api/company/self-improvement/proposals/[id]/approve/route.ts`
+   - `POST /api/company/self-improvement/proposals/:id/approve` 现在会返回：
+     - `proposal`
+     - `launch`
+   - `approve` 不再只改状态，会直接触发平台工程部立项与首跑
+4. `src/lib/approval/dispatcher.ts`
+   - approval custom callback `approve-system-improvement-proposal` 改为自动执行版
+   - 这样审批中心批准 high/critical proposal 后，也会自动进入平台工程 AI Loop
+5. 文档同步：
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-execution.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-approval.ts 'src/app/api/company/self-improvement/proposals/[id]/approve/route.ts' src/lib/approval/dispatcher.ts src/lib/company-kernel/self-improvement.test.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/platform-engineering.test.ts src/lib/workspace-catalog.test.ts
+```
+
+结果：`5 files passed, 12 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：内置平台工程部与自开发观察链路落地
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-30
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/platform-engineering.ts`、`src/lib/workspace-catalog.ts`、`src/lib/storage/gateway-db.ts`
+   - 新增内置 `平台工程部` workspace bootstrap，固定落在 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`
+   - 平台工程部通过现有 `Department / Workspace Catalog` 注册为系统默认内置部门，不新增第二套机制
+   - 自动补齐 `.department/config.json`、基础 rules、provider memory 和自进化上下文文档路径
+2. `src/lib/agents/project-types.ts`、`src/lib/types.ts`、`src/lib/agents/project-registry.ts`、`src/app/api/projects/route.ts`、`src/lib/api.ts`
+   - `Project` 新增 `governance.platformEngineering` 治理字段：
+     - `observe`
+     - `allowProposal`
+     - `departmentId`
+     - `source`
+     - `updatedAt`
+   - 平台工程部 workspace 内创建的项目默认开启观察与自动提案治理
+   - `POST /api/projects` 支持创建时直接附带平台工程治理配置
+3. `src/lib/company-kernel/platform-engineering-observer.ts`、`src/lib/agents/run-registry.ts`
+   - 新增平台工程观察器
+   - 被平台工程部观察的项目在出现 `failed / blocked / timeout` run 时，会自动生成 `SystemImprovementSignal`
+   - 如果项目同时允许自动提案，会继续自动生成 `SystemImprovementProposal`
+   - run 失败观察直接挂到现有 run 生命周期，不新增独立后台机制
+4. `src/lib/company-kernel/contracts.ts`、`src/lib/company-kernel/self-improvement-signal.ts`、`src/lib/company-kernel/self-improvement-planner.ts`
+   - `SystemImprovementSignal.source` 新增 `user-story-gap`
+   - 支持稳定 ID、保留 `createdAt`、附带 `linkedRunIds / metadata`
+   - 为自动信号和自动 proposal 提供可重复同步的持久化基础
+5. `src/lib/company-kernel/platform-engineering-observer.ts`
+   - `User Story/` 下的 `[不支持]` 场景会被同步成平台工程部长期改进信号池
+   - 第一版只自动生成 signal，不批量自动提案，避免直接淹没 CEO 决策面
+6. 文档同步：
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/platform-engineering.ts src/lib/company-kernel/platform-engineering-observer.ts src/lib/workspace-catalog.ts src/lib/agents/project-registry.ts src/lib/agents/run-registry.ts src/app/api/projects/route.ts src/lib/api.ts src/lib/types.ts src/lib/agents/project-types.ts
+```
+
+```bash
+npx vitest run src/lib/platform-engineering.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/workspace-catalog.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/departments/route.test.ts src/lib/agents/department-capability-registry.test.ts
+```
+
+结果：`6 files passed, 19 tests passed`
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+# 任务：Settings Provider 管理旅程补齐（已接入真相源 / 删除恢复 / 多兼容接入 / 真实第三方验收）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-29
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/providers/types.ts`、`src/lib/providers/ai-config.ts`
+   - 组织级 provider 配置补齐多接入语义：
+     - `customProviders[]`
+     - `activeCustomProviderId`
+     - 兼容保留 `customProvider` 作为运行时物化字段
+   - 新增 `providerProfiles[provider].enabled`，支持把已检测到的本机 Provider 从当前系统移除/恢复，而不破坏机器上的 CLI / OAuth 登录态
+   - `load/save/set` 统一走 normalize，避免旧结构和新结构出现两套真相
+2. `src/lib/providers/provider-availability.ts`
+   - 区分“技术上可用”和“当前系统启用”
+   - 默认 Provider / layer / scene 的可用性判断现在会同时考虑 inventory 与 app-level enabled 状态
+3. `src/server/control-plane/routes/settings.ts`
+   - `PUT /api/ai-config` 先归一化后校验/落盘
+   - `POST /api/api-keys/test` 新增对已保存接入的复测支持：
+     - API provider 可 `useStored=true`
+     - `custom` 可 `connectionId + useStored=true`
+   - 修复 OpenAI-compatible 端点归一化，`https://host` 与 `https://host/v1` 都不会再拼出 `/v1/v1/models`
+4. `src/lib/providers/openai-compatible.ts`
+   - 新增 OpenAI-compatible URL 归一化工具
+   - `provider-model-catalog` / `provider-image-generation` / settings route 统一复用
+5. `src/components/settings-panel.tsx`
+   - `AI 接入` 改成真实管理面，不再只是“添加表单”
+   - `native-codex / codex / claude-code` 已检测到时会直接进入“已接入”列表
+   - API provider 支持：
+     - `编辑`
+     - `复测`
+     - `删除`
+   - 兼容端点支持：
+     - 多接入保存
+     - `设为当前`
+     - `编辑`
+     - `复测`
+     - `删除`
+   - 不完整兼容接入会显示为 `待完成`，不计入已接入，也不会进入默认 Provider 选择
+   - 本机 Provider 支持：
+     - `移除`
+     - `恢复`
+   - `默认配置` 下拉现在只消费真正可用且已启用的 Provider
+   - `按层覆盖` 新增 `清除覆盖`
+6. 文档同步：
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/lib/providers/ai-config.ts src/lib/providers/provider-availability.ts src/server/control-plane/routes/settings.ts src/lib/provider-model-catalog.ts src/lib/provider-image-generation.ts src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/lib/providers/openai-compatible.ts src/lib/providers/openai-compatible.test.ts src/lib/backends/claude-engine-backend.ts
+```
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/lib/providers/openai-compatible.test.ts src/lib/provider-model-catalog.test.ts src/lib/provider-image-generation.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts
+```
+
+结果：`6 files passed, 35 tests passed`
+
+```bash
+npm run build
+```
+
+结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+真实第三方验收（使用用户提供的 OpenAI-compatible 端点）：
+
+1. `POST /api/api-keys/test`
+   - `provider=custom`
+   - `baseUrl=https://new.baogaoai.com/v1`
+   - 结果：`status=ok`
+2. `POST /api/provider-model-catalog`
+   - `provider=custom`
+   - 结果：`source=remote-discovery`，返回 `56` 个模型
+3. 浏览器验收（优先使用 `bb-browser`，本轮可用，无需回退 Playwright）：
+   - 将未完成兼容接入编辑为可用接入 `BaogaoAI GLM`
+   - 实测 `测试连接 -> 保存修改` 成功
+   - 实测新增一个临时兼容接入后可再删除
+   - 实测 `Codex (MCP)` 可 `移除 -> 恢复`
+   - 实测已保存兼容接入可直接 `复测`
+4. 验收截图：
+   - `/tmp/opc-settings-provider-journey-fixed.png`
+
+# 任务：Settings Provider 最终旅程收口（AI 接入在上 / 默认配置与高级设置合并）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - 将 `Provider 配置` 页最终收敛为两段主旅程：
+     - `AI 接入`
+     - `默认配置`
+   - `AI 接入` 置顶，统一承接 API provider 与自定义服务的接入动作
+   - `openai-api / claude-api / gemini-api / grok-api` 的 `API Key + 测试连接 + 保存接入` 全部并入 `AI 接入`
+   - `custom` 接入继续支持预设模板、端点、密钥和默认模型，但不再用 `兼容端点` 概念对外表达
+   - 删除 `执行设置` 这层多余命名，保留单卡 `默认配置`
+   - `默认配置` 只负责默认 Provider、默认模型与同卡内折叠的 `高级设置`
+   - `高级设置` 不再作为独立平级概念，改为 `默认配置` 卡内的展开层
+   - 默认 Provider 下拉不再允许新选未接入 provider；只保留对历史未接入值的兼容显示
+   - 页底主保存动作改名为 `保存默认配置`，和上方 `保存接入` 分离语义
+2. `docs/guide/agent-user-guide.md`
+   - 同步更新 Settings Provider 的最终用户旅程说明
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+rm -rf .next/dev/types && npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试 `bb-browser`，当前环境仍是 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - 存在 `AI 接入`
+   - 存在 `默认配置`
+   - `AI 接入` 出现在 `默认配置` 之前
+   - 页面上不再出现 `兼容端点`
+   - 页面上不再出现 `执行设置`
+   - 页面上不再出现 `Provider Transport / pi-ai transport / native fallback`
+   - 页面上不再出现 `Current profile`
+3. 截图：
+   - `/tmp/opc-settings-provider-final-journey.png`
+   - `/tmp/opc-settings-provider-final-journey-expanded.png`
+
+# 任务：Settings 会话平台接通本地 cc-connect 启停链路
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/cc-connect-local.ts`
+   - 新增本机 `cc-connect` 管理辅助层
+   - 支持探测安装路径、配置文件、微信绑定、`management` 端口监听和运行 PID
+   - 支持 `ensureCcConnectConfig()` 自动修复 `work_dir / args / [management]`
+   - 支持 `startCcConnect()` / `stopCcConnect()` 本地启停
+   - 修复三个关键误判：
+     - 不再把 `[management].token` 误判成微信绑定 token
+     - 不再把不存在的 ACP 脚本路径误判成“配置已就绪”
+     - 不再把访问 `9820` 的当前 web/api 进程误判成 `cc-connect` 本身
+2. 新增 Web 端本地管理 API：
+   - `src/app/api/cc-connect/local-state/route.ts`
+   - `src/app/api/cc-connect/manage/route.ts`
+3. `src/components/cc-connect-tab.tsx`
+   - `会话平台` 页不再只显示“cc-connect 未连接”
+   - 新增本地状态卡：安装 / 配置 / 绑定 / 运行
+   - 新增 `修复默认配置 / 启动 cc-connect / 停止 / 重新检查`
+   - 停机态会直接展示可启动页面，不再只能重试
+4. `src/components/platform-manager.tsx`
+   - 文案从 `添加消息平台` 收口为 `添加会话平台`
+5. 顺手修复了 `src/components/settings-panel.tsx` 的 JSX 结构错误，恢复 Settings 页正常编译
+6. 文档同步：
+   - `docs/guide/wechat-setup.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+   - `cc-connect.config.toml`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/cc-connect-tab.tsx src/components/platform-manager.tsx src/components/settings-panel.tsx src/app/api/cc-connect/local-state/route.ts src/app/api/cc-connect/manage/route.ts src/lib/cc-connect-local.ts src/lib/cc-connect-local.test.ts
+```
+
+```bash
+npx vitest run src/lib/cc-connect-local.test.ts
+```
+
+结果：`2 tests passed`。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+接口验收：
+
+1. `POST /api/cc-connect/manage { "action": "stop" }` 返回 `200`，`running=false`
+2. `POST /api/cc-connect/manage { "action": "start" }` 返回 `200`，`running=true`
+3. `GET /api/cc-connect/local-state` 返回本机 `installed/configPrepared/tokenConfigured/managementEnabled/running` 全量状态
+
+页面验收：
+
+1. 先尝试 `bb-browser open 'http://127.0.0.1:3999/?panel=settings&tab=messaging'`
+2. 初次仍遇到 daemon / CDP 不稳定，执行 `bb-browser daemon shutdown` 后恢复可打开；但 snapshot/screenshot 仍不足以做稳定 DOM 验收，因此按规则回退到一次性 Playwright
+3. Playwright 验证通过：
+   - 停机态首屏可见 `启动 cc-connect`
+   - 点击后进入 `cc-connect 已运行`
+   - 页面可见 `运行状态 / 会话平台 / 会话 / 心跳监控`
+4. 截图：
+   - `/tmp/opc-cc-connect-stopped-ui.png`
+   - `/tmp/opc-cc-connect-started-ui.png`
+
+# 任务：Settings 右侧固定摘要栏移除（释放主工作面宽度）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - 移除 Settings 顶层布局中的固定右侧 `aside`
+   - 整个页面从 `主列 + 320px 固定摘要栏` 改为单列工作面
+   - 删除 `当前配置 / 兼容 Provider` 右侧摘要卡
+   - 删除只服务于右栏的 `SettingsSidebarCard / SettingsInfoRow`
+   - 删除只服务于右栏的派生摘要变量（默认 Provider、默认模型、Layer/Scene 计数、已接入 Provider 数等）
+2. 保留所有原 tab 主流程：
+   - `个人偏好`
+   - `Provider 配置`
+   - `凭证中心`
+   - `Scene 覆盖`
+   - `预算策略`
+   - `MCP 服务器`
+   - `会话平台`
+3. 页面结果改为：
+   - 主内容区全宽展开
+   - 不再用固定右栏占据横向空间
+   - 摘要信息回归各自 tab 主工作面，不再在 Settings 首页重复平铺
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试 `bb-browser open 'http://127.0.0.1:3000/?panel=settings&tab=profile'`，但当前环境仍返回 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - Settings 首屏可正常打开
+   - 右侧不再出现 `当前配置`
+   - 右侧不再出现 `活跃 Provider`
+   - 右侧不再出现 `兼容 Provider`
+   - 页面无 404 / 无 console error
+3. 截图：
+   - `/tmp/opc-settings-no-right-rail.png`
+
+# 任务：Settings Provider 用户旅程三次收口（高级项后置 / 首屏只保留首次接入必需内容）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - 复审 `Provider 配置` 的首次接入旅程，并继续压缩首屏信息层级
+   - 将 `图像生成` 与 `按层覆盖` 从首屏主区域移出，合并进默认折叠的 `高级设置`
+   - `高级设置` 首屏只显示两条摘要：当前图像生成配置、当前 layer 覆盖数量
+   - 把 `图像 Provider / 图像 Model / 图像测试` 改成仅在展开高级设置后出现
+   - 把 layer override 表单改成二次展开，避免首次接入时直接看到四层配置
+   - 将默认 Provider 的未接入提示改成真实动作文案：先保存凭证/端点，再保存默认 Provider 选择
+   - 保持 `集中维护凭证` 为二级维护入口，但不再挤占主流程
+   - 旅程命名继续收口：`默认执行` 改为 `默认配置`，`兼容端点` 改为 `AI 接入`，主动作改为 `添加接入 / 编辑接入 / 保存接入`
+2. `docs/guide/agent-user-guide.md`
+   - 同步补充：图像生成与按层覆盖已后置到 `高级设置`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试 `bb-browser`，但当前环境仍是 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - 首屏存在 `高级设置`
+   - 首屏默认不出现 `图像 Provider` 与 layer override 详细控件
+   - 顶部主 tab 不再出现 `凭证中心`
+   - 切到 `OpenAI API` 后，同卡直接出现 `OpenAI API Key / 测试连接 / 保存凭证`
+   - `AI 接入` 未接入时只显示轻提示
+   - 展开 `高级设置` 后，图像生成与按层覆盖控件仍完整可用
+   - 首屏可见 `默认配置 / AI 接入 / 高级设置`
+3. 截图：
+   - `/tmp/opc-settings-provider-journey-tuned.png`
+   - `/tmp/opc-settings-provider-advanced-expanded.png`
+   - `/tmp/opc-settings-provider-credential-center-tertiary.png`
+
+# 任务：Settings Provider 用户旅程复审与二次收口（去主 tab 凭证中心 / 凭证并回默认执行）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - 复审 `Provider 配置` 的首次接入旅程，并按真实任务流重新收口
+   - `凭证中心` 不再作为顶部主 tab 暴露，降级成 `Provider 配置` 内的二级维护入口
+   - `openai-api / claude-api / gemini-api / grok-api` 的 API Key 输入、测试连接、保存凭证并回 `默认执行` 同一卡片
+   - 移除独立的 `当前 Provider 接入` 卡片，避免同一件事被拆成两层
+   - `native-codex / antigravity / codex / claude-code` 改成同卡内简短接入说明，不再额外生成一张接入卡
+   - `兼容 Provider` 文案统一收口为 `兼容端点`
+   - 未启用兼容端点时，默认只显示轻提示，不再先平铺摘要再让用户决定要不要展开
+   - Provider 首屏 `刷新模型` 出现次数降到 `0`
+2. `docs/guide/agent-user-guide.md`
+   - 同步更新 Settings Provider 配置的实际旅程说明
+   - 明确 `凭证中心` 已变成二级维护入口，不再是主导航 tab
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试 `bb-browser`，但当前环境仍是 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - 顶部主 tab 已不再出现 `凭证中心`
+   - Provider 首屏已不再出现独立 `当前 Provider 接入` 卡片
+   - 切到 `OpenAI API` 后，同卡直接出现 `OpenAI API Key / 测试连接 / 保存凭证`
+   - 首屏 `刷新模型` 出现次数为 `0`
+   - `兼容端点` 在未接入时只显示轻提示
+   - `集中维护凭证` 仍可作为二级入口进入 `凭证中心`
+3. 截图：
+   - `/tmp/opc-settings-provider-journey-review.png`
+   - `/tmp/opc-settings-provider-credential-center-secondary.png`
+
+# 任务：Settings 通知投递关系收口（会话平台与公司循环摘要投递解耦）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/company-loop-notification-targets.ts`
+   - 新增公司循环摘要投递目标可用性真相源
+   - `web` 固定可用；`email` 需要邮件网关 + 收件人；`webhook` 需要 Webhook URL
+   - 新增 `sanitizeCompanyLoopNotificationChannels()`，不再允许未接入通道进入有效策略
+2. `src/app/api/company/loops/notification-targets/route.ts`
+   - 新增 `GET /api/company/loops/notification-targets`
+   - Web 端可直接读取 `web / email / webhook` 的当前可用性与原因
+3. `src/app/api/company/loops/policies/[id]/route.ts`
+   - `GET` 返回已清洗的 `notificationChannels`
+   - `PUT` 保存前自动过滤未接入通道，并强制保留 `web`
+4. `src/lib/company-kernel/company-loop-notifier.ts`
+   - 执行 loop digest 投递前再次清洗渠道，避免历史脏策略继续产生 `not-configured` 假投递
+5. `src/components/settings-panel.tsx`
+   - `预算策略 -> 公司循环策略` 的 `通知渠道` 改成 `摘要投递`
+   - `Web 收件箱` 改成默认启用，不再让用户误以为可以关闭
+   - `邮件投递 / Webhook` 未接入时显示为 `未接入`，且在 Web 端不可选
+   - Settings 主 tab `消息平台` 改名为 `会话平台`，避免和摘要投递混淆
+6. `src/components/cc-connect-tab.tsx`
+   - 对应标题同步改成 `会话平台`
+   - 顺手清理旧的 hook / effect lint 问题
+7. `src/app/api/company/budget/policies/[id]/route.ts`
+   - 默认预算策略 ID 首次 `GET` 时自动创建，Settings 首屏不再打 404
+8. 文档同步：
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/components/cc-connect-tab.tsx 'src/app/api/company/loops/policies/[id]/route.ts' src/app/api/company/loops/notification-targets/route.ts 'src/app/api/company/budget/policies/[id]/route.ts' src/server/control-plane/company-routes.ts src/lib/company-kernel/company-loop-notification-targets.ts src/lib/company-kernel/company-loop-notification-targets.test.ts src/lib/company-kernel/company-loop-notifier.ts src/lib/company-kernel/company-loop.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/company-kernel/company-loop-notification-targets.test.ts src/lib/company-kernel/company-loop.test.ts
+```
+
+结果：`2 files passed`，`6 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+node - <<'NODE'
+(async () => {
+  const first = await fetch('http://127.0.0.1:3000/api/company/budget/policies/budget%3Adepartment%3Adefault%3Aday');
+  const second = await fetch('http://127.0.0.1:3000/api/company/loops/notification-targets');
+  console.log(JSON.stringify({
+    budgetStatus: first.status,
+    budgetId: (await first.json()).id,
+    notificationStatus: second.status,
+    notificationCount: ((await second.json()).items || []).length,
+  }, null, 2));
+})();
+NODE
+```
+
+结果：
+
+```json
+{
+  "budgetStatus": 200,
+  "budgetId": "budget:department:default:day",
+  "notificationStatus": 200,
+  "notificationCount": 3
+}
+```
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试 `bb-browser open 'http://127.0.0.1:3000/?panel=settings&tab=autonomy'` 与 `bb-browser screenshot ...`，但当前环境继续返回 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - 存在 `摘要投递`
+   - 存在 `Web 收件箱`
+   - `邮件投递 / Webhook` 在未接入时显示 `未接入`
+   - Settings tab 已切成 `会话平台`
+   - 页面上不再出现 `消息平台`
+   - 页面无 404 / 无 console error
+3. 截图：
+   - `/tmp/opc-settings-notification-targets.png`
+
+# 任务：Settings 自治预算页交互收口（去内部 policy 元信息 / 去裸露细配）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - `预算策略` 首屏重排为 `组织自运营预算 / 部门默认预算 / 公司循环策略`
+   - 删除组织预算和部门预算右上角的 `Policy / Scope / Mode` 技术元信息盒
+   - 删除单独的 `Operation cooldown` 与 `风险与熔断` 卡片，把风险阈值并回预算主体
+   - 把 `operation / department cooldown` 文本规则降级为 `高级规则`，默认折叠
+   - 公司循环策略改成只露出主节奏配置，动作白名单与通知渠道降为高级展开
+   - 预算字段改成中文主语义：`Token 上限 / 分钟上限 / 派发上限 / 并发上限 / 预警阈值 / 审批阈值`
+   - 清理 Provider 页遗留的 inline credential 死代码，避免旧交互残留继续污染构建
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. `bb-browser` 当前环境仍然返回 `Chrome not connected (CDP 503)`，无法用于本地 Settings 验收，因此回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - 存在 `组织自运营预算 / 部门默认预算 / 公司循环策略`
+   - 页面上不再出现 `Policy:`、`Scope:`、`Mode:`
+   - 页面上不再出现单独的 `Operation cooldown` 和 `风险与熔断` 卡片
+   - `展开高级规则` 默认可见，冷却规则和动作白名单默认不平铺
+   - 预算主字段已切成中文语义字段
+3. 截图：
+   - `/tmp/opc-settings-autonomy-redesign.png`
+
+# 任务：Settings Provider 配置旅程收口（Provider 与凭证同页闭环）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - `Provider 配置` 中新增 `当前 Provider 接入` 卡片
+   - 当默认 Provider 切到 `openai-api / claude-api / gemini-api / grok-api` 时，同页直接出现：
+     - API Key 输入
+     - 测试连接
+     - 保存凭证
+   - `默认 Provider` 下拉不再要求先配置后选择，允许先选 provider 再在同页补齐接入
+   - `API Keys` tab 改名为 `凭证中心`
+   - `凭证中心` 降级为集中维护页，不再是首次接入的必经路径
+   - 本地型 provider（`antigravity / native-codex / codex / claude-code`）改成只展示接入状态说明，不暴露多余配置
+2. `docs/guide/agent-user-guide.md`
+   - 同步更新 Settings 配置旅程说明
+   - 明确 `Provider 配置` 为首次接入主路径，`凭证中心` 为二级维护入口
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试继续使用 `bb-browser`，但当前环境仍是 `Chrome not connected (CDP 503)`，因此回退到一次性 Playwright。
+2. Playwright 验证通过：
+   - 默认 `native-codex` 时，存在 `当前 Provider 接入`
+   - 切换默认 Provider 到 `OpenAI API` 后，同页直接出现 `OpenAI API Key / 测试连接 / 保存凭证`
+   - tab 标签已从 `API Keys` 改为 `凭证中心`
+   - 页面上不再出现 `Provider Transport / pi-ai transport / native fallback`
+3. 截图：
+   - `/tmp/opc-settings-provider-inline-credentials-final.png`
+   - `/tmp/opc-settings-credential-center-final.png`
+
+# 任务：Settings Provider 页交互收口（去 transport / 去平铺 / 去重复模型信息）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/settings-panel.tsx`
+   - `Provider 配置` 主路径重排为 `默认执行 / 兼容 Provider / 图像生成 / 按层覆盖`
+   - 移除用户可见的 `Provider Transport`、`pi-ai transport`、`native fallback`
+   - 移除 `Current profile`、`Provider 诊断`、`Settings Workspace` 等解释/诊断块
+   - 兼容 Provider 改为默认折叠，仅在需要接入第三方兼容端点时展开
+   - 大卡片 preset 改成紧凑 pill 选择，不再平铺未配置第三方 Provider
+   - 模型输入框取消外露模型 chips 和重复 `刷新模型` 文案，主页面只保留必要选择
+   - 图像生成测试区改成按需 `展开测试`，不再默认平铺整块表单
+   - 右侧侧栏改成 `当前配置 + 兼容 Provider` 两张摘要卡，不再泄漏 transport 细节
+2. `src/app/page.tsx`
+   - Settings shell header 改成 `compact`，副标题收敛成 `配置工作区`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/settings-panel.tsx src/app/page.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验收：
+
+1. 先尝试 `bb-browser open 'http://127.0.0.1:3000/?panel=settings&tab=provider'`，但当前环境返回 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
+2. Playwright 断言通过：
+   - 存在 `默认执行 / 兼容 Provider / 图像生成 / 按层覆盖`
+   - 页面上不再出现 `Provider Transport`、`Current profile`、`Provider 诊断`、`Settings Workspace`
+   - `刷新模型` 在首屏出现次数为 `0`
+   - `配置连接` 可展开兼容 Provider 表单
+   - `展开测试` 可按需展开图像测试区
+3. 截图：
+   - `/tmp/opc-settings-provider-redesign.png`
+   - `/tmp/opc-settings-provider-redesign-expanded.png`
+
+# 任务：native-codex 图像 provider 收口（capability 驱动 + 真链路验收）
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/providers/types.ts`、`src/lib/providers/ai-config.ts`
+   - `providerProfiles` 新增 `supportsImageGeneration`
+   - `native-codex` 现在默认声明为 image-capable provider
+   - 默认图像模型设为 `gpt-5.5`
+2. `src/lib/provider-image-generation.ts`
+   - 图像 provider 列表从静态白名单改成 capability 驱动
+   - 新增 `native-codex` 图像生成分支
+   - 返回真实使用尺寸；`native-codex` 路径会把过小尺寸归一到 `1024x1024`
+3. `src/lib/bridge/native-codex-adapter.ts`
+   - 新增 `nativeCodexGenerateImage()`
+   - 通过 Codex subscription auth 调 `chatgpt.com/backend-api/codex/responses`
+   - 使用 Responses `image_generation` tool + SSE 解析图片结果
+4. `src/lib/provider-model-catalog.ts`
+   - `native-codex / openai-api` 的主模型目录补上 `supportsImageGeneration`
+   - catalog 缓存加入 schema version，旧缓存不会再让图像模型列表卡成 `0 个模型`
+5. `src/components/settings-panel.tsx`
+   - 图像 Provider 下拉不再依赖 `openai-api/custom` 常量
+   - 改为从 provider capability 计算可配置列表
+   - 图像 Model 输入框改成 capability 过滤，只显示已标记图像能力的模型
+   - `native-codex` 现在可直接在 `Settings -> 图像生成` 中选择、启用并测试
+6. 测试补齐：
+   - `src/lib/bridge/native-codex-adapter.test.ts`
+   - `src/lib/provider-image-generation.test.ts`
+   - `src/lib/provider-model-catalog.test.ts`
+   - `src/lib/providers/ai-config.test.ts`
+7. 文档同步更新：
+   - `docs/design/pi-ai-transport-and-visual-config-plan-2026-04-28.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/provider-image-generation.ts src/lib/provider-image-generation.test.ts src/lib/provider-model-catalog.ts src/lib/provider-model-catalog.test.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/providers/types.ts src/components/settings-panel.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/bridge/native-codex-adapter.test.ts src/lib/provider-image-generation.test.ts src/lib/provider-model-catalog.test.ts src/lib/providers/ai-config.test.ts src/app/api/provider-image-generation/route.test.ts
+```
+
+结果：`5 files passed`，`29 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+curl -s 'http://127.0.0.1:3101/api/provider-model-catalog?provider=native-codex&refresh=1' | jq '.entry.models[] | select(.id=="gpt-5.5")'
+```
+
+结果：返回 `supportsImageGeneration: true`。
+
+```bash
+node - <<'NODE'
+(async() => {
+  const res = await fetch('http://127.0.0.1:3000/api/provider-image-generation', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      provider: 'native-codex',
+      prompt: 'A minimal blue square app icon on a white background',
+      size: '512x512',
+      allowFallback: false,
+    }),
+  });
+  const data = await res.json();
+  console.log(JSON.stringify({
+    status: res.status,
+    provider: data.provider,
+    model: data.model,
+    size: data.size,
+    hasDataUrl: typeof data.dataUrl === 'string' && data.dataUrl.startsWith('data:image/'),
+  }, null, 2));
+})();
+NODE
+```
+
+结果：
+
+```json
+{
+  "status": 200,
+  "provider": "native-codex",
+  "model": "gpt-5.5",
+  "size": "1024x1024",
+  "hasDataUrl": true
+}
+```
+
+浏览器验收：
+
+1. 先用 `bb-browser` 打开 `http://127.0.0.1:3000/?section=settings`，但当前长期 profile 被历史外部标签污染，只返回 `Checking the proxy and the firewall` 错误页，无法作为本地 SPA 验收依据。
+2. 回退到一次性 Playwright 后确认：
+   - `Settings -> Provider 配置` 存在 `图像生成`
+   - 图像 Provider 当前可选 `native-codex`
+   - 图像 Model 输入框出现 `gpt-5.5`
+   - `enabled` 状态可见
+3. 截图：
+   - `/tmp/opc-settings-native-codex-image-playwright.png`
+   - `/tmp/opc-settings-native-codex-image-section.png`
+
+# 任务：pi-ai transport Phase 3-4 收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/providers/ai-config.ts` 将第三方 provider 的默认 transport 统一切到 `pi-ai`：
+   - `claude-api`
+   - `openai-api`
+   - `gemini-api`
+   - `grok-api`
+   - `custom`
+   - 同时新增 `knowledge-summary`、`knowledge-image` scene 归到 `utility` layer
+2. `src/lib/claude-engine/api/types.ts`、`src/lib/backends/claude-engine-backend.ts`、`src/lib/claude-engine/api/retry.ts`、`src/lib/claude-engine/api/pi-transport.ts` 完成 Claude Engine API-backed provider 的统一 transport 接线：
+   - `ModelConfig` 新增 `providerId / transport`
+   - `resolveApiBackedModelConfig()` 透传 provider transport 与 custom `baseUrl`
+   - `pi-ai` 首事件前失败时自动回退既有 native provider transport
+3. `src/lib/agents/llm-oneshot.ts` 的 one-shot 路径已切到 Claude Engine API-backed provider 主线，不再让 `CEO command / pipeline generate / knowledge summary` 这类调用绕开 `pi-ai` transport。
+4. 新增 provider-backed 图像生成链路：
+   - `src/lib/provider-image-generation.ts`
+   - `src/app/api/provider-image-generation/route.ts`
+   - `src/server/control-plane/routes/settings.ts`
+   - `src/server/control-plane/server.ts`
+   - 支持 `openai-api`
+   - 支持 `custom`
+   - `custom` 失败时可回退到 `openai-api`
+5. 新增 Knowledge 摘要生成链路：
+   - `src/app/api/knowledge/[id]/summary/route.ts`
+   - `src/lib/api.ts`
+   - `src/components/knowledge-panel.tsx`
+   - `src/components/knowledge-browser-workspace.tsx`
+   - Knowledge 详情页新增 `AI 摘要` 按钮，调用 `knowledge-summary` scene，并把结果回写到 metadata
+6. `src/components/settings-panel.tsx` 扩展 Provider 配置页：
+   - 所有第三方 provider 都可切换 `Provider Transport`
+   - 新增 `图像生成` 配置卡
+   - 支持 `图像 Provider / 启用图像生成 / 图像 Model / 测试提示词 / 测试图像生成`
+7. 测试补齐：
+   - `src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts`
+   - `src/lib/provider-image-generation.test.ts`
+   - `src/app/api/provider-image-generation/route.test.ts`
+   - `src/app/api/knowledge/[id]/summary/route.test.ts`
+   - `src/lib/backends/__tests__/claude-engine-runtime-config.test.ts`
+   - `src/lib/providers/ai-config.test.ts`
+8. 文档同步更新：
+   - `docs/design/pi-ai-transport-and-visual-config-plan-2026-04-28.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/knowledge-api.md`
+   - `docs/guide/agent-user-guide.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/providers/ai-config.ts src/lib/providers/types.ts src/lib/claude-engine/api/types.ts src/lib/claude-engine/api/pi-transport.ts src/lib/claude-engine/api/retry.ts src/lib/backends/claude-engine-backend.ts src/lib/agents/llm-oneshot.ts src/lib/provider-image-generation.ts src/lib/provider-image-generation.test.ts src/server/control-plane/routes/settings.ts src/server/control-plane/server.ts src/app/api/provider-image-generation/route.ts src/app/api/provider-image-generation/route.test.ts src/app/api/knowledge/[id]/summary/route.ts src/app/api/knowledge/[id]/summary/route.test.ts src/lib/api.ts src/components/knowledge-browser-workspace.tsx src/components/knowledge-panel.tsx src/components/settings-panel.tsx src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/provider-image-generation.test.ts src/app/api/provider-image-generation/route.test.ts src/app/api/knowledge/[id]/summary/route.test.ts src/lib/provider-model-catalog.test.ts src/app/api/provider-model-catalog/route.test.ts src/lib/providers/ai-config.test.ts src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`10 files passed`，`43 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+接口与页面验收：
+
+1. `curl -X POST /api/knowledge/:id/summary` 返回 `ok: true`，并返回 `provider = native-codex`、`scene = knowledge-summary`。
+2. `curl -X POST /api/provider-image-generation` 在当前环境未配置 OpenAI 图像凭证时，返回预期配置错误：`Provider openai-api is not configured for image generation`。
+3. 先用 `bb-browser` 尝试抓取 `Settings` 与 `Knowledge` 页面，但被当前长期浏览器 profile 的历史外部标签污染，无法作为最终验收依据，因此回退到一次性 Playwright。
+4. Playwright 最终确认：
+   - `Settings` 页存在 `Provider Transport`、`图像生成`、`测试图像生成`
+   - 点击 `测试图像生成` 会返回预期配置错误
+   - `Knowledge` 页存在 `AI 摘要`
+   - 点击后出现 `AI 摘要已更新`
+5. 截图：
+   - `/tmp/opc-settings-phase34.png`
+   - `/tmp/opc-knowledge-phase34.png`
+
+# 任务：pi-ai transport、模型目录与 Settings 配置接入
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-28
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/bridge/native-codex-adapter.ts` 将 `native-codex` 底层 transport 切到 `pi-ai`：
+   - 默认读取 `providerProfiles['native-codex'].transport`
+   - 默认值改为 `pi-ai`
+   - 失败时自动回退到原生 `fetch + SSE` 路径
+   - 继续复用 `~/.codex/auth.json` 的 OAuth token，而不是改动 session/runtime 主线
+2. `src/lib/providers/types.ts`、`src/lib/providers/ai-config.ts` 为组织级 provider 配置新增 `providerProfiles`，可表达：
+   - `transport`
+   - `authMode`
+   - `imageGenerationModel`
+   - `enableImageGeneration`
+   - 其他 provider 级 capability/profile 真相
+3. 新增 provider 模型目录子系统：
+   - `src/lib/provider-model-catalog.ts`
+   - `src/app/api/provider-model-catalog/route.ts`
+   - `src/server/control-plane/routes/settings.ts`
+   - `src/server/control-plane/server.ts`
+   - 缓存文件：`~/.gemini/antigravity/provider-model-catalog.json`
+4. provider 模型目录支持三种来源：
+   - `pi-registry`：内建 provider（如 `native-codex`）
+   - `remote-discovery`：`custom` provider 的 `/v1/models`
+   - `manual`：远端不可发现时保留手动模型
+5. `src/server/runtime/routes/user.ts` 的 `/api/models` provider-aware fallback 改为消费新的 provider model catalog，不再只靠静态内建列表。
+6. `src/components/settings-panel.tsx` 接入可视化配置：
+   - `Codex Transport`
+   - `pi-ai transport / native fallback`
+   - `刷新模型`
+   - provider-aware model picker
+   - model 来源提示（`pi-ai registry / remote-discovery / manual`）
+7. 测试补齐：
+   - `src/lib/provider-model-catalog.test.ts`
+   - `src/app/api/provider-model-catalog/route.test.ts`
+   - `src/lib/providers/ai-config.test.ts` 同步补 providerProfiles merge/resolve 覆盖
+8. 文档同步更新：
+   - `docs/design/pi-ai-transport-and-visual-config-plan-2026-04-28.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+   - `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/bridge/native-codex-adapter.ts src/lib/provider-model-catalog.ts src/lib/provider-model-catalog.test.ts src/app/api/provider-model-catalog/route.ts src/app/api/provider-model-catalog/route.test.ts src/server/control-plane/routes/settings.ts src/server/control-plane/server.ts src/server/runtime/routes/user.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/providers/types.ts src/components/settings-panel.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/provider-model-catalog.test.ts src/app/api/provider-model-catalog/route.test.ts src/app/api/models/route.test.ts src/lib/providers/ai-config.test.ts src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`6 files passed`，`34 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器与接口验证：
+
+1. 当前用户 `:3000` 会话是 web-only 壳层，`Settings` 在该态下无法完整验证 provider model catalog，因此临时启动隔离 `:3199 api` + `:3999 web-only` 做一次性验收；显式禁用了 `scheduler / companions / bridge worker`。
+2. `curl` 验证：
+   - `GET /api/provider-model-catalog?provider=native-codex` 返回 `source = pi-registry`，模型数 `10`
+   - `POST /api/provider-model-catalog` 对 `custom` provider 返回 `manual` 回退或远端发现结果
+   - `GET /api/models` 返回合并后的 provider-aware 模型列表
+3. Browser Use / in-app browser 验证 `http://127.0.0.1:3999/?section=projects&panel=settings&tab=provider`，确认存在：
+   - `Codex Transport`
+   - `pi-ai transport`
+   - `刷新模型`
+   - provider-aware model helper text
+4. 截图：
+   - `/tmp/opc-settings-pi-ai-provider.png`
+5. 临时 `:3199`、`:3999` 服务已停止；`lsof -nP -iTCP:3199 -iTCP:3999 -sTCP:LISTEN` 确认无端口残留。
+
+# 任务：Projects 页面真实性与浏览链路收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/page.tsx` 修复 Projects run drilldown：`navigateToProjectRun()` 现在优先使用显式 `projectId`，缓存命中失败时回退到 `api.agentRun(runId)`，不再只依赖全局首屏 `agentRuns`。
+2. `src/components/projects-panel.tsx` 修正 browse 筛选和树逻辑：
+   - `进行中` 只保留真实 `active`
+   - `查看其余 N 个部门` 现在展开全部 `openTreeSections`
+   - 搜索或筛选变化后，如果当前 focus 项目已不在可见树里，会自动清除失效 focus，避免树和中间工作台失焦
+3. `src/components/projects-panel.tsx` 移除 browse 首屏的伪造阶段生命周期：
+   - 不再生成 `目标确认 / 执行实现 / 结果验证 / 交付归档 / 复盘优化` 的假 timeline
+   - 没有 runtime stage 时改成诚实提示：模板已绑定，但真实阶段状态尚未生成
+4. `src/components/projects-panel.tsx` 将右侧 `项目健康度` 改为 `执行概览`：
+   - 移除前端 heuristic 健康分和伪造 `质量 / 风险 / 资源` 百分比
+   - 改为展示真实 `项目状态 / 阶段完成 / 项目运行 / 活跃阶段 / 关注项 / 子项目 / 最新执行`
+5. `src/components/projects-panel.tsx` 将右侧 `负责人` 改为 `执行工作区`：
+   - 不再伪造 owner persona、头像 initials 和 participant 列表
+   - 改为展示真实 workspace 绑定、department type/provider、skills/workflow-bound/templates 数量
+6. `src/components/projects-panel.tsx` 的部门上下文 `Context Snapshot` 移除 `fallback refs`，只保留真实配置项统计。
+7. `src/components/projects-panel.tsx` 修正归档恢复语义：恢复 archived 项目时不再强制写回 `active`，而是按真实 `pipelineState/status` 推断 `completed / failed / paused / cancelled / active`。
+8. 文档同步更新：
+   - `docs/design/projects-page-todos-2026-04-26.md`
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
+
+```bash
+git diff --check
+```
+
+结果：通过。
+
+浏览器验证：
+
+1. 复用用户已打开的 in-app browser，本轮直接在现有 `http://127.0.0.1:3000/?section=projects` 上做回归，不额外拉起新的本地服务。
+2. 通过 Browser Use / in-app browser 断言确认：
+   - `执行概览`
+   - `执行工作区`
+   - `项目树`
+   - `执行工作台`
+3. 同时确认以下旧内容已移除：
+   - `项目健康度`
+   - `负责人`
+   - `fallback refs`
+4. 截图：
+   - `/tmp/opc-projects-production-truthful.png`
+
+# 任务：Knowledge 首页视觉收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/knowledge-panel.tsx` 将 Knowledge 顶部 4 张指标卡从通用渐变卡收口为更接近设计稿的 `图标 + 数值 + 业务说明` 卡片，并把指标文案调整为 `最近沉淀 / 活跃资产 / 待复核 / 低活跃资产` 的知识首页语义。
+2. `src/components/knowledge-browser-workspace.tsx` 对 browse-first 主工作面做第二轮视觉改造：
+   - 左栏加入 `搜索目录或标签` 与 `重置目录筛选`
+   - 目录项、列表项、正文头部、右侧 rail 全部改为更紧凑的 enterprise 密度
+   - 知识列表头部补齐 `知识列表 (count) / 最近更新`
+3. 正文主区改成三段式阅读链路：
+   - 元数据 pills
+   - `结构化摘要`
+   - `核心要点`
+   - `正文内容`
+4. 右侧上下文栏收口为设计稿方向的四块 compact rail：
+   - `来源引用`
+   - `关联项目`
+   - `部门记忆`
+   - `版本历史`
+5. 默认 browse 首页移除 `关联增长` 区块，避免再次把首屏重心拉回治理视角。
+6. 文档同步更新：`docs/design/knowledge-page-gap-analysis-and-plan-2026-04-27.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 使用 `bb-browser` 打开并复用 `http://127.0.0.1:3000/?section=knowledge&knowledge=d711d04b-2d86-4d2f-b5fe-7191230c50fd-pattern-512ee5fbe0`。
+2. browse 工作台 DOM 断言确认存在：
+   - `搜索知识`
+   - `新建知识`
+   - `浏览工作台 / 治理工作台`
+   - `搜索目录或标签`
+   - `知识列表 (120) / 最近更新`
+   - `收藏知识 / 更多操作 / 编辑 / 删除`
+3. governance 工作台 DOM 断言确认原治理能力仍在：
+   - `Promote / Reject / Generate proposal`
+   - `Generate / Eval / Reject`
+   - `知识 / 决策 / 模式`
+4. `bb-browser errors --tab ...` 返回 `jsErrors: []`，无前端运行时错误。
+5. 截图：
+   - `/tmp/knowledge-refine-final.png`
+
+# 任务：Settings 页面结构收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/page.tsx` 将 Settings 默认入口从 `provider` 切到 `profile`，并移除页面顶部旧的三张 metrics，让首屏回到配置中心而不是过渡态 dashboard。
+2. `src/lib/app-url-state.ts` 与 `src/lib/app-url-state.test.ts` 同步把 URL fallback 的 `settingsTab` 改为 `profile`，确保直达 `?panel=settings` 时稳定落到个人偏好页。
+3. `src/components/settings-panel.tsx` 重构为 `主配置区 + 右侧摘要轨`：
+   - 顶部改为 segmented settings tabs
+   - 右侧新增 `当前配置 / 活跃 Provider / 连接状态 / 当前标签`
+   - 保留 `Provider / API Keys / Scene 覆盖 / 预算策略 / MCP / 消息平台` 全部原能力
+4. `src/components/ceo-profile-settings-tab.tsx` 将 Profile 首屏收口为 `个人信息 / 沟通偏好 / 反馈信号` 三段，并把 select trigger 文案改为中文标签，不再暴露内部枚举值 `normal / balanced / medium / preference`。
+5. 为了让整仓验证链干净通过，同时补齐了两处非 Settings 阻塞项：
+   - `src/app/api/knowledge/route.ts` 收窄 filesystem mirror 返回类型，给 `category / status / usageCount / references` 提供真实联合类型与默认值
+   - `src/components/knowledge-panel.tsx`、`src/components/knowledge-browser-workspace.tsx`、`src/app/page.tsx` 补齐 Knowledge 工作面的类型/依赖闭环，避免 Settings 任务被无关 `tsc` 错误阻断
+6. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/ceo-profile-settings-tab.tsx src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/app/api/knowledge/route.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 先按规范尝试 `bb-browser`，但当前环境 daemon 返回 `Chrome not connected (CDP 503)`，无法作为本地 Settings 验收工具。
+2. 回退到一次性 Playwright，复用既有 `http://127.0.0.1:3000/?section=projects&panel=settings&tab=profile`，未额外启动新服务。
+3. Playwright 断言确认：
+   - 7 个 settings tabs 同行显示，没有换行
+   - `个人信息 / 沟通偏好 / 反馈信号 / 当前配置 / 活跃 Provider / 连接状态` 同屏可见
+   - Profile 下拉值显示中文标签：`中等 / 平衡 / 中`
+4. 截图：
+   - `/tmp/opc-settings-profile-final-clean.png`
+
+# 任务：Ops 第二轮设计收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/ops-dashboard.tsx` 继续压缩 Ops 首屏密度：KPI、panel header、empty state、表头全部缩紧，避免页面继续像报告页而不是运维控制台。
+2. `src/components/ops-dashboard.tsx` 将 `系统状态 / MCP / 服务连接 / 额度与配额 / Tunnel / 网络` 改成更接近设计稿的紧凑表格式布局，明确展示 `状态 / 指标 / 说明`。
+3. `src/components/ops-dashboard.tsx` 将 `调度任务` 行内操作从 icon-only 改成带语义的 `立即执行 / 启用-暂停 / 调度治理`，并把结果、执行类型等首层文案统一收口为中文。
+4. `src/components/ops-dashboard.tsx` 移除默认页面流中的三段旧 appendix（`高级调度治理 / 资产 Studio / 扩展工具`），改为单一 `深层工作台` 入口，只在需要时切换承载原 `SchedulerPanel / AssetsManager / AnalyticsDashboard / CodexWidget`。
+5. `src/components/ops-dashboard.tsx` 让 `资产管理` 首屏同时表达 `已接入 / 待导入`，并把 `最近活动` 改成 `类别 + 状态 + 详情 + 时间` 的可扫读结构。
+6. `src/app/page.tsx` 将 Ops 顶栏 badge 和搜索提示改为中文，并把搜索明确标注成 `本页` 范围过滤，不再误导成全局 command bar。
+7. 文档同步更新：
+   - `docs/design/ops-page-redesign-2026-04-27.md`
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/ops-dashboard.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/app/api/management/overview/route.test.ts
+```
+
+结果：`3 files passed`，`15 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 复用既有 `:3101` API，临时启动隔离 web-only `:3999`，显式禁用 `scheduler / companions / bridge worker`。
+2. `bb-browser` 已优先用于本地打开 `http://127.0.0.1:3999/?section=operations`，但当前环境中 `snapshot / eval` 仍只返回空白 `body`，不足以作为最终验收依据。
+3. 在相同 `:3999` 页面上回退到一次性 Playwright 断言，确认：
+   - 首层存在 `调度任务 / 系统状态 / MCP / 服务连接 / 额度与配额 / Tunnel / 网络 / 资产管理 / 最近活动 / 深层工作台`
+   - 顶栏存在 `本页` 范围标记
+   - `新建任务` 能打开既有 `New Scheduled Job` 弹窗
+   - `资产工作台` 能展开全量资产面板，并显示 `可执行资产 / 当前可被任务调用`
+   - 默认首层不再出现旧 `高级调度治理`
+   - 无 bad HTTP responses / 无 console errors / 无 page errors
+4. 截图：
+   - `/tmp/opc-ops-round2-top.png`
+   - `/tmp/opc-ops-round2-assets.png`
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务将在本轮汇报前停止并释放端口。
+2. 本轮未启动 scheduler / worker / companions 长期进程。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 均已退出。
+4. `bb-browser daemon` 将在本轮汇报前停止。
+
+# 任务：Ops 首层驾驶舱重构
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/ops-dashboard.tsx` 新增统一的 Ops dashboard，把首层收口为 `4 KPI + 调度任务 + 系统状态 + MCP / 配额 / Tunnel + 资产管理 + 最近活动`。
+2. `src/app/page.tsx` 将 `Ops` 页面从旧的 `SchedulerPanel + Analytics + 右侧状态 widget + AssetsManager` 拼接，替换为新的聚合驾驶舱，并加入顶栏搜索 `任务 / 服务 / 资产 / 活动`。
+3. `src/components/scheduler-panel.tsx` 增加受控 `createRequestToken` 入口，允许首层 `新建任务` 直接复用原有 `New Scheduled Job` 弹窗。
+4. 保留深层能力但后移到第二层：
+   - `高级调度治理` 继续承载原 `SchedulerPanel`
+   - `资产 Studio` 继续承载原 `AssetsManager`
+   - `扩展工具` 承载 `AnalyticsDashboard` 和 `CodexWidget`
+5. 文档同步更新：
+   - `docs/design/ops-page-redesign-2026-04-27.md`
+   - `docs/design/ux-shell-convergence-2026-04-23.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/ops-dashboard.tsx src/components/scheduler-panel.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/app/api/management/overview/route.test.ts
+```
+
+结果：`3 files passed`，`15 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 复用既有 `:3101` API，临时启动隔离 web-only `:3999`，显式禁用 `scheduler / companions / bridge worker`。
+2. `bb-browser` 已优先用于本地打开 `http://127.0.0.1:3999/?section=operations`，但当前环境中 `snapshot / eval / screenshot` 仍只返回空白 `body` 或卡住，不足以作为最终验收依据。
+3. 在相同 `:3999` 页面上补一次性 Playwright 断言，确认首层存在：
+   - `启用中调度任务 / 待处理治理项 / 额度使用率 / 连接服务`
+   - `调度任务 / 系统状态 / MCP / 服务连接 / 额度与配额 / Tunnel / 网络 / 资产管理 / 最近活动`
+   - `高级调度治理 / 资产 Studio / 扩展工具`
+4. Playwright 继续确认：
+   - 首层 `新建任务` 能打开既有 `New Scheduled Job` 弹窗
+   - `管理全部` 能展开全量资产 studio，并显示 `可执行资产`
+   - `Analytics` 不再出现在默认首层
+   - 无 bad HTTP responses / 无 console errors / 无 page errors
+5. 截图：
+   - `/tmp/opc-ops-redesign-top.png`
+   - `/tmp/opc-ops-redesign-playwright.png`
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务将在本轮汇报前停止并释放端口。
+2. 本轮未启动 scheduler / worker / companions 长期进程。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 均已退出。
+4. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Knowledge 首页按新设计稿重构
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/app/page.tsx` 将 Knowledge 页头部改为设计稿方向的知识库入口：`Knowledge / 知识库` 标题、全视口可见搜索框与 `新建知识` 主按钮，不再沿用“标题跟随选中文档变化”的旧结构。
+2. `src/components/knowledge-panel.tsx` 将默认工作面从“空态 + 审核板卡”改为双层工作面：
+   - `浏览工作台` 默认首屏展示知识目录、知识列表、正文详情和右侧上下文栏
+   - `治理工作台` 下沉保留候选记忆、增长提案和部门记忆
+3. 新增 `src/components/knowledge-browser-workspace.tsx`，承载 browse-first 结构：目录筛选、知识列表、正文预览/编辑、来源引用、关联项目、部门记忆摘要和版本时间线。
+4. `src/app/api/knowledge/route.ts` 扩展 Knowledge API：
+   - `GET /api/knowledge` 新增 `status / scope / tag / q / sort / limit` 过滤与 richer metadata 输出
+   - `POST /api/knowledge` 支持手动创建 `manual` source 的知识项
+5. `src/app/api/knowledge/[id]/route.ts` 扩展详情输出，返回 `tags / scope / sourceType / sourceRunId / confidence / evidenceCount / promotionLevel` 等结构化字段，并在读取详情时记录 access。
+6. `src/lib/knowledge/store.ts` 与 `src/lib/knowledge/index.ts` 同步补齐 knowledge mirror metadata 和 access export，避免结构化语义继续丢失在 filesystem mirror 层。
+7. 文档同步更新：`docs/guide/knowledge-api.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`ARCHITECTURE.md`、`docs/design/knowledge-page-gap-analysis-and-plan-2026-04-27.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx src/lib/api.ts src/lib/types.ts src/lib/knowledge/index.ts src/lib/knowledge/store.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts'
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts'
+```
+
+结果：`2 files passed`，`6 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 复用既有 `http://127.0.0.1:3000/?section=knowledge&knowledge=d711d04b-2d86-4d2f-b5fe-7191230c50fd-pattern-512ee5fbe0`，未启动新服务。
+2. 先在 in-app browser 中 reload，发现一次真实运行时错误：`useMemo is not defined`；已修复后重新验收。
+3. 最终使用 in-app browser DOM 快照确认：
+   - `Knowledge 知识库` 标题存在
+   - 搜索框与 `新建知识` 可见
+   - 四张指标卡 `最近沉淀 / 活跃资产 / 待复核 / 低活跃度` 可见
+   - `浏览工作台 / 治理工作台` 切换存在
+   - `知识目录 / 知识列表 / 来源引用 / 关联项目 / 部门记忆 / 版本时间线` 同屏可见
+   - 选中文档正文已加载，治理态下 `候选记忆 / 增长提案 / 部门记忆` 也能显示
+4. 当前 in-app browser 的 screenshot capture 在该 tab 上仍会 timeout，因此本轮以 DOM 断言作为最终页面验收证据。
+
+# 任务：Projects 详情减重与 Fan-Out 工作面聚焦
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/projects-panel.tsx` 将 detail 顶部四张独立摘要卡压缩为单条 summary strip，保留 `最近执行 / 结果摘要 / 交付产物 / 关注项`，把主工作面往首屏上推。
+2. `src/components/projects-panel.tsx` 将 `关联项目` 从重复 child goal/time 的大卡片 rail 改为 compact focus strip，只保留主项目 / 子项目切换所需的最小信息。
+3. `src/components/project-workbench.tsx` 把 `列表 / 拓扑` 切换折叠进 `执行阶段` 标题行，减少首屏模式控件层级。
+4. `src/components/project-workbench.tsx` 在选中 fan-out stage 时不再在左侧阶段导航重复展开 branch 列表，避免和右侧 detail 双重展示同一批子项目。
+5. `src/components/stage-detail-panel.tsx` 为 fan-out stage 增加 `分支工作面`，展示关联项目数、完成分支、执行中分支、异常分支，以及每个 branch 的时长、run id 和 `打开子项目` 动作。
+6. `src/components/pipeline-stage-card.tsx` 和 `src/components/project-workbench.tsx` 将 Projects 主工作面的 tabs、阶段状态、分支标签、按钮文案统一为中文。
+7. 文档同步更新：`docs/design/projects-page-todos-2026-04-26.md`、`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/pipeline-stage-card.tsx src/components/stage-detail-panel.tsx src/app/page.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. `bb-browser` 先用于本地打开 `:3999`，但当前环境下 snapshot 仍只返回不完整 `body` 骨架，因此不适合作为这轮布局优化的最终验收依据。
+3. 最终使用一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 做断言：
+   - `Research Fan-Out stage` 默认选中
+   - 第一层 detail 已包含 compact `结果摘要 / 交付产物 / 关注项`
+   - `关联项目` strip 已压缩并包含 `主项目`
+   - 右侧 detail 已包含 `分支工作面` 和 `打开子项目`
+   - workbench tabs 与模式切换显示为 `执行流 / 运行 / 交付` 和 `列表 / 拓扑`
+   - 无 bad HTTP responses / 无 console 和 page errors
+4. 截图：`/tmp/opc-projects-round9-optimized.png`
+
+# 任务：Projects 详情降层与 Fan-Out 一层融合
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/projects-panel.tsx` 把 `ProjectWorkbench` 前移到 Project detail 第一层，进入项目后不再停留在“只看摘要、还要再点 stage 才有真实详情”的层级结构。
+2. `src/components/projects-panel.tsx` 新增 `关联项目` 横向 rail，在 fan-out root project 上把 `Overview + 子项目` 放进同一屏第一层，减少 root -> branch 的额外跳层。
+3. `src/components/project-workbench.tsx` 支持外部 `selectedStageId`，允许无 `runId` 的 `Research Fan-Out` 这种 stage 直接成为默认焦点。
+4. `src/components/project-workbench.tsx` 新增 `fanout-first` 默认选中策略和 list-mode 默认视图，让 fan-out 项目的 branches 和 stage details 一进入就可见。
+5. `src/components/projects-panel.tsx` 修复项目详情的 run 选择收口：只接受当前 `viewProjectRuns` 范围内的 `selectedRunId`，避免页面级全局 run 状态把当前项目 detail 带进空选中态。
+6. `stickySelection` 保持 stage / role / prompt-run 细节面板稳定，不会因为重复点击把 detail panel 折叠回空白。
+7. 文档同步更新：`docs/design/projects-page-todos-2026-04-26.md`、`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/app/page.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. `bb-browser` 先用于本地打开和 DOM 快照检查，确认第一层 detail 同时出现：
+   - `Fan-Out 项目直接放在第一层`
+   - `Research Fan-Out stage`
+   - `Stage Details`
+   - `Open sub-project`
+3. 因这轮验收需要精确确认“默认是否选中了 fan-out stage”，最终补了一次性 Playwright 断言；这不是替代 `bb-browser`，只是补默认选中态验证。
+4. Playwright 对 `http://127.0.0.1:3999/?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 断言通过：
+   - `Research Fan-Out stage` 默认选中
+   - `Stage Details` 第一层同屏可见
+   - 子项目 branch 列表和 `Open sub-project` 动作仍在
+   - 无 bad HTTP responses / 无 console 和 page errors
+5. 截图：`/tmp/opc-projects-round8-final.png`
+
+# 任务：Projects 详情页 run 证据恢复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/projects-panel.tsx` 将详情/聚焦项目的 runs 来源从“全局分页 `agentRuns`”改为“当前 focus project 的 scoped runs”。
+2. 修复 browse mode：历史项目被选中时，`最近运行 / 关联运行 / 健康度 / 最近活动时间` 不再只依赖全局前 100 条 runs。
+3. 修复 detail mode：详情页顶部摘要卡和 `ProjectWorkbench` 不再丢失历史项目的 run 证据。
+4. 根因确认：Projects 页虽然已经单独拉取了 project-scoped runs，但之前没有把这批数据传给 browse/detail 的实际渲染链路；老项目 run 不在全局 `/api/agent-runs?pageSize=100` 首屏时，页面只剩 pipeline 摘要，`最近运行` 和 detail 顶部摘要会表现成缺失。
+5. 文档同步更新：`docs/design/projects-page-todos-2026-04-26.md`、`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/projects-panel.tsx src/app/page.tsx src/components/project-workbench.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+数据验证：
+
+1. `量化AI基建与前沿Agent深度研究` 的 root run `857995d5-a1bf-4067-84bf-deae5f91707d` 不在全局 `/api/agent-runs?pageSize=100` 首屏中。
+2. 同一个 project 的 scoped 查询 `/api/agent-runs?projectId=19885e25-248b-4e17-ae37-2653b4018598&pageSize=200` 能拿到该 run。
+3. 这证明缺失不是后端没有数据，而是前端把错误的数据源喂给了 Projects browse/detail。
+
+浏览器验证：
+
+1. 先尝试 `bb-browser` 打开现有 `:3000` 页面，但当前环境中的长期 `bb-browser` session 仍绑定到外部 `eastmoney` 页面，无法作为本地 Projects 验收依据。
+2. 因 `bb-browser` 当前 session 态不可靠，回退到一次性 Playwright，只连接既有 `http://127.0.0.1:3000`，不启动新服务。
+3. Playwright 直接打开 `?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 后确认：
+   - 顶部摘要恢复 `最近执行 / 结果概览 / output evidence / 关注项`
+   - Pipeline detail 恢复 `Batch Planner / Research Fan-Out / Branches / Research Join`
+4. 截图：
+   - `/tmp/opc-projects-root-detail-evidence.png`
+   - `/tmp/opc-projects-detail-run-evidence.png`
+
+进程确认：
+
+1. 本轮未启动任何 dev/start/watch/scheduler/worker 服务。
+2. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
+3. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Projects 业务回归修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-27
+
+### 本轮实施
+
+已完成：
+
+1. `docs/design/projects-page-todos-2026-04-26.md` 增补并完成 Round 6 TODO。
+2. `src/components/projects-panel.tsx` 修复 `已完成项目` 浏览链路：历史项目过滤现在会渲染 `Completed / Archived / Cancelled` 分组，而不是切成空树。
+3. `src/components/projects-panel.tsx` 恢复可见的 `进行中` 入口：左栏 filter 改为下拉菜单，提供 `全部项目 / 进行中 / 关注项 / 历史项目`。
+4. `src/components/projects-panel.tsx` 补回部门可达性：默认首屏仍保持代表性区块，但新增 `查看其余 N 个部门 / 收起其他部门`。
+5. `src/app/page.tsx` 修复 browse-mode run 点击逻辑：不再只写入 `selectedAgentRunId`，而是导航到目标 project detail。
+6. `src/components/project-workbench.tsx` 新增外部 `selectedRunId` 对齐，进入 detail 后会自动聚焦到匹配的 stage 或 prompt run。
+7. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. `bb-browser` 先用于本地打开和检查，但其 daemon 仍把新 `:3999` 页面绑定到历史标签集合，状态不适合作最终回归验收。
+3. 最终使用一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects` 做回归断言：
+   - filter menu 含 `全部项目 / 进行中 / 关注项 / 历史项目`
+   - `历史项目` 能渲染 `Completed / Archived / Cancelled`
+   - 树存在 `查看其余 N 个部门`，并可切换为 `收起其他部门`
+   - 搜索 `baogaoai` 后点击 browse-mode run 会进入 `?section=projects&project=...` 并显示选中 run 的 detail 内容
+   - 无 bad HTTP responses / 无 console 和 page errors
+4. 截图：`/tmp/opc-projects-review-fixes-final.png`、`/tmp/opc-projects-run-drilldown-fix.png`。
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务已停止，端口已释放。
+2. 本轮未启动 scheduler / worker / watch 服务。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
+4. 当前环境里仍有独立 `bb-browser` / Chrome 会话在运行；其父命令为 `bb-browser site eastmoney/discuss ...`，不属于本轮 Projects 验证链路，因此未强制回收，避免误伤其他任务。
+5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Projects 默认工作面收敛
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. `docs/design/projects-page-todos-2026-04-26.md` 增补并完成 Round 5 TODO。
+2. `src/app/page.tsx` 去掉 Projects header 里的旧 setup 状态 chip，只保留 `Projects / 项目总览`、搜索和 `新建项目`。
+3. Projects 四张 KPI 改成更接近设计稿的纵向堆叠：label / value / detail 分层显示，不再把 detail 压在数值同一行。
+4. `src/components/projects-panel.tsx` 新增 noisy project / workspace heuristics，默认首屏降权 `test`、`Auto-Trigger`、`file_Users...` 一类原始调试项目。
+5. 项目树默认只展示更有代表性的部门区块；在有足够业务区块时，不再把 `backend/test` 放进首屏。
+6. 默认 workbench focus 改为跟随当前可见项目树，不再落到树外隐藏项目。
+7. 左栏移除 `All / Active / Attention / Done` chips，密度更接近参考稿。
+8. workbench 右上角 `...` 改成真实下拉动作菜单，并保留编辑项目、新建运行、归档/恢复、删除。
+9. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. `bb-browser` 先用于本地验证，但其长期 daemon profile 混入多个历史 `:3999` 标签，抓到的页面状态不能作为最终验收。
+3. 最终使用一次性 Playwright 对重新 build 的 `http://127.0.0.1:3999/?section=projects` 做干净断言：
+   - 顶部仍有搜索和 `新建项目`
+   - 默认树区块显示 `WorkSatation / AI情报工作室 / 线索跟踪部门 / Openmind`
+   - 默认 focus 不再落到 hidden `test` / `Auto-Trigger` 项目
+   - `项目健康度 / 快捷操作 / 已完成项目 / 打开详情` 均可用
+   - 无 bad HTTP responses / 无 console 和 page errors
+4. 最终截图：`/tmp/opc-projects-round5-playwright-final.png`。
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务已停止，端口已释放。
+2. 本轮未启动 scheduler / worker / watch 服务。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
+4. `bb-browser daemon` 已停止。
+5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Projects 主页面视觉精修
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. `docs/design/projects-page-todos-2026-04-26.md` 增补并完成 Round 4 TODO。
+2. `src/app/page.tsx` 将 Projects 顶部 action cluster 收口为设计稿方向：搜索 + `新建项目`，不再在 header 放 `部门设置`。
+3. 部门配置提示条从高 banner 压薄为低高度 notice，降低首屏占用。
+4. `src/components/projects-panel.tsx` 新增 `onOpenDepartmentSettings`，把部门配置入口迁移到右侧快捷操作，避免功能丢失。
+5. 右侧 `项目健康度` 从圆环 + 纵向 progress bars 改成参考稿方向的圆环 + 图例数值。
+6. 稀疏 stage 项目现在也渲染五步视觉轨道，并把真实 stage 状态合并到轨道中。
+7. 快捷操作补齐：新建运行、创建项目、编辑项目、AI 生成、部门设置、删除项目。
+8. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. `bb-browser` 优先用于打开、DOM 检查、截图和错误检查：
+   - header 在 KPI 前不再出现 `部门设置`
+   - 右侧快捷操作仍包含 `部门设置`
+   - slim setup notice、health legend、top `新建项目` 均可见
+   - `bb-browser screenshot /tmp/opc-projects-round4-final.png` 完成截图
+   - `bb-browser errors` / `console` 无 JS 错误
+3. 由于长期 `bb-browser` profile 混有旧 `:3999` 标签，最终交互断言使用一次性 Playwright：
+   - 顶部 `新建项目` 打开既有创建项目 Dialog
+   - 稀疏项目 stage 显示五步轨道：`目标确认 / Coding Worker / 结果验证 / 交付归档 / 复盘优化`
+   - 点击 `打开详情` 后进入 `?section=projects&project=...` 并显示 detail 内容
+   - 没有 bad HTTP responses 和 console/page errors；关闭浏览器时仅出现预期的 SSE `/api/approval/events` abort
+4. 最终截图：`/tmp/opc-projects-round4-final-playwright.png`。
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务已停止，端口已释放。
+2. 本轮未启动 scheduler / worker / watch 服务。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
+4. `bb-browser daemon` 已停止。
+5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Projects 主页面设计稿第三轮密度收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. `docs/design/projects-page-todos-2026-04-26.md` 增补并完成 Round 3 TODO。
+2. `src/components/workspace-concept-shell.tsx` 新增 `headerVariant="compact"`，Projects 页使用更接近参考稿的紧凑标题区：`Projects` 与 `项目总览` 同行展示。
+3. `src/app/page.tsx` 为 Projects 顶部加入真实搜索框和蓝色 `新建项目` 主按钮：
+   - 顶部搜索与项目树搜索共用状态。
+   - 顶部 `新建项目` 复用既有创建项目 Dialog。
+4. Projects 四张 KPI 进一步收敛为参考稿式白底紧凑指标块：左图标、较小数值、低对比边框和更低高度。
+5. `src/components/projects-panel.tsx` 进一步压缩三栏工作面 spacing / radius / padding，让项目树、执行工作台和右栏在首屏展示更多真实内容。
+6. 保留既有功能入口：创建项目、AI Generate、派发/新建运行、编辑、归档/恢复、删除、行聚焦、打开详情、run selection、detail 内容。
+7. Detail mode 的部门上下文优先复用页面已加载的 departments Map；组件独立使用且没有传入 Map 时才回退请求，避免当前页面详情切换时对受限 workspace 额外产生 403。
+8. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 为避免重启用户既有 `:3000/:3101`，临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. 优先使用 `bb-browser`；`open` 和早期 DOM 验证成功，后续 daemon 在刷新/截图标签页时超时，因此最终截图和完整交互断言回退到项目已有 Playwright 依赖。
+3. Final browser run 验证：
+   - compact header 显示 `Projects` + `项目总览`
+   - 旧 `项目、部门与执行链路的公司工作面。` 和旧 `打开 Ops` 页面动作均不存在
+   - 顶部搜索与项目树搜索同步，输入 `baogaoai` 后为 `1 visible / 67 total`
+   - 顶部 `新建项目` 打开既有创建项目 Dialog
+   - 点击 `打开详情` 后进入 `?section=projects&project=...`，`结果概览` / `OUTPUT EVIDENCE` 可见
+   - 没有 bad HTTP responses 和 console/page errors；关闭浏览器时仅出现预期的 SSE `/api/approval/events` abort
+4. 最终截图：`/tmp/opc-projects-round3-final.png`。
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务已停止，端口已释放。
+2. 本轮未启动 scheduler / worker / watch 服务。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
+4. `bb-browser daemon` 已停止。
+5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Projects 主页面设计稿二次收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. `docs/design/projects-page-todos-2026-04-26.md` 增补 Round 2 TODO，并在验收后全部勾选。
+2. `src/app/page.tsx` 将 Projects 顶部 KPI 改为设计稿风格的四张紧凑指标卡：进行中项目、阻塞项目、本周完成、待评审，并在 `xl` 断点同排展示。
+3. `src/components/projects-panel.tsx` 移除二级 `项目执行总览` hero，主内容直接进入三栏工作面。
+4. 项目树改为更密的部门树行布局，保留搜索、筛选、选中聚焦、进度、状态、编辑、归档/恢复。
+5. 新增 browse focus：点击项目行只更新中间工作台，`打开详情` 才进入完整 detail mode。
+6. 执行工作台补齐阶段进度、最近运行、阻塞项、下一步；右侧栏补齐项目健康度、负责人、关联运行、快捷操作。
+7. 保留主页面功能入口：创建项目、AI Generate、派发/新建运行、编辑、归档/恢复、删除、打开详情、run selection、detail tabs。
+8. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 现有 `:3000` 服务仍在服务旧 bundle；为避免重启用户既有 `:3000/:3101`，临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
+2. `bb-browser` 打开 `http://127.0.0.1:3999/?section=projects` 成功。
+3. `bb-browser eval` 验证 Projects 主页面包含 `进行中项目 / 阻塞项目 / 本周完成 / 待评审 / 项目树 / 执行工作台 / 阶段进度 / 最近运行 / 阻塞项 / 下一步 / 项目健康度 / 负责人 / 关联运行 / 快捷操作`。
+4. `bb-browser eval` 验证四张 KPI 在验证视口同排，旧 `项目执行总览` 二级 hero 和旧外置 `风险与最近推进` 队列均不存在。
+5. `bb-browser eval` 点击项目行后 URL 仍停留在 `?section=projects`；点击 `打开详情` 后进入 `?section=projects&project=...`，`Pipeline / Operations / Deliverables` 可见。
+6. `bb-browser screenshot /tmp/opc-projects-round2-final.png` 完成最终截图。
+7. `bb-browser errors` 返回无 JS 错误。
+
+进程确认：
+
+1. 临时 `:3999` web-only 服务已停止，端口已释放。
+2. 本轮未启动 scheduler / worker / watch 服务。
+3. `eslint`、`tsc`、`vitest`、`next build`、`bb-browser` 命令均已退出。
+4. `bb-browser daemon` 已停止。
+5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
+
+# 任务：Projects 主页面 deep pass
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. 新增 `docs/design/projects-page-todos-2026-04-26.md`，把 Project 页验收 TODO 独立记录并全部完成。
+2. `src/app/page.tsx` 移除 Projects 页外置右侧 `Execution queue`，避免页面主体由 `page.tsx` 和 `ProjectsPanel` 分裂渲染。
+3. `src/components/projects-panel.tsx` 的 browse mode 从空标题区改成完整 Projects 工作台：
+   - 项目树：搜索、All/Active/Attention/Done 筛选、按部门/状态分组、进度、编辑、归档。
+   - 执行工作台：默认聚焦需要关注或活跃项目，展示目标、状态、模板、进度、runs、风险、子项目和 pipeline 阶段。
+   - 右侧面板：项目健康评分、负责人/部门画像、关联推进、快捷操作。
+4. 保留主页面可达操作：创建项目、AI Generate Pipeline、派发、编辑、归档、删除、打开详情。
+5. `lg` 断点启用两列、`xl` 断点启用三列，修复 1512px 桌面宽度下项目树独占整行的问题。
+6. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/projects-panel.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. `bb-browser open http://localhost:3000/?section=projects` 成功。
+2. `bb-browser eval` 验证 Project browse surface 已渲染项目树、项目健康、快捷操作，并且旧 `风险与最近推进` 队列不再出现。
+3. `bb-browser screenshot /tmp/opc-projects-page-bb-2.png` 验证 1512px 桌面宽度下三列布局成立。
+4. `bb-browser` 点击 `打开详情` 后进入 `?section=projects&project=...`，`Pipeline / Operations / Deliverables` 可见。
+5. `bb-browser errors` 返回无 JS 错误，详情截图输出到 `/tmp/opc-projects-detail-bb.png`。
+
+进程确认：
+
+1. 本轮未启动新的 dev/start/watch/worker 服务。
+2. 仅复用既有 `:3000` / `:3101` 服务做页面验证。
+3. `eslint`、`tsc`、`vitest`、`next build`、`bb-browser` 命令均已退出。
+
+# 任务：Apple-style 主页面壳层统一
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-26
+
+### 本轮实施
+
+已完成：
+
+1. 找到最近成组设计稿：`docs/design/mockups/apple-reference-pages-2026-04-23/`，包含 `CEO Office / Projects / Knowledge / Ops / Settings` 五页 Apple-style reference。
+2. 新增 `src/components/workspace-concept-shell.tsx`，把 `Projects / Knowledge / Ops / Settings` 统一到和 CEO Office 同方向的浅色 Apple-style 左侧导航壳。
+3. `src/app/page.tsx` 中非 CEO 主页面不再显示旧顶部 pill nav 和旧 Sidebar；页面级大 Hero 收敛为紧凑标题区 + 指标卡。
+4. 保留原业务组件与操作入口：`ProjectsPanel`、`KnowledgeWorkspace`、`SchedulerPanel`、`AnalyticsDashboard`、`AssetsManager`、`SettingsPanel` 没有被功能重写。
+5. 修复 URL 初始化竞态：直达 `?section=projects` / `?section=knowledge` / `?section=operations` / `?panel=settings` 不再被 CEO 自动打开最近线程覆盖。
+6. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/workspace-concept-shell.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
+```
+
+结果：`2 files passed`，`13 tests passed`。
+
+```bash
+npm run build
+```
+
+结果：生产构建成功；构建仅出现既有 Turbopack broad file pattern warnings。
+
+浏览器验证：
+
+1. 优先尝试 `bb-browser open http://127.0.0.1:3000/?section=projects` 成功。
+2. `bb-browser snapshot/eval/screenshot` daemon 请求超时，因此退回一次性 Playwright 脚本，只连接既有 `:3000` 服务，未新启本地服务。
+3. Playwright 断言：
+   - `?section=projects`：`h1=Projects`，`hasOldTopNav=false`，`hasConceptRail=true`
+   - `?section=knowledge`：`h1=Knowledge`，`hasOldTopNav=false`，`hasConceptRail=true`
+   - `?section=operations`：`h1=Ops`，`hasOldTopNav=false`，`hasConceptRail=true`
+   - `?panel=settings&tab=provider`：`h1=Settings`，`hasOldTopNav=false`，`hasConceptRail=true`
+4. 验证截图输出到 `/tmp/opc-projects-concept-shell.png`、`/tmp/opc-knowledge-concept-shell.png`、`/tmp/opc-operations-concept-shell.png`、`/tmp/opc-settings-concept-shell.png`。
+
+进程确认：
+
+1. 本轮未启动新的 dev/start/watch/worker 服务。
+2. 仅复用既有 `:3000` / `:3101` 服务做页面验证。
+3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
+
 # 任务：Company Kernel P7 自改审批恢复状态机修复
 
 **状态**: ✅ 已完成
@@ -5154,6 +7977,185 @@ npm run build
 
 **状态**: ✅ 已完成
 **日期**: 2026-04-19
+
+---
+
+## 任务：Department 新建与配置旅程补完
+
+**状态**: ✅ 已完成
+**日期**: 2026-04-29
+
+### 本次完成
+
+#### 1. Department 已支持多目录绑定配置
+
+这次没有再把 Department 继续等同于单一 workspace，而是在现有 `.department/config.json` 兼容模型上补了：
+
+1. `departmentId`
+2. `workspaceBindings`
+   - `primary`
+   - `execution`
+   - `context`
+3. `executionPolicy`
+   - `defaultWorkspaceUri`
+   - `contextDocumentPaths`
+
+对应代码：
+
+- `src/lib/types.ts`
+- `src/lib/department-config.ts`
+- `src/server/control-plane/routes/departments.ts`
+- `src/lib/agents/department-capability-registry.ts`
+
+当前 `GET /api/departments` 会返回归一化后的多目录 Department 配置，`PUT /api/departments` 会把同一份配置镜像写入所有已绑定 workspace 的 `.department/config.json`。
+
+#### 2. Department 配置弹窗已补成完整旅程
+
+`DepartmentSetupDialog` 现在不再只支持基础信息，而是直接支持：
+
+1. 绑定一个或多个工作区目录
+2. 指定主执行目录、执行目录、上下文目录
+3. 导入额外目录并立即挂入当前部门
+4. 维护潜在上下文文档列表
+5. 继续配置模板、skills、roster、OKR、provider、token quota
+
+对应代码：
+
+- `src/components/department-setup-dialog.tsx`
+
+#### 3. Projects 页已接入“新建部门 + 按部门聚合 + 编辑部门”
+
+Projects 主旅程现在补上了真正的 Department 入口：
+
+1. 左侧项目树顶部可直接新建部门
+2. 树分组按 Department 聚合，而不是只按单个 workspace
+3. 每个 Department 分组可直接打开设置
+4. 右侧“执行工作区”卡片会展示：
+   - 绑定目录
+   - 主执行目录
+   - 上下文目录
+   - 潜在上下文文档
+5. 项目详情里的部门上下文也同步展示多目录绑定信息
+
+对应代码：
+
+- `src/components/projects-panel.tsx`
+- `src/app/page.tsx`
+
+#### 3.1 交互收口：去掉浏览器原生 `prompt`
+
+本轮追加收口了最差的一层兜底交互：
+
+1. `Projects` 新建部门不再弹浏览器原生 `prompt`
+2. `CEO Dashboard` 新建部门不再弹浏览器原生 `prompt`
+3. `DepartmentSetupDialog` 追加目录不再弹浏览器原生 `prompt`
+4. 三处统一改成产品内路径输入对话框，并区分：
+   - Web 模式：输入绝对路径
+   - Tauri 桌面：可直接调用原生文件夹选择器
+5. `OnboardingWizard` 文案不再把 Department 继续误写成“每个 workspace 对应一个部门”
+
+对应代码：
+
+- `src/components/local-folder-import-dialog.tsx`
+- `src/components/projects-panel.tsx`
+- `src/components/ceo-dashboard.tsx`
+- `src/components/department-setup-dialog.tsx`
+- `src/components/onboarding-wizard.tsx`
+- `src/app/page.tsx`
+
+#### 4. CEO Dashboard / Department 抽屉已改为部门视角
+
+CEO Office 里的部门卡片和详情抽屉现在不再把多目录部门拆成多个重复卡片，而是按主目录聚合展示，并补充：
+
+1. 部门配置概览
+2. 绑定工作区列表
+3. context docs 概览
+4. 多目录范围内的项目统计
+
+对应代码：
+
+- `src/components/ceo-dashboard.tsx`
+- `src/components/department-detail-drawer.tsx`
+- `src/components/ceo-office-cockpit.tsx`
+
+#### 5. Runtime contract 已收口“上下文目录默认只读”
+
+多目录 Department 进入运行态后：
+
+1. 绑定目录会进入 `additionalWorkingDirectories`
+2. context docs 会进入 `readRoots`
+3. `context` role 不再默认进入 `writeRoots`
+
+这让“主目录写入、其他目录主要做上下文”真正落到运行契约，而不只是 UI 配置。
+
+### 文档同步
+
+已同步更新：
+
+- `docs/guide/agent-user-guide.md`
+
+补充了：
+
+1. Department = 可绑定多个 workspace 的组织对象
+2. `workspaceBindings` / `executionPolicy` 字段含义
+3. 桌面端新建部门与补充绑定目录的用户旅程
+4. Web 模式改为产品内路径输入对话框，不再走浏览器原生 `prompt`
+
+### 验证
+
+#### TypeScript
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+#### 定向测试
+
+通过：
+
+```bash
+npx vitest run src/lib/department-config.test.ts src/app/api/departments/route.test.ts src/lib/agents/department-capability-registry.test.ts
+```
+
+结果：
+
+1. `3 files passed`
+2. `12 tests passed`
+
+覆盖：
+
+1. Department 配置归一化
+2. 多目录部门路由写回
+3. Department runtime contract 对多目录与 context docs 的注入
+
+#### Lint
+
+执行：
+
+```bash
+npx eslint src/components/department-setup-dialog.tsx src/components/projects-panel.tsx src/components/department-detail-drawer.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-cockpit.tsx src/lib/department-config.ts src/lib/agents/department-capability-registry.ts src/server/control-plane/routes/departments.ts src/app/page.tsx src/app/api/departments/route.test.ts src/lib/agents/department-capability-registry.test.ts
+```
+
+结果：
+
+1. 无 error
+2. `src/components/department-setup-dialog.tsx` 保留 2 条既有 `@next/next/no-img-element` warning，来源于已有 sprite 选择器实现
+
+#### Production Build
+
+通过：
+
+```bash
+npm run build
+```
+
+结果：
+
+1. Next build 成功
+2. 页面与 API route 生产构建通过
+3. 保留 2 条与本次 Department 改动无关的 Turbopack broad-pattern warning
 
 ### 本轮目标
 

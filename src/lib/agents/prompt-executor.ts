@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { resolveProvider } from '../providers';
-import type { ProviderId } from '../providers/types';
+import type { AIProviderId, AgentBackendId } from '../providers/types';
 import { AssetLoader } from './asset-loader';
 import {
   applyProviderExecutionContext,
@@ -396,7 +396,7 @@ export async function executePrompt(
   const requestedProvider = resolveProvider('execution', workspacePath);
   const providerRouting = resolveCapabilityAwareProvider({
     workspacePath,
-    requestedProvider: requestedProvider.provider as ProviderId,
+    requestedProvider: requestedProvider.provider as AIProviderId,
     requestedModel: requestedProvider.model,
     explicitModel: Boolean(input.model),
     runtimeContract: effectiveRuntimeContract,
@@ -657,8 +657,8 @@ Reply with ONLY a JSON object: {"status": "HEALTHY|STUCK|LOOPING|DONE", "analysi
 
   ensureBuiltInAgentBackends();
   const configuredSupervisorProvider = resolveProvider('supervisor', workspacePath).provider;
-  const evalProvider: ProviderId = configuredSupervisorProvider === 'antigravity' && run.provider && run.provider !== 'antigravity'
-    ? run.provider as ProviderId
+  const evalProvider: AgentBackendId = configuredSupervisorProvider === 'antigravity' && run.provider && run.provider !== 'antigravity'
+    ? run.provider as AgentBackendId
     : configuredSupervisorProvider;
   const evalBackend = getAgentBackend(evalProvider);
   const evalSessionRunId = `prompt-eval-${runId}-${randomUUID()}`;

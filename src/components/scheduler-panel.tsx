@@ -67,6 +67,7 @@ function ResultBadge({ result }: { result?: string }) {
 
 interface SchedulerPanelProps {
   className?: string;
+  createRequestToken?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ const emptyForm: JobFormState = {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function SchedulerPanel({ className }: SchedulerPanelProps) {
+export default function SchedulerPanel({ className, createRequestToken = 0 }: SchedulerPanelProps) {
   const [jobs, setJobs] = useState<SchedulerJobResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [triggeringId, setTriggeringId] = useState<string | null>(null);
@@ -296,6 +297,11 @@ export default function SchedulerPanel({ className }: SchedulerPanelProps) {
     setSaveError(null);
     setDialogOpen(true);
   };
+
+  useEffect(() => {
+    if (createRequestToken <= 0) return;
+    openCreateDialog();
+  }, [createRequestToken]);
 
   const openEditDialog = (job: SchedulerJobResponse) => {
     setEditingJobId(job.jobId);

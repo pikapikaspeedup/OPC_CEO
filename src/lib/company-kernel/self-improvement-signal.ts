@@ -8,8 +8,10 @@ import type {
   SystemImprovementSignalSource,
 } from './contracts';
 import { upsertSystemImprovementSignal } from './self-improvement-store';
+import { getSystemImprovementSignal } from './self-improvement-store';
 
 export interface CreateSystemImprovementSignalInput {
+  id?: string;
   source: SystemImprovementSignalSource;
   title: string;
   summary: string;
@@ -19,12 +21,13 @@ export interface CreateSystemImprovementSignalInput {
   recurrence?: number;
   estimatedBenefit?: SystemImprovementSignal['estimatedBenefit'];
   metadata?: Record<string, unknown>;
+  createdAt?: string;
 }
 
 function inferSeverity(input: CreateSystemImprovementSignalInput): SystemImprovementSeverity {
   if (input.severity) return input.severity;
   if (input.source === 'runtime-error' || input.source === 'test-failure') return 'high';
-  if (input.source === 'performance' || input.source === 'architecture-risk') return 'medium';
+  if (input.source === 'performance' || input.source === 'architecture-risk' || input.source === 'user-story-gap') return 'medium';
   return 'low';
 }
 
@@ -35,22 +38,25 @@ function inferAreas(input: CreateSystemImprovementSignalInput): SystemImprovemen
   if (input.source === 'test-failure') return ['runtime', 'api'];
   if (input.source === 'ux-breakpoint') return ['frontend'];
   if (input.source === 'architecture-risk') return ['runtime', 'database'];
+  if (input.source === 'user-story-gap') return ['docs'];
   return ['docs'];
 }
 
 export function createSystemImprovementSignal(input: CreateSystemImprovementSignalInput): SystemImprovementSignal {
   const now = new Date().toISOString();
+  const signalId = input.id || `system-improvement-signal-${randomUUID()}`;
+  const existing = input.id ? getSystemImprovementSignal(input.id) : null;
   return upsertSystemImprovementSignal({
-    id: `system-improvement-signal-${randomUUID()}`,
+    id: signalId,
     source: input.source,
     title: input.title.trim(),
     summary: input.summary.trim(),
     evidenceRefs: input.evidenceRefs || [],
     affectedAreas: inferAreas(input),
     severity: inferSeverity(input),
-    recurrence: Math.max(1, Math.trunc(input.recurrence || 1)),
+    recurrence: Math.max(1, Math.trunc(input.recurrence || existing?.recurrence || 1)),
     estimatedBenefit: input.estimatedBenefit || {},
-    createdAt: now,
+    createdAt: input.createdAt || existing?.createdAt || now,
     ...(input.metadata ? { metadata: input.metadata } : {}),
   });
 }

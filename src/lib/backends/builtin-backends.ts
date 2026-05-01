@@ -3,7 +3,7 @@ import * as path from 'path';
 
 import { getApiKey, getOwnerConnection, grpc, refreshOwnerMap } from '../bridge/gateway';
 import type { GroupRoleDefinition, TaskResult } from '../agents/group-types';
-import { appendRunHistoryEntry, readRunHistory } from '../agents/run-history';
+import { appendRunHistoryEntry } from '../agents/run-history';
 import { compactCodingResult } from '../agents/result-parser';
 import { normalizeClaudeCodeEvents, type ClaudeStreamEvent } from '../providers/claude-code-normalizer';
 import { watchConversation, type ConversationWatchState } from '../agents/watch-conversation';
@@ -158,7 +158,14 @@ function createEventChannel<T>() {
   };
 }
 
-class CodexAgentSession implements AgentSession {
+// ---------------------------------------------------------------------------
+// Legacy manual CLI backends
+// ---------------------------------------------------------------------------
+// These paths are kept for compatibility/manual entrypoints such as /api/codex*
+// and old backend-attached conversations. The Claude Engine mainline should use
+// ExecutionTool instead of selecting codex / claude-code as a peer backend.
+
+class LegacyCodexManualSession implements AgentSession {
   readonly providerId = 'codex' as const;
   readonly capabilities: AgentBackendCapabilities;
   readonly handle: string;
@@ -187,8 +194,8 @@ class CodexAgentSession implements AgentSession {
     }
   }
 
-  static attach(config: BackendRunConfig, handle: string): CodexAgentSession {
-    return new CodexAgentSession(config.runId, config, {
+  static attach(config: BackendRunConfig, handle: string): LegacyCodexManualSession {
+    return new LegacyCodexManualSession(config.runId, config, {
       handle,
       startExecution: false,
     });
@@ -278,134 +285,6 @@ class CodexAgentSession implements AgentSession {
       await this.executor.cancel(this.handle);
     } catch (err: any) {
       log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Codex cancel raised an error');
-    }
-
-    this.channel.push({
-      kind: 'cancelled',
-      runId: this.runId,
-      providerId: this.providerId,
-      handle: this.handle,
-      finishedAt: new Date().toISOString(),
-      reason,
-    });
-    this.terminal = true;
-    this.channel.close();
-  }
-}
-
-class NativeCodexAgentSession implements AgentSession {
-  readonly providerId = 'native-codex' as const;
-  readonly capabilities: AgentBackendCapabilities;
-  readonly handle: string;
-
-  private readonly executor = getExecutor('native-codex');
-  private readonly channel = createEventChannel<AgentEvent>();
-  private terminal = false;
-  private cancelled = false;
-
-  constructor(
-    readonly runId: string,
-    private readonly config: BackendRunConfig,
-    options: { handle?: string; startExecution?: boolean } = {},
-  ) {
-    this.handle = options.handle || `native-codex-${runId}`;
-    const baseCaps = mapCapabilities(this.executor.capabilities());
-    this.capabilities = { ...baseCaps, supportsAppend: true };
-    this.channel.push({
-      kind: 'started',
-      runId: this.runId,
-      providerId: this.providerId,
-      handle: this.handle,
-      startedAt: new Date().toISOString(),
-    });
-    if (options.startExecution !== false) {
-      void this.run();
-    }
-  }
-
-  private async run(): Promise<void> {
-    try {
-      const memoryInstructions = formatMemoryContextForBaseInstructions(this.config.memoryContext);
-      const result = await this.executor.executeTask({
-        workspace: this.config.workspacePath,
-        prompt: this.config.prompt,
-        model: this.config.model,
-        artifactDir: this.config.artifactDir,
-        timeout: this.config.timeoutMs,
-        runId: this.config.runId,
-        stageId: this.config.metadata?.stageId,
-        roleId: this.config.metadata?.roleId,
-        parentConversationId: this.config.parentConversationId,
-        baseInstructions: memoryInstructions || undefined,
-      });
-
-      if (this.cancelled || this.terminal) {
-        return;
-      }
-
-      this.channel.push({
-        kind: 'completed',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: result.handle || this.handle,
-        finishedAt: new Date().toISOString(),
-        result: toTaskResult(result),
-        finalText: result.content,
-        rawSteps: result.steps,
-      });
-      this.terminal = true;
-      this.channel.close();
-    } catch (err: any) {
-      if (this.cancelled || this.terminal) {
-        return;
-      }
-
-      this.channel.push({
-        kind: 'failed',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: this.handle,
-        finishedAt: new Date().toISOString(),
-        error: createBackendError({
-          code: 'provider_failed',
-          message: err?.message || 'Native Codex execution failed',
-          retryable: true,
-          source: 'provider',
-        }),
-      });
-      this.terminal = true;
-      this.channel.close();
-    }
-  }
-
-  events(): AsyncIterable<AgentEvent> {
-    return this.channel.iterate();
-  }
-
-  async append(request: AppendRunRequest): Promise<void> {
-    if (!this.capabilities.supportsAppend) {
-      throw new Error('append_not_supported');
-    }
-
-    await this.executor.appendMessage(this.handle, {
-      prompt: request.prompt,
-      model: request.model,
-      workspace: request.workspacePath || this.config.workspacePath,
-      runId: this.runId,
-    });
-  }
-
-  async cancel(reason?: string): Promise<void> {
-    if (this.terminal || this.cancelled) {
-      return;
-    }
-
-    this.cancelled = true;
-
-    try {
-      await this.executor.cancel(this.handle);
-    } catch (err: any) {
-      log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Native Codex cancel raised an error');
     }
 
     this.channel.push({
@@ -904,7 +783,13 @@ class AntigravityAgentSession implements AgentSession {
   }
 }
 
-export class CodexAgentBackend implements AgentBackend {
+/**
+ * Compatibility/manual backend for Codex CLI.
+ *
+ * Keep this only for manual entrypoints and old backend-attached sessions.
+ * New Claude Engine coding flows should call Codex through ExecutionTool.
+ */
+export class LegacyCodexManualBackend implements AgentBackend {
   readonly providerId = 'codex' as const;
 
   capabilities(): AgentBackendCapabilities {
@@ -912,56 +797,11 @@ export class CodexAgentBackend implements AgentBackend {
   }
 
   async start(config: BackendRunConfig): Promise<AgentSession> {
-    return new CodexAgentSession(config.runId, config);
+    return new LegacyCodexManualSession(config.runId, config);
   }
 
   async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
-    return CodexAgentSession.attach(config, handle);
-  }
-}
-
-export class NativeCodexAgentBackend implements AgentBackend {
-  readonly providerId = 'native-codex' as const;
-
-  capabilities(): AgentBackendCapabilities {
-    const base = mapCapabilities(getExecutor('native-codex').capabilities());
-    return { ...base, supportsAppend: true };
-  }
-
-  async start(config: BackendRunConfig): Promise<AgentSession> {
-    return new NativeCodexAgentSession(config.runId, config);
-  }
-
-  async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
-    return new NativeCodexAgentSession(config.runId, config, { handle, startExecution: false });
-  }
-
-  async getRecentSteps(handle: string, options?: GetRecentStepsOptions): Promise<unknown[]> {
-    const runId = handle.startsWith('native-codex-') ? handle.slice('native-codex-'.length) : '';
-    if (!runId) {
-      return [];
-    }
-
-    const steps = readRunHistory(runId)
-      .filter((entry) => entry.eventType === 'conversation.message.user' || entry.eventType === 'conversation.message.assistant')
-      .map((entry) => {
-        const content = typeof entry.details.content === 'string' ? entry.details.content : '';
-        if (entry.eventType === 'conversation.message.user') {
-          return {
-            type: 'CORTEX_STEP_TYPE_USER_INPUT',
-            userInput: { items: [{ text: content }], media: [] },
-          };
-        }
-        return {
-          type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
-          plannerResponse: { response: content },
-        };
-      });
-
-    if (!options?.limit || options.limit <= 0) {
-      return steps;
-    }
-    return steps.slice(-options.limit);
+    return LegacyCodexManualSession.attach(config, handle);
   }
 }
 
@@ -1012,10 +852,10 @@ export class AntigravityAgentBackend implements AgentBackend {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code Backend — Phase 1 minimal adapter
+// Legacy Claude Code manual backend
 // ---------------------------------------------------------------------------
 
-class ClaudeCodeAgentSession implements AgentSession {
+class LegacyClaudeCodeManualSession implements AgentSession {
   readonly providerId = 'claude-code' as const;
   readonly capabilities: AgentBackendCapabilities;
   readonly handle: string;
@@ -1046,8 +886,8 @@ class ClaudeCodeAgentSession implements AgentSession {
     }
   }
 
-  static attach(config: BackendRunConfig, handle: string): ClaudeCodeAgentSession {
-    return new ClaudeCodeAgentSession(config.runId, config, {
+  static attach(config: BackendRunConfig, handle: string): LegacyClaudeCodeManualSession {
+    return new LegacyClaudeCodeManualSession(config.runId, config, {
       handle,
       startExecution: false,
     });
@@ -1156,7 +996,13 @@ class ClaudeCodeAgentSession implements AgentSession {
   }
 }
 
-export class ClaudeCodeAgentBackend implements AgentBackend {
+/**
+ * Compatibility/manual backend for Claude Code CLI.
+ *
+ * Keep this only for manual entrypoints and old backend-attached sessions.
+ * New Claude Engine coding flows should call Claude Code through ExecutionTool.
+ */
+export class LegacyClaudeCodeManualBackend implements AgentBackend {
   readonly providerId = 'claude-code' as const;
 
   capabilities(): AgentBackendCapabilities {
@@ -1166,20 +1012,32 @@ export class ClaudeCodeAgentBackend implements AgentBackend {
   }
 
   async start(config: BackendRunConfig): Promise<AgentSession> {
-    return new ClaudeCodeAgentSession(config.runId, config);
+    return new LegacyClaudeCodeManualSession(config.runId, config);
   }
 
   async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
-    return ClaudeCodeAgentSession.attach(config, handle);
+    return LegacyClaudeCodeManualSession.attach(config, handle);
   }
 }
 
 export { ClaudeEngineAgentBackend };
 
-let codexBackend: CodexAgentBackend | null = null;
+/**
+ * @deprecated Compatibility/manual path only. Claude Engine mainline should
+ * invoke Codex through ExecutionTool instead of selecting this backend.
+ */
+export const CodexAgentBackend = LegacyCodexManualBackend;
+
+/**
+ * @deprecated Compatibility/manual path only. Claude Engine mainline should
+ * invoke Claude Code through ExecutionTool instead of selecting this backend.
+ */
+export const ClaudeCodeAgentBackend = LegacyClaudeCodeManualBackend;
+
+let legacyCodexManualBackend: LegacyCodexManualBackend | null = null;
 let nativeCodexBackend: ClaudeEngineAgentBackend | null = null;
 let antigravityBackend: AntigravityAgentBackend | null = null;
-let claudeCodeBackend: ClaudeCodeAgentBackend | null = null;
+let legacyClaudeCodeManualBackend: LegacyClaudeCodeManualBackend | null = null;
 let claudeApiBackend: ClaudeEngineAgentBackend | null = null;
 let openaiApiBackend: ClaudeEngineAgentBackend | null = null;
 let geminiApiBackend: ClaudeEngineAgentBackend | null = null;
@@ -1188,13 +1046,13 @@ let customApiBackend: ClaudeEngineAgentBackend | null = null;
 
 export function ensureBuiltInAgentBackends(): void {
   if (!hasAgentBackend('codex')) {
-    codexBackend ||= new CodexAgentBackend();
-    registerAgentBackend(codexBackend);
+    // Compatibility/manual path only. Mainline Claude Engine coding should use ExecutionTool.
+    legacyCodexManualBackend ||= new LegacyCodexManualBackend();
+    registerAgentBackend(legacyCodexManualBackend);
   }
 
   if (!hasAgentBackend('native-codex')) {
-    // Department runtime mainline routes native-codex through Claude Engine.
-    // The legacy NativeCodexExecutor remains available for local conversation flows.
+    // native-codex is now uniformly routed through Claude Engine.
     nativeCodexBackend ||= new ClaudeEngineAgentBackend('native-codex');
     registerAgentBackend(nativeCodexBackend);
   }
@@ -1205,8 +1063,9 @@ export function ensureBuiltInAgentBackends(): void {
   }
 
   if (!hasAgentBackend('claude-code')) {
-    claudeCodeBackend ||= new ClaudeCodeAgentBackend();
-    registerAgentBackend(claudeCodeBackend);
+    // Compatibility/manual path only. Mainline Claude Engine coding should use ExecutionTool.
+    legacyClaudeCodeManualBackend ||= new LegacyClaudeCodeManualBackend();
+    registerAgentBackend(legacyClaudeCodeManualBackend);
   }
 
   if (!hasAgentBackend('claude-api')) {

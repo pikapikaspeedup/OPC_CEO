@@ -35,6 +35,7 @@ import DepartmentDetailDrawer from '@/components/department-detail-drawer';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { api, type AuditEvent } from '@/lib/api';
+import { getDepartmentBoundWorkspaceUris } from '@/lib/department-config';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { pickLatestDailyDigest } from '@/lib/ceo-office-home';
 import type { Locale } from '@/lib/i18n';
@@ -116,6 +117,48 @@ type CeoOfficeCockpitProps = {
 };
 
 type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'accent';
+
+function formatImprovementMergeGateLabel(proposal: SystemImprovementProposalFE): string {
+  switch (proposal.exitEvidence?.mergeGate.status) {
+    case 'ready-to-merge':
+      return '可准出';
+    case 'blocked':
+      return '已阻塞';
+    case 'pending':
+      return '待补齐';
+    default:
+      return '待收口';
+  }
+}
+
+function formatImprovementExecutionSummary(proposal: SystemImprovementProposalFE): string {
+  const evidence = proposal.exitEvidence;
+  if (!evidence) {
+    return proposal.status;
+  }
+  const segments: string[] = [];
+  if (evidence.project) segments.push(`项目 ${evidence.project.status}`);
+  if (evidence.latestRun) {
+    segments.push(
+      evidence.latestRun.status === 'completed'
+        ? 'Run 已完成'
+        : evidence.latestRun.status === 'running'
+          ? 'Run 执行中'
+          : evidence.latestRun.status === 'blocked'
+            ? 'Run 阻塞'
+            : evidence.latestRun.status === 'failed'
+              ? 'Run 失败'
+              : `Run ${evidence.latestRun.status}`,
+    );
+  }
+  segments.push(
+    evidence.testing.evidenceCount > 0
+      ? `测试 ${evidence.testing.passedCount}/${evidence.testing.evidenceCount}`
+      : '未提交测试',
+  );
+  segments.push(`准出 ${formatImprovementMergeGateLabel(proposal)}`);
+  return segments.join(' · ');
+}
 
 type DepartmentPulse = {
   workspace: Workspace;
@@ -1094,7 +1137,15 @@ export default function CeoOfficeCockpit({
     }
     : null;
   const selectedDepartmentProjects = selectedDepartmentUri
-    ? projects.filter(project => project.workspace === selectedDepartmentUri)
+    ? projects.filter((project) => project.workspace && (
+      selectedDepartmentConfig
+        ? getDepartmentBoundWorkspaceUris(
+            selectedDepartmentConfig,
+            selectedDepartmentUri,
+            selectedDepartmentWorkspace?.name,
+          ).includes(project.workspace)
+        : project.workspace === selectedDepartmentUri
+    ))
     : [];
   const selectedAgendaItem = useMemo<OperatingAgendaItemFE | null>(() => {
     if (!selectedAgendaItemId) return null;
@@ -1633,9 +1684,50 @@ export default function CeoOfficeCockpit({
 	                  </Button>
 	                </div>
 	                {improvementProposals.length ? (
-	                  <div className="flex items-center justify-between rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-800">
-	                    <span>系统改进</span>
-	                    <span className="font-semibold">{improvementProposals.filter(item => item.status === 'approval-required').length} approval / {improvementProposals.length} total</span>
+	                  <div className="space-y-2">
+	                    <div className="flex items-center justify-between rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-800">
+	                      <span>系统改进</span>
+	                      <span className="font-semibold">{improvementProposals.filter(item => item.status === 'approval-required').length} approval / {improvementProposals.length} total</span>
+	                    </div>
+	                    <div className="space-y-2">
+	                      {improvementProposals.slice(0, 2).map((proposal) => (
+	                        <button
+	                          key={proposal.id}
+	                          type="button"
+	                          onClick={() => {
+	                            const projectId = typeof proposal.exitEvidence?.project?.projectId === 'string'
+	                              ? proposal.exitEvidence.project.projectId
+	                              : null;
+	                            if (projectId) {
+	                              onNavigateToProject(projectId);
+	                              return;
+	                            }
+	                            onOpenOps();
+	                          }}
+	                          className="w-full rounded-xl border border-[#edf1f7] bg-[#fbfcff] p-3 text-left hover:bg-[#f8fbff]"
+	                        >
+	                          <div className="flex items-start justify-between gap-3">
+	                            <div className="min-w-0">
+	                              <div className="truncate text-[12px] font-semibold text-[#111827]">{proposal.title}</div>
+	                              <div className="mt-1 text-[12px] text-[#6b768a]">{formatImprovementExecutionSummary(proposal)}</div>
+	                              {proposal.exitEvidence?.mergeGate.reasons?.[0] ? (
+	                                <div className="mt-1 truncate text-[11px] text-[#8a94a6]">{proposal.exitEvidence.mergeGate.reasons[0]}</div>
+	                              ) : null}
+	                            </div>
+	                            <span className={cn(
+	                              'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+	                              proposal.exitEvidence?.mergeGate.status === 'ready-to-merge'
+	                                ? 'bg-emerald-50 text-emerald-700'
+	                                : proposal.exitEvidence?.mergeGate.status === 'blocked'
+	                                  ? 'bg-red-50 text-red-600'
+	                                  : 'bg-amber-50 text-amber-700',
+	                            )}>
+	                              {formatImprovementMergeGateLabel(proposal)}
+	                            </span>
+	                          </div>
+	                        </button>
+	                      ))}
+	                    </div>
 	                  </div>
 	                ) : null}
 	              </div>
@@ -1750,6 +1842,7 @@ export default function CeoOfficeCockpit({
           workspace={selectedDepartmentWorkspace}
           config={selectedDepartmentConfig}
           projects={selectedDepartmentProjects}
+          allWorkspaces={workspaces}
           onNavigateToProject={(projectId) => {
             setSelectedDepartmentUri(null);
             onNavigateToProject(projectId);

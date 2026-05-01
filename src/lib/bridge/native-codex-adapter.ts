@@ -21,6 +21,12 @@
 
 import { createLogger } from '../logger';
 import { resolveCodexAccessToken } from './native-codex-auth';
+import type {
+  AssistantMessage as PiAssistantMessage,
+  Context as PiContext,
+  TSchema,
+  Tool as PiTool,
+} from '@mariozechner/pi-ai';
 
 const log = createLogger('NativeCodexAdapter');
 
@@ -30,6 +36,8 @@ const log = createLogger('NativeCodexAdapter');
 const CODEX_BASE_URL = process.env.NATIVE_CODEX_BASE_URL?.trim()
   || 'https://chatgpt.com/backend-api/codex';
 
+const DEFAULT_INSTRUCTIONS = 'You are a helpful assistant.';
+
 /** Default model for native Codex. GPT-5.4 is the latest full model. */
 const DEFAULT_MODEL = 'gpt-5.4';
 
@@ -38,9 +46,11 @@ export const CODEX_FALLBACK_MODEL = 'gpt-5.3-codex';
 
 /** Available native Codex models. */
 export const NATIVE_CODEX_MODELS = [
+  'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',
   'gpt-5.3-codex',
+  'gpt-5.3-codex-spark',
   'gpt-5.2-codex',
 ] as const;
 
@@ -54,12 +64,20 @@ const INTERNAL_MODEL_FALLBACKS: Record<string, string> = {
 };
 
 const DEFAULT_NATIVE_CODEX_TIMEOUT_MS = 90_000;
+let piAiModulePromise: Promise<typeof import('@mariozechner/pi-ai')> | null = null;
 
 function getNativeCodexTimeoutMs(): number {
   const raw = process.env.NATIVE_CODEX_TIMEOUT_MS?.trim();
   if (!raw) return DEFAULT_NATIVE_CODEX_TIMEOUT_MS;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_NATIVE_CODEX_TIMEOUT_MS;
+}
+
+async function loadPiAi() {
+  if (!piAiModulePromise) {
+    piAiModulePromise = import('@mariozechner/pi-ai');
+  }
+  return piAiModulePromise;
 }
 
 export function normalizeNativeCodexModel(model?: string): string {
@@ -83,6 +101,10 @@ export function normalizeNativeCodexModel(model?: string): string {
 
   if (/mini/i.test(trimmed)) {
     return 'gpt-5.4-mini';
+  }
+
+  if (/^gpt-[\w.-]+$/i.test(trimmed)) {
+    return trimmed;
   }
 
   return DEFAULT_MODEL;
@@ -152,57 +174,20 @@ export interface NativeCodexResponse {
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
 }
 
-// ─── Content Conversion ────────────────────────────────────────────────────
-
-/**
- * Convert chat.completions content to Responses API format.
- *
- * chat.completions uses:
- *   { type: "text", text: "..." }
- *   { type: "image_url", image_url: { url: "..." } }
- *
- * Responses API uses:
- *   { type: "input_text", text: "..." }
- *   { type: "input_image", image_url: "..." }
- */
-function convertContentForResponses(
-  content: string | ContentPart[]
-): string | Array<Record<string, unknown>> {
-  if (typeof content === 'string') return content;
-
-  return content.map((part) => {
-    if (part.type === 'text') {
-      return { type: 'input_text', text: part.text || '' };
-    }
-    if (part.type === 'image_url' && part.image_url) {
-      const entry: Record<string, unknown> = {
-        type: 'input_image',
-        image_url: part.image_url.url,
-      };
-      if (part.image_url.detail) {
-        entry.detail = part.image_url.detail;
-      }
-      return entry;
-    }
-    // Unknown type, pass through as text
-    return { type: 'input_text', text: part.text || '' };
-  });
+export interface NativeCodexImageRequestOptions {
+  prompt: string;
+  model?: string;
+  size?: '256x256' | '512x512' | '1024x1024';
+  store?: boolean;
+  signal?: AbortSignal;
 }
 
-/**
- * Convert function tools from chat.completions format to Responses API format.
- */
-function convertToolsForResponses(
-  tools: FunctionTool[]
-): Array<Record<string, unknown>> {
-  return tools
-    .filter((t) => t.function?.name)
-    .map((t) => ({
-      type: 'function',
-      name: t.function.name,
-      description: t.function.description || '',
-      parameters: t.function.parameters || {},
-    }));
+export interface NativeCodexImageResponse {
+  model: string;
+  size: '1024x1024';
+  imageBase64: string;
+  mimeType: string;
+  revisedPrompt?: string;
 }
 
 // ─── SSE Response Parsing ──────────────────────────────────────────────────
@@ -215,6 +200,8 @@ interface ResponsesOutputItem {
   call_id?: string;
   name?: string;
   arguments?: string;
+  result?: string;
+  revised_prompt?: string;
 }
 
 interface ResponsesFinalResponse {
@@ -223,6 +210,190 @@ interface ResponsesFinalResponse {
     input_tokens?: number;
     output_tokens?: number;
     total_tokens?: number;
+  };
+}
+
+const EMPTY_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+} as const;
+
+function toMimeAndData(url: string): { mimeType: string; data: string } | null {
+  const match = /^data:([^;,]+);base64,(.+)$/i.exec(url);
+  if (!match) return null;
+  return {
+    mimeType: match[1],
+    data: match[2],
+  };
+}
+
+async function convertPiContentPart(part: ContentPart): Promise<
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string }
+> {
+  if (part.type === 'text') {
+    return { type: 'text', text: part.text || '' };
+  }
+
+  const imageUrl = part.image_url?.url || '';
+  const fromDataUrl = toMimeAndData(imageUrl);
+  if (fromDataUrl) {
+    return {
+      type: 'image',
+      data: fromDataUrl.data,
+      mimeType: fromDataUrl.mimeType,
+    };
+  }
+
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image input for pi-ai transport: HTTP ${response.status}`);
+  }
+
+  const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'image/png';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return {
+    type: 'image',
+    data: buffer.toString('base64'),
+    mimeType,
+  };
+}
+
+async function convertContentForPi(
+  content: string | ContentPart[],
+): Promise<string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>> {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  return Promise.all(content.map((part) => convertPiContentPart(part)));
+}
+
+async function toPiContext(
+  opts: NativeCodexRequestOptions,
+  model: string,
+): Promise<PiContext> {
+  const messages: PiContext['messages'] = [];
+  const systemParts: string[] = [];
+  const now = Date.now();
+
+  for (let index = 0; index < opts.messages.length; index += 1) {
+    const msg = opts.messages[index];
+    if (msg.role === 'system') {
+      const content = typeof msg.content === 'string'
+        ? msg.content
+        : msg.content.map((part) => part.type === 'text' ? (part.text || '') : '').join('\n');
+      if (content.trim()) {
+        systemParts.push(content.trim());
+      }
+      continue;
+    }
+
+    const timestamp = now + index;
+    if (msg.role === 'user') {
+      messages.push({
+        role: 'user',
+        content: await convertContentForPi(msg.content),
+        timestamp,
+      });
+      continue;
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: typeof msg.content === 'string'
+          ? msg.content
+          : msg.content.map((part) => part.type === 'text' ? (part.text || '') : '').join('\n'),
+      }],
+      api: 'openai-codex-responses',
+      provider: 'openai-codex',
+      model,
+      usage: { ...EMPTY_USAGE, cost: { ...EMPTY_USAGE.cost } },
+      stopReason: 'stop',
+      timestamp,
+    } satisfies PiAssistantMessage);
+  }
+
+  const tools: PiTool<TSchema>[] | undefined = opts.tools?.length
+    ? opts.tools
+        .filter((tool) => tool.function?.name)
+        .map((tool) => ({
+          name: tool.function.name,
+          description: tool.function.description || '',
+          parameters: (tool.function.parameters || { type: 'object', properties: {} }) as TSchema,
+        }))
+    : undefined;
+
+  return {
+    systemPrompt: systemParts.join('\n\n').trim() || undefined,
+    messages,
+    tools,
+  };
+}
+
+function finishReasonFromPi(stopReason: PiAssistantMessage['stopReason']): NativeCodexResponse['finishReason'] {
+  if (stopReason === 'toolUse') return 'tool_calls';
+  if (stopReason === 'length') return 'length';
+  if (stopReason === 'error' || stopReason === 'aborted') return 'error';
+  return 'stop';
+}
+
+async function nativeCodexCompleteViaPi(
+  opts: NativeCodexRequestOptions,
+  accessToken: string,
+  model: string,
+): Promise<NativeCodexResponse> {
+  const piAi = await loadPiAi();
+  const piContext = await toPiContext(opts, model);
+  const piModel = piAi.getModels('openai-codex').find((candidate) => candidate.id === model)
+    ?? piAi.getModel('openai-codex', 'gpt-5.4');
+  const result = await piAi.complete(piModel, piContext, {
+    apiKey: accessToken,
+    signal: opts.signal,
+    transport: 'auto',
+    timeoutMs: getNativeCodexTimeoutMs(),
+    sessionId: opts.store ? `ag-native-codex-${Date.now()}` : undefined,
+  });
+
+  const text = result.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('')
+    .trim() || null;
+
+  const toolCalls = result.content
+    .filter((block): block is Extract<PiAssistantMessage['content'][number], { type: 'toolCall' }> => block.type === 'toolCall')
+    .map((block) => ({
+      id: block.id,
+      type: 'function' as const,
+      function: {
+        name: block.name,
+        arguments: JSON.stringify(block.arguments ?? {}),
+      },
+    }));
+
+  return {
+    content: text,
+    toolCalls,
+    model,
+    usage: {
+      promptTokens: result.usage.input,
+      completionTokens: result.usage.output,
+      totalTokens: result.usage.totalTokens,
+    },
+    finishReason: finishReasonFromPi(result.stopReason),
   };
 }
 
@@ -301,71 +472,45 @@ async function parseSSEStream(response: Response): Promise<{
 
 // ─── Main Adapter ──────────────────────────────────────────────────────────
 
-/**
- * Send a completion request to the native Codex backend.
- *
- * This is the core function that translates standard chat.completions-style
- * requests into OpenAI's internal Responses API format and sends them to
- * the Codex backend endpoint.
- *
- * @throws Error if no valid Codex auth tokens are available
- * @throws Error if the API call fails
- */
-export async function nativeCodexComplete(
-  opts: NativeCodexRequestOptions
-): Promise<NativeCodexResponse> {
-  // 1. Resolve auth token
+function normalizeNativeCodexImageSize(): '1024x1024' {
+  return '1024x1024';
+}
+
+export async function nativeCodexGenerateImage(
+  opts: NativeCodexImageRequestOptions,
+): Promise<NativeCodexImageResponse> {
   const accessToken = await resolveCodexAccessToken();
   if (!accessToken) {
     throw new Error(
-      'No Codex credentials available. Run `codex` in your terminal to authenticate.'
+      'No Codex credentials available. Run `codex` in your terminal to authenticate.',
     );
   }
 
-  const requestedModel = opts.model;
-  const model = normalizeNativeCodexModel(requestedModel);
-
-  // 2. Build Responses API payload
-  //    Separate system instructions from conversation messages
-  let instructions = 'You are a helpful assistant.';
-  const inputMessages: Array<Record<string, unknown>> = [];
-
-  for (const msg of opts.messages) {
-    if (msg.role === 'system') {
-      instructions = typeof msg.content === 'string' ? msg.content : String(msg.content);
-    } else {
-      inputMessages.push({
-        role: msg.role,
-        content: convertContentForResponses(msg.content),
-      });
-    }
+  const prompt = opts.prompt.trim();
+  if (!prompt) {
+    throw new Error('prompt is required');
   }
 
+  const model = normalizeNativeCodexModel(opts.model);
+  const size = normalizeNativeCodexImageSize();
   const payload: Record<string, unknown> = {
     model,
-    instructions,
-    input: inputMessages.length > 0
-      ? inputMessages
-      : [{ role: 'user', content: '' }],
+    instructions: DEFAULT_INSTRUCTIONS,
+    input: [
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: prompt }],
+      },
+    ],
     store: opts.store ?? false,
     stream: true,
+    tool_choice: { type: 'image_generation' },
+    tools: [{
+      type: 'image_generation',
+      size,
+    }],
   };
 
-  // Add tools if provided
-  if (opts.tools && opts.tools.length > 0) {
-    payload.tools = convertToolsForResponses(opts.tools);
-  }
-
-  // CRITICAL: Do NOT include temperature or max_output_tokens.
-  // The Codex backend rejects them with HTTP 400.
-
-  log.debug(
-    { model, requestedModel, messageCount: opts.messages.length, hasTools: !!opts.tools?.length },
-    'Sending native Codex request'
-  );
-
-  // 3. Stream the response
-  const url = `${CODEX_BASE_URL}/responses`;
   const timeoutMs = getNativeCodexTimeoutMs();
   const timeoutController = opts.signal ? null : new AbortController();
   const timeout = timeoutController
@@ -374,7 +519,7 @@ export async function nativeCodexComplete(
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetch(`${CODEX_BASE_URL}/responses`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -386,7 +531,7 @@ export async function nativeCodexComplete(
     });
   } catch (error: unknown) {
     if (timeoutController?.signal.aborted) {
-      throw new Error(`Native Codex request timed out after ${timeoutMs}ms`);
+      throw new Error(`Native Codex image generation timed out after ${timeoutMs}ms`);
     }
     throw error;
   } finally {
@@ -395,65 +540,44 @@ export async function nativeCodexComplete(
 
   if (!response.ok) {
     const errBody = await response.text().catch(() => '');
-    log.error(
-      { status: response.status, body: errBody.slice(0, 500), model },
-      'Native Codex API error'
-    );
-    throw new Error(
-      `Native Codex API error ${response.status}: ${errBody.slice(0, 300)}`
-    );
+    throw new Error(`Native Codex image generation error ${response.status}: ${errBody.slice(0, 300)}`);
   }
 
-  // 4. Parse SSE stream
-  const { output, textDeltas, usage, hasFunctionCalls } = await parseSSEStream(response);
-
-  // 5. Extract text content and tool calls from output items
-  const textParts: string[] = [];
-  const toolCalls: ToolCallResult[] = [];
-
-  for (const item of output) {
-    if (item.type === 'message') {
-      for (const part of item.content || []) {
-        if (part.type === 'output_text' || part.type === 'text') {
-          textParts.push(part.text || '');
-        }
-      }
-    } else if (item.type === 'function_call') {
-      toolCalls.push({
-        id: item.call_id || '',
-        type: 'function',
-        function: {
-          name: item.name || '',
-          arguments: item.arguments || '{}',
-        },
-      });
-    }
+  const { output } = await parseSSEStream(response);
+  const imageCall = output.find((item) => item.type === 'image_generation_call');
+  const imageBase64 = imageCall?.result?.trim();
+  if (!imageBase64) {
+    throw new Error('Native Codex image generation returned no image payload');
   }
-
-  // Backfill from text deltas if output items were empty
-  if (textParts.length === 0 && textDeltas.length > 0 && !hasFunctionCalls) {
-    textParts.push(textDeltas.join(''));
-    log.debug(
-      { deltaCount: textDeltas.length },
-      'Backfilled text from stream deltas'
-    );
-  }
-
-  const content = textParts.join('').trim() || null;
 
   return {
-    content,
-    toolCalls,
     model,
-    usage: usage
-      ? {
-          promptTokens: usage.input_tokens || 0,
-          completionTokens: usage.output_tokens || 0,
-          totalTokens: usage.total_tokens || 0,
-        }
-      : null,
-    finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+    size,
+    imageBase64,
+    mimeType: 'image/png',
+    revisedPrompt: imageCall?.revised_prompt,
   };
+}
+
+export async function nativeCodexComplete(
+  opts: NativeCodexRequestOptions
+): Promise<NativeCodexResponse> {
+  const accessToken = await resolveCodexAccessToken();
+  if (!accessToken) {
+    throw new Error(
+      'No Codex credentials available. Run `codex` in your terminal to authenticate.'
+    );
+  }
+
+  const requestedModel = opts.model;
+  const model = normalizeNativeCodexModel(requestedModel);
+
+  log.debug(
+    { model, requestedModel, transport: 'pi-ai', messageCount: opts.messages.length, hasTools: !!opts.tools?.length },
+    'Routing native Codex text/tool path through pi-ai',
+  );
+
+  return nativeCodexCompleteViaPi(opts, accessToken, model);
 }
 
 /**

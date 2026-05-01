@@ -68,9 +68,9 @@ vi.mock('../agents/result-parser', () => ({
 
 import {
   AntigravityAgentBackend,
-  ClaudeCodeAgentBackend,
+  LegacyClaudeCodeManualBackend,
   ClaudeEngineAgentBackend,
-  CodexAgentBackend,
+  LegacyCodexManualBackend,
   clearAgentBackends,
   ensureBuiltInAgentBackends,
   getAgentBackend,
@@ -185,7 +185,7 @@ describe('builtin-backends', () => {
     };
     mockGetExecutor.mockReturnValue(executor);
 
-    const backend = new CodexAgentBackend();
+    const backend = new LegacyCodexManualBackend();
     const session = await backend.start(makeConfig('run-1'));
     const events = await collectEvents(session);
 
@@ -218,7 +218,7 @@ describe('builtin-backends', () => {
     };
     mockGetExecutor.mockReturnValue(executor);
 
-    const backend = new CodexAgentBackend();
+    const backend = new LegacyCodexManualBackend();
     const session = await backend.start(makeConfig('run-2'));
     const eventsPromise = collectEvents(session);
 
@@ -420,7 +420,7 @@ describe('builtin-backends', () => {
     };
     mockGetExecutor.mockReturnValue(executor);
 
-    const backend = new CodexAgentBackend();
+    const backend = new LegacyCodexManualBackend();
     const session = await backend.attach(makeConfig('run-5c'), 'codex-thread-existing');
     const iterator = session.events()[Symbol.asyncIterator]();
     const started = await iterator.next();
@@ -769,7 +769,7 @@ describe('builtin-backends', () => {
   // Claude Code AgentBackend tests
   // -------------------------------------------------------------------------
 
-  describe('ClaudeCodeAgentBackend', () => {
+  describe('LegacyClaudeCodeManualBackend', () => {
     const claudeCodeExecutor = {
       capabilities: () => claudeCodeCapabilities,
       executeTask: vi.fn(),
@@ -796,7 +796,7 @@ describe('builtin-backends', () => {
         status: 'completed',
       });
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-cc-1'));
       const events = await collectEvents(session);
 
@@ -818,7 +818,7 @@ describe('builtin-backends', () => {
     it('emits started then failed when execution throws', async () => {
       claudeCodeExecutor.executeTask.mockRejectedValue(new Error('Anthropic API key missing'));
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-cc-2'));
       const events = await collectEvents(session);
 
@@ -841,7 +841,7 @@ describe('builtin-backends', () => {
         status: 'failed',
       });
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-cc-3'));
       const events = await collectEvents(session);
 
@@ -860,7 +860,7 @@ describe('builtin-backends', () => {
       claudeCodeExecutor.executeTask.mockReturnValue(neverResolve);
       claudeCodeExecutor.cancel.mockResolvedValue(undefined);
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-cc-4'));
 
       // Collect first event (started)
@@ -879,7 +879,7 @@ describe('builtin-backends', () => {
     });
 
     it('attach creates a session without starting execution', async () => {
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.attach(makeConfig('run-cc-5'), 'existing-handle-123');
 
       expect(session.handle).toBe('existing-handle-123');
@@ -888,7 +888,7 @@ describe('builtin-backends', () => {
     });
 
     it('capabilities reports correct values', () => {
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const caps = backend.capabilities();
 
       expect(caps.supportsCancel).toBe(true);

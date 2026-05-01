@@ -4,6 +4,7 @@ import { agentTool } from "./agent";
 import { askUserQuestionTool } from "./ask-user";
 import { bashTool } from "./bash";
 import { configTool } from "./config";
+import { executionTool } from "./execution-tool";
 import { fileEditTool } from "./file-edit";
 import { fileReadTool } from "./file-read";
 import { fileWriteTool } from "./file-write";
@@ -58,6 +59,7 @@ const CORE_TOOLS: Tool[] = [
 	// Discovery & config
 	toolSearchTool,
 	configTool,
+	executionTool,
 	// MCP resources
 	listMcpResourcesTool,
 	readMcpResourceTool,

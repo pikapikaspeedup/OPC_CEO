@@ -19,7 +19,7 @@ import {
   addCacheBreakpoints,
   estimateCacheSavings,
 } from '../caching';
-import { APIClientError } from '../client';
+import { APIClientError } from '../api-client-error';
 
 // ─── Error Classification ────────────────────────────────────────────────────
 
@@ -284,7 +284,7 @@ describe('getRateLimitResetDelayMs', () => {
 
   test('returns null for past timestamp', () => {
     const pastUnixSec = Math.floor(Date.now() / 1000) - 60;
-    const error = { headers: { get: (k: string) => String(pastUnixSec) } };
+    const error = { headers: { get: () => String(pastUnixSec) } };
     expect(getRateLimitResetDelayMs(error)).toBeNull();
   });
 });
@@ -354,7 +354,8 @@ describe('addCacheBreakpoints', () => {
     // Last user message should have cache
     const lastUser = result[2];
     expect(Array.isArray(lastUser.content)).toBe(true);
-    expect((lastUser.content as any)[0].cache_control).toEqual({ type: 'ephemeral' });
+    const cachedBlocks = lastUser.content as Array<{ cache_control?: { type: string } }>;
+    expect(cachedBlocks[0]?.cache_control).toEqual({ type: 'ephemeral' });
   });
 
   test('caches multiple user messages when count > 1', () => {
@@ -385,9 +386,9 @@ describe('addCacheBreakpoints', () => {
       },
     ];
     const result = addCacheBreakpoints(messages);
-    const content = result[0].content as any[];
+    const content = result[0].content as Array<{ cache_control?: { type: string } }>;
     expect(content[0]).not.toHaveProperty('cache_control');
-    expect(content[1].cache_control).toEqual({ type: 'ephemeral' });
+    expect(content[1]?.cache_control).toEqual({ type: 'ephemeral' });
   });
 });
 

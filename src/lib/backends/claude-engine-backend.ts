@@ -25,6 +25,10 @@ import type { ModelConfig as APIModelConfig } from '../claude-engine/api/types';
 import type { Tool, ToolContext, ExecResult } from '../claude-engine/types';
 import { createDefaultRegistry } from '../claude-engine/tools/registry';
 import {
+  bindExecutionToolRuntime,
+  createDefaultExecutionToolRuntime,
+} from '../claude-engine/tools/execution-tool';
+import {
   bindAgentHandler,
   type AgentSpawnHandler,
 } from '../claude-engine/tools/agent';
@@ -46,6 +50,7 @@ import type {
 import { isExecutionProfile, type ExecutionProfile } from '../execution/contracts';
 import type { DepartmentRequiredArtifact, DepartmentRuntimeContract } from '../organization/contracts';
 import { loadAIConfig } from '../providers/ai-config';
+import type { AIProviderId } from '../providers/types';
 import type { Step } from '../types';
 import type {
   AgentBackend,
@@ -55,7 +60,6 @@ import type {
   AppendRunRequest,
   BackendRunConfig,
 } from './types';
-import type { ProviderId } from '../providers';
 
 const log = createLogger('ClaudeEngineBackend');
 const execAsync = promisify(execCallback);
@@ -108,9 +112,15 @@ function readStoredApiKeys(): StoredApiKeys {
   }
 }
 
-export function resolveApiBackedModelConfig(providerId: ProviderId, requestedModel?: string): APIModelConfig {
+export function resolveApiBackedModelConfig(providerId: AIProviderId, requestedModel?: string): APIModelConfig {
   const keys = readStoredApiKeys();
   const aiConfig = loadAIConfig();
+  const profile = aiConfig.providerProfiles?.[providerId]
+    ? {
+        ...aiConfig.providerProfiles?.[providerId],
+      }
+    : undefined;
+  const transport = profile?.transport ?? (providerId === 'antigravity' ? 'native' : 'pi-ai');
 
   switch (providerId) {
     case 'claude-api':
@@ -118,37 +128,50 @@ export function resolveApiBackedModelConfig(providerId: ProviderId, requestedMod
         model: requestedModel ?? 'claude-sonnet-4-20250514',
         apiKey: keys.anthropic || process.env.ANTHROPIC_API_KEY || '',
         provider: 'anthropic',
+        providerId,
+        transport,
       };
     case 'openai-api':
       return {
         model: requestedModel ?? 'gpt-4.1-mini',
         apiKey: keys.openai || process.env.OPENAI_API_KEY || '',
         provider: 'openai',
+        providerId,
+        transport,
+        baseUrl: process.env.OPENAI_BASE_URL,
       };
     case 'native-codex':
       return {
         model: requestedModel ?? 'gpt-5.4',
         apiKey: '',
         provider: 'native-codex',
+        providerId,
+        transport,
       };
     case 'gemini-api':
       return {
         model: requestedModel ?? 'gemini-2.5-flash',
         apiKey: keys.gemini || process.env.GEMINI_API_KEY || '',
         provider: 'gemini',
+        providerId,
+        transport,
       };
     case 'grok-api':
       return {
         model: requestedModel ?? 'grok-3-mini',
         apiKey: keys.grok || process.env.GROK_API_KEY || process.env.XAI_API_KEY || '',
         provider: 'grok',
+        providerId,
+        transport,
         baseUrl: process.env.GROK_BASE_URL,
       };
     case 'custom':
       return {
         model: requestedModel ?? aiConfig.customProvider?.defaultModel ?? 'gpt-4.1-mini',
         apiKey: aiConfig.customProvider?.apiKey || '',
-        provider: 'openai',
+        provider: 'custom',
+        providerId,
+        transport,
         baseUrl: aiConfig.customProvider?.baseUrl,
       };
     default:
@@ -444,7 +467,7 @@ export function createClaudeEngineToolContext(
     ...(additionalWorkingDirectories ?? []).map((entry) => path.resolve(entry)),
   ];
 
-  return {
+  const context: ToolContext = {
     workspacePath,
     abortSignal: signal,
     ...(additionalWorkingDirectories?.length
@@ -484,6 +507,9 @@ export function createClaudeEngineToolContext(
       }
     },
   };
+
+  bindExecutionToolRuntime(context, createDefaultExecutionToolRuntime());
+  return context;
 }
 
 function isPathWithinRoot(candidate: string, root: string): boolean {
@@ -825,7 +851,7 @@ async function closeClaudeEngine(engine: ClaudeEngine): Promise<void> {
 // ---------------------------------------------------------------------------
 
 class ClaudeEngineAgentSession implements AgentSession {
-  readonly providerId: ProviderId;
+  readonly providerId: AIProviderId;
   readonly capabilities: AgentBackendCapabilities = {
     supportsAppend: true,
     supportsCancel: true,
@@ -846,7 +872,7 @@ class ClaudeEngineAgentSession implements AgentSession {
   private constructor(
     readonly runId: string,
     private readonly config: BackendRunConfig,
-    providerId: ProviderId,
+    providerId: AIProviderId,
     handle: string,
     engine: ClaudeEngine,
     abortController: AbortController,
@@ -875,7 +901,7 @@ class ClaudeEngineAgentSession implements AgentSession {
   static async create(
     runId: string,
     config: BackendRunConfig,
-    providerId: ProviderId,
+    providerId: AIProviderId,
   ): Promise<ClaudeEngineAgentSession> {
     const abortController = new AbortController();
     const modelConfig = resolveApiBackedModelConfig(providerId, config.model);
@@ -885,7 +911,7 @@ class ClaudeEngineAgentSession implements AgentSession {
       runtimePayload,
       config,
     );
-    if (!modelConfig.apiKey) {
+    if (!modelConfig.apiKey && providerId !== 'native-codex') {
       log.warn({ runId: runId.slice(0, 8), providerId }, 'Provider credential not configured');
     }
 
@@ -945,7 +971,7 @@ class ClaudeEngineAgentSession implements AgentSession {
   static async attach(
     runId: string,
     config: BackendRunConfig,
-    providerId: ProviderId,
+    providerId: AIProviderId,
     handle: string,
   ): Promise<ClaudeEngineAgentSession> {
     const prefix = `${providerId}-`;
@@ -962,7 +988,7 @@ class ClaudeEngineAgentSession implements AgentSession {
       runtimePayload,
       config,
     );
-    if (!modelConfig.apiKey) {
+    if (!modelConfig.apiKey && providerId !== 'native-codex') {
       log.warn({ runId: runId.slice(0, 8), providerId }, 'Provider credential not configured');
     }
 
@@ -1214,9 +1240,9 @@ class ClaudeEngineAgentSession implements AgentSession {
 // ---------------------------------------------------------------------------
 
 export class ClaudeEngineAgentBackend implements AgentBackend {
-  readonly providerId: ProviderId;
+  readonly providerId: AIProviderId;
 
-  constructor(providerId: ProviderId = 'claude-api') {
+  constructor(providerId: AIProviderId = 'claude-api') {
     this.providerId = providerId;
   }
 

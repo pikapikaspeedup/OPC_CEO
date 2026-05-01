@@ -17,11 +17,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../logger';
+import { coerceConfigProviderId, isAIProviderId } from './types';
 import type {
+  AIProviderId,
   AIProviderConfig,
   AILayer,
   AIScene,
-  ProviderId,
+  CustomProviderConfig,
+  ProviderTransportProfile,
   ResolvedProvider,
 } from './types';
 
@@ -41,6 +44,32 @@ const DEFAULT_CONFIG: AIProviderConfig = {
     utility: { provider: 'antigravity' },
   },
   scenes: {},
+  providerProfiles: {
+    antigravity: { transport: 'native', authMode: 'runtime' },
+    'native-codex': {
+      transport: 'pi-ai',
+      authMode: 'codex-oauth',
+      supportsImageGeneration: true,
+      enableImageGeneration: true,
+      imageGenerationModel: 'gpt-5.5',
+    },
+    'claude-api': { transport: 'pi-ai', authMode: 'api-key' },
+    'openai-api': {
+      transport: 'pi-ai',
+      authMode: 'api-key',
+      supportsImageGeneration: true,
+      enableImageGeneration: true,
+      imageGenerationModel: 'gpt-image-1',
+    },
+    'gemini-api': { transport: 'pi-ai', authMode: 'api-key' },
+    'grok-api': { transport: 'pi-ai', authMode: 'api-key' },
+    custom: {
+      transport: 'pi-ai',
+      authMode: 'proxy',
+      supportsImageGeneration: true,
+      enableImageGeneration: false,
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -54,6 +83,8 @@ const SCENE_LAYER_MAP: Record<string, AILayer> = {
   nudge: 'execution',
   'review-decision': 'utility',
   'code-summary': 'utility',
+  'knowledge-summary': 'utility',
+  'knowledge-image': 'utility',
 };
 
 // ---------------------------------------------------------------------------
@@ -64,6 +95,79 @@ let cachedConfig: AIProviderConfig | null = null;
 let cachedConfigMtimeMs: number | null = null;
 let cachedConfigSource: 'file' | 'override' | 'default' | null = null;
 
+function hasText(value?: string): boolean {
+  return Boolean(value?.trim());
+}
+
+function trimToUndefined(value?: string): string | undefined {
+  return hasText(value) ? value!.trim() : undefined;
+}
+
+function sanitizeCustomProvider(
+  raw?: Partial<CustomProviderConfig> | null,
+  fallbackId?: string,
+): CustomProviderConfig | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+
+  const id = trimToUndefined(raw.id) ?? fallbackId;
+  if (!id) {
+    return undefined;
+  }
+
+  return {
+    id,
+    vendor: trimToUndefined(raw.vendor),
+    name: trimToUndefined(raw.name),
+    baseUrl: trimToUndefined(raw.baseUrl),
+    apiKey: trimToUndefined(raw.apiKey),
+    defaultModel: trimToUndefined(raw.defaultModel),
+  };
+}
+
+function dedupeCustomProviders(
+  providers: Array<CustomProviderConfig | undefined>,
+): CustomProviderConfig[] {
+  const seen = new Set<string>();
+  const result: CustomProviderConfig[] = [];
+  for (const provider of providers) {
+    if (!provider || seen.has(provider.id)) {
+      continue;
+    }
+    seen.add(provider.id);
+    result.push(provider);
+  }
+  return result;
+}
+
+function materializeCustomProviderState(raw?: Partial<AIProviderConfig>): Pick<
+  AIProviderConfig,
+  'customProviders' | 'activeCustomProviderId' | 'customProvider'
+> {
+  const shouldAppendLegacyCustomProvider = (raw?.customProviders?.length ?? 0) === 0
+    || hasText(raw?.customProvider?.id);
+  const customProviders = dedupeCustomProviders([
+    ...((raw?.customProviders ?? []).map((provider, index) => sanitizeCustomProvider(provider, `custom-${index + 1}`))),
+    shouldAppendLegacyCustomProvider
+      ? sanitizeCustomProvider(raw?.customProvider, raw?.customProvider?.id ?? 'custom-default')
+      : undefined,
+  ]);
+
+  const requestedActiveId = trimToUndefined(raw?.activeCustomProviderId)
+    ?? trimToUndefined(raw?.customProvider?.id)
+    ?? customProviders[0]?.id;
+
+  const activeCustomProvider = customProviders.find((provider) => provider.id === requestedActiveId)
+    ?? customProviders[0];
+
+  return {
+    customProviders: customProviders.length > 0 ? customProviders : undefined,
+    activeCustomProviderId: activeCustomProvider?.id,
+    customProvider: activeCustomProvider,
+  };
+}
+
 function getConfigPath(): string {
   return path.join(process.env.HOME || '~', '.gemini', 'antigravity', 'ai-config.json');
 }
@@ -71,6 +175,111 @@ function getConfigPath(): string {
 function shouldUseBuildDefaultConfig(): boolean {
   return process.env.NEXT_PHASE === 'phase-production-build'
     && process.env.AG_ALLOW_BUILD_HOME_CONFIG !== '1';
+}
+
+function sanitizeLayerConfigs(
+  raw?: Partial<AIProviderConfig>['layers'],
+): AIProviderConfig['layers'] {
+  if (!raw) {
+    return undefined;
+  }
+
+  const next: Partial<Record<AILayer, { provider: AIProviderId; model?: string; dailyBudget?: number }>> = {};
+  for (const [layer, config] of Object.entries(raw) as Array<[AILayer, (typeof raw)[AILayer]]>) {
+    if (!config) continue;
+    next[layer] = {
+      ...config,
+      provider: coerceConfigProviderId(config.provider, DEFAULT_CONFIG.layers?.[layer]?.provider ?? DEFAULT_CONFIG.defaultProvider),
+    };
+  }
+  return next;
+}
+
+function sanitizeSceneConfigs(
+  raw?: Partial<AIProviderConfig>['scenes'],
+): AIProviderConfig['scenes'] {
+  if (!raw) {
+    return undefined;
+  }
+
+  const next: Record<string, NonNullable<AIProviderConfig['scenes']>[string]> = {};
+  for (const [sceneId, config] of Object.entries(raw)) {
+    if (!config) continue;
+    next[sceneId] = {
+      ...config,
+      provider: coerceConfigProviderId(config.provider, DEFAULT_CONFIG.defaultProvider),
+    };
+  }
+  return next;
+}
+
+function sanitizeProviderProfiles(
+  raw?: Partial<Record<string, ProviderTransportProfile>> | undefined,
+): AIProviderConfig['providerProfiles'] {
+  if (!raw) {
+    return undefined;
+  }
+
+  const next: Partial<Record<AIProviderId, ProviderTransportProfile>> = {};
+  for (const [providerId, profile] of Object.entries(raw)) {
+    if (!profile || !isAIProviderId(providerId)) {
+      continue;
+    }
+    next[providerId] = profile;
+  }
+  return next;
+}
+
+function normalizeProviderTransport(
+  providerId: AIProviderId,
+  profile?: ProviderTransportProfile,
+): ProviderTransportProfile | undefined {
+  if (!profile) {
+    return undefined;
+  }
+  if (providerId === 'antigravity') {
+    return profile;
+  }
+  return {
+    ...profile,
+    transport: 'pi-ai',
+  };
+}
+
+export function normalizeAIConfig(raw?: Partial<AIProviderConfig>): AIProviderConfig {
+  const customProviderState = materializeCustomProviderState(raw);
+  const layers = sanitizeLayerConfigs(raw?.layers);
+  const scenes = sanitizeSceneConfigs(raw?.scenes);
+  const providerProfiles = sanitizeProviderProfiles(raw?.providerProfiles as Partial<Record<string, ProviderTransportProfile>> | undefined);
+  const normalized = {
+    ...DEFAULT_CONFIG,
+    ...raw,
+    defaultProvider: coerceConfigProviderId(raw?.defaultProvider, DEFAULT_CONFIG.defaultProvider),
+    layers: {
+      ...(DEFAULT_CONFIG.layers ?? {}),
+      ...(layers ?? {}),
+    },
+    scenes: {
+      ...(DEFAULT_CONFIG.scenes ?? {}),
+      ...(scenes ?? {}),
+    },
+    providerProfiles: {
+      ...(DEFAULT_CONFIG.providerProfiles ?? {}),
+      ...(providerProfiles ?? {}),
+    },
+    ...customProviderState,
+  };
+
+  if (normalized.providerProfiles) {
+    for (const providerId of Object.keys(normalized.providerProfiles) as AIProviderId[]) {
+      normalized.providerProfiles[providerId] = normalizeProviderTransport(
+        providerId,
+        normalized.providerProfiles[providerId],
+      )!;
+    }
+  }
+
+  return normalized;
 }
 
 /**
@@ -86,7 +295,7 @@ export function loadAIConfig(): AIProviderConfig {
     if (cachedConfig && cachedConfigSource === 'default') {
       return cachedConfig;
     }
-    cachedConfig = { ...DEFAULT_CONFIG };
+    cachedConfig = normalizeAIConfig();
     cachedConfigMtimeMs = null;
     cachedConfigSource = 'default';
     return cachedConfig;
@@ -100,8 +309,8 @@ export function loadAIConfig(): AIProviderConfig {
         return cachedConfig;
       }
 
-      const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      cachedConfig = { ...DEFAULT_CONFIG, ...raw } as AIProviderConfig;
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Partial<AIProviderConfig>;
+      cachedConfig = normalizeAIConfig(raw);
       cachedConfigMtimeMs = mtimeMs;
       cachedConfigSource = 'file';
       log.info({ configPath }, 'AI config loaded');
@@ -116,7 +325,7 @@ export function loadAIConfig(): AIProviderConfig {
     return cachedConfig;
   }
 
-  cachedConfig = { ...DEFAULT_CONFIG };
+  cachedConfig = normalizeAIConfig();
   cachedConfigMtimeMs = null;
   cachedConfigSource = 'default';
   return cachedConfig;
@@ -126,7 +335,7 @@ export function loadAIConfig(): AIProviderConfig {
  * Override AI config in memory (for testing or runtime updates).
  */
 export function setAIConfig(config: Partial<AIProviderConfig>): void {
-  cachedConfig = { ...DEFAULT_CONFIG, ...config };
+  cachedConfig = normalizeAIConfig(config);
   cachedConfigMtimeMs = null;
   cachedConfigSource = 'override';
 }
@@ -144,13 +353,14 @@ export function resetAIConfigCache(): void {
  * Save current config to disk.
  */
 export function saveAIConfig(config: AIProviderConfig): void {
+  const normalized = normalizeAIConfig(config);
   const configPath = getConfigPath();
   const dir = path.dirname(configPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-  cachedConfig = config;
+  fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2));
+  cachedConfig = normalized;
   try {
     cachedConfigMtimeMs = fs.statSync(configPath).mtimeMs;
   } catch {
@@ -158,6 +368,90 @@ export function saveAIConfig(config: AIProviderConfig): void {
   }
   cachedConfigSource = 'file';
   log.info({ configPath }, 'AI config saved');
+}
+
+export function resolveProviderProfile(
+  providerId: AIProviderId,
+  config: AIProviderConfig = loadAIConfig(),
+): ProviderTransportProfile {
+  return normalizeProviderTransport(providerId, {
+    ...(DEFAULT_CONFIG.providerProfiles?.[providerId] ?? {}),
+    ...(config.providerProfiles?.[providerId] ?? {}),
+  }) ?? {};
+}
+
+export function getCustomProviderConnections(
+  config: AIProviderConfig = loadAIConfig(),
+): CustomProviderConfig[] {
+  return [...(config.customProviders ?? [])];
+}
+
+export function getActiveCustomProvider(
+  config: AIProviderConfig = loadAIConfig(),
+): CustomProviderConfig | undefined {
+  return config.customProvider;
+}
+
+export function setActiveCustomProvider(
+  config: AIProviderConfig,
+  connectionId: string | undefined,
+): AIProviderConfig {
+  const normalized = normalizeAIConfig(config);
+  if (!connectionId) {
+    return normalizeAIConfig({
+      ...normalized,
+      activeCustomProviderId: normalized.customProviders?.[0]?.id,
+    });
+  }
+
+  const exists = normalized.customProviders?.some((provider) => provider.id === connectionId);
+  return normalizeAIConfig({
+    ...normalized,
+    activeCustomProviderId: exists ? connectionId : normalized.customProviders?.[0]?.id,
+  });
+}
+
+export function upsertCustomProviderConnection(
+  config: AIProviderConfig,
+  connection: Partial<CustomProviderConfig>,
+  options?: { makeActive?: boolean },
+): AIProviderConfig {
+  const normalized = normalizeAIConfig(config);
+  const existing = normalized.customProviders ?? [];
+  const fallbackId = trimToUndefined(connection.id) ?? `custom-${Date.now()}`;
+  const nextConnection = sanitizeCustomProvider(connection, fallbackId);
+  if (!nextConnection) {
+    return normalized;
+  }
+
+  const nextConnections = existing.some((provider) => provider.id === nextConnection.id)
+    ? existing.map((provider) => (provider.id === nextConnection.id ? nextConnection : provider))
+    : [...existing, nextConnection];
+
+  return normalizeAIConfig({
+    ...normalized,
+    customProviders: nextConnections,
+    activeCustomProviderId: options?.makeActive === false
+      ? normalized.activeCustomProviderId
+      : nextConnection.id,
+  });
+}
+
+export function removeCustomProviderConnection(
+  config: AIProviderConfig,
+  connectionId: string,
+): AIProviderConfig {
+  const normalized = normalizeAIConfig(config);
+  const nextConnections = (normalized.customProviders ?? []).filter((provider) => provider.id !== connectionId);
+  const nextActiveId = normalized.activeCustomProviderId === connectionId
+    ? nextConnections[0]?.id
+    : normalized.activeCustomProviderId;
+
+  return normalizeAIConfig({
+    ...normalized,
+    customProviders: nextConnections,
+    activeCustomProviderId: nextActiveId,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -170,14 +464,14 @@ export function saveAIConfig(config: AIProviderConfig): void {
  * @param workspacePath — Absolute workspace path.
  * @returns Provider ID if configured, undefined otherwise.
  */
-function getDepartmentProvider(workspacePath: string): ProviderId | undefined {
+function getDepartmentProvider(workspacePath: string): AIProviderId | undefined {
   try {
     const configPath = path.join(workspacePath, '.department', 'config.json');
     if (!fs.existsSync(configPath)) return undefined;
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     if (config.provider && typeof config.provider === 'string') {
-      return config.provider as ProviderId;
+      return coerceConfigProviderId(config.provider, DEFAULT_CONFIG.defaultProvider);
     }
   } catch {
     // Ignore parse errors

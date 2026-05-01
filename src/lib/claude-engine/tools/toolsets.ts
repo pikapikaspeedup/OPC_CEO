@@ -49,6 +49,12 @@ export const TOOLSETS: Record<string, ToolsetDefinition> = {
     includes: [],
   },
 
+  execution: {
+    description: 'External coding executors such as Codex CLI and Claude Code CLI; shell/file/search remain separate Claude Engine tools',
+    tools: ['ExecutionTool'],
+    includes: [],
+  },
+
   task: {
     description: 'Task management',
     tools: ['TaskCreateTool', 'TaskUpdateTool', 'TaskListTool', 'TaskGetTool', 'TodoWriteTool'],
@@ -90,7 +96,7 @@ export const TOOLSETS: Record<string, ToolsetDefinition> = {
   coding: {
     description: 'Software development — file ops + shell + search',
     tools: ['AgentTool', 'AskUserQuestionTool', 'ToolSearchTool', 'ConfigTool'],
-    includes: ['file', 'shell', 'search', 'task', 'planning', 'skill'],
+    includes: ['file', 'shell', 'search', 'task', 'planning', 'skill', 'execution'],
   },
 
   safe: {
@@ -102,7 +108,7 @@ export const TOOLSETS: Record<string, ToolsetDefinition> = {
   full: {
     description: 'Full toolset — all available tools',
     tools: [],
-    includes: ['file', 'shell', 'search', 'web', 'task', 'planning', 'skill', 'memory', 'mcp'],
+    includes: ['file', 'shell', 'search', 'web', 'task', 'planning', 'skill', 'memory', 'mcp', 'execution'],
   },
 };
 

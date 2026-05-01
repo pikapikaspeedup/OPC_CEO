@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { attachSystemImprovementTestEvidence } from '@/lib/company-kernel/self-improvement-store';
+import { syncSystemImprovementProposalRuntimeState } from '@/lib/company-kernel/self-improvement-runtime-state';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -34,5 +35,6 @@ export async function POST(
   if (!proposal) {
     return NextResponse.json({ error: 'System improvement proposal not found' }, { status: 404 });
   }
-  return NextResponse.json({ proposal });
+  const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
+  return NextResponse.json({ proposal: synced || proposal });
 }

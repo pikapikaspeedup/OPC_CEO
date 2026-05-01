@@ -88,6 +88,18 @@ export interface CEODecisionRecord {
   decidedAt: string;
 }
 
+export interface PlatformEngineeringProjectGovernance {
+  observe: boolean;
+  allowProposal: boolean;
+  departmentId?: string;
+  source?: 'default' | 'manual' | 'proposal-created';
+  updatedAt?: string;
+}
+
+export interface ProjectGovernance {
+  platformEngineering?: PlatformEngineeringProjectGovernance;
+}
+
 export interface ProjectDefinition {
   projectId: string;
   name: string;
@@ -110,4 +122,6 @@ export interface ProjectDefinition {
   priority?: 'urgent' | 'high' | 'normal' | 'low';
   /** Phase 6: CEO AI decision record */
   ceoDecision?: CEODecisionRecord;
+  /** Platform-level governance switches */
+  governance?: ProjectGovernance;
 }

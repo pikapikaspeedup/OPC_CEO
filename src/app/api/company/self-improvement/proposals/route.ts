@@ -9,6 +9,7 @@ import {
   countSystemImprovementProposals,
   listSystemImprovementProposals,
 } from '@/lib/company-kernel/self-improvement-store';
+import { syncAllActiveSystemImprovementProposals } from '@/lib/company-kernel/self-improvement-runtime-state';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -20,6 +21,8 @@ export async function GET(req: Request) {
   if (shouldProxyControlPlaneRequest()) {
     return proxyToControlPlane(req);
   }
+
+  await syncAllActiveSystemImprovementProposals();
 
   const { searchParams } = new URL(req.url);
   const pagination = parsePaginationSearchParams(searchParams, {

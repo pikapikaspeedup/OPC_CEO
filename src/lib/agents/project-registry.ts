@@ -8,6 +8,7 @@ import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { resolveStageId } from './pipeline/pipeline-graph';
 import { deleteProjectRecord, listProjectRecords, upsertProjectRecord } from '../storage/gateway-db';
 import { getRun } from './run-registry';
+import { defaultPlatformEngineeringProjectGovernance, isPlatformEngineeringWorkspaceUri } from '../platform-engineering';
 
 const log = createLogger('ProjectRegistry');
 
@@ -119,9 +120,12 @@ export function createProject(input: {
   projectType?: 'coordinated' | 'adhoc' | 'strategic';
   skillHint?: string;
   priority?: 'urgent' | 'high' | 'normal' | 'low';
+  governance?: ProjectDefinition['governance'];
 }): ProjectDefinition {
   ensureProjectRegistryInitialized();
   const projectId = randomUUID();
+  const governance = input.governance
+    || (isPlatformEngineeringWorkspaceUri(input.workspace) ? defaultPlatformEngineeringProjectGovernance() : undefined);
   const project: ProjectDefinition = {
     projectId,
     name: input.name,
@@ -138,6 +142,7 @@ export function createProject(input: {
     projectType: input.projectType,
     skillHint: input.skillHint,
     priority: input.priority,
+    ...(governance ? { governance } : {}),
   };
 
   const projectDir = path.join(input.workspace.replace(/^file:\/\//, ''), ARTIFACT_ROOT_DIR, 'projects', projectId);

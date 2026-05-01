@@ -1,4 +1,4 @@
-import type { ProviderId } from '../providers';
+import type { AgentBackendId } from '../providers';
 import type {
   ExecutionTarget,
   ExecutorKind,
@@ -46,8 +46,8 @@ export interface BackendRunResolution {
   resolvedSkillRefs?: string[];
   resolutionReason?: string;
   promptResolution?: PromptModeResolution;
-  requestedProvider?: ProviderId;
-  routedProvider?: ProviderId;
+  requestedProvider?: AgentBackendId;
+  routedProvider?: AgentBackendId;
   providerRoutingReason?: string;
   requiredExecutionClass?: DepartmentExecutionClass;
 }
@@ -114,7 +114,7 @@ export interface BackendRunError {
 export interface StartedAgentEvent {
   kind: 'started';
   runId: string;
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   handle: string;
   startedAt: string;
 }
@@ -122,7 +122,7 @@ export interface StartedAgentEvent {
 export interface LiveStateAgentEvent {
   kind: 'live_state';
   runId: string;
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   handle: string;
   liveState: RunLiveState;
 }
@@ -130,7 +130,7 @@ export interface LiveStateAgentEvent {
 export interface CompletedAgentEvent {
   kind: 'completed';
   runId: string;
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   handle: string;
   finishedAt: string;
   result: TaskResult;
@@ -146,7 +146,7 @@ export interface CompletedAgentEvent {
 export interface FailedAgentEvent {
   kind: 'failed';
   runId: string;
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   handle?: string;
   finishedAt: string;
   error: BackendRunError;
@@ -157,7 +157,7 @@ export interface FailedAgentEvent {
 export interface CancelledAgentEvent {
   kind: 'cancelled';
   runId: string;
-  providerId: ProviderId;
+  providerId: AgentBackendId;
   handle?: string;
   finishedAt: string;
   reason?: string;
@@ -172,7 +172,7 @@ export type AgentEvent =
 
 export interface AgentSession {
   readonly runId: string;
-  readonly providerId: ProviderId;
+  readonly providerId: AgentBackendId;
   readonly handle: string;
   readonly capabilities: AgentBackendCapabilities;
   events(): AsyncIterable<AgentEvent>;
@@ -181,7 +181,7 @@ export interface AgentSession {
 }
 
 export interface AgentBackend {
-  readonly providerId: ProviderId;
+  readonly providerId: AgentBackendId;
   capabilities(): AgentBackendCapabilities;
   start(config: BackendRunConfig): Promise<AgentSession>;
   attach?(config: BackendRunConfig, handle: string): Promise<AgentSession>;

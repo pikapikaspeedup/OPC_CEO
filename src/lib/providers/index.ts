@@ -11,7 +11,10 @@ export type {
   TaskExecutionResult,
   AppendMessageOptions,
   ProviderCapabilities,
+  AIProviderId,
+  AgentBackendId,
   ProviderId,
+  TaskExecutorId,
   AIProviderConfig,
   AILayer,
   AIScene,
@@ -21,7 +24,6 @@ export type {
 } from './types';
 
 export { CodexExecutor } from './codex-executor';
-export { NativeCodexExecutor } from './native-codex-executor';
 export { AntigravityExecutor } from './antigravity-executor';
 export { ClaudeCodeExecutor } from './claude-code-executor';
 export {
@@ -33,10 +35,9 @@ export {
   getSceneConstraints,
 } from './ai-config';
 
-import type { TaskExecutor, ProviderId } from './types';
+import type { TaskExecutor, TaskExecutorId } from './types';
 import { AntigravityExecutor } from './antigravity-executor';
 import { CodexExecutor } from './codex-executor';
-import { NativeCodexExecutor } from './native-codex-executor';
 import { ClaudeCodeExecutor } from './claude-code-executor';
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,6 @@ import { ClaudeCodeExecutor } from './claude-code-executor';
 
 let antigravityInstance: AntigravityExecutor | null = null;
 let codexInstance: CodexExecutor | null = null;
-let nativeCodexInstance: NativeCodexExecutor | null = null;
 let claudeCodeInstance: ClaudeCodeExecutor | null = null;
 
 /**
@@ -53,11 +53,11 @@ let claudeCodeInstance: ClaudeCodeExecutor | null = null;
  *
  * Usage:
  * ```ts
- * const executor = getExecutor('native-codex');
+ * const executor = getExecutor('codex');
  * const result = await executor.executeTask({ workspace, prompt });
  * ```
  */
-export function getExecutor(provider: ProviderId): TaskExecutor {
+export function getExecutor(provider: TaskExecutorId): TaskExecutor {
   switch (provider) {
     case 'antigravity':
       if (!antigravityInstance) antigravityInstance = new AntigravityExecutor();
@@ -65,9 +65,6 @@ export function getExecutor(provider: ProviderId): TaskExecutor {
     case 'codex':
       if (!codexInstance) codexInstance = new CodexExecutor();
       return codexInstance;
-    case 'native-codex':
-      if (!nativeCodexInstance) nativeCodexInstance = new NativeCodexExecutor();
-      return nativeCodexInstance;
     case 'claude-code':
       if (!claudeCodeInstance) claudeCodeInstance = new ClaudeCodeExecutor();
       return claudeCodeInstance;

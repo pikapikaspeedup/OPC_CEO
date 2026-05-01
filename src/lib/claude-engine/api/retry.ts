@@ -1,8 +1,6 @@
-import { streamQuery } from './client';
-import { streamQueryOpenAI } from './openai';
-import { streamQueryGemini } from './gemini';
-import { streamQueryGrok } from './grok';
-import { streamQueryNativeCodex } from './native-codex';
+import { createLogger } from '../../logger';
+import { APIClientError } from './api-client-error';
+import { streamQueryViaPi } from './pi-transport';
 import {
   classifyAPIError,
   isRetryableError,
@@ -15,6 +13,8 @@ import {
 } from './errors';
 import type { TokenManager } from './auth';
 import type { QueryOptions, StreamEvent } from './types';
+
+const log = createLogger('ClaudeEngineRetry');
 
 export type RetryOptions = {
   maxRetries?: number;
@@ -200,18 +200,48 @@ function selectProviderStream(
   options: QueryOptions,
 ): AsyncGenerator<StreamEvent> {
   switch (provider) {
-    case 'openai':
-      return streamQueryOpenAI(options);
-    case 'gemini':
-      return streamQueryGemini(options);
-    case 'grok':
-      return streamQueryGrok(options);
-    case 'native-codex':
-      return streamQueryNativeCodex(options);
     case 'anthropic':
+    case 'openai':
+    case 'gemini':
+    case 'grok':
+    case 'custom':
+    case 'native-codex':
+      if (options.model.transport && options.model.transport !== 'pi-ai') {
+        log.warn(
+          {
+            provider,
+            requestedTransport: options.model.transport,
+            model: options.model.model,
+          },
+          'Claude Engine mainline coerced API-backed provider transport to pi-ai',
+        );
+      }
+      return streamQueryViaPi({
+        ...options,
+        model: {
+          ...options.model,
+          transport: 'pi-ai',
+        },
+      });
     default:
-      return streamQuery(options);
+      return unsupportedProviderStream(provider, options);
   }
+}
+
+async function* unsupportedProviderStream(
+  provider: string,
+  options: QueryOptions,
+): AsyncGenerator<StreamEvent> {
+  throw new APIClientError(
+    `Claude Engine mainline does not support provider "${provider}" outside pi-ai routing`,
+    {
+      responseBody: JSON.stringify({
+        provider,
+        requestedTransport: options.model.transport ?? null,
+        model: options.model.model,
+      }),
+    },
+  );
 }
 
 /**

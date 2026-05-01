@@ -2,7 +2,7 @@ import { TERMINAL_STATUSES } from '../agents/group-types';
 import type { SessionProvenance } from '../agents/group-types';
 import { getRun, updateRun } from '../agents/run-registry';
 import { appendRunHistoryEntry } from '../agents/run-history';
-import type { ProviderId } from '../providers';
+import type { AgentBackendId } from '../providers';
 import { applyAfterRunMemoryHooks } from './memory-hooks';
 import type { BackendSessionConsumerHooks } from './session-consumer';
 import type {
@@ -20,7 +20,7 @@ export interface CreateRunSessionHooksOptions {
   runId: string;
   activeRoleId?: string;
   backendConfig?: BackendRunConfig;
-  bindConversationHandleForProviders?: ProviderId[];
+  bindConversationHandleForProviders?: AgentBackendId[];
   /** How this session was created (for provenance tracking) */
   createdVia?: SessionProvenance['createdVia'];
   /** Where the provider decision came from */
