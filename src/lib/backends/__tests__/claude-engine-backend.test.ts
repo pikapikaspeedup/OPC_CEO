@@ -25,6 +25,7 @@ import {
   createClaudeEngineToolContext,
 } from '../claude-engine-backend';
 import { agentTool } from '../../claude-engine/tools/agent';
+import { getExecutionToolRuntime } from '../../claude-engine/tools/execution-tool';
 import { listMcpResourcesTool } from '../../claude-engine/tools/mcp-resources';
 import type { ToolContext } from '../../claude-engine/types';
 import type { BackendRunConfig } from '../types';
@@ -247,6 +248,21 @@ describe('ClaudeEngineAgentBackend', () => {
     const ctx = mockEngineInstances[0]?.options.toolContext as ToolContext;
     const result = await listMcpResourcesTool.call({}, ctx);
     expect(result.data).toContain('No resources found');
+  });
+
+  test('start injects execution tool runtime and registers ExecutionTool', async () => {
+    await backend.start(makeConfig({
+      runtimeContract: {
+        workspaceRoot: '/tmp/test-workspace',
+        toolset: 'coding',
+      },
+    }));
+
+    const ctx = mockEngineInstances[0]?.options.toolContext as ToolContext;
+    const tools = mockEngineInstances[0]?.options.tools as Array<{ name: string }>;
+
+    expect(getExecutionToolRuntime(ctx)).not.toBeNull();
+    expect(tools.some((tool) => tool.name === 'ExecutionTool')).toBe(true);
   });
 
   test('missing required artifacts fails the run', async () => {

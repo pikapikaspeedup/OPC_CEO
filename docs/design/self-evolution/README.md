@@ -2,38 +2,40 @@
 
 **日期**: 2026-04-30  
 **状态**: 专题入口  
-**边界**: 本目录用于汇总软件自进化相关方案、架构、试运行计划和用户场景，不代表功能已全部跑通。
+**边界**: 本目录只汇总主软件自迭代机制、架构事实、已验证执行边界和软件用户场景索引；业务上下文、Skill、Workflow 的改进属于业务能力进化，不归入本专题。
 
 ## 1. 当前定位
 
 本专题只回答一件事：
 
-> 如何在不新增第二套机制的前提下，复用现有 Department / Project / Knowledge / Company Kernel / Approval / Scheduler / Ops / CEO Office，把软件自进化跑成一条真实闭环。
+> 如何在不新增第二套机制的前提下，复用现有 Department / Project / Company Kernel / Approval / Ops / CEO Office，把主软件自迭代跑成一条真实闭环。
 
 当前主线默认围绕：
 
 1. 内置平台工程部门
-2. AI 情报室真实定时任务
-3. 用户场景缺口到系统改进 proposal 的链路
+2. 主软件用户场景缺口到系统改进 proposal 的链路
+3. Codex CLI worktree runner 代码执行链
 4. 准入 / 准出双门槛
 
 ## 2. 核心文档
 
-### 总体方案
+### 当前机制
 
-1. [Self Evolution Loop 技术方案与现状报告](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution-loop-technical-plan-and-report-2026-04-29.md>)
-2. [试运行行动计划](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/trial-run-action-plan-2026-04-30.md>)
-3. [内置平台工程部门 Contract](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/builtin-platform-engineering-department-contract-2026-04-30.md>)
-4. [AI 情报室黄金路径现状审计](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/ai-intelligence-room-golden-path-current-state-audit-2026-04-30.md>)
+1. [当前软件自迭代机制](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/current-auto-iteration-mechanism-2026-05-01.md>)
+2. [软件自迭代产品化缺口](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/software-self-iteration-productization-gap-2026-05-01.md>)
+3. [平台工程部 Codex CLI Worktree 执行评估](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/platform-engineering-codex-worktree-execution-assessment-2026-05-01.md>)
+4. [内置平台工程部门 Contract](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/builtin-platform-engineering-department-contract-2026-04-30.md>)
 5. [Provider Adapter 与 Execution Tool 收口设计](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md>)
+6. [历史试运行计划](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/trial-run-action-plan-2026-04-30.md>)
+
+### 边界外文档
+
+1. [业务能力进化边界](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/business-capability-evolution/current-business-capability-evolution-boundary-2026-05-01.md>)
 
 ### 架构真相源
 
 1. [ARCHITECTURE.md](</Users/darrel/Documents/Antigravity-Mobility-CLI/ARCHITECTURE.md>)
 2. [Company Kernel Boundary Audit](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/company-kernel-boundary-audit-2026-04-25.md>)
-3. [AI 公司自增长内核长期策划书](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/ai-company-self-growth-kernel-long-term-plan-2026-04-25.md>)
-4. [AI 公司自增长内核 Phase 3-5 开发计划](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md>)
-5. [AI 公司自增长内核 Phase 6-7 剩余开发计划](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md>)
 
 ### 用户场景索引
 
@@ -49,31 +51,25 @@
 10. [Settings / 会话平台](</Users/darrel/Documents/Antigravity-Mobility-CLI/User Story/Settings/会话平台.md>)
 11. [Settings / 凭证中心](</Users/darrel/Documents/Antigravity-Mobility-CLI/User Story/Settings/凭证中心.md>)
 
-### 研究与历史样本
-
-1. [AI 公司全功能测试计划](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/research/ai-company-full-feature-test-plan-2026-04-19.md>)
-2. [AI 公司全功能测试结果](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/research/ai-company-full-feature-test-results-2026-04-19.md>)
-3. [Native Codex Daily Digest CLI Runbook](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/research/native-codex-daily-digest-cli-runbook-2026-04-17.md>)
-4. [Antigravity Daily Digest Adhoc Project Run](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/research/antigravity-daily-digest-adhoc-project-run-2026-04-17.md>)
-5. [Standard Scheduler API Native Codex AI BigEvent Smoke](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/research/standard-scheduler-api-native-codex-ai-bigevent-smoke-2026-04-18.md>)
-
 ## 3. 推荐阅读顺序
 
-1. 先读 [ARCHITECTURE.md](</Users/darrel/Documents/Antigravity-Mobility-CLI/ARCHITECTURE.md>)，确认系统已有机制。
-2. 再读 [Self Evolution Loop 技术方案与现状报告](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution-loop-technical-plan-and-report-2026-04-29.md>)，确认目标边界。
-3. 再读 [内置平台工程部门 Contract](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/builtin-platform-engineering-department-contract-2026-04-30.md>)，冻结责任主体。
-4. 再读 [AI 情报室黄金路径现状审计](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/ai-intelligence-room-golden-path-current-state-audit-2026-04-30.md>)，确认当前断点。
-5. 再读 [Provider Adapter 与 Execution Tool 收口设计](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md>)，确认执行层收口边界。
-6. 最后读 [试运行行动计划](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/trial-run-action-plan-2026-04-30.md>)，进入执行。
-7. 然后结合 `User Story` 文档判断哪些链路还只是“有机制”，哪些已经“可试运行”。
+1. 先读 [当前软件自迭代机制](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/current-auto-iteration-mechanism-2026-05-01.md>)，确认当前已接通机制、人工边界、去重和准出规则。
+2. 再读 [软件自迭代产品化缺口](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/software-self-iteration-productization-gap-2026-05-01.md>)，确认 approved proposal 到 CEO/Ops 准出视图还缺哪些组件。
+3. 再读 [ARCHITECTURE.md](</Users/darrel/Documents/Antigravity-Mobility-CLI/ARCHITECTURE.md>)，确认系统已有机制。
+4. 再读 [内置平台工程部门 Contract](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/builtin-platform-engineering-department-contract-2026-04-30.md>)，确认责任主体。
+5. 再读 [平台工程部 Codex CLI Worktree 执行评估](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/platform-engineering-codex-worktree-execution-assessment-2026-05-01.md>)，确认 Codex CLI 自开发执行基线。
+6. 再读 [Provider Adapter 与 Execution Tool 收口设计](</Users/darrel/Documents/Antigravity-Mobility-CLI/docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md>)，确认执行层收口边界。
+7. 最后结合 `User Story` 文档判断系统改进信号来源。
 
-## 4. 当前执行口径
+## 4. 当前机制口径
 
-当前不再新增第二套自进化机制。
+当前不再新增第二套软件自迭代机制。
 
-后续所有试运行和调试都遵循：
+当前机制遵循：
 
-1. 复用现有 Department / Project / Knowledge / Company Kernel / Approval / Scheduler / Ops / CEO Office。
-2. 优先验证真实黄金路径，不优先扩展页面。
-3. 优先围绕 AI 情报室和内置平台工程部门试运行。
-4. 人类只做准入和准出，中间由 AI Loop 控制。
+1. 复用现有 Department / Project / Company Kernel / Approval / Ops / CEO Office。
+2. 系统改进从 signal / proposal 进入平台工程部 Project / Run。
+3. 代码级修改通过 Codex CLI worktree runner 在隔离 worktree 中执行。
+4. 准出依赖 evidence、allowlist、验证命令和 CEO / Ops 可消费证据。
+5. merge / push / deploy / restart 不属于当前自动机制。
+6. 业务上下文、Skill、Workflow 的自我改进不称为 self-evolution，在业务能力进化专题中描述。

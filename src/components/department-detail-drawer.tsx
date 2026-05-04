@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
+import {
+  getDepartmentContextDocumentPaths,
+  getDepartmentWorkspaceBindings,
+  workspaceNameFromUri,
+} from '@/lib/department-config';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +47,7 @@ interface DepartmentDetailDrawerProps {
   workspace: Workspace;
   config: DepartmentConfig;
   projects: Project[];
+  allWorkspaces?: Workspace[];
   onNavigateToProject?: (projectId: string) => void;
   onOpenSettings?: () => void;
 }
@@ -52,6 +58,7 @@ export default function DepartmentDetailDrawer({
   workspace,
   config,
   projects,
+  allWorkspaces = [],
   onNavigateToProject,
   onOpenSettings,
 }: DepartmentDetailDrawerProps) {
@@ -90,6 +97,17 @@ export default function DepartmentDetailDrawer({
   const completedProjects = projects.filter(p => p.status === 'completed');
   const failedProjects = projects.filter(p => p.status === 'failed');
   const blockedProjects = projects.filter((project) => project.pipelineState?.stages?.some((stage) => stage.status === 'blocked'));
+  const workspaceBindings = getDepartmentWorkspaceBindings(config, workspace.uri, workspace.name);
+  const contextDocumentPaths = getDepartmentContextDocumentPaths(config);
+  const workflowBoundSkillCount = config.skills.filter((skill) => skill.workflowRef?.trim()).length;
+  const templateCount = config.templateIds?.length ?? 0;
+  const boundWorkspaceEntries = workspaceBindings.map((binding) => ({
+    binding,
+    workspace: allWorkspaces.find((entry) => entry.uri === binding.workspaceUri) ?? {
+      uri: binding.workspaceUri,
+      name: binding.alias || workspaceNameFromUri(binding.workspaceUri),
+    },
+  }));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -137,6 +155,55 @@ export default function DepartmentDetailDrawer({
               <StatBox icon={CheckCircle2} label="已完成" value={completedProjects.length} color="text-emerald-700 bg-emerald-400/10" />
               <StatBox icon={XCircle} label="失败" value={failedProjects.length} color="text-red-700 bg-red-400/10" />
               <StatBox icon={AlertTriangle} label="阻塞" value={blockedProjects.length} color="text-amber-700 bg-amber-400/10" />
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
+                <Settings className="h-3.5 w-3.5 text-[var(--app-accent)]" /> 部门配置
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <MetricPill label="类型" value={config.type || 'build'} />
+                <MetricPill label="Provider" value={config.provider || 'auto'} />
+                <MetricPill label="技能" value={`${config.skills.length}`} />
+                <MetricPill label="Workflow Skill" value={`${workflowBoundSkillCount}`} />
+                <MetricPill label="模板" value={`${templateCount}`} />
+                <MetricPill label="上下文文档" value={`${contextDocumentPaths.length}`} />
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[var(--app-text-muted)]">
+                <ClipboardList className="h-3.5 w-3.5 text-[var(--app-accent)]" /> 工作区编排
+              </div>
+              <div className="space-y-2">
+                {boundWorkspaceEntries.map(({ binding, workspace: boundWorkspace }) => (
+                  <div key={binding.workspaceUri} className="rounded-lg border border-[var(--app-border-soft)] bg-white px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-[var(--app-text)]">
+                          {binding.alias || boundWorkspace.name}
+                        </div>
+                        <div className="mt-1 truncate text-[10px] text-[var(--app-text-muted)]">{binding.workspaceUri}</div>
+                      </div>
+                      <Badge variant="outline" className="text-[10px]">
+                        {binding.role === 'primary' ? '主执行' : binding.role === 'execution' ? '执行' : '上下文'}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {contextDocumentPaths.length > 0 ? (
+                <div className="rounded-lg border border-[var(--app-border-soft)] bg-white px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-widest text-[var(--app-text-muted)]">Context Docs</div>
+                  <div className="mt-2 space-y-1">
+                    {contextDocumentPaths.slice(0, 6).map((documentPath) => (
+                      <div key={documentPath} className="truncate text-[11px] text-[var(--app-text-soft)]">
+                        {documentPath}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {managementOverview && (

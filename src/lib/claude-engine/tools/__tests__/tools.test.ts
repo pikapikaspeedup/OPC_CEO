@@ -16,6 +16,7 @@ import { globTool } from "../glob";
 import { grepTool } from "../grep";
 import { resolveSandboxedPath } from "../path-sandbox";
 import { createDefaultRegistry, ToolRegistry } from "../registry";
+import { resolveToolset } from "../toolsets";
 
 const execAsync = promisify(execCallback);
 
@@ -133,6 +134,7 @@ describe("ToolRegistry", () => {
 			"BashTool",
 			"ConfigTool",
 			"EnterPlanModeTool",
+			"ExecutionTool",
 			"ExitPlanModeTool",
 			"FileEditTool",
 			"FileReadTool",
@@ -155,7 +157,12 @@ describe("ToolRegistry", () => {
 			"WebFetchTool",
 			"WebSearchTool",
 		]);
-		expect(registry.size).toBe(26);
+		expect(registry.size).toBe(27);
+	});
+
+	test("coding toolset includes ExecutionTool", () => {
+		expect(resolveToolset("coding")).toContain("ExecutionTool");
+		expect(resolveToolset("research")).not.toContain("ExecutionTool");
 	});
 });
 

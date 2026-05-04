@@ -5,9 +5,11 @@ import {
   Activity,
   ArrowUpRight,
   Bot,
+  CheckCircle2,
   ChevronRight,
   Clock3,
   FolderKanban,
+  GitMerge,
   KeyRound,
   Loader2,
   Network,
@@ -16,6 +18,7 @@ import {
   Plug2,
   Radio,
   RefreshCw,
+  RotateCcw,
   Settings2,
   ShieldAlert,
   Sparkles,
@@ -36,6 +39,8 @@ import type {
   Rule,
   Skill,
   SystemImprovementProposalFE,
+  SystemImprovementReleaseActionFE,
+  SystemImprovementReleaseGateSnapshotFE,
   Workflow,
   Workspace,
 } from '@/lib/types';
@@ -64,9 +69,14 @@ type OpsDashboardProps = {
   requestedTab?: AssetTab;
   requestedItemName?: string | null;
   requestToken?: number;
+  requestedProposalId?: string | null;
+  proposalRequestToken?: number;
+  refreshSignal?: number;
   onRefreshAssets: () => void;
   onOpenProviderSettings: () => void;
   onOpenApiKeys: () => void;
+  onNavigateToProject?: (projectId: string) => void;
+  onOpenImprovementProposal?: (proposalId: string | null) => void;
 };
 
 type StatusTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
@@ -292,13 +302,52 @@ function formatProposalStatus(status: SystemImprovementProposalFE['status']): st
 function formatProposalMergeGateStatus(status?: 'pending' | 'ready-to-merge' | 'blocked'): string {
   switch (status) {
     case 'ready-to-merge':
-      return '可准出';
+      return '可发布';
     case 'blocked':
       return '已阻塞';
     case 'pending':
       return '待补齐';
     default:
       return '待收口';
+  }
+}
+
+function formatProposalReleaseStatus(status?: SystemImprovementReleaseGateSnapshotFE['status']): string {
+  switch (status) {
+    case 'preflight-failed':
+      return '预检失败';
+    case 'ready-for-approval':
+      return '待批准发布';
+    case 'approved':
+      return '已批准发布';
+    case 'merged':
+      return '已合并';
+    case 'restarted':
+      return '已重启';
+    case 'observing':
+      return '观察中';
+    case 'rolled-back':
+      return '已回滚';
+    case 'not-started':
+    default:
+      return '未预检';
+  }
+}
+
+function getProposalReleaseTone(status?: SystemImprovementReleaseGateSnapshotFE['status']): StatusTone {
+  switch (status) {
+    case 'ready-for-approval':
+    case 'approved':
+    case 'merged':
+    case 'restarted':
+    case 'observing':
+      return 'success';
+    case 'preflight-failed':
+    case 'rolled-back':
+      return 'danger';
+    case 'not-started':
+    default:
+      return 'neutral';
   }
 }
 
@@ -339,6 +388,10 @@ function buildProposalEvidenceDetail(proposal: SystemImprovementProposalFE): str
     return proposal.summary || `影响文件 ${proposal.affectedFiles.length} 个`;
   }
   const segments: string[] = [];
+  if (evidence.codex) {
+    segments.push(`Codex ${evidence.codex.decision}`);
+    segments.push(`${evidence.codex.changedFiles.length} files`);
+  }
   if (evidence.project) {
     segments.push(`项目 ${evidence.project.status}`);
   }
@@ -350,7 +403,7 @@ function buildProposalEvidenceDetail(proposal: SystemImprovementProposalFE): str
   } else {
     segments.push('未提交测试');
   }
-  segments.push(`准出 ${formatProposalMergeGateStatus(evidence.mergeGate.status)}`);
+  segments.push(`发布 ${formatProposalMergeGateStatus(evidence.mergeGate.status)}`);
   return segments.join(' · ');
 }
 
@@ -358,6 +411,15 @@ function buildProposalEvidenceReason(proposal: SystemImprovementProposalFE): str
   const reasons = proposal.exitEvidence?.mergeGate.reasons || [];
   if (reasons.length > 0) return reasons[0];
   return proposal.summary || `影响文件 ${proposal.affectedFiles.length} 个`;
+}
+
+function buildReleaseGateDetail(releaseGate?: SystemImprovementReleaseGateSnapshotFE): string {
+  if (!releaseGate) return '发布前检查尚未执行';
+  const checks = releaseGate.checks.length
+    ? `${releaseGate.checks.filter((item) => item.status === 'passed').length}/${releaseGate.checks.length} checks`
+    : '0 checks';
+  const patch = releaseGate.patchPath ? releaseGate.patchPath.split('/').pop() : 'no patch';
+  return `${checks} · ${patch}`;
 }
 
 function formatServerType(type?: McpServer['type']): string {
@@ -554,9 +616,14 @@ export default function OpsDashboard({
   requestedTab = 'workflows',
   requestedItemName = null,
   requestToken = 0,
+  requestedProposalId = null,
+  proposalRequestToken = 0,
+  refreshSignal = 0,
   onRefreshAssets,
   onOpenProviderSettings,
   onOpenApiKeys,
+  onNavigateToProject,
+  onOpenImprovementProposal,
 }: OpsDashboardProps) {
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<ManagementOverviewFE | null>(null);
@@ -575,7 +642,10 @@ export default function OpsDashboard({
   const [deepWorkspaceTab, setDeepWorkspaceTab] = useState<DeepWorkspaceTab | null>(null);
   const [createJobRequestToken, setCreateJobRequestToken] = useState(0);
   const [jobBusyKey, setJobBusyKey] = useState<string | null>(null);
+  const [proposalBusyKey, setProposalBusyKey] = useState<string | null>(null);
+  const [highlightedProposalId, setHighlightedProposalId] = useState<string | null>(null);
   const deepWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const exitEvidenceRef = useRef<HTMLDivElement | null>(null);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -632,7 +702,7 @@ export default function OpsDashboard({
       void loadDashboard();
     }, 30_000);
     return () => window.clearInterval(interval);
-  }, [loadDashboard]);
+  }, [loadDashboard, refreshSignal]);
 
   useEffect(() => {
     setAssetTab(requestedTab);
@@ -644,6 +714,16 @@ export default function OpsDashboard({
       window.setTimeout(() => scrollToRef(deepWorkspaceRef), 50);
     }
   }, [requestedItemName, requestToken]);
+
+  useEffect(() => {
+    if (!requestedProposalId || loading) return;
+    setHighlightedProposalId(requestedProposalId);
+    window.setTimeout(() => scrollToRef(exitEvidenceRef), 80);
+    const timer = window.setTimeout(() => {
+      setHighlightedProposalId((current) => current === requestedProposalId ? null : current);
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [improvementProposals.length, loading, proposalRequestToken, requestedProposalId]);
 
   const handleToggleJob = useCallback(async (job: SchedulerJobResponse) => {
     const busyKey = `${job.jobId}:toggle`;
@@ -664,6 +744,36 @@ export default function OpsDashboard({
       await loadDashboard();
     } finally {
       setJobBusyKey(null);
+    }
+  }, [loadDashboard]);
+
+  const handleRunCodexProposal = useCallback(async (proposal: SystemImprovementProposalFE, force = false) => {
+    setProposalBusyKey(`${proposal.id}:codex`);
+    try {
+      await api.runSystemImprovementCodexProposal(proposal.id, { force });
+      await loadDashboard();
+    } finally {
+      setProposalBusyKey(null);
+    }
+  }, [loadDashboard]);
+
+  const handleReleaseGateAction = useCallback(async (
+    proposal: SystemImprovementProposalFE,
+    action: SystemImprovementReleaseActionFE,
+  ) => {
+    setProposalBusyKey(`${proposal.id}:${action}`);
+    try {
+      await api.runSystemImprovementReleaseGateAction(proposal.id, {
+        action,
+        actor: 'Ops',
+        note: action === 'approve' ? 'CEO/Ops 批准发布' : undefined,
+        observationSummary: action === 'start-observation' ? '发布后观察开始。' : undefined,
+        rollbackReason: action === 'mark-rolled-back' ? 'Ops 标记回滚。' : undefined,
+        healthCheckSummary: action === 'mark-restarted' ? 'Ops 标记重启完成，进入发布后检查。' : undefined,
+      });
+      await loadDashboard();
+    } finally {
+      setProposalBusyKey(null);
     }
   }, [loadDashboard]);
 
@@ -928,10 +1038,17 @@ export default function OpsDashboard({
   );
 
   const exitEvidenceRows = useMemo(() => improvementProposals
-    .filter((proposal) => proposal.exitEvidence)
+    .filter((proposal) => (
+      proposal.exitEvidence
+      || proposal.status === 'approved'
+      || proposal.status === 'in-progress'
+      || proposal.status === 'testing'
+      || proposal.status === 'ready-to-merge'
+    ))
     .filter((proposal) => matchesSearch(
       searchQuery,
       proposal.title,
+      proposal.id,
       proposal.summary,
       buildProposalEvidenceDetail(proposal),
       buildProposalEvidenceReason(proposal),
@@ -1425,20 +1542,29 @@ export default function OpsDashboard({
           )}
         </OpsPanel>
 
-        <OpsPanel
-          title="准出证据"
-          subtitle="平台工程项目、最新 Run、测试证据和 merge gate 在这里统一收口。"
-          actions={<StatusPill tone={exitEvidenceRows.length ? 'warning' : 'neutral'} label={`${exitEvidenceRows.length} 条`} />}
-        >
-          {exitEvidenceRows.length === 0 ? (
-            <EmptyState
-              title="暂无准出证据"
-              body="当前没有进入平台工程执行态的系统改进 proposal。"
-            />
-          ) : (
-            <div className="space-y-3">
-              {exitEvidenceRows.map((proposal) => (
-                <div key={proposal.id} className="rounded-[12px] border border-[#eef2f7] bg-[#fbfdff] px-3.5 py-3">
+        <div ref={exitEvidenceRef}>
+          <OpsPanel
+            title="系统改进发布检查"
+            subtitle="这里收口系统改进的执行证据、发布前检查、合并状态和发布后观察。"
+            actions={<StatusPill tone={exitEvidenceRows.length ? 'warning' : 'neutral'} label={`${exitEvidenceRows.length} 条`} />}
+          >
+            {exitEvidenceRows.length === 0 ? (
+              <EmptyState
+                title="暂无系统改进发布检查"
+                body="当前没有进入平台工程执行态的系统改进 proposal。"
+              />
+            ) : (
+              <div className="space-y-3">
+                {exitEvidenceRows.map((proposal) => (
+                  <div
+                    key={proposal.id}
+                    className={cn(
+                      'rounded-[12px] border bg-[#fbfdff] px-3.5 py-3 transition-colors',
+                      highlightedProposalId === proposal.id
+                        ? 'border-[#2f6df6] ring-4 ring-[#2f6df6]/10'
+                        : 'border-[#eef2f7]',
+                    )}
+                  >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-[13px] font-semibold text-[#0f172a]">{proposal.title}</div>
@@ -1452,11 +1578,195 @@ export default function OpsDashboard({
                   </div>
                   <div className="mt-2 text-[12px] text-[#475569]">{buildProposalEvidenceDetail(proposal)}</div>
                   <div className="mt-1 text-[12px] text-[#64748b]">{buildProposalEvidenceReason(proposal)}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </OpsPanel>
+                  {proposal.exitEvidence?.codex ? (
+                    <div className="mt-3 overflow-hidden rounded-[10px] border border-[#eef2f7] bg-white">
+                      <div className="grid grid-cols-[0.95fr_1.2fr_0.8fr] gap-3 bg-[#f8fafc] px-3 py-2 text-[11px] font-semibold text-[#64748b]">
+                        <div>Worktree</div>
+                        <div>Scope</div>
+                        <div>Validation</div>
+                      </div>
+                      <div className="grid grid-cols-[0.95fr_1.2fr_0.8fr] gap-3 px-3 py-2 text-[12px] text-[#475569]">
+                        <div className="min-w-0">
+                          <div className="truncate font-mono text-[11px] text-[#0f172a]">{proposal.exitEvidence.codex.branch}</div>
+                          <div className="mt-1 truncate text-[11px] text-[#94a3b8]">{proposal.exitEvidence.codex.worktreePath}</div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate">{proposal.exitEvidence.codex.changedFiles.length} changed · {proposal.exitEvidence.codex.disallowedFiles.length} disallowed</div>
+                          <div className="mt-1 truncate text-[11px] text-[#94a3b8]">
+                            {proposal.exitEvidence.codex.allowedPathPrefixes.slice(0, 3).join(', ') || 'allowlist missing'}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate">{proposal.exitEvidence.codex.passedValidationCount}/{proposal.exitEvidence.codex.validationCount} passed</div>
+                          <div className="mt-1 truncate text-[11px] text-[#94a3b8]">
+                            diff {proposal.exitEvidence.codex.diffCheckPassed ? 'ok' : 'failed'} · scope {proposal.exitEvidence.codex.scopeCheckPassed ? 'ok' : 'failed'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 overflow-hidden rounded-[10px] border border-[#e6edf6] bg-white">
+                    <div className="flex items-center justify-between gap-3 bg-[#f8fafc] px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-[#64748b]">发布检查</div>
+                        <div className="mt-0.5 truncate text-[12px] text-[#475569]">
+                          {buildReleaseGateDetail(proposal.exitEvidence?.releaseGate)}
+                        </div>
+                      </div>
+                      <StatusPill
+                        tone={getProposalReleaseTone(proposal.exitEvidence?.releaseGate?.status)}
+                        label={formatProposalReleaseStatus(proposal.exitEvidence?.releaseGate?.status)}
+                      />
+                    </div>
+                    {proposal.exitEvidence?.releaseGate ? (
+                      <div className="grid gap-3 px-3 py-2 text-[12px] text-[#475569] lg:grid-cols-[1fr_1fr]">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#94a3b8]">检查项</div>
+                          <div className="mt-1 space-y-1">
+                            {proposal.exitEvidence.releaseGate.checks.slice(0, 4).map((item) => (
+                              <div key={`${proposal.id}-${item.label}`} className="flex items-center justify-between gap-2">
+                                <span className="truncate">{item.label}</span>
+                                <span className={cn(
+                                  'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                                  item.status === 'passed' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600',
+                                )}>
+                                  {item.status === 'passed' ? 'passed' : 'failed'}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#94a3b8]">操作命令</div>
+                          <div className="mt-1 space-y-1 font-mono text-[11px] text-[#64748b]">
+                            <div className="truncate">merge: {proposal.exitEvidence.releaseGate.commands.mergeCommand}</div>
+                            <div className="truncate">verify: {proposal.exitEvidence.releaseGate.commands.verifyCommand}</div>
+                            <div className="truncate">restart: {proposal.exitEvidence.releaseGate.commands.restartCommand}</div>
+                            <div className="truncate">rollback: {proposal.exitEvidence.releaseGate.commands.rollbackCommand}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {proposal.exitEvidence?.project?.projectId ? (
+                      <Button
+                        variant="outline"
+                        onClick={() => onNavigateToProject?.(proposal.exitEvidence!.project!.projectId)}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        查看项目执行
+                      </Button>
+                    ) : null}
+                    {onOpenImprovementProposal ? (
+                      <Button
+                        variant="outline"
+                        onClick={() => onOpenImprovementProposal(proposal.id)}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        查看完整详情
+                      </Button>
+                    ) : null}
+                    {proposal.status === 'approved' && !proposal.exitEvidence?.codex ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:codex`}
+                        onClick={() => { void handleRunCodexProposal(proposal); }}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        {proposalBusyKey === `${proposal.id}:codex` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+                        启动 Codex
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.mergeGate.status === 'blocked' ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:codex`}
+                        onClick={() => { void handleRunCodexProposal(proposal, true); }}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        {proposalBusyKey === `${proposal.id}:codex` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                        重跑 Codex
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.mergeGate.status === 'ready-to-merge' ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:preflight`}
+                        onClick={() => { void handleReleaseGateAction(proposal, 'preflight'); }}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        {proposalBusyKey === `${proposal.id}:preflight` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}
+                        发布前检查
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.releaseGate?.status === 'ready-for-approval' ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:approve`}
+                        onClick={() => { void handleReleaseGateAction(proposal, 'approve'); }}
+                        className="h-8 rounded-[9px] border-emerald-200 bg-emerald-50 px-3 text-[12px] text-emerald-700 hover:bg-emerald-100"
+                      >
+                        {proposalBusyKey === `${proposal.id}:approve` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-1.5 h-4 w-4" />}
+                        批准发布
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.releaseGate?.status === 'approved' ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:mark-merged`}
+                        onClick={() => { void handleReleaseGateAction(proposal, 'mark-merged'); }}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        {proposalBusyKey === `${proposal.id}:mark-merged` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <GitMerge className="mr-1.5 h-4 w-4" />}
+                        标记已合并
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.releaseGate?.status === 'merged' ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:mark-restarted`}
+                        onClick={() => { void handleReleaseGateAction(proposal, 'mark-restarted'); }}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        {proposalBusyKey === `${proposal.id}:mark-restarted` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                        标记已重启
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.releaseGate?.status === 'restarted' ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:start-observation`}
+                        onClick={() => { void handleReleaseGateAction(proposal, 'start-observation'); }}
+                        className="h-8 rounded-[9px] border-[#dfe5ee] bg-white px-3 text-[12px] text-[#0f172a] hover:bg-[#f8fafc]"
+                      >
+                        {proposalBusyKey === `${proposal.id}:start-observation` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Radio className="mr-1.5 h-4 w-4" />}
+                        开始观察
+                      </Button>
+                    ) : null}
+                    {proposal.exitEvidence?.releaseGate && ['approved', 'merged', 'restarted', 'observing'].includes(proposal.exitEvidence.releaseGate.status) ? (
+                      <Button
+                        variant="outline"
+                        disabled={proposalBusyKey === `${proposal.id}:mark-rolled-back`}
+                        onClick={() => { void handleReleaseGateAction(proposal, 'mark-rolled-back'); }}
+                        className="h-8 rounded-[9px] border-red-100 bg-white px-3 text-[12px] text-red-600 hover:bg-red-50"
+                      >
+                        {proposalBusyKey === `${proposal.id}:mark-rolled-back` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1.5 h-4 w-4" />}
+                        标记回滚
+                      </Button>
+                    ) : null}
+                  {proposal.exitEvidence?.codex?.evidencePath ? (
+                    <span className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-[#64748b]">
+                      evidence {proposal.exitEvidence.codex.evidencePath.split('/').pop()}
+                      </span>
+                    ) : null}
+                  </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </OpsPanel>
+        </div>
       </div>
 
       <OpsPanel

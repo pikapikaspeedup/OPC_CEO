@@ -62,7 +62,13 @@ mkdir -p ~/.cc-connect
 cp cc-connect.config.toml ~/.cc-connect/config.toml
 ```
 
-编辑 `~/.cc-connect/config.toml`，修改以下两处路径：
+现在 Web 端 `Settings -> 会话平台` 已经支持三件事：
+
+1. 检查本机是否安装 `cc-connect`
+2. 自动修复默认 `work_dir / args / [management]`
+3. 启动 / 停止本地 `cc-connect`
+
+如果你习惯手动配置，也可以继续编辑 `~/.cc-connect/config.toml`，核心字段如下：
 
 ```toml
 [projects.agent.options]
@@ -81,6 +87,16 @@ account_id = "自动填入"
 allow_from = "*"    # "*" = 任何人可用；替换为你的微信 ID 限制访问
 ```
 
+Settings 页依赖 `management` 配置来检测和控制本地进程：
+
+```toml
+[management]
+enabled = true
+port = 9820
+token = "ag-mgmt-2026"
+cors_origins = ["http://localhost:3000"]
+```
+
 ---
 
 ## 步骤 4：启动服务
@@ -97,6 +113,8 @@ npm run dev
 ```bash
 cc-connect
 ```
+
+如果你已经完成了步骤 2 和步骤 3，也可以直接在 `Settings -> 会话平台` 点击 `启动 cc-connect`，不必再回终端手动拉起。
 
 ---
 
@@ -170,6 +188,11 @@ go install -tags anp .
 1. 确认 Antigravity Gateway 正在运行（`http://localhost:3000`）
 2. 确认 `config.toml` 中的 `args` 路径指向正确的 `antigravity-acp.ts`
 3. 检查 cc-connect 日志：`cc-connect --log-level debug`
+4. 打开 `Settings -> 会话平台`，确认页面显示：
+   - 安装 = 已安装
+   - 配置 = 已就绪
+   - 绑定 = 已完成 weixin setup
+   - 运行 = 运行中
 
 ### 消息发送后无回复
 

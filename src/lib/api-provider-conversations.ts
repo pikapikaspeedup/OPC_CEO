@@ -15,6 +15,7 @@ import path from 'path';
 import fs from 'fs/promises';
 
 export type ApiConversationProvider =
+  | 'native-codex'
   | 'claude-api'
   | 'openai-api'
   | 'gemini-api'
@@ -22,6 +23,7 @@ export type ApiConversationProvider =
   | 'custom';
 
 const API_CONVERSATION_PROVIDERS: ApiConversationProvider[] = [
+  'native-codex',
   'claude-api',
   'openai-api',
   'gemini-api',
@@ -132,6 +134,21 @@ function buildConversationConfig(provider: ApiConversationProvider, workspacePat
   };
 }
 
+async function resolveResumeSessionId(sessionHandle?: string): Promise<UUID | undefined> {
+  const parsed = sessionHandle ? parseApiConversationHandle(sessionHandle) : null;
+  if (!parsed) {
+    return undefined;
+  }
+
+  const store = new TranscriptStore();
+  try {
+    const session = await store.loadSession(parsed.sessionId);
+    return session ? parsed.sessionId : undefined;
+  } finally {
+    await store.close();
+  }
+}
+
 export async function runApiConversationTurn(
   provider: ApiConversationProvider,
   workspacePath: string,
@@ -140,7 +157,7 @@ export async function runApiConversationTurn(
   sessionHandle?: string,
   conversationId?: string,
 ): Promise<{ handle: string; content: string }> {
-  const resume = sessionHandle ? parseApiConversationHandle(sessionHandle) : null;
+  const resumeSessionId = await resolveResumeSessionId(sessionHandle);
   const controller = new AbortController();
   if (conversationId) {
     activeRequests.set(conversationId, controller);
@@ -151,7 +168,7 @@ export async function runApiConversationTurn(
     systemPrompt: buildClaudeEngineSystemPrompt(config),
     toolContext: createClaudeEngineToolContext(workspacePath, controller.signal),
     maxTurns: 30,
-    ...(resume ? { resumeSessionId: resume.sessionId } : {}),
+    ...(resumeSessionId ? { resumeSessionId } : {}),
   });
 
   try {

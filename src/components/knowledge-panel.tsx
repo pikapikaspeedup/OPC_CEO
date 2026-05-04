@@ -1,27 +1,21 @@
 'use client';
 
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { renderMarkdown } from '@/lib/render-markdown';
-import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { api } from '@/lib/api';
-import type { GrowthProposalFE, KnowledgeDetail, KnowledgeItem, MemoryCandidateFE } from '@/lib/types';
+import type { GrowthProposalFE, KnowledgeDetail, KnowledgeItem, MemoryCandidateFE, Project, Workspace } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/components/locale-provider';
 import {
   AlertTriangle,
-  BookOpen,
   Brain,
-  Check,
   CheckCircle2,
+  Clock3,
   FileText,
   FolderOpen,
   Link2,
   Loader2,
-  MessageSquare,
-  Pencil,
   RotateCcw,
-  Save,
   ShieldAlert,
   Sparkles,
   Trash2,
@@ -29,17 +23,23 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { EmptyState, InspectorTabs, Pane, StatusChip } from '@/components/ui/app-shell';
+import { ModeTabs, Pane, StatusChip } from '@/components/ui/app-shell';
 import {
   WorkspaceEmptyBlock,
   WorkspaceIconFrame,
-  WorkspaceListItem,
   WorkspaceSectionHeader,
   WorkspaceSurface,
 } from '@/components/ui/workspace-primitives';
+import DepartmentMemoryPanel from '@/components/department-memory-panel';
+import KnowledgeBrowseWorkspace from '@/components/knowledge-browser-workspace';
 
 interface KnowledgeWorkspaceProps {
   selectedId: string | null;
+  searchQuery: string;
+  projects: Project[];
+  workspaces: Workspace[];
+  refreshSignal?: number;
+  onSelectKnowledge: (id: string, title: string, mode?: 'push' | 'replace') => void;
   onDeleted?: (deletedId: string) => void;
   onTitleChange?: (title: string | null) => void;
 }
@@ -49,7 +49,7 @@ type GrowthProposal = GrowthProposalFE;
 
 function refIcon(type: string) {
   if (type === 'workspace') return <FolderOpen className="h-3.5 w-3.5 shrink-0 text-sky-400" />;
-  if (type === 'conversation_id') return <MessageSquare className="h-3.5 w-3.5 shrink-0 text-indigo-400" />;
+  if (type === 'run_id') return <Clock3 className="h-3.5 w-3.5 shrink-0 text-indigo-400" />;
   if (type === 'url') return <Link2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />;
   return <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />;
 }
@@ -63,16 +63,18 @@ function extractFirstHeading(text: string) {
   return match?.[1]?.trim() || '';
 }
 
-function getArtifactLabel(path: string) {
-  return path.split('/').pop() || path;
-}
-
 const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   selectedId,
+  searchQuery,
+  projects,
+  workspaces,
+  refreshSignal = 0,
+  onSelectKnowledge,
   onDeleted,
   onTitleChange,
 }: KnowledgeWorkspaceProps) {
   const { locale, t } = useI18n();
+  const [surfaceMode, setSurfaceMode] = useState<'browse' | 'governance'>('browse');
   const [detail, setDetail] = useState<KnowledgeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null);
@@ -83,6 +85,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   const [summaryDraft, setSummaryDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
+  const [summaryGenerating, setSummaryGenerating] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
@@ -139,7 +142,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   const loadKnowledgeItems = useCallback(async () => {
     setKnowledgeListLoading(true);
     try {
-      const items = await api.knowledge({ limit: 50 });
+      const items = await api.knowledge({ limit: 120, sort: 'recent' });
       setKnowledgeItems(items);
     } catch {
       setKnowledgeItems([]);
@@ -177,17 +180,22 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   }, []);
 
   useEffect(() => {
+    void loadKnowledgeItems();
+  }, [loadKnowledgeItems, refreshSignal]);
+
+  useEffect(() => {
+    void loadMemoryCandidates();
+    void loadGrowthProposals();
+  }, [loadGrowthProposals, loadMemoryCandidates, refreshSignal]);
+
+  useEffect(() => {
     if (!selectedId) {
       resetSelectionState();
-      void loadKnowledgeItems();
-      void loadMemoryCandidates();
-      void loadGrowthProposals();
       return;
     }
 
     void loadDetail(selectedId);
-    void loadGrowthProposals();
-  }, [selectedId, loadDetail, loadKnowledgeItems, loadMemoryCandidates, loadGrowthProposals, resetSelectionState]);
+  }, [selectedId, loadDetail, resetSelectionState]);
 
   useEffect(() => {
     if (!detail || !activeArtifact) {
@@ -206,6 +214,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
       await api.updateKnowledge(detail.id, { title: titleDraft, summary: summaryDraft });
       const next = { ...detail, title: titleDraft, summary: summaryDraft };
       setDetail(next);
+      setKnowledgeItems((current) => current.map((item) => item.id === detail.id ? { ...item, title: titleDraft, summary: summaryDraft } : item));
       setEditingMeta(false);
       setSaveMsg(t('knowledge.saved'));
       onTitleChange?.(titleDraft);
@@ -231,6 +240,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
           [activeArtifact]: artifactDraft,
         },
       });
+      await loadKnowledgeItems();
       setSaveMsg(t('knowledge.saved'));
       window.setTimeout(() => setSaveMsg(''), 1800);
     } catch {
@@ -252,6 +262,29 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
       resetSelectionState();
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleGenerateSummary = async () => {
+    if (!detail) return;
+
+    setSummaryGenerating(true);
+    setSaveMsg('');
+    try {
+      const result = await api.generateKnowledgeSummary(detail.id);
+      const next = { ...detail, summary: result.summary };
+      setDetail(next);
+      setSummaryDraft(result.summary);
+      setKnowledgeItems((current) => current.map((item) => (
+        item.id === detail.id ? { ...item, summary: result.summary } : item
+      )));
+      setSaveMsg(`AI 摘要已更新 · ${result.provider}${result.model ? ` / ${result.model}` : ''}`);
+      window.setTimeout(() => setSaveMsg(''), 2200);
+    } catch (err) {
+      setSaveMsg(err instanceof Error ? err.message : 'AI 摘要生成失败');
+      window.setTimeout(() => setSaveMsg(''), 2200);
+    } finally {
+      setSummaryGenerating(false);
     }
   };
 
@@ -388,361 +421,159 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
     }
   };
 
-  const modifiedLabel = detail ? formatRelativeTime(detail.timestamps.modified, locale) : '';
   const activeArtifactContent = detail && activeArtifact ? (detail.artifacts[activeArtifact] || '') : '';
   const hasUnsavedArtifact = Boolean(activeArtifact && artifactDraft !== activeArtifactContent);
   const duplicateArtifactHeading = detail && activeArtifact
     ? normalizeHeading(extractFirstHeading(artifactDraft || activeArtifactContent)) === normalizeHeading(detail.title)
     : false;
-  const linkedKnowledgeProposals = detail
-    ? growthProposals.filter((proposal) => proposal.sourceKnowledgeIds.includes(detail.id))
-    : [];
+  const recentWindowCount = useMemo(() => {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return knowledgeItems.filter((item) => new Date(item.timestamps.created || 0).getTime() >= cutoff).length;
+  }, [knowledgeItems]);
 
-  if (!selectedId) {
-    const recentItems = [...knowledgeItems]
-      .sort((a, b) => a.timestamps.created.localeCompare(b.timestamps.created) > 0 ? -1 : 1)
-      .slice(0, 5);
-    const highReuse = [...knowledgeItems]
-      .sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0))
-      .filter((item) => (item.usageCount || 0) > 0)
-      .slice(0, 5);
-    const staleItems = knowledgeItems
-      .filter((item) => item.status === 'stale' || item.status === 'conflicted')
-      .slice(0, 5);
-    const proposalSignals = knowledgeItems
-      .filter((item) => item.status === 'proposal')
-      .slice(0, 5);
+  const activeAssetCount = useMemo(
+    () => knowledgeItems.filter((item) => item.status === 'active').length,
+    [knowledgeItems],
+  );
 
-    return (
-      <Pane tone="strong" className="min-h-[620px] p-6 md:p-8">
-        <div className="space-y-6">
-          <EmptyState
-            icon={<BookOpen className="h-6 w-6" />}
-            title={t('knowledge.emptyTitle')}
-            body={t('knowledge.emptySubtitle')}
-            className="min-h-[220px]"
-          />
-          <div className="grid gap-4 lg:grid-cols-4">
-            <KnowledgeListCard
-              title="Recent Additions"
-              loading={knowledgeListLoading}
-              items={recentItems}
-              emptyText="暂无新增知识"
-            />
-            <KnowledgeListCard
-              title="High Reuse"
-              loading={knowledgeListLoading}
-              items={highReuse}
-              emptyText="暂无高复用知识"
-              showUsage
-            />
-            <KnowledgeListCard
-              title="Stale / Conflict"
-              loading={knowledgeListLoading}
-              items={staleItems}
-              emptyText="暂无陈旧或冲突知识"
-              showStatus
-            />
-            <KnowledgeListCard
-              title="Proposal Signals"
-              loading={knowledgeListLoading}
-              items={proposalSignals}
-              emptyText="暂无待演化信号"
-              showStatus
-            />
-          </div>
-          <MemoryCandidateReviewBoard
-            candidates={memoryCandidates}
-            proposals={growthProposals}
-            loading={memoryCandidatesLoading}
-            error={memoryCandidatesError}
-            busyId={memoryCandidateBusyId}
-            onRefresh={loadMemoryCandidates}
-            onPromote={handlePromoteMemoryCandidate}
-            onReject={handleRejectMemoryCandidate}
-            onGenerateProposal={handleGenerateGrowthProposalForCandidate}
-          />
-          <GrowthProposalBoard
-            proposals={growthProposals}
-            loading={growthProposalsLoading}
-            error={growthProposalsError}
-            busyId={growthProposalBusyId}
-            onRefresh={loadGrowthProposals}
-            onGenerate={handleGenerateGrowthProposals}
-            onEvaluate={handleEvaluateGrowthProposal}
-            onApprove={handleApproveGrowthProposal}
-            onDryRun={handleDryRunGrowthProposal}
-            onReject={handleRejectGrowthProposal}
-            onPublish={handlePublishGrowthProposal}
-            onObserve={handleObserveGrowthProposal}
-          />
-        </div>
-      </Pane>
-    );
-  }
+  const totalReuseCount = useMemo(
+    () => knowledgeItems.reduce((sum, item) => sum + (item.usageCount || 0), 0),
+    [knowledgeItems],
+  );
 
-  if (detailLoading || !detail) {
-    return (
-      <Pane tone="strong" className="min-h-[620px] p-6 md:p-8">
-        <EmptyState
-          icon={<Loader2 className="h-5 w-5 animate-spin" />}
-          title={t('common.loading')}
-          body={t('knowledge.detail')}
-          className="min-h-[520px]"
-        />
-      </Pane>
-    );
-  }
+  const inactiveAssetCount = useMemo(() => {
+    const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    return knowledgeItems.filter((item) => {
+      const lastTouched = new Date(item.lastAccessedAt || item.timestamps.accessed || item.timestamps.modified || item.timestamps.created || 0).getTime();
+      if (!Number.isFinite(lastTouched) || Number.isNaN(lastTouched)) {
+        return item.status === 'stale' || item.status === 'conflicted';
+      }
+      return lastTouched < cutoff || item.status === 'stale' || item.status === 'conflicted';
+    }).length;
+  }, [knowledgeItems]);
+
+  const reviewQueueCount = useMemo(() => {
+    const openCandidates = memoryCandidates.filter(isOpenMemoryCandidate).length;
+    const pendingGrowth = growthProposals.filter((proposal) => proposal.status === 'approval-required' || proposal.status === 'evaluated').length;
+    return openCandidates + pendingGrowth;
+  }, [growthProposals, memoryCandidates]);
 
   return (
     <>
-      <Pane tone="strong" className="min-h-[680px] overflow-hidden">
-        <div className="grid min-h-[680px] lg:grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="flex min-h-0 flex-col border-b border-[var(--app-border-soft)] lg:border-b-0 lg:border-r">
-            <div className="border-b border-[var(--app-border-soft)] px-5 py-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  {editingMeta ? (
-                    <div className="mt-3 space-y-3">
-                      <input
-                        className="w-full rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-sm font-semibold outline-none focus:border-[var(--app-border-strong)]"
-                        value={titleDraft}
-                        placeholder={t('knowledge.titlePlaceholder')}
-                        onChange={(event) => setTitleDraft(event.target.value)}
-                      />
-                      <textarea
-                        className="min-h-[140px] w-full resize-y rounded-[14px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-sm leading-7 outline-none focus:border-[var(--app-border-strong)]"
-                        value={summaryDraft}
-                        placeholder={t('knowledge.summaryPlaceholder')}
-                        onChange={(event) => setSummaryDraft(event.target.value)}
-                      />
-                    </div>
-                  ) : (
-                    <>
-                      {!duplicateArtifactHeading ? (
-                        <div className="mt-3 text-xl font-semibold leading-tight text-[var(--app-text)]">{detail.title}</div>
-                      ) : null}
-                      <p
-                        className={cn(
-                          'max-w-prose text-sm leading-7 text-[var(--app-text-soft)]',
-                          duplicateArtifactHeading ? 'mt-0' : 'mt-3',
-                        )}
-                      >
-                        {detail.summary || t('knowledge.noSummary')}
-                      </p>
-                    </>
-                  )}
-                </div>
-
-                {!editingMeta ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-full"
-                    aria-label={t('common.edit')}
-                    onClick={() => setEditingMeta(true)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                ) : null}
-              </div>
-
-              {editingMeta ? (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" className="h-9 rounded-full" onClick={() => setEditingMeta(false)}>
-                    {t('common.cancel')}
-                  </Button>
-                  <Button size="sm" className="h-9 rounded-full" onClick={handleSaveMeta} disabled={saving}>
-                    {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                    {t('common.save')}
-                  </Button>
-                </div>
-              ) : null}
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <StatusChip>{detail.artifactFiles.length} {t('knowledge.artifacts')}</StatusChip>
-                {modifiedLabel ? <StatusChip>{t('knowledge.modified')} {modifiedLabel}</StatusChip> : null}
-                <StatusChip>{t('knowledge.created')} {formatRelativeTime(detail.timestamps.created, locale)}</StatusChip>
-                <StatusChip>{t('knowledge.accessed')} {formatRelativeTime(detail.timestamps.accessed, locale)}</StatusChip>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              <div className="px-2 app-eyebrow">{t('knowledge.artifacts')}</div>
-              <div className="mt-3 space-y-2">
-                {detail.artifactFiles.map(file => {
-                  const isActive = activeArtifact === file;
-                  const label = getArtifactLabel(file);
-                  const secondary = label === file ? null : file;
-
-                  return (
-                    <button
-                      key={file}
-                      type="button"
-                      className={cn(
-                        'flex w-full items-start gap-3 rounded-[18px] border px-3 py-3 text-left transition-all',
-                        isActive
-                          ? 'border-[var(--app-border-strong)] bg-[var(--app-accent-soft)] shadow-[0_16px_36px_rgba(0,0,0,0.18)]'
-                          : 'border-[var(--app-border-soft)] bg-[var(--app-raised)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)]',
-                      )}
-                      onClick={() => {
-                        setActiveArtifact(file);
-                        setViewMode('preview');
-                      }}
-                    >
-                      <div
-                        className={cn(
-                          'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border',
-                          isActive
-                            ? 'border-[var(--app-border-strong)] bg-[rgba(88,243,212,0.12)] text-[var(--app-accent)]'
-                            : 'border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.02)] text-[var(--app-text-muted)]',
-                        )}
-                      >
-                        <FileText className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className={cn('truncate text-sm leading-6', isActive ? 'font-semibold text-[var(--app-text)]' : 'text-[var(--app-text)]')}>
-                          {label}
-                        </div>
-                        {secondary ? (
-                          <div className="truncate font-mono text-[11px] text-[var(--app-text-muted)]">{secondary}</div>
-                        ) : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-6 border-t border-[var(--app-border-soft)] px-2 pt-6">
-                <div className="app-eyebrow">{t('knowledge.references')}</div>
-                {detail.references.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    {detail.references.map((reference, index) => (
-                      <div
-                        key={`${reference.type}-${reference.value}-${index}`}
-                        className="flex items-center gap-3 rounded-[16px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2.5"
-                      >
-                        {refIcon(reference.type)}
-                        <span className="truncate font-mono text-[11px] text-[var(--app-text-soft)]">{reference.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm leading-6 text-[var(--app-text-muted)]">{t('knowledge.noReferences')}</p>
-                )}
-              </div>
-
-              <div className="mt-6 border-t border-[var(--app-border-soft)] px-2 pt-6">
-                <div className="app-eyebrow">Linked Growth</div>
-                {linkedKnowledgeProposals.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    {linkedKnowledgeProposals.slice(0, 4).map((proposal) => (
-                      <div
-                        key={proposal.id}
-                        className="rounded-[16px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2.5"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-xs font-semibold text-[var(--app-text)]">{proposal.title}</span>
-                          <StatusChip tone={proposal.risk === 'high' ? 'danger' : proposal.risk === 'medium' ? 'warning' : 'success'}>
-                            {proposal.score}
-                          </StatusChip>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <StatusChip>{proposal.kind}</StatusChip>
-                          <StatusChip>{proposal.status}</StatusChip>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm leading-6 text-[var(--app-text-muted)]">No linked growth proposals.</p>
-                )}
-              </div>
-            </div>
-
-            <div className="border-t border-[var(--app-border-soft)] p-4">
-              <Button
-                variant="outline"
-                className="w-full rounded-[18px] border-red-400/18 bg-red-400/10 text-red-700 hover:border-red-400/30 hover:bg-red-400/14 hover:text-red-800"
-                onClick={() => setDeleteOpen(true)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                {t('knowledge.deleteItem')}
-              </Button>
-            </div>
-          </aside>
-
-          <div className="min-h-0 flex flex-col">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--app-border-soft)] px-5 py-4">
-              <div className="min-w-0">
-                <div className="mt-2 truncate font-mono text-sm text-[var(--app-text)]">
-                  {activeArtifact || t('knowledge.selectArtifact')}
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {saveMsg ? (
-                  <StatusChip tone="success">
-                    <Check className="mr-1 h-3.5 w-3.5" />
-                    {saveMsg}
-                  </StatusChip>
-                ) : null}
-                {hasUnsavedArtifact ? <StatusChip tone="warning">{t('knowledge.unsaved')}</StatusChip> : null}
-                {activeArtifact ? (
-                  <InspectorTabs
-                    value={viewMode}
-                    onValueChange={(value) => setViewMode(value === 'edit' ? 'edit' : 'preview')}
-                    tabs={[
-                      { value: 'preview', label: t('common.preview') },
-                      { value: 'edit', label: t('common.edit') },
-                    ]}
-                  />
-                ) : null}
-                {activeArtifact ? (
-                  <Button
-                    size="sm"
-                    className="h-10 rounded-full px-4"
-                    onClick={handleSaveArtifact}
-                    disabled={saving || !hasUnsavedArtifact}
-                  >
-                    {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                    {t('common.save')}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-
-            {!activeArtifact ? (
-              <EmptyState
-                icon={<FileText className="h-5 w-5" />}
-                title={t('knowledge.selectArtifact')}
-                className="min-h-[420px]"
-              />
-            ) : viewMode === 'edit' ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="border-b border-[var(--app-border-soft)] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">
-                  {t('knowledge.markdownSource')}
-                </div>
-                <textarea
-                  className="min-h-0 flex-1 resize-none bg-[var(--app-ink)] px-5 py-4 font-mono text-sm leading-7 text-[var(--app-text)] outline-none"
-                  value={artifactDraft}
-                  onChange={(event) => setArtifactDraft(event.target.value)}
-                  spellCheck={false}
-                />
-              </div>
-            ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <div className="mx-auto max-w-[88ch] px-6 py-8 xl:px-10">
-                  <div
-                    className="chat-markdown text-[15px] leading-7 text-[var(--app-text-soft)]"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(artifactDraft) }}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
+      <div className="space-y-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <KnowledgeMetricCard
+            icon={<Clock3 className="h-4 w-4" />}
+            label="最近沉淀"
+            value={recentWindowCount}
+            detail="近 7 天新增知识"
+            note={recentWindowCount > 0 ? `+${recentWindowCount}` : '暂无新增'}
+            tone={recentWindowCount > 0 ? 'accent' : 'neutral'}
+          />
+          <KnowledgeMetricCard
+            icon={<Brain className="h-4 w-4" />}
+            label="活跃资产"
+            value={activeAssetCount}
+            detail={`累计复用 ${totalReuseCount} 次`}
+            tone={activeAssetCount > 0 ? 'info' : 'neutral'}
+          />
+          <KnowledgeMetricCard
+            icon={<ShieldAlert className="h-4 w-4" />}
+            label="待复核"
+            value={reviewQueueCount}
+            detail="候选记忆与增长提案"
+            tone={reviewQueueCount > 0 ? 'warning' : 'success'}
+          />
+          <KnowledgeMetricCard
+            icon={<RotateCcw className="h-4 w-4" />}
+            label="低活跃资产"
+            value={inactiveAssetCount}
+            detail="60 天内未访问或已冲突"
+            tone={inactiveAssetCount > 0 ? 'danger' : 'success'}
+          />
         </div>
-      </Pane>
+
+        <ModeTabs
+          value={surfaceMode}
+          onValueChange={(value) => setSurfaceMode(value === 'governance' ? 'governance' : 'browse')}
+          tabs={[
+            { value: 'browse', label: '浏览工作台' },
+            { value: 'governance', label: '治理工作台' },
+          ]}
+        />
+
+        {surfaceMode === 'browse' ? (
+          <KnowledgeBrowseWorkspace
+            locale={locale}
+            selectedId={selectedId}
+            detail={detail}
+            detailLoading={detailLoading}
+            knowledgeItems={knowledgeItems}
+            knowledgeListLoading={knowledgeListLoading}
+            searchQuery={searchQuery}
+            projects={projects}
+            workspaces={workspaces}
+            activeArtifact={activeArtifact}
+            viewMode={viewMode}
+            artifactDraft={artifactDraft}
+            editingMeta={editingMeta}
+            titleDraft={titleDraft}
+            summaryDraft={summaryDraft}
+            saving={saving}
+            saveMsg={saveMsg}
+            summaryGenerating={summaryGenerating}
+            hasUnsavedArtifact={hasUnsavedArtifact}
+            duplicateArtifactHeading={duplicateArtifactHeading}
+            onSelectKnowledge={onSelectKnowledge}
+            onArtifactSelect={(artifactPath) => {
+              setActiveArtifact(artifactPath);
+              setViewMode('preview');
+            }}
+            onViewModeChange={setViewMode}
+            onArtifactDraftChange={setArtifactDraft}
+            onEditingMetaChange={setEditingMeta}
+            onTitleDraftChange={setTitleDraft}
+            onSummaryDraftChange={setSummaryDraft}
+            onSaveMeta={() => { void handleSaveMeta(); }}
+            onSaveArtifact={() => { void handleSaveArtifact(); }}
+            onGenerateSummary={() => { void handleGenerateSummary(); }}
+            onRequestDelete={() => setDeleteOpen(true)}
+          />
+        ) : (
+          <div className="space-y-6">
+            <MemoryCandidateReviewBoard
+              candidates={memoryCandidates}
+              proposals={growthProposals}
+              loading={memoryCandidatesLoading}
+              error={memoryCandidatesError}
+              busyId={memoryCandidateBusyId}
+              onRefresh={loadMemoryCandidates}
+              onPromote={handlePromoteMemoryCandidate}
+              onReject={handleRejectMemoryCandidate}
+              onGenerateProposal={handleGenerateGrowthProposalForCandidate}
+            />
+            <GrowthProposalBoard
+              proposals={growthProposals}
+              loading={growthProposalsLoading}
+              error={growthProposalsError}
+              busyId={growthProposalBusyId}
+              onRefresh={loadGrowthProposals}
+              onGenerate={handleGenerateGrowthProposals}
+              onEvaluate={handleEvaluateGrowthProposal}
+              onApprove={handleApproveGrowthProposal}
+              onDryRun={handleDryRunGrowthProposal}
+              onReject={handleRejectGrowthProposal}
+              onPublish={handlePublishGrowthProposal}
+              onObserve={handleObserveGrowthProposal}
+            />
+            {workspaces.length > 0 ? (
+              <Pane tone="strong" className="p-5">
+                <DepartmentMemoryPanel workspaces={workspaces} selectedWorkspace={detail?.workspaceUri || workspaces[0]?.uri} />
+              </Pane>
+            ) : null}
+          </div>
+        )}
+      </div>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-[420px]">
@@ -752,7 +583,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
               {t('knowledge.deleteTitle')}
             </DialogTitle>
             <DialogDescription>
-              {t('knowledge.deleteBody', { title: detail.title })}
+              {t('knowledge.deleteBody', { title: detail?.title || t('knowledge.items') })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -771,49 +602,6 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
 });
 
 export default KnowledgeWorkspace;
-
-function KnowledgeListCard({
-  title,
-  items,
-  loading,
-  emptyText,
-  showUsage,
-  showStatus,
-}: {
-  title: string;
-  items: KnowledgeItem[];
-  loading: boolean;
-  emptyText: string;
-  showUsage?: boolean;
-  showStatus?: boolean;
-}) {
-  return (
-    <WorkspaceSurface>
-      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">{title}</div>
-      {loading ? (
-        <div className="mt-4 text-sm text-[var(--app-text-muted)]">Loading…</div>
-      ) : items.length > 0 ? (
-        <div className="mt-4 space-y-2">
-          {items.map((item) => (
-            <WorkspaceListItem
-              key={item.id}
-              title={item.title}
-              description={item.summary}
-              actions={(showUsage || showStatus) ? (
-                <>
-                  {showUsage ? <StatusChip>{item.usageCount || 0} uses</StatusChip> : null}
-                  {showStatus && item.status ? <StatusChip>{item.status}</StatusChip> : null}
-                </>
-              ) : null}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="mt-4 text-sm text-[var(--app-text-muted)]">{emptyText}</div>
-      )}
-    </WorkspaceSurface>
-  );
-}
 
 function isOpenMemoryCandidate(candidate: MemoryCandidate): boolean {
   return candidate.status === 'candidate' || candidate.status === 'pending-review';
@@ -857,6 +645,57 @@ function formatShortDate(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function KnowledgeMetricCard({
+  icon,
+  label,
+  value,
+  detail,
+  note,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: number;
+  detail: string;
+  note?: string;
+  tone: 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'accent';
+}) {
+  const iconToneClass: Record<typeof tone, string> = {
+    neutral: 'border-[#dfe5ee] bg-[#f8fafc] text-[#667085]',
+    success: 'border-emerald-100 bg-emerald-50 text-emerald-600',
+    warning: 'border-amber-100 bg-amber-50 text-amber-600',
+    danger: 'border-rose-100 bg-rose-50 text-rose-600',
+    info: 'border-sky-100 bg-sky-50 text-sky-600',
+    accent: 'border-[#cfe0ff] bg-[#eef4ff] text-[#2f6df6]',
+  };
+  const noteToneClass: Record<typeof tone, string> = {
+    neutral: 'text-[#98a2b3]',
+    success: 'text-emerald-600',
+    warning: 'text-amber-600',
+    danger: 'text-rose-600',
+    info: 'text-sky-600',
+    accent: 'text-[#2f6df6]',
+  };
+
+  return (
+    <div className="rounded-[12px] border border-[#dfe5ee] bg-white px-5 py-4 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
+      <div className="flex items-start gap-3">
+        <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] border', iconToneClass[tone])}>
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-[#667085]">{label}</div>
+          <div className="mt-1 text-[2rem] font-semibold leading-none tracking-[-0.03em] text-[#0f172a]">{value}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs leading-5 text-[#98a2b3]">
+            <span>{detail}</span>
+            {note ? <span className={cn('font-medium', noteToneClass[tone])}>{note}</span> : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function MemoryCandidateReviewBoard({

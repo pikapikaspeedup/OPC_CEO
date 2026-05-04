@@ -1,5 +1,6 @@
 import { appendCEOEvent } from '../organization/ceo-event-store';
 import type { CompanyLoopDigest, CompanyLoopNotificationChannel } from './contracts';
+import { sanitizeCompanyLoopNotificationChannels } from './company-loop-notification-targets';
 
 function buildCompanyLoopNotificationMeta(input: {
   digest: CompanyLoopDigest;
@@ -127,7 +128,7 @@ export function notifyCompanyLoopDigest(input: {
   digest: CompanyLoopDigest;
   channels: CompanyLoopNotificationChannel[];
 }): string[] {
-  return input.channels.map((channel) => {
+  return sanitizeCompanyLoopNotificationChannels(input.channels).map((channel) => {
     if (channel === 'web') {
       return appendCompanyLoopNotificationEvent({
         digest: input.digest,

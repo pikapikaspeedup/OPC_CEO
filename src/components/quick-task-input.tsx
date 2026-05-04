@@ -4,12 +4,13 @@ import { useState, useCallback } from 'react';
 import { Send, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Workspace, DepartmentConfig, ModelConfig } from '@/lib/types';
+import type { AIProviderId } from '@/lib/providers/types';
 
 interface QuickTaskInputProps {
   workspaces: Workspace[];
   departments?: Map<string, DepartmentConfig>;
   models?: ModelConfig[];
-  onSubmit: (task: { goal: string; workspace: string; model?: string; provider?: string }) => void | Promise<void>;
+  onSubmit: (task: { goal: string; workspace: string; model?: string; provider?: AIProviderId }) => void | Promise<void>;
 }
 
 function generateTaskName(goal: string): string {
@@ -23,7 +24,7 @@ export default function QuickTaskInput({ workspaces, departments, models, onSubm
   const [goal, setGoal] = useState('');
   const [workspace, setWorkspace] = useState(workspaces[0]?.uri || '');
   const [model, setModel] = useState('');
-  const [provider, setProvider] = useState('');
+  const [provider, setProvider] = useState<AIProviderId | ''>('');
   const [submitting, setSubmitting] = useState(false);
 
   const canSubmit = goal.trim().length > 0 && workspace.length > 0 && !submitting;
@@ -43,7 +44,7 @@ export default function QuickTaskInput({ workspaces, departments, models, onSubm
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, goal, workspace, model, onSubmit]);
+  }, [canSubmit, goal, workspace, model, onSubmit, provider]);
 
   // Filter models that have a valid model ID
   const availableModels = models?.filter(m => m.modelOrAlias?.model) || [];
@@ -106,7 +107,7 @@ export default function QuickTaskInput({ workspaces, departments, models, onSubm
         )}
         <select
           value={provider}
-          onChange={(e) => setProvider(e.target.value)}
+          onChange={(e) => setProvider(e.target.value as AIProviderId | '')}
           disabled={submitting}
           className={cn(
             'rounded-lg border border-white/8 bg-white/[0.03] px-2 py-2 text-xs text-white/60 focus:border-sky-400/30 focus:outline-none max-w-[130px]',
@@ -115,9 +116,7 @@ export default function QuickTaskInput({ workspaces, departments, models, onSubm
         >
           <option value="">自动 Provider</option>
           <option value="antigravity">Antigravity</option>
-          <option value="codex">Codex</option>
           <option value="native-codex">Codex Native</option>
-          <option value="claude-code">Claude Code</option>
           <option value="claude-api">Claude API</option>
           <option value="openai-api">OpenAI API</option>
           <option value="gemini-api">Gemini API</option>

@@ -1381,6 +1381,28 @@ export interface SystemImprovementExecutionTestSummaryFE {
   latestAt?: string;
 }
 
+export interface SystemImprovementCodexExecutionSnapshotFE {
+  runId: string;
+  taskKey: string;
+  branch: string;
+  worktreePath: string;
+  evidencePath?: string;
+  baseMode?: 'checkpoint' | 'snapshot';
+  baseSha: string;
+  headSha: string;
+  snapshotSha?: string;
+  changedFiles: string[];
+  allowedPathPrefixes: string[];
+  disallowedFiles: string[];
+  scopeCheckPassed: boolean;
+  diffCheckPassed: boolean;
+  validationCount: number;
+  passedValidationCount: number;
+  failedValidationCount: number;
+  decision: 'testing' | 'ready-to-merge' | 'blocked';
+  updatedAt: string;
+}
+
 export interface SystemImprovementMergeGateSummaryFE {
   status: 'pending' | 'ready-to-merge' | 'blocked';
   approvalReady: boolean;
@@ -1390,11 +1412,69 @@ export interface SystemImprovementMergeGateSummaryFE {
   reasons: string[];
 }
 
+export type SystemImprovementReleaseGateStatusFE =
+  | 'not-started'
+  | 'preflight-failed'
+  | 'ready-for-approval'
+  | 'approved'
+  | 'merged'
+  | 'restarted'
+  | 'observing'
+  | 'rolled-back';
+
+export type SystemImprovementReleasePreflightStatusFE = 'not-run' | 'passed' | 'failed';
+
+export type SystemImprovementReleaseActionFE =
+  | 'preflight'
+  | 'approve'
+  | 'mark-merged'
+  | 'mark-restarted'
+  | 'start-observation'
+  | 'mark-rolled-back';
+
+export interface SystemImprovementReleasePreflightCheckFE {
+  label: string;
+  status: 'passed' | 'failed';
+  detail: string;
+  command?: string;
+}
+
+export interface SystemImprovementReleaseCommandBundleFE {
+  mergeCommand: string;
+  verifyCommand: string;
+  restartCommand: string;
+  rollbackCommand: string;
+  healthCheckCommand?: string;
+}
+
+export interface SystemImprovementReleaseGateSnapshotFE {
+  status: SystemImprovementReleaseGateStatusFE;
+  preflightStatus: SystemImprovementReleasePreflightStatusFE;
+  checks: SystemImprovementReleasePreflightCheckFE[];
+  commands: SystemImprovementReleaseCommandBundleFE;
+  patchPath?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  approvalNote?: string;
+  mergedAt?: string;
+  mergeCommitSha?: string;
+  restartedAt?: string;
+  restartTarget?: string;
+  healthCheckSummary?: string;
+  observingAt?: string;
+  observationSummary?: string;
+  rolledBackAt?: string;
+  rollbackReason?: string;
+  updatedAt: string;
+}
+
 export interface SystemImprovementExitEvidenceBundleFE {
   project?: SystemImprovementExecutionProjectSnapshotFE;
   latestRun?: SystemImprovementExecutionRunSnapshotFE;
+  codex?: SystemImprovementCodexExecutionSnapshotFE;
   testing: SystemImprovementExecutionTestSummaryFE;
   mergeGate: SystemImprovementMergeGateSummaryFE;
+  releaseGate?: SystemImprovementReleaseGateSnapshotFE;
   updatedAt: string;
 }
 
@@ -1425,6 +1505,10 @@ export interface SystemImprovementLaunchResultFE {
   status: 'already-running' | 'dispatched' | 'dispatch-failed';
   projectId?: string;
   runId?: string;
+  codexRunId?: string;
+  evidencePath?: string;
+  worktreePath?: string;
+  branch?: string;
   createdProject: boolean;
   templateId: string;
   workspaceUri: string;

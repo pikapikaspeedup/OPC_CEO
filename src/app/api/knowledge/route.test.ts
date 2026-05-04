@@ -12,7 +12,7 @@ async function loadRouteAndStore() {
   delete (globalThis as Record<string, unknown>).__AG_GATEWAY_DB__;
   const route = await import('./route');
   const store = await import('@/lib/knowledge');
-  return { GET: route.GET, store };
+  return { GET: route.GET, POST: route.POST, store };
 }
 
 describe('GET /api/knowledge', () => {
@@ -42,6 +42,18 @@ describe('GET /api/knowledge', () => {
       title: 'Use SQLite knowledge store',
       content: 'Structured knowledge is persisted in SQLite and mirrored to filesystem.',
       source: { type: 'run', runId: 'run-1' },
+      tags: ['sqlite', 'knowledge'],
+      confidence: 0.92,
+      evidence: {
+        refs: [{
+          id: 'evidence-1',
+          type: 'artifact',
+          label: 'artifact',
+          runId: 'run-1',
+          createdAt: '2026-04-19T00:00:00.000Z',
+        }],
+        strength: 0.8,
+      },
       createdAt: '2026-04-19T00:00:00.000Z',
       updatedAt: '2026-04-19T00:00:00.000Z',
       lastAccessedAt: '2026-04-19T02:00:00.000Z',
@@ -60,6 +72,11 @@ describe('GET /api/knowledge', () => {
         workspaceUri: 'file:///tmp/workspace-a',
         usageCount: 3,
         lastAccessedAt: '2026-04-19T02:00:00.000Z',
+        tags: ['sqlite', 'knowledge'],
+        sourceType: 'run',
+        sourceRunId: 'run-1',
+        confidence: 0.92,
+        evidenceCount: 1,
       }),
     ]);
   });
@@ -101,5 +118,85 @@ describe('GET /api/knowledge', () => {
         category: 'pattern',
       }),
     ]);
+  });
+
+  it('supports tag, query and reuse sorting', async () => {
+    const { GET, store } = await loadRouteAndStore();
+    store.upsertKnowledgeAsset({
+      id: 'knowledge-search-a',
+      scope: 'department',
+      workspaceUri: 'file:///tmp/workspace-a',
+      category: 'pattern',
+      title: 'Autopilot digest workflow',
+      content: 'Digest workflow content',
+      source: { type: 'manual' },
+      tags: ['digest', 'workflow'],
+      usageCount: 2,
+      createdAt: '2026-04-19T00:00:00.000Z',
+      updatedAt: '2026-04-19T00:00:00.000Z',
+      status: 'active',
+    });
+    store.upsertKnowledgeAsset({
+      id: 'knowledge-search-b',
+      scope: 'department',
+      workspaceUri: 'file:///tmp/workspace-a',
+      category: 'pattern',
+      title: 'Digest review checklist',
+      content: 'Checklist content',
+      source: { type: 'manual' },
+      tags: ['digest', 'review'],
+      usageCount: 9,
+      createdAt: '2026-04-19T01:00:00.000Z',
+      updatedAt: '2026-04-19T01:00:00.000Z',
+      status: 'active',
+    });
+
+    const res = await GET(new Request('http://localhost/api/knowledge?tag=digest&q=checklist&sort=reuse'));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toHaveLength(1);
+    expect(data[0]).toEqual(expect.objectContaining({
+      id: 'knowledge-search-b',
+      tags: ['digest', 'review'],
+      usageCount: 9,
+    }));
+  });
+
+  it('creates manual knowledge items via POST', async () => {
+    const { POST, store } = await loadRouteAndStore();
+    const res = await POST(new Request('http://localhost/api/knowledge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Manual note',
+        summary: 'A short summary',
+        content: '# Manual note\n\nBody text.',
+        workspaceUri: 'file:///tmp/workspace-c',
+        category: 'domain-knowledge',
+        tags: ['manual', 'draft'],
+      }),
+    }));
+
+    expect(res.status).toBe(201);
+    const payload = await res.json();
+    expect(payload).toEqual(expect.objectContaining({
+      title: 'Manual note',
+      summary: 'A short summary',
+      workspaceUri: 'file:///tmp/workspace-c',
+      category: 'domain-knowledge',
+      tags: ['manual', 'draft'],
+      sourceType: 'manual',
+      artifacts: {
+        'content.md': '# Manual note\n\nBody text.',
+      },
+    }));
+
+    const stored = store.getKnowledgeAsset(payload.id);
+    expect(stored).toEqual(expect.objectContaining({
+      title: 'Manual note',
+      workspaceUri: 'file:///tmp/workspace-c',
+      category: 'domain-knowledge',
+      tags: ['manual', 'draft'],
+    }));
   });
 });

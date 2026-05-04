@@ -1,12 +1,15 @@
 import type { TokenUsage as BaseTokenUsage } from '../types';
+import type { ProviderId, ProviderTransportId } from '../../providers/types';
 
-export type APIProvider = 'anthropic' | 'openai' | 'gemini' | 'grok' | 'native-codex' | 'bedrock' | 'vertex';
+export type APIProvider = 'anthropic' | 'openai' | 'gemini' | 'grok' | 'native-codex' | 'custom' | 'bedrock' | 'vertex';
 
 export type ModelConfig = {
   model: string;
   apiKey: string;
   baseUrl?: string;
   provider?: APIProvider;
+  providerId?: ProviderId;
+  transport?: ProviderTransportId;
   maxOutputTokens?: number;
   temperature?: number;
 };

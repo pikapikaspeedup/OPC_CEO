@@ -8,18 +8,18 @@ import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import {
   Activity,
+  AlertCircle,
+  CheckCircle2,
   Clock,
   Globe,
   Loader2,
   MessageSquare,
   Play,
   Pause,
-  Power,
   RefreshCw,
   Send,
   Settings,
   Trash2,
-  Users,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -72,6 +72,25 @@ type CcHeartbeat = {
   interval_mins: number;
   run_count: number;
   last_run: string;
+};
+
+type CcLocalState = {
+  installed: boolean;
+  binaryPath: string | null;
+  configPath: string;
+  templatePath: string;
+  configExists: boolean;
+  configPrepared: boolean;
+  platformConfigured: boolean;
+  tokenConfigured: boolean;
+  managementEnabled: boolean;
+  managementPort: number;
+  running: boolean;
+  pid: number | null;
+  connectedPlatforms: string[];
+  projectsCount: number;
+  version: string | null;
+  issues: string[];
 };
 
 // ─── API Helper ─────────────────────────────────────────────────
@@ -135,6 +154,161 @@ function StatusCard({ status, onRefresh, loading }: { status: CcStatus | null; o
           <p className="text-white/80 mt-0.5">{status.projects_count}</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+function LocalGatewayCard({
+  state,
+  loading,
+  actionState,
+  onRefresh,
+  onManage,
+}: {
+  state: CcLocalState | null;
+  loading: boolean;
+  actionState: { busy: boolean; error: string | null; message: string | null };
+  onRefresh: () => void;
+  onManage: (action: 'prepare-config' | 'start' | 'stop') => void;
+}) {
+  const statusTone = !state
+    ? 'text-white/50'
+    : !state.installed
+      ? 'text-red-300'
+      : state.running
+        ? 'text-emerald-300'
+        : state.tokenConfigured && state.configExists
+          ? 'text-amber-200'
+          : 'text-white/60';
+
+  const statusTitle = !state
+    ? '正在检查 cc-connect'
+    : !state.installed
+      ? '未安装 cc-connect'
+      : !state.configExists
+        ? '尚未创建配置'
+        : !state.tokenConfigured
+          ? '尚未绑定微信'
+          : state.running
+            ? 'cc-connect 已运行'
+            : '已配置，待启动';
+
+  return (
+    <div className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className={cn('text-sm font-medium', statusTone)}>{statusTitle}</div>
+          <div className="mt-1 text-xs leading-6 text-white/40">
+            {state?.running
+              ? `management API 已就绪，端口 ${state.managementPort}。`
+              : '这个页面现在可以负责本地配置和启动，不再只显示断开提示。'}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {state && (!state.configExists || !state.configPrepared || !state.managementEnabled) ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => onManage('prepare-config')}
+              disabled={actionState.busy}
+            >
+              {actionState.busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Settings className="mr-1.5 h-3.5 w-3.5" />}
+              修复默认配置
+            </Button>
+          ) : null}
+          {state?.installed && state?.configExists && state?.configPrepared && state?.managementEnabled && state?.platformConfigured && state?.tokenConfigured && !state.running ? (
+            <Button
+              size="sm"
+              className="h-8 bg-sky-500/80 text-xs text-white hover:bg-sky-500"
+              onClick={() => onManage('start')}
+              disabled={actionState.busy}
+            >
+              {actionState.busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1.5 h-3.5 w-3.5" />}
+              启动 cc-connect
+            </Button>
+          ) : null}
+          {state?.running ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => onManage('stop')}
+              disabled={actionState.busy}
+            >
+              {actionState.busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Pause className="mr-1.5 h-3.5 w-3.5" />}
+              停止
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="sm" onClick={onRefresh} className="h-8 px-3 text-xs" disabled={loading}>
+            {loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+            重新检查
+          </Button>
+        </div>
+      </div>
+
+      {state ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-white/8 bg-white/[0.02] px-3 py-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">安装</div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-white/75">
+              {state.installed ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <AlertCircle className="h-3.5 w-3.5 text-red-300" />}
+              {state.installed ? '已安装' : '未安装'}
+            </div>
+            {state.binaryPath ? <div className="mt-2 truncate font-mono text-[10px] text-white/35">{state.binaryPath}</div> : null}
+          </div>
+          <div className="rounded-lg border border-white/8 bg-white/[0.02] px-3 py-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">配置</div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-white/75">
+              {state.configExists && state.configPrepared ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <AlertCircle className="h-3.5 w-3.5 text-amber-300" />}
+              {state.configExists ? (state.configPrepared ? '已就绪' : '需要修复') : '未创建'}
+            </div>
+            <div className="mt-2 truncate font-mono text-[10px] text-white/35">{state.configPath}</div>
+          </div>
+          <div className="rounded-lg border border-white/8 bg-white/[0.02] px-3 py-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">绑定</div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-white/75">
+              {state.tokenConfigured ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <AlertCircle className="h-3.5 w-3.5 text-amber-300" />}
+              {state.tokenConfigured ? '已完成 weixin setup' : '需要运行 weixin setup'}
+            </div>
+            {!state.tokenConfigured ? (
+              <div className="mt-2 font-mono text-[10px] text-white/35">cc-connect weixin setup --project antigravity</div>
+            ) : null}
+          </div>
+          <div className="rounded-lg border border-white/8 bg-white/[0.02] px-3 py-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-white/35">运行</div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-white/75">
+              {state.running ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <AlertCircle className="h-3.5 w-3.5 text-amber-300" />}
+              {state.running ? `运行中 · ${state.managementPort}` : '未运行'}
+            </div>
+            {state.connectedPlatforms.length > 0 ? (
+              <div className="mt-2 text-[10px] text-white/35">平台：{state.connectedPlatforms.join(', ')}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {state?.issues?.length ? (
+        <div className="mt-4 rounded-lg border border-amber-400/15 bg-amber-400/5 px-3 py-3 text-xs text-amber-100">
+          <div className="font-medium">待处理</div>
+          <ul className="mt-2 list-disc space-y-1 pl-4">
+            {state.issues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {actionState.error ? (
+        <div className="mt-4 rounded-lg border border-red-400/15 bg-red-400/10 px-3 py-3 text-xs text-red-200">
+          {actionState.error}
+        </div>
+      ) : null}
+      {actionState.message ? (
+        <div className="mt-4 rounded-lg border border-emerald-400/15 bg-emerald-400/10 px-3 py-3 text-xs text-emerald-200">
+          {actionState.message}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -258,18 +432,19 @@ function CronJobsList({ jobs, onRefresh }: { jobs: CcCronJob[]; onRefresh: () =>
 }
 
 function HeartbeatCard({ heartbeat, projectName, onRefresh }: { heartbeat: CcHeartbeat | null; projectName: string; onRefresh: () => void }) {
-  if (!heartbeat) return null;
-
   const handleToggle = useCallback(async () => {
+    if (!heartbeat) return;
     const action = heartbeat.paused ? 'resume' : 'pause';
     await ccApi(`projects/${projectName}/heartbeat/${action}`, { method: 'POST' });
     onRefresh();
-  }, [heartbeat.paused, projectName, onRefresh]);
+  }, [heartbeat, projectName, onRefresh]);
 
   const handleTrigger = useCallback(async () => {
     await ccApi(`projects/${projectName}/heartbeat/run`, { method: 'POST' });
     onRefresh();
   }, [projectName, onRefresh]);
+
+  if (!heartbeat) return null;
 
   return (
     <div className="rounded-lg border border-white/6 bg-white/[0.015] p-3">
@@ -326,74 +501,141 @@ function SectionHeader({ icon, title, action }: { icon: React.ReactNode; title: 
 
 export default function CcConnectTab() {
   const [status, setStatus] = useState<CcStatus | null>(null);
-  const [projects, setProjects] = useState<CcProject[]>([]);
+  const [localState, setLocalState] = useState<CcLocalState | null>(null);
   const [sessions, setSessions] = useState<CcSession[]>([]);
   const [cronJobs, setCronJobs] = useState<CcCronJob[]>([]);
   const [heartbeat, setHeartbeat] = useState<CcHeartbeat | null>(null);
   const [platformDetails, setPlatformDetails] = useState<{ type: string; connected: boolean }[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeProject, setActiveProject] = useState<string>('');
+  const [actionState, setActionState] = useState<{ busy: boolean; error: string | null; message: string | null }>({
+    busy: false,
+    error: null,
+    message: null,
+  });
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
+      const localRes = await fetch('/api/cc-connect/local-state')
+        .then((res) => res.json())
+        .catch(() => ({ ok: false }));
+
+      const nextLocalState = localRes.ok ? localRes.data as CcLocalState : null;
+      setLocalState(nextLocalState);
+
+      if (!nextLocalState?.running) {
+        setStatus(null);
+        setSessions([]);
+        setCronJobs([]);
+        setHeartbeat(null);
+        setPlatformDetails([]);
+        setLoading(false);
+        return;
+      }
+
       const [statusRes, projectsRes] = await Promise.all([
         ccApi<CcStatus>('status'),
         ccApi<{ projects: CcProject[] }>('projects'),
       ]);
 
-      if (statusRes.ok && statusRes.data) setStatus(statusRes.data);
-      else setStatus(null);
+      setStatus(statusRes.ok && statusRes.data ? statusRes.data : null);
 
-      if (projectsRes.ok && projectsRes.data) {
-        const prjs = projectsRes.data.projects ?? [];
-        setProjects(prjs);
+      const prjs = projectsRes.ok && projectsRes.data ? (projectsRes.data.projects ?? []) : [];
+      const projName = activeProject || prjs[0]?.name || '';
+      if (projName) {
+        setActiveProject(projName);
 
-        // Auto-select first project
-        const projName = activeProject || prjs[0]?.name || '';
-        if (projName) {
-          setActiveProject(projName);
+        const [sessRes, cronRes, hbRes, projDetailRes] = await Promise.all([
+          ccApi<{ sessions: CcSession[] }>(`projects/${projName}/sessions`),
+          ccApi<{ jobs: CcCronJob[] }>('cron'),
+          ccApi<CcHeartbeat>(`projects/${projName}/heartbeat`),
+          ccApi<{ platforms?: { type: string; connected: boolean }[] }>(`projects/${projName}`),
+        ]);
 
-          const [sessRes, cronRes, hbRes, projDetailRes] = await Promise.all([
-            ccApi<{ sessions: CcSession[] }>(`projects/${projName}/sessions`),
-            ccApi<{ jobs: CcCronJob[] }>('cron'),
-            ccApi<CcHeartbeat>(`projects/${projName}/heartbeat`),
-            ccApi<{ platforms?: { type: string; connected: boolean }[] }>(`projects/${projName}`),
-          ]);
-
-          if (sessRes.ok && sessRes.data) setSessions(sessRes.data.sessions ?? []);
-          if (cronRes.ok && cronRes.data) setCronJobs(cronRes.data.jobs ?? []);
-          if (hbRes.ok && hbRes.data) setHeartbeat(hbRes.data);
-          if (projDetailRes.ok && projDetailRes.data?.platforms) {
-            setPlatformDetails(projDetailRes.data.platforms);
+        setSessions(sessRes.ok && sessRes.data ? (sessRes.data.sessions ?? []) : []);
+        setCronJobs(cronRes.ok && cronRes.data ? (cronRes.data.jobs ?? []) : []);
+        setHeartbeat(hbRes.ok && hbRes.data ? hbRes.data : null);
+        if (projDetailRes.ok && projDetailRes.data?.platforms) {
+          setPlatformDetails(projDetailRes.data.platforms);
+        } else {
+          const proj = prjs.find((p) => p.name === projName);
+          if (proj) {
+            const pds = (proj.platforms ?? []).map((p) =>
+              typeof p === 'string' ? { type: p, connected: true } : p
+            );
+            setPlatformDetails(pds);
           } else {
-            // Fallback: derive from project list
-            const proj = prjs.find(p => p.name === projName);
-            if (proj) {
-              const pds = (proj.platforms ?? []).map(p =>
-                typeof p === 'string' ? { type: p, connected: true } : p
-              );
-              setPlatformDetails(pds);
-            }
+            setPlatformDetails([]);
           }
         }
+      } else {
+        setSessions([]);
+        setCronJobs([]);
+        setHeartbeat(null);
+        setPlatformDetails([]);
       }
     } catch { /* handled by StatusCard */ }
     setLoading(false);
   }, [activeProject]);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    queueMicrotask(() => {
+      void refresh();
+    });
+  }, [refresh]);
+
+  const handleManage = useCallback(async (action: 'prepare-config' | 'start' | 'stop') => {
+    setActionState({ busy: true, error: null, message: null });
+    try {
+      const res = await fetch('/api/cc-connect/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const payload = await res.json() as { ok?: boolean; error?: string; changed?: boolean; data?: CcLocalState };
+      if (!res.ok || !payload.ok) {
+        throw new Error(payload.error || 'cc-connect 操作失败');
+      }
+      setLocalState(payload.data ?? null);
+      const nextState = payload.data ?? null;
+      setActionState({
+        busy: false,
+        error: null,
+        message: action === 'prepare-config'
+          ? (payload.changed ? '已写入并修复本地 cc-connect 配置。' : '本地 cc-connect 配置已是最新。')
+          : action === 'start'
+            ? (nextState?.running ? 'cc-connect 已启动。' : 'cc-connect 启动请求已发送，但 management API 尚未就绪。')
+            : 'cc-connect 已停止。',
+      });
+      await refresh();
+    } catch (error) {
+      setActionState({
+        busy: false,
+        error: error instanceof Error ? error.message : 'cc-connect 操作失败',
+        message: null,
+      });
+    }
+  }, [refresh]);
 
   return (
     <ScrollArea className="h-[calc(100vh-200px)]">
       <div className="space-y-1">
-        {/* Status */}
-        <StatusCard status={status} onRefresh={refresh} loading={loading} />
+        <LocalGatewayCard
+          state={localState}
+          loading={loading}
+          actionState={actionState}
+          onRefresh={refresh}
+          onManage={handleManage}
+        />
 
-        {status && (
+        {status ? (
           <>
+            <SectionHeader icon={<Wifi className="h-3.5 w-3.5" />} title="运行状态" />
+            <StatusCard status={status} onRefresh={refresh} loading={loading} />
+
             {/* Platforms */}
-            <SectionHeader icon={<Globe className="h-3.5 w-3.5" />} title={`消息平台 (${platformDetails.length})`} />
+            <SectionHeader icon={<Globe className="h-3.5 w-3.5" />} title={`会话平台 (${platformDetails.length})`} />
             <PlatformManager platforms={platformDetails} projectName={activeProject} onRefresh={refresh} />
 
             <Separator className="my-4 bg-white/6" />
@@ -421,6 +663,11 @@ export default function CcConnectTab() {
             {/* Cron */}
             <SectionHeader icon={<Clock className="h-3.5 w-3.5" />} title={`定时任务 (${cronJobs.length})`} />
             <CronJobsList jobs={cronJobs} onRefresh={refresh} />
+          </>
+        ) : (
+          <>
+            <SectionHeader icon={<Globe className="h-3.5 w-3.5" />} title="会话平台配置" />
+            <PlatformManager platforms={platformDetails} projectName={activeProject || 'antigravity'} onRefresh={refresh} />
           </>
         )}
       </div>

@@ -80,7 +80,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 > Split-mode API ownership（2026-04-21）:
 > 在 `AG_ROLE=web` 且配置了 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 时，`web` 只负责页面与 WS ingress，不再执行前端主链的控制面业务逻辑。
-> - `control-plane` 负责：`/api/approval*`、`/api/ai-config`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
+> - `control-plane` 负责：`/api/approval*`、`/api/ai-config`、`/api/provider-model-catalog`、`/api/provider-image-generation`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
 > - `runtime` 负责：`/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation send/steps/cancel、run stream/intervene 等运行时接口
 > - `api` 组合服务允许同一路径按 method 分流；例如 `GET /api/conversations` 归 control-plane，`POST /api/conversations` 归 runtime，路由器会在 405 后继续匹配后续同路径 route。
 
@@ -88,15 +88,16 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **功能**: 从 SQLite conversation projection 返回所有已知对话；请求热路径不再同步扫描 `.pb / brain / trajectory`。
 
-> 当 workspace provider 命中本地 provider 轨道时，对话可能只存在于 Gateway 本地缓存，不会落 `.pb`。当前该轨道包括：
+> 当 workspace 命中 Gateway 本地会话轨道时，对话可能只存在于 Gateway 本地缓存，不会落 `.pb`。当前该轨道包括：
 >
-> - `codex`
 > - `native-codex`
 > - `claude-api`
 > - `openai-api`
 > - `gemini-api`
 > - `grok-api`
 > - `custom`
+>
+> 其中 `codex` / `claude-code` 属于执行工具层，不是 provider；它们在 Claude Engine 中通过 `ExecutionTool` 被调用，而不是作为这里的 provider 选择项。
 
 **Query 参数**:
 
@@ -140,7 +141,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 创建一个新的对话。
 
 - `antigravity` / Playground：创建真实 Cascade，对接 language_server
-- 本地 provider conversation：创建 Gateway 本地 conversation，不依赖 IDE / language_server
+- Gateway 本地 conversation：创建 Gateway 本地 conversation，不依赖 IDE / language_server
 
 **Request Body**:
 
@@ -159,7 +160,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 { "cascadeId": "3cb98b88-b875-4611-85d7-0782321db911" }
 ```
 
-当 provider 为本地 provider 时，返回可能类似：
+当 provider 为 Gateway 本地会话路径时，返回可能类似：
 
 ```json
 {
@@ -187,7 +188,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **内部执行流程**（客户端无需关心）:
 ```
 1. resolveProvider('execution', workspacePath)
-2. 若 provider ∈ {`codex`, `native-codex`, `claude-api`, `openai-api`, `gemini-api`, `grok-api`, `custom`}
+2. 若 provider ∈ {`native-codex`, `claude-api`, `openai-api`, `gemini-api`, `grok-api`, `custom`}
    ├─ 直接创建 `local-*` conversation
    └─ 写入 SQLite / 本地缓存
 3. 若 provider = `antigravity`
@@ -205,8 +206,8 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 提交用户消息给 AI。
 
 - Antigravity conversation：异步提交给 gRPC，后续通过 WebSocket 或轮询 `/steps` 获取
-- 本地 provider conversation：Gateway 同步执行本地 provider，随后把 transcript 写回本地 steps 文件
-- 本地 provider executor 返回 `status=failed` 时，接口返回 `502 { "error": "..." }`，不再把失败内容伪装成成功 assistant 回复
+- Gateway 本地 conversation：Gateway 同步执行本地 provider，随后把 transcript 写回本地 steps 文件
+- Gateway 本地执行路径返回 `status=failed` 时，接口返回 `502 { "error": "..." }`，不再把失败内容伪装成成功 assistant 回复
 - Native Codex 请求默认 90s 超时，可通过 `NATIVE_CODEX_TIMEOUT_MS` 调整
 
 **URL 参数**: `:id` = `cascadeId`
@@ -246,8 +247,8 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **内部执行流程**:
 ```
-1. 判断 conversation 是否为本地 provider conversation
-2. 若是本地 provider conversation
+1. 判断 conversation 是否为 Gateway 本地 conversation
+2. 若是 Gateway 本地 conversation
    ├─ 首次消息：`executor.executeTask(...)`
    ├─ 后续消息：`executor.appendMessage(sessionHandle, ...)`
    └─ transcript 写回本地 steps 文件
@@ -265,7 +266,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 获取对话的完整步骤列表。
 
 - Antigravity conversation：从 checkpoint / gRPC 拉取
-- 本地 provider conversation：从 Gateway 管理的本地 transcript / provider transcript store 回放
+- Gateway 本地 conversation：从 Gateway 管理的本地 transcript / provider transcript store 回放
 
 **URL 参数**: `:id` = `cascadeId`
 
@@ -307,7 +308,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 }
 ```
 
-> 本地 provider conversation 返回的 transcript 也会标准化成前端可渲染的 CORTEX step，例如：
+> Gateway 本地 conversation 返回的 transcript 也会标准化成前端可渲染的 CORTEX step，例如：
 >
 > - `CORTEX_STEP_TYPE_USER_INPUT`
 > - `CORTEX_STEP_TYPE_PLANNER_RESPONSE`
@@ -366,7 +367,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 停止 AI 当前的生成任务。
 
 - Antigravity conversation：调用 gRPC `cancelCascade`
-- 本地 provider conversation：
+- Gateway 本地 conversation：
   - 若当前有进行中的 API-backed 请求：尝试中断
   - 若当前没有活动请求：返回 `not_running`
 
@@ -377,7 +378,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 { "ok": true, "data": {} }
 ```
 
-本地 provider conversation 的典型返回可能是：
+Gateway 本地 conversation 的典型返回可能是：
 
 ```json
 {
@@ -395,7 +396,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 **功能**: 当 AI 在某个 `NOTIFY_USER` 步骤等待用户审批时（`isBlocking: true`），调用此接口让 AI 继续工作。
 
-> 对本地 provider conversation，这类审批语义通常不适用。当前会返回：
+> 对 Gateway 本地 conversation，这类审批语义通常不适用。当前会返回：
 >
 > - `ok: true`
 > - `status: "not_applicable"`
@@ -423,7 +424,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 回退对话到指定步骤索引处。
 
 - Antigravity conversation：通过 gRPC 回退
-- 本地 provider conversation：直接截断本地 transcript / transcript store
+- Gateway 本地 conversation：直接截断本地 transcript / transcript store
 
 **Request Body**:
 
@@ -436,7 +437,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 { "stepIndex": 5, "model": "MODEL_PLACEHOLDER_M26" }
 ```
 
-本地 provider conversation 的典型响应：
+Gateway 本地 conversation 的典型响应：
 
 ```json
 {
@@ -456,7 +457,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 获取回退后的步骤预览。
 
 - Antigravity conversation：通过 gRPC 获取预览
-- 本地 provider conversation：直接返回截断后的 preview steps
+- Gateway 本地 conversation：直接返回截断后的 preview steps
 
 **Query 参数**:
 
@@ -469,7 +470,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 GET /api/conversations/abc123/revert-preview?stepIndex=5&model=MODEL_PLACEHOLDER_M26
 ```
 
-本地 provider conversation 返回示例：
+Gateway 本地 conversation 返回示例：
 
 ```json
 {
@@ -576,7 +577,7 @@ GET /api/conversations/abc123/revert-preview?stepIndex=5&model=MODEL_PLACEHOLDER
 - 路由层会把 `executionProfile + departmentRuntimeContract` 写入 `taskEnvelope` carrier。
 - `group-runtime` 与 `prompt-executor` 会把它们继续合并进 `BackendRunConfig`。
 - 当前真正消费这套合同的是 `ClaudeEngineAgentBackend`，覆盖 `claude-api`、`openai-api`、`gemini-api`、`grok-api`、`custom`、`native-codex`。
-- `native-codex` 的 Department / agent-runs 主链已经切到 Claude Engine；旧 `NativeCodexExecutor` 仅保留给本地 conversation / chat shell 路径。
+- `native-codex` 的 Department / agent-runs 主链已经切到 Claude Engine，并要求 provider 主线固定走 `pi-ai`；本地 conversation 也复用同一条 Claude Engine transcript-backed 路径。
 - `codex` 仍然属于 light/local runtime，遇到 `artifact-heavy / review-loop / delivery` 任务会被 capability-aware routing 回退。
 
 ---
@@ -662,6 +663,8 @@ done
 | `templateId` | `string` | 否 | 模板 ID |
 | `projectType` | `string` | 否 | 项目类型 |
 | `skillHint` | `string` | 否 | 技能提示 |
+| `governance.platformEngineering.observe` | `boolean` | 否 | 是否纳入平台工程部观察 |
+| `governance.platformEngineering.allowProposal` | `boolean` | 否 | 是否允许平台工程部根据真实运行自动生成 proposal |
 
 **Request Body** 示例:
 ```json
@@ -679,6 +682,19 @@ done
 ### `PATCH /api/projects/:id` — 更新项目
 
 **功能**: 部分更新项目属性。
+
+常见治理 patch：
+
+```json
+{
+  "governance": {
+    "platformEngineering": {
+      "observe": true,
+      "allowProposal": true
+    }
+  }
+}
+```
 
 ### `DELETE /api/projects/:id` — 删除项目
 
@@ -1366,6 +1382,35 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 
 - `/api/departments/memory` 仍负责传统 Markdown 部门记忆。
 - `/api/knowledge*` 负责结构化知识资产与镜像兼容视图。
+- `GET /api/knowledge` 现支持：
+  - `workspace`
+  - `category`
+  - `status`
+  - `scope`
+  - `tag`
+  - `q`
+  - `sort=recent|created|updated|alpha|reuse`
+  - `limit`
+- `POST /api/knowledge` 可手动创建 `manual` source 的知识项，并立即返回 `KnowledgeDetail`。
+- `GET /api/knowledge/:id` 会透出 richer knowledge metadata，例如 `tags`、`scope`、`sourceType/sourceRunId`、`confidence`、`evidenceCount`、`promotionLevel`。
+- `POST /api/knowledge/:id/summary` 会按 `knowledge-summary` scene 解析 provider/model，生成摘要并回写到 Knowledge metadata。
+
+### `POST /api/knowledge/:id/summary` — 生成并回写 Knowledge 摘要
+
+**功能**: 读取指定 Knowledge 条目，使用当前 `knowledge-summary` scene 对应的 provider/model 生成摘要，并把结果回写到条目的 `summary`。
+
+**Response** `200 OK`:
+
+```json
+{
+  "ok": true,
+  "summary": "本文适合用于判断 AI 从单点模型竞争转向 Agent 系统落地的行业趋势。",
+  "provider": "native-codex",
+  "model": "gpt-5.4",
+  "source": "department",
+  "scene": "knowledge-summary"
+}
+```
 
 **功能**: 追加或更新部门记忆文件。
 
@@ -1533,6 +1578,8 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 读取或更新预算策略。策略字段包括 `scope`、`scopeId`、`period`、`maxTokens`、`maxMinutes`、`maxDispatches`、`maxConcurrentRuns`、`cooldownMinutesByKind`、`failureBudget`、`warningThreshold`、`hardStop`。
 
+当请求默认策略 ID（例如 `budget:organization:default:day`、`budget:department:default:day`）且本地尚未落库时，`GET` 会自动创建并返回默认策略，避免 Settings 首次打开时产生 404 噪音。
+
 ### `GET /api/company/budget/ledger`
 
 分页读取预算流水。支持 `scope`、`scopeId`、`policyId`、`decision`、`agendaItemId`、`runId`、`schedulerJobId`、`proposalId` 过滤。`decision` 包括 `reserved`、`committed`、`released`、`blocked`、`skipped`；`skipped` 表示调度被 budget/circuit gate 明确拦截，未创建 run；growth generate/evaluate 也会写入 `growth-proposal` scope ledger。
@@ -1569,11 +1616,15 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 { "proposalId": "growth-proposal-..." }
 ```
 
+### `GET /api/company/loops/notification-targets`
+
+读取公司循环摘要投递目标的当前可用性。该接口返回 `web / email / webhook` 的可用状态与说明，用于 Settings `预算策略` 页禁用未接入通道。`web` 固定可用；`email` 需要同时配置 `COMPANY_LOOP_EMAIL_WEBHOOK_URL`（或 `AG_COMPANY_LOOP_EMAIL_WEBHOOK_URL`）与收件人；`webhook` 需要配置 `COMPANY_LOOP_WEBHOOK_URL`（或 `AG_COMPANY_LOOP_WEBHOOK_URL`）。
+
 ### `GET /api/company/loops/policies` / `GET|PUT /api/company/loops/policies/:id`
 
 读取或更新 `CompanyLoopPolicy`。默认组织策略 ID 为 `company-loop-policy:organization:default`，字段包括 `enabled`、`timezone`、`dailyReviewHour`、`weeklyReviewDay`、`weeklyReviewHour`、`maxAgendaPerDailyLoop`、`maxAutonomousDispatchesPerLoop`、`allowedAgendaActions`、`growthReviewEnabled`、`notificationChannels`。Settings `Autonomy 预算`页会通过该接口保存 loop policy；scheduler 内置 daily/weekly company-loop cron 会读取该策略的时间、时区和 enabled 状态。
 
-`notificationChannels` 支持 `web`、`email`、`webhook`。每个启用通道都会在 loop digest 后写入 channel-specific notification id；`webhook` 在配置 `COMPANY_LOOP_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_WEBHOOK_URL` 后异步 POST digest payload；`email` 可通过 `COMPANY_LOOP_EMAIL_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_EMAIL_WEBHOOK_URL` 接入外部邮件投递器，收件人来自 `COMPANY_LOOP_EMAIL_RECIPIENTS` 或 `AG_COMPANY_LOOP_EMAIL_RECIPIENTS`。
+`notificationChannels` 支持 `web`、`email`、`webhook`。`web` 始终固定启用；`email` 和 `webhook` 只有在对应外部投递目标已接入时才会被保存和执行。每个启用通道都会在 loop digest 后写入 channel-specific notification id；`webhook` 在配置 `COMPANY_LOOP_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_WEBHOOK_URL` 后异步 POST digest payload；`email` 可通过 `COMPANY_LOOP_EMAIL_WEBHOOK_URL` 或 `AG_COMPANY_LOOP_EMAIL_WEBHOOK_URL` 接入外部邮件投递器，收件人来自 `COMPANY_LOOP_EMAIL_RECIPIENTS` 或 `AG_COMPANY_LOOP_EMAIL_RECIPIENTS`。
 
 ### `GET /api/company/loops/runs` / `GET /api/company/loops/runs/:id`
 
@@ -1599,6 +1650,11 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 读取或创建 `SystemImprovementSignal`。第一版信号来源包括 `performance`、`ux-breakpoint`、`test-failure`、`runtime-error`、`manual-feedback`、`duplicate-work`、`architecture-risk`。
 
+系统当前还会自动补充两类来源：
+
+1. 被平台工程部观察的项目出现 `failed / blocked / timeout` run。
+2. `User Story` 文档中的 `[不支持]` 用户场景被同步为长期改进信号。
+
 ```json
 {
   "source": "performance",
@@ -1617,6 +1673,8 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 从 signal 生成 `SystemImprovementProposal`，包含 `affectedFiles`、`protectedAreas`、`risk`、`implementationPlan`、`testPlan`、`rollbackPlan`。涉及 protected core 的 high/critical proposal 会自动创建 approval request。该接口不创建 git branch、不提交、不推送、不合并。
 
+平台工程部对已纳入观察且允许提案的项目，会在失败 run 出现后直接生成 proposal，CEO Office 可直接读取，不需要手工再次描述问题。
+
 ```json
 {
   "signalIds": ["system-improvement-signal-..."],
@@ -1628,9 +1686,9 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 读取单个系统改进 proposal。
 
-### `POST /api/company/self-improvement/proposals/:id/evaluate|approve|reject|attach-test-evidence|observe`
+### `POST /api/company/self-improvement/proposals/:id/evaluate|approve|reject|attach-test-evidence|release-gate|observe`
 
-`evaluate` 会重新计算 protected core 风险并按需创建 approval request；`approve` 会写入持久 `metadata.approvalStatus/approvedAt`，`reject` 只更新拒绝状态；`attach-test-evidence` 记录测试命令和摘要。low/medium proposal 在最新 passed evidence 后可进入 `ready-to-merge`；high/critical proposal 必须已有持久审批事实，不能用测试证据绕过审批；已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 `ready-to-merge`。`observe` 将 proposal 标记为 `observing` 并记录观察摘要。没有 auto merge / push / deploy 入口。
+`evaluate` 会重新计算 protected core 风险并按需创建 approval request；`approve` 会写入持久 `metadata.approvalStatus/approvedAt`，并自动在平台工程部创建 Project、挂上 `development-template-1`、派发首个 run，返回 `proposal + launch`；`reject` 只更新拒绝状态；`attach-test-evidence` 记录测试命令和摘要。proposal 运行态会根据平台工程项目与最新 run 自动推进：`approved -> in-progress -> testing -> ready-to-merge`。low/medium proposal 在最新 passed evidence 后可进入 `ready-to-merge`；high/critical proposal 必须已有持久审批事实，不能用测试证据绕过审批；已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 `ready-to-merge`。`GET /api/company/self-improvement/proposals` 与 `GET /api/company/self-improvement/proposals/:id` 会返回 `exitEvidence`，其中包含 `project/latestRun/testing/mergeGate/releaseGate` 准出证据包。`release-gate` 接收 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`，其中 `preflight` 会从 Codex worktree 生成 patch 并对当前主仓执行 `git apply --check`；后续动作只记录 CEO/Ops 显式准出、合并、重启、观察、回滚状态和命令包，不会静默执行 auto merge / push / deploy。`observe` 将 proposal 标记为 `observing` 并记录观察摘要。
 
 ---
 
@@ -2063,6 +2121,11 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 - 有 Antigravity server 时：返回 gRPC 模型与实时配额
 - 无 Antigravity server 时：返回 provider-aware fallback model 列表
+- provider-aware fallback 现在会合并：
+  - `antigravity-runtime` 实时模型
+  - `pi-ai` provider registry
+  - `custom` provider 的 `/v1/models`
+  - 必要时的手动模型回退缓存 `~/.gemini/antigravity/provider-model-catalog.json`
 
 **Response** `200 OK`:
 ```json
@@ -2376,6 +2439,19 @@ ws.on('message', (data) => {
 ```json
 {
   "defaultProvider": "antigravity",
+  "activeCustomProviderId": "baogaoai-glm",
+  "customProviders": [
+    {
+      "id": "baogaoai-glm",
+      "name": "BaogaoAI GLM",
+      "baseUrl": "https://new.baogaoai.com/v1",
+      "defaultModel": "glm-4-flash-250414"
+    }
+  ],
+  "providerProfiles": {
+    "antigravity": { "transport": "native", "authMode": "runtime" },
+    "native-codex": { "transport": "pi-ai", "authMode": "codex-oauth" }
+  },
   "layers": {
     "executive": { "provider": "antigravity" },
     "management": { "provider": "antigravity" },
@@ -2391,15 +2467,43 @@ ws.on('message', (data) => {
 **功能**: 保存组织级 Provider 配置，并在落盘前校验所有 `defaultProvider` / `layers.*.provider` / `scenes.*.provider` 是否真实可用。
 
 > 2026-04-16 起，未配置 Provider 不再允许通过 Settings 被选中；即便绕过前端直接调用本接口，也会被服务端拒绝。
+>
+> 2026-04-30 起，遗留的 `codex / claude-code` 配置值会在服务端自动归一为 `native-codex`；CLI coder 不再属于组织级 Provider 配置平面。
 
 **Request Body**:
 ```json
 {
   "defaultProvider": "claude-api",
+  "activeCustomProviderId": "baogaoai-glm",
+  "customProviders": [
+    {
+      "id": "baogaoai-glm",
+      "name": "BaogaoAI GLM",
+      "baseUrl": "https://new.baogaoai.com/v1",
+      "apiKey": "sk-...",
+      "defaultModel": "glm-4-flash-250414"
+    }
+  ],
+  "providerProfiles": {
+    "native-codex": {
+      "transport": "pi-ai",
+      "authMode": "codex-oauth",
+      "supportsImageGeneration": true,
+      "enableImageGeneration": true,
+      "imageGenerationModel": "gpt-5.5"
+    },
+    "openai-api": {
+      "transport": "pi-ai",
+      "authMode": "api-key",
+      "supportsImageGeneration": true,
+      "enableImageGeneration": true,
+      "imageGenerationModel": "gpt-image-1"
+    }
+  },
   "layers": {
     "executive": { "provider": "antigravity" },
     "management": { "provider": "claude-api" },
-    "execution": { "provider": "codex" },
+    "execution": { "provider": "native-codex" },
     "utility": { "provider": "antigravity" }
   },
   "scenes": {
@@ -2423,11 +2527,196 @@ ws.on('message', (data) => {
 }
 ```
 
-### `GET /api/api-keys` — Provider 凭据与本地登录状态
+### `GET /api/cc-connect/local-state` — 读取本机 cc-connect 状态
+
+**Split mode owner**: `web`
+
+**功能**: 供 `Settings -> 会话平台` 读取本机 `cc-connect` 的安装、配置、绑定和运行状态。这个接口不会透传到 `cc-connect`，而是直接检查：
+
+- `which cc-connect`
+- `~/.cc-connect/config.toml`
+- `cc-connect.config.toml` 模板路径
+- `management` 端口是否仍在 `LISTEN`
+
+**Response** `200 OK`:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "installed": true,
+    "binaryPath": "/opt/homebrew/bin/cc-connect",
+    "configPath": "/Users/darrel/.cc-connect/config.toml",
+    "templatePath": "/Users/darrel/Documents/Antigravity-Mobility-CLI/cc-connect.config.toml",
+    "configExists": true,
+    "configPrepared": true,
+    "platformConfigured": true,
+    "tokenConfigured": true,
+    "managementEnabled": true,
+    "managementPort": 9820,
+    "running": true,
+    "pid": 94985,
+    "connectedPlatforms": ["weixin"],
+    "projectsCount": 1,
+    "version": "e64aa04",
+    "issues": []
+  }
+}
+```
+
+### `POST /api/cc-connect/manage` — 修复 / 启停本机 cc-connect
+
+**Split mode owner**: `web`
+
+**功能**: 供 `Settings -> 会话平台` 执行本机管理动作。
+
+**Request Body**:
+
+```json
+{ "action": "prepare-config" }
+```
+
+支持动作：
+
+- `prepare-config`: 修复 `work_dir / args / [management]`
+- `start`: 启动本机 `cc-connect`
+- `stop`: 停止当前 `management` 端口对应的 `cc-connect` 监听进程
+
+**Response** `200 OK`:
+
+```json
+{
+  "ok": true,
+  "action": "start",
+  "data": {
+    "running": true,
+    "pid": 94985
+  }
+}
+```
+
+### `ALL /api/cc-connect/[...path]` — 代理 cc-connect Management API
+
+**Split mode owner**: `web`
+
+**功能**: 把浏览器端请求代理到本机 `cc-connect` 的 Management API（默认 `http://127.0.0.1:9820/api/v1/*`），例如：
+
+- `GET /api/cc-connect/status`
+- `GET /api/cc-connect/projects`
+- `GET /api/cc-connect/projects/:project/sessions`
+
+> 这个代理只负责把 Settings / 会话平台页和本机 `cc-connect` 接起来；本机安装、配置修复、进程启停不走这个代理，而是走上面的 `local-state` / `manage`。
+
+### `GET /api/provider-model-catalog` — 读取 provider 模型目录
 
 **Split mode owner**: `control-plane`
 
-**功能**: 返回已配置的 API Key 状态，以及本机 Provider 的安装/登录检测结果。不会返回真实 key 内容。
+**功能**: 读取指定 provider 的模型目录。默认优先返回缓存，`refresh=1` 时强制刷新。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `provider` | `string` | 必填。`antigravity / native-codex / claude-api / openai-api / gemini-api / grok-api / custom` |
+| `refresh` | `0/1` | 可选。`1` 时强制刷新 |
+
+**Response** `200 OK`:
+```json
+{
+  "entry": {
+    "provider": "native-codex",
+    "transport": "pi-ai",
+    "source": "pi-registry",
+    "fetchedAt": "2026-04-28T09:15:12.000Z",
+    "models": [
+      { "id": "gpt-5.5", "label": "GPT-5.5", "supportsTools": true, "supportsReasoning": true }
+    ]
+  },
+  "cachePath": "/Users/you/.gemini/antigravity/provider-model-catalog.json"
+}
+```
+
+### `POST /api/provider-model-catalog` — 刷新 provider 模型目录
+
+**Split mode owner**: `control-plane`
+
+**功能**: 用 request body 指定 provider、刷新策略，或为 `custom` provider 传入临时的 `baseUrl/apiKey/defaultModel` 覆盖。
+
+**Request Body**:
+```json
+{
+  "provider": "custom",
+  "refresh": true,
+  "customProviderOverride": {
+    "baseUrl": "https://api.deepseek.com",
+    "apiKey": "sk-...",
+    "defaultModel": "deepseek-chat"
+  }
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "entry": {
+    "provider": "custom",
+    "transport": "pi-ai",
+    "source": "remote-discovery",
+    "fetchedAt": "2026-04-28T09:18:00.000Z",
+    "models": [
+      { "id": "deepseek-chat", "label": "deepseek-chat", "supportsTools": true }
+    ]
+  },
+  "cachePath": "/Users/you/.gemini/antigravity/provider-model-catalog.json"
+}
+```
+
+### `POST /api/provider-image-generation` — 触发 provider 图像生成测试
+
+**Split mode owner**: `control-plane`
+
+**功能**: 使用当前 provider 配置触发一次图像生成测试。当前实现支持：
+
+1. `native-codex`（Codex subscription auth + Responses `image_generation` tool）
+2. `openai-api`
+3. `custom`
+
+`custom` 失败时可回退到已配置的 `openai-api`。`native-codex` 若收到小尺寸请求，会在 provider 层自动归一到 `1024x1024` 以满足上游最小像素预算。
+
+**Request Body**:
+
+```json
+{
+  "provider": "native-codex",
+  "prompt": "A compact product icon with a blue square and a clean white background",
+  "size": "512x512"
+}
+```
+
+**Response** `200 OK`:
+
+```json
+{
+  "provider": "native-codex",
+  "model": "gpt-5.5",
+  "size": "1024x1024",
+  "dataUrl": "data:image/png;base64,..."
+}
+```
+
+**配置错误示例** `500`:
+
+```json
+{
+  "error": "Provider openai-api is not configured for image generation"
+}
+```
+
+### `GET /api/api-keys` — Provider 凭据与本机执行工具状态
+
+**Split mode owner**: `control-plane`
+
+**功能**: 返回已配置的 API Key 状态，以及本机 AI provider / execution tool 的安装与登录检测结果。不会返回真实 key 内容。
 
 **Response** `200 OK`:
 ```json
@@ -2494,7 +2783,26 @@ ws.on('message', (data) => {
 {
   "provider": "custom",
   "apiKey": "sk-...",
-  "baseUrl": "https://api.deepseek.com"
+  "baseUrl": "https://api.deepseek.com/v1"
+}
+```
+
+也支持复测已保存接入，而不重新提交密钥：
+
+```json
+{
+  "provider": "custom",
+  "connectionId": "baogaoai-glm",
+  "useStored": true
+}
+```
+
+或：
+
+```json
+{
+  "provider": "openai-api",
+  "useStored": true
 }
 ```
 
@@ -2511,3 +2819,10 @@ ws.on('message', (data) => {
 ```json
 { "status": "error", "error": "base URL invalid" }
 ```
+
+说明：
+
+1. `custom.baseUrl` 现在接受 `https://host` 和 `https://host/v1` 两种写法；服务端会自动归一化，避免 `/v1/v1/models`。
+2. `useStored=true` 时：
+   - API provider 会读取 `~/.gemini/antigravity/api-keys.json`
+   - `custom` 会读取 `AIProviderConfig.customProviders[]` / `activeCustomProviderId`

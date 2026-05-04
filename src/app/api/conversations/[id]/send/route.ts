@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
+  addLocalConversation,
   getOwnerConnection,
   refreshOwnerMap,
   convOwnerMap,
@@ -26,6 +27,15 @@ import {
 } from '@/server/shared/proxy';
 
 const log = createLogger('SendMsg');
+const PROVIDER_TITLES: Record<string, string> = {
+  codex: 'Codex',
+  'native-codex': 'Native Codex',
+  'claude-api': 'Claude API',
+  'openai-api': 'OpenAI API',
+  'gemini-api': 'Gemini API',
+  'grok-api': 'Grok API',
+  custom: 'Custom API',
+};
 
 export const dynamic = 'force-dynamic';
 
@@ -126,6 +136,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           sessionHandle: result.handle,
           stepCount: steps.length,
         });
+      } else {
+        const workspaceUri = backingRun?.workspace || `file://${localWorkspace}`;
+        const workspaceName = localWorkspace.split('/').pop() || 'conversation';
+        addLocalConversation(
+          conversationId,
+          workspaceUri,
+          `${PROVIDER_TITLES[localProvider] || localProvider}: ${workspaceName}`,
+          {
+            provider: localProvider,
+            sessionHandle: result.handle,
+            stepCount: steps.length,
+          },
+        );
       }
 
       return NextResponse.json({ ok: true, data: { cascadeId, state: 'idle', provider: localProvider } });

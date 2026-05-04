@@ -10,7 +10,8 @@ describe('app-url-state', () => {
       conversationTitle: null,
       projectId: null,
       knowledgeId: null,
-      settingsTab: 'provider',
+      opsProposalId: null,
+      settingsTab: 'profile',
       settingsFocus: null,
     });
   });
@@ -27,7 +28,8 @@ describe('app-url-state', () => {
       conversationTitle: 'CEO Office',
       projectId: null,
       knowledgeId: null,
-      settingsTab: 'provider',
+      opsProposalId: null,
+      settingsTab: 'profile',
       settingsFocus: null,
     });
   });
@@ -41,6 +43,7 @@ describe('app-url-state', () => {
         conversationTitle: null,
         projectId: 'proj-42',
         knowledgeId: null,
+        opsProposalId: null,
         settingsTab: 'api-keys',
         settingsFocus: 'third-party-provider',
       }),
@@ -55,6 +58,34 @@ describe('app-url-state', () => {
       conversationTitle: null,
       projectId: null,
       knowledgeId: null,
+      opsProposalId: null,
+      settingsTab: 'profile',
+      settingsFocus: null,
+    });
+  });
+
+  it('round-trips operations URLs with a targeted proposal', () => {
+    const url = buildAppUrl('/', {
+      section: 'operations',
+      utilityPanel: null,
+      conversationId: null,
+      conversationTitle: null,
+      projectId: null,
+      knowledgeId: null,
+      opsProposalId: 'system-improvement-proposal-1',
+      settingsTab: 'profile',
+      settingsFocus: null,
+    });
+
+    expect(url).toBe('/?section=operations&proposal=system-improvement-proposal-1');
+    expect(parseAppUrlState(url.split('?')[1] || '')).toEqual({
+      section: 'operations',
+      utilityPanel: null,
+      conversationId: null,
+      conversationTitle: null,
+      projectId: null,
+      knowledgeId: null,
+      opsProposalId: 'system-improvement-proposal-1',
       settingsTab: 'profile',
       settingsFocus: null,
     });
@@ -68,7 +99,8 @@ describe('app-url-state', () => {
       conversationTitle: 'OpenAI API: demo',
       projectId: null,
       knowledgeId: null,
-      settingsTab: 'provider',
+      opsProposalId: null,
+      settingsTab: 'profile',
       settingsFocus: null,
     });
 
@@ -80,7 +112,8 @@ describe('app-url-state', () => {
       conversationTitle: 'OpenAI API: demo',
       projectId: null,
       knowledgeId: null,
-      settingsTab: 'provider',
+      opsProposalId: null,
+      settingsTab: 'profile',
       settingsFocus: null,
     });
   });
@@ -93,7 +126,8 @@ describe('app-url-state', () => {
       conversationTitle: null,
       projectId: null,
       knowledgeId: null,
-      settingsTab: 'provider',
+      opsProposalId: null,
+      settingsTab: 'profile',
       settingsFocus: null,
     });
 
@@ -104,7 +138,8 @@ describe('app-url-state', () => {
       conversationTitle: null,
       projectId: null,
       knowledgeId: null,
-      settingsTab: 'provider',
+      opsProposalId: null,
+      settingsTab: 'profile',
       settingsFocus: null,
     })).toBe('/');
   });

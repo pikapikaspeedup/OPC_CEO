@@ -9,6 +9,7 @@ import type {
   TemplateStageSummaryFE,
   RoleProgressFE,
   TemplateSummaryFE,
+  PipelineStageProgressFE,
 } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
@@ -46,12 +47,17 @@ type SelectionTarget =
   | { type: 'role'; stageIndex: number; roleKey: string }
   | { type: 'prompt-run'; runId: string };
 
+type DefaultSelectionMode = 'auto' | 'fanout-first';
+type DefaultWorkbenchViewMode = 'list' | 'graph';
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface ProjectWorkbenchProps {
   project: Project;
+  selectedRunId?: string | null;
+  selectedStageId?: string | null;
   agentRuns: AgentRun[];
   templateStages: Record<string, TemplateStageSummaryFE>;
   models: ModelConfig[];
@@ -63,6 +69,63 @@ interface ProjectWorkbenchProps {
   template?: TemplateSummaryFE;
   /** Navigate to a different project (e.g. sub-project from fan-out) */
   onNavigateToProject?: (projectId: string) => void;
+  /** Keep one selection visible instead of allowing the detail pane to collapse to empty. */
+  stickySelection?: boolean;
+  /** How to pick the first visible detail when no external run is selected. */
+  defaultSelectionMode?: DefaultSelectionMode;
+  /** Prefer list when the first layer needs visible execution details instead of graph-only summary. */
+  defaultViewMode?: DefaultWorkbenchViewMode;
+  systemImprovementProposalId?: string | null;
+  systemImprovementProposalTitle?: string | null;
+  onOpenImprovementProposal?: (proposalId: string | null) => void;
+}
+
+function pickDefaultSelection(
+  stages: PipelineStageProgressFE[],
+  standalonePromptRuns: AgentRun[],
+  mode: DefaultSelectionMode,
+): SelectionTarget | null {
+  if (standalonePromptRuns.length > 0 && stages.length === 0) {
+    return { type: 'prompt-run', runId: standalonePromptRuns[0].runId };
+  }
+
+  if (stages.length === 0) {
+    return standalonePromptRuns[0] ? { type: 'prompt-run', runId: standalonePromptRuns[0].runId } : null;
+  }
+
+  const findStageIndex = (predicate: (stage: typeof stages[number]) => boolean) => stages.findIndex(predicate);
+  const runningStageIndex = findStageIndex((stage) => stage.status === 'running');
+  if (runningStageIndex >= 0) {
+    return { type: 'stage', stageIndex: runningStageIndex };
+  }
+
+  const attentionStageIndex = findStageIndex((stage) =>
+    stage.status === 'failed' || stage.status === 'blocked' || stage.gateApproval?.status === 'pending',
+  );
+  if (attentionStageIndex >= 0) {
+    return { type: 'stage', stageIndex: attentionStageIndex };
+  }
+
+  if (mode === 'fanout-first') {
+    const fanOutStageIndex = findStageIndex((stage) =>
+      stage.nodeKind === 'fan-out' || Boolean(stage.branches && stage.branches.length > 0),
+    );
+    if (fanOutStageIndex >= 0) {
+      return { type: 'stage', stageIndex: fanOutStageIndex };
+    }
+  }
+
+  const completedStageWithRunIndex = findStageIndex((stage) => stage.status === 'completed' && !!stage.runId);
+  if (completedStageWithRunIndex >= 0) {
+    return { type: 'stage', stageIndex: completedStageWithRunIndex };
+  }
+
+  const firstStageWithRunIndex = findStageIndex((stage) => !!stage.runId);
+  if (firstStageWithRunIndex >= 0) {
+    return { type: 'stage', stageIndex: firstStageWithRunIndex };
+  }
+
+  return { type: 'stage', stageIndex: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +134,8 @@ interface ProjectWorkbenchProps {
 
 export default function ProjectWorkbench({
   project,
+  selectedRunId: externallySelectedRunId = null,
+  selectedStageId: externallySelectedStageId = null,
   agentRuns,
   templateStages,
   models,
@@ -80,6 +145,12 @@ export default function ProjectWorkbench({
   onEvaluateRun,
   template,
   onNavigateToProject,
+  stickySelection = false,
+  defaultSelectionMode = 'auto',
+  defaultViewMode = 'list',
+  systemImprovementProposalId = null,
+  systemImprovementProposalTitle = null,
+  onOpenImprovementProposal,
 }: ProjectWorkbenchProps) {
   const pipeline = project.pipelineState;
   const stages = useMemo(() => pipeline?.stages ?? [], [pipeline?.stages]);
@@ -204,12 +275,19 @@ export default function ProjectWorkbench({
   const totalCount = stages.length;
 
   // View mode toggle: list vs graph (for non-linear pipelines)
-  const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => showDagTab ? 'graph' : 'list');
+  const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => {
+    if (!showDagTab) return 'list';
+    return defaultViewMode === 'graph' ? 'graph' : 'list';
+  });
 
   // Sync viewMode when switching between linear/non-linear projects
   useEffect(() => {
-    setViewMode(showDagTab ? 'graph' : 'list');
-  }, [showDagTab]);
+    if (!showDagTab) {
+      setViewMode('list');
+      return;
+    }
+    setViewMode(defaultViewMode === 'graph' ? 'graph' : 'list');
+  }, [defaultViewMode, project.projectId, showDagTab]);
 
   // Find pending gate stages for quick review
   const pendingGates = useMemo(
@@ -261,6 +339,45 @@ export default function ProjectWorkbench({
   }, [selection, promptOnlyProject, primaryPromptRun]);
 
   useEffect(() => {
+    if (externallySelectedRunId || externallySelectedStageId || selection) return;
+    const nextSelection = pickDefaultSelection(stages, standalonePromptRuns, defaultSelectionMode);
+    if (nextSelection) {
+      setSelection(nextSelection);
+    }
+  }, [defaultSelectionMode, externallySelectedRunId, externallySelectedStageId, selection, stages, standalonePromptRuns]);
+
+  useEffect(() => {
+    if (externallySelectedRunId) {
+      if (standalonePromptRuns.some((run) => run.runId === externallySelectedRunId)) {
+        setSelection({ type: 'prompt-run', runId: externallySelectedRunId });
+        return;
+      }
+
+      const stageIndex = stages.findIndex((stage) => stage.runId === externallySelectedRunId);
+      if (stageIndex >= 0) {
+        setSelection({ type: 'stage', stageIndex });
+        return;
+      }
+
+      setSelection(null);
+      return;
+    }
+
+    if (externallySelectedStageId) {
+      const stageIndex = stages.findIndex((stage) => stage.stageId === externallySelectedStageId);
+      if (stageIndex >= 0) {
+        setSelection({ type: 'stage', stageIndex });
+        return;
+      }
+
+      setSelection(null);
+      return;
+    }
+
+    setSelection(null);
+  }, [externallySelectedRunId, externallySelectedStageId, project.projectId, stages, standalonePromptRuns]);
+
+  useEffect(() => {
     if (!selectedRunId) {
       setSelectedRunDetail(null);
       return;
@@ -296,15 +413,15 @@ export default function ProjectWorkbench({
       <TabsList className="mb-4">
         <TabsTrigger value="pipeline">
           <Layers className="h-3.5 w-3.5 mr-1" />
-          Pipeline
+          执行流
         </TabsTrigger>
         <TabsTrigger value="operations">
           <Activity className="h-3.5 w-3.5 mr-1" />
-          Operations
+          运行
         </TabsTrigger>
         <TabsTrigger value="deliverables">
           <Package className="h-3.5 w-3.5 mr-1" />
-          Deliverables
+          交付
         </TabsTrigger>
       </TabsList>
 
@@ -316,7 +433,7 @@ export default function ProjectWorkbench({
             <div className="flex items-center gap-2 mb-2">
               <ShieldCheck className="h-4 w-4 text-amber-400" />
               <span className="text-xs font-semibold uppercase tracking-widest text-amber-400/80">
-                Pending Review · {pendingGates.length}
+                待审批 · {pendingGates.length}
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -334,7 +451,7 @@ export default function ProjectWorkbench({
                 >
                   <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
                   {resolveStageTitle(gate.stageId, templateStages, gate.title)}
-                  <span className="text-[10px] text-amber-400/50">→ Review</span>
+                  <span className="text-[10px] text-amber-400/50">→ 去处理</span>
                 </button>
               ))}
             </div>
@@ -344,41 +461,11 @@ export default function ProjectWorkbench({
         {/* Team summary bar */}
         {teamSummary && teamSummary.total > 0 && (
           <div className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/[0.02] px-4 py-2 text-[11px] text-white/50 mb-4">
-            <span>👥 {teamSummary.total} {t('role.summary.roles')}</span>
-            {teamSummary.working > 0 && <span className="text-sky-400">🟢 {teamSummary.working} {t('role.summary.working')}</span>}
-            {teamSummary.completed > 0 && <span className="text-emerald-400">✅ {teamSummary.completed} {t('role.summary.done')}</span>}
-            {teamSummary.pending > 0 && <span className="text-white/40">⏳ {teamSummary.pending} {t('role.summary.queued')}</span>}
-            {teamSummary.awaitingReview > 0 && <span className="text-amber-400">📝 {teamSummary.awaitingReview} {t('role.summary.awaitingReview')}</span>}
-          </div>
-        )}
-
-        {/* View mode toggle for non-linear pipelines */}
-        {showDagTab && (
-          <div className="flex items-center gap-1 mb-4">
-            <button
-              className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors",
-                viewMode === 'list'
-                  ? "bg-white/10 text-white/80"
-                  : "text-white/30 hover:text-white/50"
-              )}
-              onClick={() => setViewMode('list')}
-            >
-              <List className="h-3 w-3" />
-              List
-            </button>
-            <button
-              className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors",
-                viewMode === 'graph'
-                  ? "bg-white/10 text-white/80"
-                  : "text-white/30 hover:text-white/50"
-              )}
-              onClick={() => setViewMode('graph')}
-            >
-              <Network className="h-3 w-3" />
-              Graph
-            </button>
+            <span>{teamSummary.total} {t('role.summary.roles')}</span>
+            {teamSummary.working > 0 && <span className="text-sky-400">{teamSummary.working} {t('role.summary.working')}</span>}
+            {teamSummary.completed > 0 && <span className="text-emerald-400">{teamSummary.completed} {t('role.summary.done')}</span>}
+            {teamSummary.pending > 0 && <span className="text-white/40">{teamSummary.pending} {t('role.summary.queued')}</span>}
+            {teamSummary.awaitingReview > 0 && <span className="text-amber-400">{teamSummary.awaitingReview} {t('role.summary.awaitingReview')}</span>}
           </div>
         )}
 
@@ -410,13 +497,41 @@ export default function ProjectWorkbench({
                     </div>
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
-                        Pipeline Stages
+                        执行阶段
                       </div>
                       <div className="text-[11px] text-white/30">
-                        {completedCount}/{totalCount} completed
+                        {completedCount}/{totalCount} 已完成
                       </div>
                     </div>
                     <div className="ml-auto flex items-center gap-2">
+                      {showDagTab && (
+                        <div className="flex items-center gap-1 rounded-lg border border-white/8 bg-white/[0.03] p-0.5">
+                          <button
+                            className={cn(
+                              'flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+                              viewMode === 'list'
+                                ? 'bg-white/10 text-white/85'
+                                : 'text-white/35 hover:text-white/55',
+                            )}
+                            onClick={() => setViewMode('list')}
+                          >
+                            <List className="h-3 w-3" />
+                            列表
+                          </button>
+                          <button
+                            className={cn(
+                              'flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+                              viewMode === 'graph'
+                                ? 'bg-white/10 text-white/85'
+                                : 'text-white/35 hover:text-white/55',
+                            )}
+                            onClick={() => setViewMode('graph')}
+                          >
+                            <Network className="h-3 w-3" />
+                            拓扑
+                          </button>
+                        </div>
+                      )}
                       <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/8">
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400 transition-all duration-500"
@@ -438,6 +553,10 @@ export default function ProjectWorkbench({
                       const run = stage.runId
                         ? agentRuns.find((r) => r.runId === stage.runId)
                         : undefined;
+                      const isStageFocused = (
+                        (selection?.type === 'stage' || selection?.type === 'role')
+                        && selection.stageIndex === index
+                      );
 
                       return (
                         <div key={`${stage.stageId}-${stage.stageIndex}`} className="relative">
@@ -459,19 +578,28 @@ export default function ProjectWorkbench({
                             }
                             onClick={() =>
                               setSelection((prev) =>
-                                prev?.type === 'stage' && prev.stageIndex === index
-                                  ? null
-                                  : { type: 'stage', stageIndex: index },
+                                stickySelection
+                                  ? { type: 'stage', stageIndex: index }
+                                  : prev?.type === 'stage' && prev.stageIndex === index
+                                    ? null
+                                    : { type: 'stage', stageIndex: index },
                               )
                             }
                             onSelectRole={(roleKey) =>
                               setSelection((prev) =>
-                                prev?.type === 'role' && prev.stageIndex === index && prev.roleKey === roleKey
-                                  ? null
-                                  : { type: 'role', stageIndex: index, roleKey },
+                                stickySelection
+                                  ? (
+                                    prev?.type === 'role' && prev.stageIndex === index && prev.roleKey === roleKey
+                                      ? { type: 'stage', stageIndex: index }
+                                      : { type: 'role', stageIndex: index, roleKey }
+                                  )
+                                  : prev?.type === 'role' && prev.stageIndex === index && prev.roleKey === roleKey
+                                    ? null
+                                    : { type: 'role', stageIndex: index, roleKey },
                               )
                             }
                             onNavigateToProject={onNavigateToProject}
+                            showBranchList={!isStageFocused}
                           />
                         </div>
                       );
@@ -485,14 +613,20 @@ export default function ProjectWorkbench({
                     runs={standalonePromptRuns}
                     onCancel={onCancelRun}
                     selectedRunId={selection?.type === 'prompt-run' ? selection.runId : null}
-                    onSelectRun={(runId) => setSelection({ type: 'prompt-run', runId })}
+                    onSelectRun={(runId) => setSelection((prev) => {
+                      if (!stickySelection) return { type: 'prompt-run', runId };
+                      if (prev?.type === 'prompt-run' && prev.runId === runId) {
+                        return prev;
+                      }
+                      return { type: 'prompt-run', runId };
+                    })}
                     compactTimeline={useCompactPromptRail}
                   />
                 )}
 
                 {stages.length === 0 && standalonePromptRuns.length === 0 && (
                   <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
-                    <div className="text-sm font-medium text-white/70">No execution evidence yet</div>
+                    <div className="text-sm font-medium text-white/70">暂无执行证据</div>
                     <div className="mt-2 text-[12px] leading-6 text-white/40">
                       这个项目还没有 pipeline stage，也没有 prompt run。创建执行后，结果和产物会显示在这里。
                     </div>
@@ -515,6 +649,7 @@ export default function ProjectWorkbench({
                     onOpenConversation={onOpenConversation}
                     onEvaluateRun={onEvaluateRun}
                     onGateApprove={handleGateApprove}
+                    onNavigateToProject={onNavigateToProject}
                   />
                 ) : selection.type === 'prompt-run' && resolvedSelectedRun ? (
                   <AgentRunDetail
@@ -523,6 +658,9 @@ export default function ProjectWorkbench({
                     onCancel={onCancelRun}
                     onEvaluateRun={onEvaluateRun}
                     onOpenConversation={onOpenConversation}
+                    systemImprovementProposalId={systemImprovementProposalId}
+                    systemImprovementProposalTitle={systemImprovementProposalTitle}
+                    onOpenImprovementProposal={onOpenImprovementProposal}
                     executiveMode
                   />
                 ) : selection.type === 'role' && resolvedSelectedRun && selectedRole ? (

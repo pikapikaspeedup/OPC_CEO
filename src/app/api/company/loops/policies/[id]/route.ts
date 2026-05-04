@@ -7,6 +7,7 @@ import {
   upsertCompanyLoopPolicy,
 } from '@/lib/company-kernel/company-loop-policy';
 import type { CompanyLoopPolicy } from '@/lib/company-kernel/contracts';
+import { sanitizeCompanyLoopNotificationChannels } from '@/lib/company-kernel/company-loop-notification-targets';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -27,7 +28,10 @@ export async function GET(
   if (!policy) {
     return NextResponse.json({ error: 'Company loop policy not found' }, { status: 404 });
   }
-  return NextResponse.json(policy);
+  return NextResponse.json({
+    ...policy,
+    notificationChannels: sanitizeCompanyLoopNotificationChannels(policy.notificationChannels),
+  });
 }
 
 export async function PUT(
@@ -57,7 +61,9 @@ export async function PUT(
     maxAgendaPerDailyLoop: Math.max(0, Math.min(100, Math.trunc(body.maxAgendaPerDailyLoop ?? base.maxAgendaPerDailyLoop))),
     maxAutonomousDispatchesPerLoop: Math.max(0, Math.min(10, Math.trunc(body.maxAutonomousDispatchesPerLoop ?? base.maxAutonomousDispatchesPerLoop))),
     allowedAgendaActions: body.allowedAgendaActions?.length ? body.allowedAgendaActions : base.allowedAgendaActions,
-    notificationChannels: Array.isArray(body.notificationChannels) ? body.notificationChannels : base.notificationChannels,
+    notificationChannels: sanitizeCompanyLoopNotificationChannels(
+      Array.isArray(body.notificationChannels) ? body.notificationChannels : base.notificationChannels,
+    ),
     createdAt: existing?.createdAt || body.createdAt || base.createdAt,
     updatedAt: new Date().toISOString(),
   };

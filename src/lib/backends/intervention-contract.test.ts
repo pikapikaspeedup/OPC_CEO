@@ -45,7 +45,7 @@ vi.mock('../bridge/gateway', () => ({
   refreshOwnerMap: vi.fn(),
 }));
 
-import { ClaudeCodeAgentBackend } from './builtin-backends';
+import { LegacyClaudeCodeManualBackend } from './builtin-backends';
 import type { BackendRunConfig, AgentEvent } from './types';
 
 function makeConfig(runId: string): BackendRunConfig {
@@ -74,7 +74,7 @@ describe('intervention-contract', () => {
 
   describe('capabilities', () => {
     it('reports supportsAppend = true despite stepWatch = false', () => {
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const caps = backend.capabilities();
       expect(caps.supportsAppend).toBe(true);
       expect(caps.supportsCancel).toBe(true);
@@ -93,7 +93,7 @@ describe('intervention-contract', () => {
         status: 'completed',
       });
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-nudge'));
 
       await session.append({
@@ -128,7 +128,7 @@ describe('intervention-contract', () => {
         status: 'completed',
       });
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.attach(makeConfig('run-attach'), 'existing-session-123');
 
       expect(session.handle).toBe('existing-session-123');
@@ -151,7 +151,7 @@ describe('intervention-contract', () => {
     });
 
     it('attached session emits started event but does not execute', async () => {
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.attach(makeConfig('run-attach-2'), 'handle-xyz');
 
       // Should not call executeTask
@@ -171,7 +171,7 @@ describe('intervention-contract', () => {
       mockClaudeCodeExecutor.executeTask.mockImplementation(() => new Promise(() => {}));
       mockClaudeCodeExecutor.cancel.mockResolvedValue(undefined);
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-cancel'));
 
       await session.cancel('test cancellation');
@@ -192,7 +192,7 @@ describe('intervention-contract', () => {
       mockClaudeCodeExecutor.executeTask.mockImplementation(() => new Promise(() => {}));
       mockClaudeCodeExecutor.cancel.mockResolvedValue(undefined);
 
-      const backend = new ClaudeCodeAgentBackend();
+      const backend = new LegacyClaudeCodeManualBackend();
       const session = await backend.start(makeConfig('run-cancel-2'));
 
       await session.cancel();

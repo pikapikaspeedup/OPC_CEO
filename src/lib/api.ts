@@ -47,6 +47,8 @@ import type {
   RunCapsuleFE,
   SystemImprovementProposalFE,
   SystemImprovementProposalStatusFE,
+  SystemImprovementReleaseActionFE,
+  SystemImprovementReleaseGateSnapshotFE,
   SystemImprovementRiskFE,
   SystemImprovementLaunchResultFE,
   SystemImprovementSeverityFE,
@@ -983,6 +985,12 @@ export const api = {
     fetchJson<{ proposal: SystemImprovementProposalFE; launch: SystemImprovementLaunchResultFE | null }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
     }),
+  runSystemImprovementCodexProposal: (id: string, payload?: { force?: boolean }) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE; launch: SystemImprovementLaunchResultFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/run-codex`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    }),
   rejectSystemImprovementProposal: (id: string, reason?: string) =>
     fetchJson<{ proposal: SystemImprovementProposalFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
@@ -1001,7 +1009,21 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
-
+  runSystemImprovementReleaseGateAction: (id: string, payload: {
+    action: SystemImprovementReleaseActionFE;
+    actor?: string;
+    note?: string;
+    mergeCommitSha?: string;
+    restartTarget?: string;
+    healthCheckSummary?: string;
+    observationSummary?: string;
+    rollbackReason?: string;
+  }) =>
+    fetchJson<{ proposal: SystemImprovementProposalFE; releaseGate: SystemImprovementReleaseGateSnapshotFE }>(`/api/company/self-improvement/proposals/${encodeURIComponent(id)}/release-gate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
   // CEO / Management
   ceoProfile: () => fetchJson<import('./types').CEOProfileFE>('/api/ceo/profile'),
   updateCeoProfile: (patch: Partial<import('./types').CEOProfileFE>) =>

@@ -539,7 +539,8 @@ export type SystemImprovementSignalSource =
   | 'runtime-error'
   | 'manual-feedback'
   | 'duplicate-work'
-  | 'architecture-risk';
+  | 'architecture-risk'
+  | 'user-story-gap';
 
 export type SystemImprovementArea =
   | 'frontend'
@@ -595,6 +596,128 @@ export interface SystemImprovementTestEvidence {
   createdAt: string;
 }
 
+export interface SystemImprovementExecutionProjectSnapshot {
+  projectId: string;
+  name: string;
+  status: string;
+  workspaceUri?: string;
+  templateId?: string;
+  runCount: number;
+  updatedAt: string;
+}
+
+export interface SystemImprovementExecutionRunSnapshot {
+  runId: string;
+  status: RunStatus;
+  stageId: string;
+  summary?: string;
+  lastError?: string;
+  changedFilesCount: number;
+  blockerCount: number;
+  finishedAt?: string;
+  updatedAt: string;
+}
+
+export interface SystemImprovementExecutionTestSummary {
+  plannedCount: number;
+  evidenceCount: number;
+  passedCount: number;
+  failedCount: number;
+  latestStatus?: 'passed' | 'failed';
+  latestCommand?: string;
+  latestSummary?: string;
+  latestAt?: string;
+}
+
+export interface SystemImprovementCodexExecutionSnapshot {
+  runId: string;
+  taskKey: string;
+  branch: string;
+  worktreePath: string;
+  evidencePath?: string;
+  baseMode?: 'checkpoint' | 'snapshot';
+  baseSha: string;
+  headSha: string;
+  snapshotSha?: string;
+  changedFiles: string[];
+  allowedPathPrefixes: string[];
+  disallowedFiles: string[];
+  scopeCheckPassed: boolean;
+  diffCheckPassed: boolean;
+  validationCount: number;
+  passedValidationCount: number;
+  failedValidationCount: number;
+  decision: 'testing' | 'ready-to-merge' | 'blocked';
+  updatedAt: string;
+}
+
+export interface SystemImprovementMergeGateSummary {
+  status: 'pending' | 'ready-to-merge' | 'blocked';
+  approvalReady: boolean;
+  deliveryReady: boolean;
+  testsReady: boolean;
+  rollbackReady: boolean;
+  reasons: string[];
+}
+
+export type SystemImprovementReleaseGateStatus =
+  | 'not-started'
+  | 'preflight-failed'
+  | 'ready-for-approval'
+  | 'approved'
+  | 'merged'
+  | 'restarted'
+  | 'observing'
+  | 'rolled-back';
+
+export type SystemImprovementReleasePreflightStatus = 'not-run' | 'passed' | 'failed';
+
+export interface SystemImprovementReleasePreflightCheck {
+  label: string;
+  status: 'passed' | 'failed';
+  detail: string;
+  command?: string;
+}
+
+export interface SystemImprovementReleaseCommandBundle {
+  mergeCommand: string;
+  verifyCommand: string;
+  restartCommand: string;
+  rollbackCommand: string;
+  healthCheckCommand?: string;
+}
+
+export interface SystemImprovementReleaseGateSnapshot {
+  status: SystemImprovementReleaseGateStatus;
+  preflightStatus: SystemImprovementReleasePreflightStatus;
+  checks: SystemImprovementReleasePreflightCheck[];
+  commands: SystemImprovementReleaseCommandBundle;
+  patchPath?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  approvalNote?: string;
+  mergedAt?: string;
+  mergeCommitSha?: string;
+  restartedAt?: string;
+  restartTarget?: string;
+  healthCheckSummary?: string;
+  observingAt?: string;
+  observationSummary?: string;
+  rolledBackAt?: string;
+  rollbackReason?: string;
+  updatedAt: string;
+}
+
+export interface SystemImprovementExitEvidenceBundle {
+  project?: SystemImprovementExecutionProjectSnapshot;
+  latestRun?: SystemImprovementExecutionRunSnapshot;
+  codex?: SystemImprovementCodexExecutionSnapshot;
+  testing: SystemImprovementExecutionTestSummary;
+  mergeGate: SystemImprovementMergeGateSummary;
+  releaseGate?: SystemImprovementReleaseGateSnapshot;
+  updatedAt: string;
+}
+
 export interface SystemImprovementProposal {
   id: string;
   status: SystemImprovementProposalStatus;
@@ -612,6 +735,7 @@ export interface SystemImprovementProposal {
   approvalRequestId?: string;
   linkedRunIds: string[];
   testEvidence: SystemImprovementTestEvidence[];
+  exitEvidence?: SystemImprovementExitEvidenceBundle;
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;

@@ -1,5 +1,5 @@
-import { streamQuery } from '../api/client';
-import type { APIMessage, ModelConfig, TokenUsage } from '../api/types';
+import { streamQueryWithRetry } from '../api/retry';
+import type { APIMessage, ModelConfig } from '../api/types';
 
 /**
  * Estimate token count for a message array.
@@ -65,7 +65,7 @@ export async function compactMessages(
 
   let summary: string;
 
-  if (options.model?.apiKey) {
+  if (options.model?.apiKey || options.model?.providerId === 'native-codex') {
     summary = await apiSummarize(middleMessages, options.model, options.signal);
   } else {
     summary = extractiveSummarize(middleMessages);
@@ -106,7 +106,7 @@ async function apiSummarize(
   try {
     const chunks: string[] = [];
 
-    for await (const event of streamQuery({
+    for await (const event of streamQueryWithRetry({
       model: summaryModel,
       systemPrompt: 'You are a conversation summarizer. Be extremely concise.',
       messages: [{ role: 'user', content: prompt }],

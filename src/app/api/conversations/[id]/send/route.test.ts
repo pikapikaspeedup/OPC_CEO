@@ -12,6 +12,7 @@ const { findRunRecordByConversationRefMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/bridge/gateway', () => ({
+  addLocalConversation: vi.fn(),
   getOwnerConnection: vi.fn(),
   refreshOwnerMap: vi.fn(async () => {}),
   convOwnerMap: new Map(),
@@ -38,7 +39,8 @@ vi.mock('@/lib/local-provider-conversations', () => ({
 
 vi.mock('@/lib/api-provider-conversations', () => ({
   isApiConversationProvider: vi.fn((provider: string | null | undefined) => (
-    provider === 'claude-api'
+    provider === 'native-codex'
+    || provider === 'claude-api'
     || provider === 'openai-api'
     || provider === 'gemini-api'
     || provider === 'grok-api'
@@ -62,6 +64,7 @@ vi.mock('@/lib/storage/gateway-db', () => ({
 }));
 
 import {
+  addLocalConversation,
   resolveConversationRecord,
   getOwnerConnection,
   updateLocalConversation,
@@ -94,6 +97,7 @@ describe('POST /api/conversations/[id]/send', () => {
   beforeEach(() => {
     vi.mocked(resolveConversationRecord).mockReset();
     vi.mocked(getOwnerConnection).mockReset();
+    vi.mocked(addLocalConversation).mockReset();
     vi.mocked(updateLocalConversation).mockReset();
     vi.mocked(getExecutor).mockReset();
     vi.mocked(appendLocalProviderConversationTurn).mockClear();
@@ -104,7 +108,7 @@ describe('POST /api/conversations/[id]/send', () => {
     sendMessageMock.mockReset();
   });
 
-  it('routes local native-codex conversations through the local executor', async () => {
+  it('routes local native-codex conversations through the API conversation helper', async () => {
     vi.mocked(resolveConversationRecord).mockReturnValue({
       id: 'local-native-codex-1',
       title: 'CEO Office',
@@ -115,17 +119,14 @@ describe('POST /api/conversations/[id]/send', () => {
     } as never);
     vi.mocked(inferLocalProviderFromConversation).mockReturnValue('native-codex');
 
-    const executeTask = vi.fn(async () => ({
+    vi.mocked(runApiConversationTurn).mockResolvedValue({
       handle: 'native-codex-session-1',
       content: 'native response',
-      steps: [],
-      changedFiles: [],
-      status: 'completed',
-    }));
-    vi.mocked(getExecutor).mockReturnValue({
-      executeTask,
-      appendMessage: vi.fn(),
-    } as never);
+    });
+    vi.mocked(readApiConversationSteps).mockResolvedValue([
+      { type: 'CORTEX_STEP_TYPE_USER_INPUT' },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' },
+    ] as never);
 
     const res = await POST(makeRequest({ text: 'hello native codex' }), params('local-native-codex-1'));
 
@@ -138,15 +139,16 @@ describe('POST /api/conversations/[id]/send', () => {
         provider: 'native-codex',
       },
     });
-    expect(executeTask).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'hello native codex',
-      workspace: '/tmp/native-codex',
-    }));
-    expect(vi.mocked(appendLocalProviderConversationTurn)).toHaveBeenCalledWith(
-      'local-native-codex-1',
+    expect(vi.mocked(runApiConversationTurn)).toHaveBeenCalledWith(
+      'native-codex',
+      '/tmp/native-codex',
       'hello native codex',
-      'native response',
+      undefined,
+      undefined,
+      'local-native-codex-1',
     );
+    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('native-codex-session-1');
+    expect(vi.mocked(appendLocalProviderConversationTurn)).not.toHaveBeenCalled();
     expect(vi.mocked(updateLocalConversation)).toHaveBeenCalledWith('local-native-codex-1', {
       provider: 'native-codex',
       sessionHandle: 'native-codex-session-1',
@@ -164,31 +166,38 @@ describe('POST /api/conversations/[id]/send', () => {
       sessionProvenance: { handle: 'native-codex-session-1' },
     } as never);
 
-    const appendMessage = vi.fn(async () => ({
+    vi.mocked(runApiConversationTurn).mockResolvedValue({
       handle: 'native-codex-session-1',
       content: 'continued response',
-      steps: [],
-      changedFiles: [],
-      status: 'completed',
-    }));
-    vi.mocked(getExecutor).mockReturnValue({
-      executeTask: vi.fn(),
-      appendMessage,
-    } as never);
+    });
+    vi.mocked(readApiConversationSteps).mockResolvedValue([
+      { type: 'CORTEX_STEP_TYPE_USER_INPUT' },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' },
+    ] as never);
 
     const res = await POST(makeRequest({ text: 'continue native codex' }), params('native-codex-session-1'));
 
     expect(res.status).toBe(200);
-    expect(appendMessage).toHaveBeenCalledWith('native-codex-session-1', expect.objectContaining({
-      prompt: 'continue native codex',
-      workspace: '/tmp/native-codex',
-    }));
-    expect(vi.mocked(appendLocalProviderConversationTurn)).toHaveBeenCalledWith(
-      'native-codex-session-1',
+    expect(vi.mocked(runApiConversationTurn)).toHaveBeenCalledWith(
+      'native-codex',
+      '/tmp/native-codex',
       'continue native codex',
-      'continued response',
+      undefined,
+      'native-codex-session-1',
+      'native-codex-session-1',
     );
-    expect(vi.mocked(updateLocalConversation)).not.toHaveBeenCalled();
+    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('native-codex-session-1');
+    expect(vi.mocked(appendLocalProviderConversationTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(addLocalConversation)).toHaveBeenCalledWith(
+      'native-codex-session-1',
+      'file:///tmp/native-codex',
+      'Native Codex: native-codex',
+      expect.objectContaining({
+        provider: 'native-codex',
+        sessionHandle: 'native-codex-session-1',
+        stepCount: 2,
+      }),
+    );
   });
 
   it('returns an HTTP error when a local provider reports failed status', async () => {
@@ -202,20 +211,11 @@ describe('POST /api/conversations/[id]/send', () => {
     } as never);
     vi.mocked(inferLocalProviderFromConversation).mockReturnValue('native-codex');
 
-    vi.mocked(getExecutor).mockReturnValue({
-      executeTask: vi.fn(async () => ({
-        handle: 'native-codex-session-1',
-        content: 'Native Codex request timed out after 90000ms',
-        steps: [],
-        changedFiles: [],
-        status: 'failed',
-      })),
-      appendMessage: vi.fn(),
-    } as never);
+    vi.mocked(runApiConversationTurn).mockRejectedValue(new Error('Native Codex request timed out after 90000ms'));
 
     const res = await POST(makeRequest({ text: 'hello native codex' }), params('local-native-codex-1'));
 
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(500);
     await expect(res.json()).resolves.toEqual({
       error: 'Native Codex request timed out after 90000ms',
     });

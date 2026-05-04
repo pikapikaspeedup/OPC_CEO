@@ -3,7 +3,7 @@ import {
   getSystemImprovementProposal,
   patchSystemImprovementProposal,
 } from './self-improvement-store';
-import { ensureSystemImprovementProjectLaunched } from './self-improvement-execution';
+import { runApprovedSystemImprovementCodexTask } from './self-improvement-codex-execution';
 import { syncSystemImprovementProposalRuntimeState } from './self-improvement-runtime-state';
 
 function buildApprovalMetadata(input: {
@@ -99,7 +99,7 @@ export async function approveSystemImprovementProposal(
       launch: null,
     };
   }
-  const launched = await ensureSystemImprovementProjectLaunched(proposal.id);
+  const launched = await runApprovedSystemImprovementCodexTask(proposal.id);
   return {
     ...launched,
     proposal: await syncSystemImprovementProposalRuntimeState(launched.proposal.id, { proposal: launched.proposal }) || launched.proposal,

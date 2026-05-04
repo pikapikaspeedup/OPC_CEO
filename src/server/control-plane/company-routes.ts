@@ -323,6 +323,16 @@ export function createCompanyControlPlaneRoutes(): RouteDefinition[] {
       },
     },
     {
+      pattern: /^\/api\/company\/loops\/notification-targets$/,
+      handler: async (req) => {
+        if (req.method === 'GET') {
+          const { GET } = await import('@/app/api/company/loops/notification-targets/route');
+          return GET(req);
+        }
+        return methodNotAllowedResponse(['GET']);
+      },
+    },
+    {
       pattern: /^\/api\/company\/loops\/policies$/,
       handler: async (req) => {
         if (req.method === 'GET') {
@@ -456,6 +466,26 @@ export function createCompanyControlPlaneRoutes(): RouteDefinition[] {
       handler: async (req, match) => {
         if (req.method === 'POST') {
           const { POST } = await import('@/app/api/company/self-improvement/proposals/[id]/approve/route');
+          return POST(req, idParams(match[1]));
+        }
+        return methodNotAllowedResponse(['POST']);
+      },
+    },
+    {
+      pattern: /^\/api\/company\/self-improvement\/proposals\/([^/]+)\/run-codex$/,
+      handler: async (req, match) => {
+        if (req.method === 'POST') {
+          const { POST } = await import('@/app/api/company/self-improvement/proposals/[id]/run-codex/route');
+          return POST(req, idParams(match[1]));
+        }
+        return methodNotAllowedResponse(['POST']);
+      },
+    },
+    {
+      pattern: /^\/api\/company\/self-improvement\/proposals\/([^/]+)\/release-gate$/,
+      handler: async (req, match) => {
+        if (req.method === 'POST') {
+          const { POST } = await import('@/app/api/company/self-improvement/proposals/[id]/release-gate/route');
           return POST(req, idParams(match[1]));
         }
         return methodNotAllowedResponse(['POST']);

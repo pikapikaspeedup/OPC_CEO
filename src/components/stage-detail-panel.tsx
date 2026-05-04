@@ -16,6 +16,8 @@ import {
   MessageSquare,
   ShieldCheck,
   FastForward,
+  GitBranch,
+  ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -35,16 +37,17 @@ interface StageDetailPanelProps {
   onOpenConversation?: (id: string, title: string) => void;
   onEvaluateRun?: (runId: string) => Promise<void>;
   onGateApprove?: (nodeId: string, input: { action: 'approve' | 'reject'; reason?: string }) => Promise<void>;
+  onNavigateToProject?: (projectId: string) => void;
 }
 
 const stageStatusConfig: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' | 'info' }> = {
-  pending: { label: 'Pending', tone: 'neutral' },
-  running: { label: 'Running', tone: 'info' },
-  completed: { label: 'Completed', tone: 'success' },
-  failed: { label: 'Failed', tone: 'danger' },
-  blocked: { label: 'Blocked', tone: 'warning' },
-  cancelled: { label: 'Cancelled', tone: 'neutral' },
-  skipped: { label: 'Skipped', tone: 'neutral' },
+  pending: { label: '待开始', tone: 'neutral' },
+  running: { label: '执行中', tone: 'info' },
+  completed: { label: '已完成', tone: 'success' },
+  failed: { label: '失败', tone: 'danger' },
+  blocked: { label: '阻塞', tone: 'warning' },
+  cancelled: { label: '已取消', tone: 'neutral' },
+  skipped: { label: '已跳过', tone: 'neutral' },
 };
 
 function formatElapsedTime(startedAt?: string, completedAt?: string): string | null {
@@ -81,6 +84,7 @@ export default function StageDetailPanel({
   onOpenConversation,
   onEvaluateRun,
   onGateApprove,
+  onNavigateToProject,
 }: StageDetailPanelProps) {
   const config = stageStatusConfig[stage.status] || stageStatusConfig.pending;
   const elapsed = formatElapsedTime(stage.startedAt, stage.completedAt);
@@ -99,6 +103,10 @@ export default function StageDetailPanel({
   const needsReview = run?.result?.needsReview || [];
   const blockers = run?.result?.blockers || [];
   const hasConversationLink = !!(run?.childConversationId || run?.sessionProvenance?.handle);
+  const branches = stage.branches || [];
+  const branchCompletedCount = branches.filter((branch) => branch.status === 'completed').length;
+  const branchRunningCount = branches.filter((branch) => branch.status === 'running').length;
+  const branchIssueCount = branches.filter((branch) => ['failed', 'blocked', 'cancelled'].includes(branch.status) || branch.lastError).length;
 
   // Evaluate-specific state
   const [evalLoading, setEvalLoading] = useState(false);
@@ -183,15 +191,15 @@ export default function StageDetailPanel({
   return (
     <Pane tone="strong" className="p-6">
       <PaneHeader
-        eyebrow="Stage Details"
+        eyebrow="阶段详情"
         title={stageTitle}
         meta={(
           <>
             <StatusChip tone={config.tone}>{config.label}</StatusChip>
-            {isPromptRun && <StatusChip tone="info">Prompt</StatusChip>}
+            {isPromptRun && <StatusChip tone="info">对话运行</StatusChip>}
             {run?.reviewOutcome && <ReviewOutcomeBadge outcome={run.reviewOutcome} />}
             {stage.attempts > 1 && (
-              <StatusChip tone="warning">×{stage.attempts} attempts</StatusChip>
+              <StatusChip tone="warning">×{stage.attempts} 次尝试</StatusChip>
             )}
             {elapsed && <StatusChip>{elapsed}</StatusChip>}
           </>
@@ -222,10 +230,10 @@ export default function StageDetailPanel({
         <div className="mt-5 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] px-5 py-4">
           <div className="flex items-center gap-2 mb-3">
             <ShieldCheck className="h-4 w-4 text-amber-400" />
-            <span className="text-[13px] font-semibold text-amber-200">Gate Awaiting Approval</span>
+            <span className="text-[13px] font-semibold text-amber-200">等待审批</span>
           </div>
           <div className="text-[12px] text-amber-200/60 mb-4">
-            This gate node requires human approval to proceed. Rejecting will cancel the gate and block downstream stages.
+            这个 gate 节点需要人工批准后才能继续。拒绝后会中断该节点并阻塞后续阶段。
           </div>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline"
@@ -233,14 +241,14 @@ export default function StageDetailPanel({
               disabled={gateLoading}
               onClick={(e) => handleGateAction('approve', e)}>
               {gateLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
-              Approve
+              批准
             </Button>
             <Button size="sm" variant="outline"
               className="h-8 rounded-xl border-red-400/20 bg-red-400/8 text-xs font-semibold text-red-300 hover:bg-red-400/15 hover:text-red-200 disabled:opacity-50"
               disabled={gateLoading}
               onClick={(e) => handleGateAction('reject', e)}>
               {gateLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <XCircle className="mr-1.5 h-3.5 w-3.5" />}
-              Reject
+              驳回
             </Button>
           </div>
           {gateError && (
@@ -260,14 +268,14 @@ export default function StageDetailPanel({
           <div className="flex items-center gap-2">
             <ShieldCheck className={cn('h-4 w-4', stage.gateApproval.status === 'approved' ? 'text-emerald-400' : 'text-red-400')} />
             <span className={cn('text-[13px] font-semibold', stage.gateApproval.status === 'approved' ? 'text-emerald-200' : 'text-red-200')}>
-              Gate {stage.gateApproval.status === 'approved' ? 'Approved' : 'Rejected'}
+              {stage.gateApproval.status === 'approved' ? 'Gate 已批准' : 'Gate 已驳回'}
             </span>
             {stage.gateApproval.decidedAt && (
               <span className="text-[10px] text-white/30 ml-auto font-mono">{new Date(stage.gateApproval.decidedAt).toLocaleString()}</span>
             )}
           </div>
           {stage.gateApproval.approvedBy && (
-            <div className="mt-1 text-[11px] text-white/40">By: {stage.gateApproval.approvedBy}</div>
+            <div className="mt-1 text-[11px] text-white/40">处理人: {stage.gateApproval.approvedBy}</div>
           )}
           {stage.gateApproval.reason && (
             <div className="mt-1 text-[12px] text-white/50">{stage.gateApproval.reason}</div>
@@ -278,11 +286,86 @@ export default function StageDetailPanel({
       {/* ── Execution Summary (primary content) ── */}
       {summary && (
         <div className="mt-5 rounded-2xl border border-emerald-400/12 bg-emerald-400/[0.04] px-5 py-4">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-emerald-400/60 mb-2">Execution Summary</div>
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-emerald-400/60 mb-2">执行摘要</div>
           <div
             className="chat-markdown text-[14px] leading-6 text-white/80"
             dangerouslySetInnerHTML={{ __html: renderMarkdown(summary) }}
           />
+        </div>
+      )}
+
+      {branches.length > 0 && (
+        <div className="mt-4 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetaCell label="关联项目">{branches.length}</MetaCell>
+            <MetaCell label="已完成分支">{branchCompletedCount}</MetaCell>
+            <MetaCell label="执行中分支">{branchRunningCount}</MetaCell>
+            <MetaCell label="异常分支">{branchIssueCount}</MetaCell>
+          </div>
+          <div className="rounded-2xl border border-violet-400/12 bg-violet-400/[0.04] px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <GitBranch className="h-4 w-4 text-violet-300/80" />
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-violet-300/70">分支工作面</div>
+                  <div className="mt-1 text-sm font-semibold text-white/80">当前 fan-out 阶段下的子项目执行情况</div>
+                </div>
+              </div>
+              <div className="text-[11px] text-white/40">{branchCompletedCount}/{branches.length} 已完成</div>
+            </div>
+            <div className="mt-4 space-y-2">
+              {branches.map((branch) => {
+                const branchConfig = stageStatusConfig[branch.status] || stageStatusConfig.pending;
+                const branchElapsed = formatElapsedTime(branch.startedAt, branch.completedAt);
+
+                return (
+                  <div key={branch.branchIndex} className="flex items-center gap-3 rounded-xl border border-white/6 bg-white/[0.03] px-3 py-2.5">
+                    <div className={cn(
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border text-[11px] font-semibold',
+                      branch.status === 'completed' ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' :
+                        branch.status === 'running' ? 'border-sky-400/20 bg-sky-400/10 text-sky-300' :
+                          ['failed', 'blocked', 'cancelled'].includes(branch.status)
+                            ? 'border-red-400/20 bg-red-400/10 text-red-300'
+                            : 'border-white/10 bg-white/[0.03] text-white/35',
+                    )}>
+                      {branch.branchIndex + 1}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] font-medium text-white/80">{branch.workPackageName}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/40">
+                        <span className={cn(
+                          'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                          branch.status === 'completed' ? 'bg-emerald-500/12 text-emerald-300' :
+                            branch.status === 'running' ? 'bg-sky-500/12 text-sky-300' :
+                              ['failed', 'blocked', 'cancelled'].includes(branch.status)
+                                ? 'bg-red-500/12 text-red-300'
+                                : 'bg-white/[0.05] text-white/50',
+                        )}>
+                          {branchConfig.label}
+                        </span>
+                        {branchElapsed && <span className="font-mono">{branchElapsed}</span>}
+                        {branch.runId && <span className="font-mono">run {branch.runId.slice(0, 8)}</span>}
+                      </div>
+                      {branch.lastError && (
+                        <div className="mt-1 line-clamp-1 text-[11px] text-red-300/75">{branch.lastError}</div>
+                      )}
+                    </div>
+                    {branch.subProjectId && onNavigateToProject && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-full border-sky-400/20 bg-sky-400/8 px-3 text-[11px] font-semibold text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
+                        onClick={() => onNavigateToProject(branch.subProjectId)}
+                      >
+                        <ExternalLink className="mr-1.5 h-3 w-3" />
+                        打开子项目
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -291,7 +374,7 @@ export default function StageDetailPanel({
         <div className="mt-4 space-y-3">
           {resultEnvelope.decision && (
             <div className="flex items-center gap-3">
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-white/30">Decision</span>
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-white/30">决策</span>
               <span className={cn(
                 'rounded-full px-2.5 py-0.5 text-xs font-semibold',
                 resultEnvelope.decision === 'approved' || resultEnvelope.decision === 'delivered'
@@ -304,7 +387,7 @@ export default function StageDetailPanel({
           )}
           {outputArtifacts.length > 0 && (
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">Output Artifacts</div>
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">输出产物</div>
               <div className="space-y-1.5">
                 {outputArtifacts.map((art, i) => (
                   <div key={i} className="flex items-center gap-3 rounded-xl border border-white/6 bg-white/[0.02] px-3 py-2.5">
@@ -328,7 +411,7 @@ export default function StageDetailPanel({
           {needsReview.length > 0 && (
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-widest text-amber-400/60 mb-2">
-                Needs Review ({needsReview.length})
+                待复核 ({needsReview.length})
               </div>
               <div className="space-y-1.5">
                 {needsReview.map((item, i) => (
@@ -342,7 +425,7 @@ export default function StageDetailPanel({
           {blockers.length > 0 && (
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-widest text-red-400/60 mb-2">
-                Blockers ({blockers.length})
+                阻塞项 ({blockers.length})
               </div>
               <div className="space-y-1.5">
                 {blockers.map((item, i) => (
@@ -359,7 +442,7 @@ export default function StageDetailPanel({
       {/* ── Task Configuration ── */}
       {taskEnvelope && (
         <div className="mt-4 rounded-xl border border-white/6 bg-white/[0.02] px-4 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">Task Configuration</div>
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-2">任务配置</div>
           <div className="text-[13px] leading-6 text-white/60">{taskEnvelope.goal}</div>
           {taskEnvelope.successCriteria && taskEnvelope.successCriteria.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -384,13 +467,13 @@ export default function StageDetailPanel({
 
       {/* ── Metadata grid ── */}
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <MetaCell label="Stage ID">{stage.stageId}</MetaCell>
-        <MetaCell label="Stage Index">{stage.stageIndex}</MetaCell>
-        {stage.startedAt && <MetaCell label="Started">{new Date(stage.startedAt).toLocaleString()}</MetaCell>}
-        {stage.completedAt && <MetaCell label="Completed">{new Date(stage.completedAt).toLocaleString()}</MetaCell>}
+        <MetaCell label="阶段 ID">{stage.stageId}</MetaCell>
+        <MetaCell label="阶段序号">{stage.stageIndex}</MetaCell>
+        {stage.startedAt && <MetaCell label="开始时间">{new Date(stage.startedAt).toLocaleString()}</MetaCell>}
+        {stage.completedAt && <MetaCell label="完成时间">{new Date(stage.completedAt).toLocaleString()}</MetaCell>}
         {stage.runId && (
           <div className="col-span-2">
-            <MetaCell label="Run ID">{stage.runId}</MetaCell>
+            <MetaCell label="运行 ID">{stage.runId}</MetaCell>
           </div>
         )}
       </div>
@@ -398,7 +481,7 @@ export default function StageDetailPanel({
       {/* ── Error display ── */}
       {stage.lastError && (
         <div className="mt-4 rounded-xl border border-red-400/15 bg-red-400/8 px-4 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-red-300/60 mb-1">Error</div>
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-red-300/60 mb-1">错误</div>
           <div className="text-[13px] leading-5 text-red-300/90">{stage.lastError}</div>
         </div>
       )}
@@ -411,7 +494,7 @@ export default function StageDetailPanel({
               className="h-8 rounded-xl border-sky-400/20 bg-sky-400/8 text-xs font-semibold text-sky-300 hover:bg-sky-400/15 hover:text-sky-200 disabled:opacity-50"
               disabled={resumeLoading} onClick={(e) => handleResume('nudge', e)}>
               {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Zap className="mr-1.5 h-3.5 w-3.5" />}
-              Nudge
+              轻推继续
             </Button>
           )}
           {canRestartRole && (
@@ -419,7 +502,7 @@ export default function StageDetailPanel({
               className="h-8 rounded-xl border-emerald-400/20 bg-emerald-400/8 text-xs font-semibold text-emerald-300 hover:bg-emerald-400/15 hover:text-emerald-200 disabled:opacity-50"
               disabled={resumeLoading} onClick={(e) => handleResume('restart_role', e)}>
               {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RotateCw className="mr-1.5 h-3.5 w-3.5" />}
-              Restart Role
+              重启角色
             </Button>
           )}
           {canCancel && (
@@ -427,7 +510,7 @@ export default function StageDetailPanel({
               className="h-8 rounded-xl border-red-400/20 bg-red-400/8 text-xs font-semibold text-red-300 hover:bg-red-400/15 hover:text-red-200 disabled:opacity-50"
               disabled={resumeLoading} onClick={(e) => handleResume('cancel', e)}>
               {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <XCircle className="mr-1.5 h-3.5 w-3.5" />}
-              Cancel
+              取消
             </Button>
           )}
           {canSkip && (
@@ -435,7 +518,7 @@ export default function StageDetailPanel({
               className="h-8 rounded-xl border-white/10 bg-white/5 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white"
               disabled={resumeLoading} onClick={(e) => handleResume('skip', e)}>
               {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <SkipForward className="mr-1.5 h-3.5 w-3.5" />}
-              Skip
+              跳过
             </Button>
           )}
           {canForceComplete && (
@@ -443,7 +526,7 @@ export default function StageDetailPanel({
               className="h-8 rounded-xl border-orange-400/20 bg-orange-400/8 text-xs font-semibold text-orange-300 hover:bg-orange-400/15 hover:text-orange-200 disabled:opacity-50"
               disabled={resumeLoading} onClick={(e) => handleResume('force-complete', e)}>
               {resumeLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FastForward className="mr-1.5 h-3.5 w-3.5" />}
-              Force Complete
+              强制完成
             </Button>
           )}
           {hasConversationLink && onOpenConversation && (
@@ -451,7 +534,7 @@ export default function StageDetailPanel({
               className="h-8 rounded-xl border-sky-400/20 bg-sky-400/8 text-xs font-semibold text-sky-300 hover:bg-sky-400/15 hover:text-sky-200"
               onClick={() => { void handleOpenRunConversation(); }}>
               <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-              Open Conversation
+              打开会话
             </Button>
           )}
           {run?.runId && onEvaluateRun && (
@@ -467,7 +550,7 @@ export default function StageDetailPanel({
               disabled={evalLoading || resumeLoading}
               onClick={handleEvaluate}>
               {evalLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />}
-              {evalStatus === 'running' ? 'Diagnosing...' : evalStatus === 'done' ? 'Done ✓' : 'AI Diagnose'}
+              {evalStatus === 'running' ? '诊断中...' : evalStatus === 'done' ? '已完成' : 'AI 诊断'}
             </Button>
           )}
         </div>
@@ -478,15 +561,15 @@ export default function StageDetailPanel({
         <div className="mt-3 flex items-center gap-3 rounded-xl border border-purple-400/20 bg-purple-400/[0.06] px-4 py-3">
           <Loader2 className="h-4 w-4 animate-spin text-purple-400 shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium text-purple-200">AI Supervisor is analyzing this run...</div>
-            <div className="text-[11px] text-purple-300/60 mt-0.5">This may take 30-90 seconds.</div>
+            <div className="text-[13px] font-medium text-purple-200">AI Supervisor 正在分析这次运行...</div>
+            <div className="text-[11px] text-purple-300/60 mt-0.5">通常需要 30-90 秒。</div>
           </div>
           {run?.supervisorConversationId && onOpenConversation && (
             <Button size="sm" variant="outline"
               className="h-7 rounded-lg border-purple-400/30 bg-purple-400/15 text-[11px] font-semibold text-purple-200 hover:bg-purple-400/25 hover:text-white shrink-0"
               onClick={() => onOpenConversation(run.supervisorConversationId!, 'AI Supervisor Diagnosis')}>
               <MessageSquare className="mr-1 h-3 w-3" />
-              View Live
+              查看实时过程
             </Button>
           )}
         </div>
@@ -494,12 +577,12 @@ export default function StageDetailPanel({
       {evalStatus === 'done' && (
         <div className="mt-3 flex items-center gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.06] px-4 py-3">
           <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-          <div className="text-[13px] font-medium text-emerald-200">Diagnosis complete — check Supervisor Reviews for results.</div>
+          <div className="text-[13px] font-medium text-emerald-200">诊断完成，可到 Supervisor Reviews 查看结果。</div>
         </div>
       )}
       {evalStatus === 'error' && evalError && (
         <div className="mt-3 rounded-xl border border-red-400/15 bg-red-400/10 px-4 py-3 text-[13px] text-red-300">
-          Diagnosis failed: {evalError}
+          诊断失败: {evalError}
         </div>
       )}
 

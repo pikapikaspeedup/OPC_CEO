@@ -234,10 +234,31 @@
 已落地：
 
 - `src/app/page.tsx`
-  - `CEO Office` 改为 `WorkspaceHero + Command Center + Company Cockpit + Recent Threads + Control Center`
-  - 命令线程缩成命令卡片，保留 `Chat / ChatInput / revert / proceed / cancel / model / workflow / skill` 等原能力
-  - 新增页面内 `ceoHistory` 轮询，只拉 CEO 工作区最近线程，不再依赖侧栏加载全部会话
-  - `currentViewTitle` 对 `CEO Office` 固定为页面名，不再被单条线程标题劫持
+- `CEO Office` 改为 `WorkspaceHero + Command Center + Company Cockpit + Recent Threads + Control Center`
+- 命令线程缩成命令卡片，保留 `Chat / ChatInput / revert / proceed / cancel / model / workflow / skill` 等原能力
+- 新增页面内 `ceoHistory` 轮询，只拉 CEO 工作区最近线程，不再依赖侧栏加载全部会话
+- `currentViewTitle` 对 `CEO Office` 固定为页面名，不再被单条线程标题劫持
+
+## 2026-04-27 Projects 真实性收口
+
+本轮不再继续给 `Projects` 加“看起来像完整控制台”的假解释层，而是把 browse 首屏重新收口到真实业务数据：
+
+- 右侧 `项目健康度` 改为 `执行概览`
+  - 不再展示前端 heuristics 算出来的 0-100 健康分
+  - 只展示真实 `project.status / stage counts / run counts / child project count / latest run`
+- 右侧 `负责人` 改为 `执行工作区`
+  - 不再伪造 owner persona、头像 initials、participants
+  - 改为展示真实 workspace 绑定、department type/provider、skills/workflow-bound/templates 数量
+- browse `阶段进度` 不再兜底伪造五步生命周期
+  - 没有真实 runtime stage 时，明确展示“模板已绑定，但尚未生成运行状态”
+- 部门上下文移除 `fallback refs`
+  - 该值是内部 `skillRefs` fallback 计数，不再作为产品指标暴露
+- browse run drilldown 改为显式携带 `projectId`
+  - page 层保留 `api.agentRun(runId)` fallback，避免历史 run 因全局缓存缺失而打不开详情
+- browse filter/tree 再收口
+  - `进行中` 只保留真实 `active`
+  - `查看其余 N 个部门` 现在展开全部 `openTreeSections`
+  - 搜索 / 筛选改变后，如果当前 focus 已不在可见树中，会自动清理失效 focus
 - `src/components/sidebar.tsx`
   - CEO 侧栏历史列表删除
   - 改为 `Cockpit mode` 摘要卡 + `打开线程工作台 / 查看 OPC / 打开 Ops` 三个快速跳转
@@ -258,6 +279,47 @@
 - `Control Center` 和 `Company Cockpit` 的职责开始分离
 
 第五阶段仍未完成的差距：
+
+## 2026-04-27 Ops 收口补记
+
+本轮已补上 `Ops` 页内部首层重构，不再停留在“旧 widget 纵向拼接”的过渡态：
+
+- `src/app/page.tsx`
+  - `Ops` header 改为标题 + badge + 搜索入口，不再把 Provider / API Key 按钮放成首层主 CTA
+- `src/components/ops-dashboard.tsx`
+  - 新增聚合式 Ops dashboard，首层改成 `4 KPI + 调度任务 + 系统状态 + MCP / 配额 / Tunnel + 资产管理 + 最近活动`
+  - 统一到与 `Projects` 相同的紧凑浅色驾驶舱密度
+- `src/components/scheduler-panel.tsx`
+  - 增加受控 `createRequestToken` 入口，允许 Ops 首层 `新建任务` 直接复用原有 scheduler 创建弹窗
+- 保留深层能力但后移：
+  - `SchedulerPanel`
+  - `AssetsManager`
+  - `AnalyticsDashboard`
+  - `CodexWidget`
+
+结果：
+
+- `Ops` 已从“工具箱首页”收口为“运营驾驶舱首页”
+- 首屏优先回答调度是否正常、哪里阻塞、配额是否安全、连接是否可用、资产与活动发生了什么
+- 老的重型面板没有删除，只是退到第二层，减少与首页叙事竞争
+
+同日第二轮继续收口：
+
+- `src/components/ops-dashboard.tsx`
+  - 首屏继续压缩，KPI、panel header、empty state、表头全部改为更接近运维控制台的密度
+  - `系统状态 / MCP / 配额 / Tunnel` 从 summary card 改为 compact table
+  - `调度任务` 行内动作从 icon-only 改成 `立即执行 / 启用-暂停 / 调度治理`
+  - `高级调度治理 / 资产 Studio / 扩展工具` 三段旧 appendix 合并成一个 `深层工作台`
+  - 资产首页开始同屏显示 `已接入 / 待导入`，最近活动改成 `类别 + 状态 + 详情` 的可扫读结构
+- `src/app/page.tsx`
+  - `Ops` header 搜索明确标注为 `本页` 过滤，不再假装是全局 command bar
+- 验收补充：
+  - `bb-browser` 仍优先尝试，但 `snapshot / eval` 在 `:3999` 上继续只返回空白 `body`
+  - 因而回退到一次性 Playwright，对同一 `:3999` 页面断言：
+    - `深层工作台` 替代旧三段 appendix
+    - `新建任务` 可打开既有 `New Scheduled Job`
+    - `资产工作台` 可展开全量资产面板并显示 `可执行资产`
+    - 无 console error / page error / bad response
 
 - `Projects / Knowledge / Ops / Settings` 还没有按参考图逐页做结构级 1:1 收口
 - `CEODashboard` 内部仍有部分历史深色 class 和高密度区块，后续还需要继续去遗留
@@ -317,6 +379,45 @@ web 角色隔离已落地：
 
 - `ProjectsPanel / SettingsPanel / SchedulerPanel` 深层内部还有部分历史 `text-white/*`、`bg-white/*` 类，当前由浅色 token 覆盖和局部替换兜住，后续可以继续按组件逐步清扫
 - `WS` ingress 仍会在订阅 Antigravity conversation 时连接本机 Language Server；这是当前 web ingress 设计，不属于 scheduler/project registry 后台 worker 问题
+
+## 第七阶段实现范围
+
+第七阶段处理第六阶段后的壳层分叉问题：`CEO Office` 已经使用独立 Apple-style 左侧导航壳，但 `Projects / Knowledge / Ops / Settings` 仍通过旧 `AppShell Header + Sidebar + WorkspaceHero` 过渡结构承载，导致用户看到两套主页面产品语言。
+
+已落地：
+
+- 新增 `src/components/workspace-concept-shell.tsx`
+  - 统一左侧 `OPC` 导航、用户卡片、公司入口和移动端主导航
+  - 统一主页面标题区、状态 badge、页面动作和右上工具区承载方式
+  - 复用 CEO Office 的浅色 Apple-style 视觉方向：浅灰背景、蓝色强调、白色卡片、低对比边框
+- `src/app/page.tsx`
+  - `Projects / Knowledge / Ops / Settings` 切到 `WorkspaceConceptShell`
+  - 非 CEO 主页面不再渲染旧顶部 pill nav，也不再渲染旧 Sidebar
+  - 页面级 `WorkspaceHero` 改为紧凑标题 + 指标卡，避免 Header/Hero/子组件三层标题重复
+  - 保留原业务组件：`ProjectsPanel`、`KnowledgeWorkspace`、`SchedulerPanel`、`AnalyticsDashboard`、`AssetsManager`、`SettingsPanel`
+- URL 初始化竞态修复
+  - CEO 自动打开最近线程的 effect 必须等待 URL state 初始化完成
+  - 当当前打开的是 Settings utility panel 时，不再被 CEO 自动线程覆盖
+  - 直达 `?section=projects`、`?section=knowledge`、`?section=operations`、`?panel=settings` 能稳定停留在目标页面
+
+第七阶段结果：
+
+- 五个一级主页面的外壳层重新统一到同一套 Apple-style 主导航语言
+- `CEO Office` 不再是唯一遵循设计稿方向的页面
+- `Projects / Knowledge / Ops / Settings` 的深层业务组件仍保留现有能力，后续可继续按组件清理历史暗色 class 和重复局部标题
+
+验证记录：
+
+- `npx eslint src/app/page.tsx src/components/workspace-concept-shell.tsx`
+- `npx tsc --noEmit --pretty false`
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts`
+- `npm run build`
+- 浏览器验证优先尝试 `bb-browser`；`open` 成功，但 `snapshot/eval/screenshot` daemon 请求超时，因此退回一次性 Playwright 脚本，只连接既有 `:3000` 服务，不启动新服务
+- Playwright 验证：
+  - `?section=projects`：`h1=Projects`，`hasOldTopNav=false`，`hasConceptRail=true`
+  - `?section=knowledge`：`h1=Knowledge`，`hasOldTopNav=false`，`hasConceptRail=true`
+  - `?section=operations`：`h1=Ops`，`hasOldTopNav=false`，`hasConceptRail=true`
+  - `?panel=settings&tab=provider`：`h1=Settings`，`hasOldTopNav=false`，`hasConceptRail=true`
 
 ## 第七阶段实现范围
 
@@ -598,3 +699,323 @@ web 角色隔离已落地：
 - `npm run lint -- src/components/ceo-dashboard.tsx src/app/page.tsx src/components/sidebar.tsx src/lib/home-shell.ts src/lib/home-shell.test.ts src/components/projects-panel.tsx src/components/settings-panel.tsx src/lib/providers/provider-availability.ts src/lib/providers/provider-availability.test.ts src/components/ceo-office-settings.tsx src/components/assets-manager.tsx src/components/ceo-profile-settings-tab.tsx` 通过
 - `npm test -- src/lib/providers/provider-availability.test.ts src/lib/home-shell.test.ts` 通过，`11 tests passed`
 - `npm run build` 通过
+
+## Phase 14：Projects 页面 deep pass
+
+本阶段按 `docs/design/mockups/apple-reference-pages-2026-04-23/projects.png` 先完成一个主页面的深层收口，并把 TODO 固化到 `docs/design/projects-page-todos-2026-04-26.md`。
+
+已落地：
+
+- `src/app/page.tsx`
+  - Projects 页移除页面级右侧 `Execution queue`，避免 `page.tsx` 和 `ProjectsPanel` 分别拥有半个项目页面。
+  - Projects 页只保留壳层、顶部指标、部门配置 banner 和 `ProjectsPanel` 主工作面。
+- `src/components/projects-panel.tsx`
+  - Browse mode 从空标题区改成完整 Projects 工作台。
+  - 新增项目树：搜索、All/Active/Attention/Done 筛选、按部门/状态分组、进度条、编辑、归档。
+  - 新增执行工作台：默认聚焦需要关注或活跃项目，展示目标、状态、模板、进度、活跃 runs、风险、子项目和 pipeline 阶段。
+  - 新增右侧面板：项目健康评分、负责人/部门画像、关联推进、快捷操作。
+  - 保留主页面可达操作：创建项目、AI Generate Pipeline、派发、编辑、归档、删除、打开详情。
+  - `lg` 断点启用两列、`xl` 断点启用三列，避免 1512px 桌面宽度下项目树独占整行。
+  - Detail mode 保留现有 `Pipeline / Operations / Deliverables` 工作台，不新增 scheduler/worker 轮询副作用。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/projects-panel.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- `bb-browser open http://localhost:3000/?section=projects` 成功
+- `bb-browser eval` 验证 Project browse surface 已渲染项目树、项目健康、快捷操作，并且旧 `风险与最近推进` 队列不再出现
+- `bb-browser screenshot /tmp/opc-projects-page-bb-2.png` 验证 1512px 桌面宽度下三列布局成立
+- `bb-browser` 点击 `打开详情` 后进入 `?section=projects&project=...`，`Pipeline / Operations / Deliverables` 可见，`bb-browser errors` 无 JS 错误
+- 详情截图：`/tmp/opc-projects-detail-bb.png`
+
+## Phase 15：Projects 页面设计稿二次收口
+
+本阶段继续按 `docs/design/mockups/apple-reference-pages-2026-04-23/projects.png` 收紧 Projects 主页面完整度，重点是“更像参考稿，同时不丢功能”。
+
+已落地：
+
+- `src/app/page.tsx`
+  - Projects 顶部指标改为参考稿风格的四张紧凑 KPI：进行中项目、阻塞项目、本周完成、待评审。
+  - `xl` 断点起四张 KPI 同排，避免 1512px 桌面宽度下指标区变成两行大卡。
+- `src/components/projects-panel.tsx`
+  - 移除 browse body 内二级 `项目执行总览` hero，正文直接进入三栏工作面。
+  - 项目树改成更密的部门树行项目：支持搜索、筛选、聚焦态、进度、状态、编辑和归档/恢复。
+  - 新增 browse focus state：点击项目行只更新中间工作台；`打开详情` 才进入完整 detail mode。
+  - 执行工作台补齐参考稿结构：标题/状态/目标、阶段进度、最近运行、阻塞项、下一步。
+  - 右侧栏按参考稿顺序收敛为项目健康度、负责人、关联运行、快捷操作。
+  - 保留主页面动作入口：创建项目、AI Generate、派发、新建运行、编辑、归档/恢复、删除、打开详情、run selection。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/projects-panel.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- `bb-browser` 在临时 web-only `http://127.0.0.1:3999/?section=projects` 验证：
+  - Projects 主页面包含 `进行中项目 / 阻塞项目 / 本周完成 / 待评审 / 项目树 / 执行工作台 / 阶段进度 / 最近运行 / 阻塞项 / 下一步 / 项目健康度 / 负责人 / 关联运行 / 快捷操作`
+  - 四张 KPI 在验证视口同排
+  - 旧 `项目执行总览` 二级 hero 和旧外置 `风险与最近推进` 队列均不存在
+  - 点击项目行后 URL 仍停留在 `?section=projects`
+  - 点击 `打开详情` 后进入 `?section=projects&project=...`，`Pipeline / Operations / Deliverables` 可见
+  - `bb-browser screenshot /tmp/opc-projects-round2-final.png` 完成截图
+  - `bb-browser errors` 无 JS 错误
+
+## Phase 16：Projects 页面设计稿第三轮密度收口
+
+本阶段继续按 `docs/design/mockups/apple-reference-pages-2026-04-23/projects.png` 收紧 Projects 主页面剩余差异，目标是让页面顶部和主工作面更接近参考稿，同时保留第二轮补齐的所有项目功能。
+
+已落地：
+
+- `src/components/workspace-concept-shell.tsx`
+  - 新增 `headerVariant="compact"`，用于 Projects 这类需要更密页面头的主页面。
+  - compact 模式把 `Projects` 和 `项目总览` 放在同一行，降低 H1 尺寸和标题区高度。
+- `src/app/page.tsx`
+  - Projects 顶部加入真实搜索框，和 `ProjectsPanel` 的项目树搜索共享状态。
+  - 顶部加入蓝色主按钮 `新建项目`，直接打开既有创建项目 Dialog。
+  - KPI 卡继续收紧为白底低半径指标块：左侧图标、较小数值、低对比边框。
+- `src/components/projects-panel.tsx`
+  - 接收受控搜索值和顶部创建请求 token，不复制创建逻辑。
+  - 主工作面进一步降低 gap、radius、padding；项目树、执行工作台、右栏卡片密度更接近参考稿。
+  - Detail mode 的部门上下文优先使用页面已加载的 departments Map；只有组件独立使用且未传入 Map 时才回退请求，避免当前页面详情切换时对受限 workspace 额外打出 403。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- 临时 web-only `http://127.0.0.1:3999/?section=projects` 验证：
+  - compact header 渲染 `Projects` + `项目总览`
+  - 旧 `项目、部门与执行链路的公司工作面。` 和旧 `打开 Ops` 页面动作均不存在
+  - 顶部搜索和项目树搜索同步，`baogaoai` 过滤为 `1 visible / 67 total`
+  - 顶部 `新建项目` 打开既有创建项目 Dialog
+  - `打开详情` 进入 `?section=projects&project=...`，详情内容仍显示 `结果概览` / `OUTPUT EVIDENCE`
+  - Final browser run 没有 bad HTTP responses 和 console/page errors；关闭浏览器时仅出现预期的 SSE `/api/approval/events` abort
+- 截图：`/tmp/opc-projects-round3-final.png`
+- 浏览器验证优先使用 `bb-browser`；`open` 与早期 DOM 验证成功，但 daemon 后续在刷新/截图标签页时超时，最终截图和完整交互断言回退到项目已有 Playwright 依赖。
+
+## Phase 17：Projects 页面视觉精修
+
+本阶段处理第三轮后剩余的参考稿细节差异，继续保持功能不丢失。
+
+已落地：
+
+- `src/app/page.tsx`
+  - Projects 顶部 action cluster 移除额外 `部门设置`，只保留搜索和主操作 `新建项目`。
+  - 部门配置提示条压薄为低高度 notice，降低对主工作面的占用。
+- `src/components/projects-panel.tsx`
+  - 新增 `onOpenDepartmentSettings`，把部门配置入口迁入右侧快捷操作，避免功能丢失。
+  - 右侧 `项目健康度` 从圆环 + 纵向 progress bars 改成参考稿方向的圆环 + 图例数值。
+  - 当真实项目只有 0/1 或少量 stage 时，仍渲染五步视觉轨道，并把真实 stage 状态合并到轨道中。
+  - 快捷操作从泛化 `更多操作` 改为明确 `AI 生成`，并保留新建运行、创建项目、编辑项目、部门设置、删除项目。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- 临时 web-only `http://127.0.0.1:3999/?section=projects` 验证：
+  - header 在 KPI 前不再出现 `部门设置`
+  - `部门设置` 仍在右侧快捷操作可达
+  - slim setup notice、health legend 和 top `新建项目` 均可见
+  - 稀疏项目显示五步轨道：`目标确认 / Coding Worker / 结果验证 / 交付归档 / 复盘优化`
+  - 顶部 `新建项目` 打开既有创建项目 Dialog
+  - `打开详情` 进入 `?section=projects&project=...` 并显示 detail 内容
+  - no bad HTTP responses / no console or page errors；关闭浏览器时仅出现预期的 SSE `/api/approval/events` abort
+- `bb-browser` 优先用于打开、DOM 检查、截图和错误检查；因长期 profile 中混有旧 `:3999` 标签，最终交互断言使用一次性 Playwright。
+- 截图：`/tmp/opc-projects-round4-final.png`、`/tmp/opc-projects-round4-final-playwright.png`
+
+## Phase 18：Projects 默认工作面收敛
+
+本阶段处理用户指出的“还有大量没完成”，重点不是继续堆控件，而是把默认首屏从真实数据直出改成参考稿式的代表性工作面。
+
+已落地：
+
+- `src/app/page.tsx`
+  - Projects header 不再显示旧的 setup 状态 chip，顶部保留 `Projects / 项目总览`、搜索和 `新建项目`。
+  - KPI tile 由图标 + 数值 + 细节同行改为参考稿更接近的纵向堆叠。
+- `src/components/projects-panel.tsx`
+  - 新增 noisy project heuristics，默认首屏降权 `test / Auto-Trigger / file_Users...` 一类原始噪音项目。
+  - 项目树默认只展示更有代表性的部门区块；如果存在足够的业务项目区块，则不再把 `backend/test` 放进首屏。
+  - 默认 workbench focus 改为跟随可见项目树，不再落到树外隐藏项目。
+  - 移除 `All / Active / Attention / Done` 筛选 chips，保持左栏密度更接近参考稿。
+  - workbench 右上角 `...` 变成真实下拉动作菜单，保留编辑项目、新建运行、归档/恢复、删除。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- `bb-browser` 先用于本地打开 `:3999`，但其长期 daemon profile 混入旧 `:3999` 标签，导致抓到的页面状态不可作为最终验收依据
+- 最终使用一次性 Playwright 对重新 build 的 `http://127.0.0.1:3999/?section=projects` 做干净断言：
+  - 顶部仍有搜索和 `新建项目`
+  - 默认树区块包含 `WorkSatation / AI情报工作室 / 线索跟踪部门 / Openmind`
+  - 默认焦点不再落到 hidden `test` / `Auto-Trigger` 项目
+  - `项目健康度 / 快捷操作 / 已完成项目 / 打开详情` 仍可用
+  - 无 bad HTTP responses / 无 console 和 page errors
+- 最终截图：`/tmp/opc-projects-round5-playwright-final.png`
+
+## Phase 19：Projects 业务回归修复
+
+本阶段处理 review 中确认的真实业务回归，而不是继续做视觉收口。
+
+已落地：
+
+- `src/components/projects-panel.tsx`
+  - 历史项目过滤改回可浏览闭环：`completed / archived / cancelled` 会在树中按 `Completed / Archived / Cancelled` 分组显示，不再切到空树。
+  - 左栏 filter 按钮改成下拉菜单，恢复 `进行中` 入口，同时保留 `全部 / 关注项 / 历史项目`。
+  - 默认首屏部门树继续只显示代表区块，但补回 `查看其余 N 个部门 / 收起其他部门`，避免后续部门完全消失。
+- `src/app/page.tsx`
+  - Projects 页点击 run 时不再只写入 `selectedAgentRunId`；现在会导航到目标 project detail。
+- `src/components/project-workbench.tsx`
+  - 新增外部 `selectedRunId` 对齐逻辑，Projects browse mode 点击 run 后，detail workbench 会自动聚焦到匹配的 stage 或 prompt run。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- `bb-browser` 先用于本地打开 `:3999`，但其 daemon 仍把新页面绑定到历史 `:3999` 标签集合，页面状态不适合作最终回归验收
+- 最终使用一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects` 做回归断言：
+  - filter menu 含 `全部项目 / 进行中 / 关注项 / 历史项目`
+  - `历史项目` 能渲染 closed sections
+  - 树存在 `查看其余 N 个部门` 并能切换为 `收起其他部门`
+  - 搜索 `baogaoai` 后点击 browse-mode run 会进入 `?section=projects&project=...`，并显示选中 run 的 detail 内容
+  - 无 bad HTTP responses / 无 console 和 page errors
+- 截图：`/tmp/opc-projects-review-fixes-final.png`、`/tmp/opc-projects-run-drilldown-fix.png`
+
+## Phase 20：Projects 历史 run 证据恢复
+
+本阶段处理用户指出的“老详情页里有 pipeline 运行情况，新页面里不见了”。
+
+根因不是后端缺数据，而是前端在两个地方仍然错误依赖全局分页 `agentRuns`：
+
+- browse surface 的 `最近运行 / 关联运行 / 健康度 / 最近活动时间`
+- detail surface 的 `ProjectWorkbench`
+
+虽然组件已经单独请求了 project-scoped runs，但旧代码没有把这批 scoped runs 真正传给上述渲染链路。于是当历史项目的 run 不在全局 `/api/agent-runs?pageSize=100` 首屏里时，页面就只剩 pipeline 摘要，丢掉 run-backed evidence。
+
+已落地：
+
+- `src/components/projects-panel.tsx`
+  - 引入 focused project runs 状态，当前 focus project 无论处于 browse 还是 detail mode，都单独拉取 `api.agentRunsByFilterAll({ projectId })`。
+  - browse mode 的 `最近运行 / 关联运行 / 健康度 / 最近活动时间` 改为优先使用 focused project runs，而不是只看全局分页 runs。
+  - detail mode 的 `viewProjectRuns` 改为优先使用 focused project runs。
+  - detail mode 渲染 `ProjectWorkbench` 时，传入 `viewProjectRuns`，不再传全局 `agentRuns`。
+
+验证结果：
+
+- `npx eslint src/components/projects-panel.tsx src/app/page.tsx src/components/project-workbench.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- 数据验证：
+  - root project `19885e25-248b-4e17-ae37-2653b4018598` 的 scoped run `857995d5-a1bf-4067-84bf-deae5f91707d` 不在全局 `/api/agent-runs?pageSize=100`
+  - 但存在于 `/api/agent-runs?projectId=19885e25-248b-4e17-ae37-2653b4018598&pageSize=200`
+- 浏览器验证：
+  - 先尝试 `bb-browser`，但当前 session 仍绑定到外部 `eastmoney` 页面，无法作为本地 Projects 验收依据
+  - 回退到一次性 Playwright，仅连接既有 `http://127.0.0.1:3000`
+  - 验证 root detail 已恢复 `最近执行 / 结果概览 / output evidence / 关注项`
+  - 验证 pipeline detail 已恢复 `Batch Planner / Research Fan-Out / Branches / Research Join`
+- 截图：`/tmp/opc-projects-root-detail-evidence.png`、`/tmp/opc-projects-detail-run-evidence.png`
+
+## Phase 21：Projects 详情降层与 Fan-Out 一层融合
+
+本阶段处理用户指出的“项目详情太深，要点多次才能看到真正详情”，尤其是 Fan-Out root project 的第一层工作面不够完整。
+
+已落地：
+
+- `src/components/projects-panel.tsx`
+  - 把 `ProjectWorkbench` 前移到 detail mode 第一层，不再要求用户先进入摘要后再额外点 stage 才能看到真实 stage 详情。
+  - 新增 `关联项目` 横向 rail，把 root overview 和 fan-out child projects 放到同一屏第一层。
+  - detail mode 进入时会推断首个有效焦点；当项目包含 child projects / branch fan-out 时，优先聚焦 fan-out stage。
+  - 对 `selectedRunId` 做 project-scope 收口：只有当 run 真属于当前 `viewProjectRuns` 时才采用，避免页面级全局 run 选择把项目详情带进空选中态。
+- `src/components/project-workbench.tsx`
+  - 支持外部 `selectedStageId`，允许无 `runId` 的 fan-out stage 直接作为默认焦点。
+  - 新增 `defaultSelectionMode="fanout-first"` 和 `defaultViewMode="list"`，保证 fan-out detail 默认就在可读的列表工作面上。
+  - `stickySelection` 下，stage / role / prompt-run 不会因为重复点击而把 detail panel 折叠回空白。
+
+验证结果：
+
+- `npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/app/page.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- `bb-browser` 快照确认第一层 detail 同时包含 `Fan-Out 项目直接放在第一层`、`Research Fan-Out stage`、`Stage Details`、`Open sub-project`
+- 一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 的断言确认：
+  - `Research Fan-Out` 默认选中
+  - `Stage Details` 在第一层同屏可见
+  - branch 列表和子项目打开动作未丢失
+- 截图：`/tmp/opc-projects-round8-final.png`
+
+## Phase 22：Projects 详情减重与 Fan-Out 工作面聚焦
+
+本阶段处理上一轮 detail 改造后剩余的视觉冗余问题，目标是在不丢功能的情况下，让第一层 detail 更像真正的工作台而不是多个重复卡片的堆叠。
+
+已落地：
+
+- `src/components/projects-panel.tsx`
+  - 顶部 detail 摘要从四张独立卡压成单条 summary strip，保留 `最近执行 / 结果摘要 / 交付产物 / 关注项`，减少首屏卡片噪音。
+  - `关联项目` 从大卡片 rail 改成 compact focus strip，只保留主项目 / 子项目切换所需的最小信息。
+- `src/components/project-workbench.tsx`
+  - `列表 / 拓扑` 切换并入阶段区标题行，去掉额外的一整行模式切换。
+  - 选中 fan-out stage 时，左侧阶段导航不再重复展开 branch 列表；branch 主内容改由右侧 detail pane 承担。
+  - workbench 顶部 tabs 和阶段工作区标签统一为中文：`执行流 / 运行 / 交付`、`执行阶段`。
+- `src/components/pipeline-stage-card.tsx`
+  - 阶段状态、分支标签、角色数量、`打开` 按钮改为中文。
+  - fan-out stage header 增加分支数量 badge，左侧导航在不展开 branch 列表时仍能看出 fan-out 规模。
+- `src/components/stage-detail-panel.tsx`
+  - `阶段详情` 本地化为中文。
+  - 当选中 fan-out stage 且没有直属 run 摘要时，右侧优先渲染 `分支工作面`：关联项目数、完成分支、执行中分支、异常分支，以及每个子项目的时长 / run id / 打开子项目动作。
+
+验证结果：
+
+- `npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/pipeline-stage-card.tsx src/components/stage-detail-panel.tsx src/app/page.tsx src/components/workspace-concept-shell.tsx` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- `bb-browser` 先用于本地打开 `:3999`，但当前环境下 snapshot 仍只返回不完整 `body` 骨架，无法作为最终布局验收依据
+- 一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 断言通过：
+  - `Research Fan-Out` 默认选中
+  - 第一层 detail 已包含 `关联项目 / 主项目 / 结果摘要 / 交付产物 / 关注项`
+  - 右侧 detail 已包含 `分支工作面` 和 `打开子项目`
+  - 无 bad HTTP responses / 无 console 和 page errors
+- 截图：`/tmp/opc-projects-round9-optimized.png`
+
+## Phase 23：Settings 页面结构收口
+
+本阶段把 `Settings` 从“旧壳层叠一个 panel”的过渡态，收口到和 `Projects / Ops / Knowledge` 同方向的浅色配置中心，同时保留原有 Provider / API Keys / Scene / MCP / Messaging 功能。
+
+已落地：
+
+- `src/app/page.tsx`
+  - `Settings` 入口默认 tab 从 `provider` 改为 `profile`，直达 `?panel=settings` 时优先展示个人偏好。
+  - 移除旧的顶部三张 metrics，避免页面首屏继续停留在过渡态 dashboard。
+- `src/lib/app-url-state.ts`
+  - URL state 默认 `settingsTab` 改为 `profile`，并同步测试用例。
+- `src/components/settings-panel.tsx`
+  - 外层重构为 `主配置区 + 右侧摘要轨` 的两栏布局。
+  - 顶部 tabs 改成参考稿方向的 segmented control，不再换行；`消息平台` 等长标签保持同一行。
+  - 新增右侧 `当前配置 / 活跃 Provider / 连接状态 / 当前标签` 四个摘要卡，让 Settings 首屏具备上下文而不是空白表单。
+  - `Profile` 成为默认首屏，其余 Provider / API Keys / Scene / MCP / Messaging 全部保留。
+- `src/components/ceo-profile-settings-tab.tsx`
+  - `CEO Profile` 重排为 `个人信息 / 沟通偏好 / 反馈信号` 三段，更接近设计稿的个人偏好页结构。
+  - 下拉控件触发器直接显示中文标签，不再把内部枚举值 `normal / balanced / medium / preference` 暴露给用户。
+  - 卡片底座、字段布局、保存动作统一到浅色 `Workspace` token 体系。
+
+验证结果：
+
+- `npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/ceo-profile-settings-tab.tsx src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/app/api/knowledge/route.ts` 通过
+- `npx tsc --noEmit --pretty false` 通过
+- `npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts` 通过，`13 tests passed`
+- `npm run build` 通过，仅保留既有 Turbopack broad-pattern warnings
+- 浏览器验收：
+  - 先按约束尝试 `bb-browser`，但当前环境里的 daemon 返回 `Chrome not connected (CDP 503)`，无法作为本地 Settings 验收工具
+  - 回退到一次性 Playwright，复用既有 `http://127.0.0.1:3000/?section=projects&panel=settings&tab=profile`
+  - 断言通过：7 个 settings tabs 同行显示、`个人信息 / 沟通偏好 / 反馈信号 / 当前配置 / 活跃 Provider / 连接状态` 可见，Profile 下拉值显示中文
+- 截图：`/tmp/opc-settings-profile-final-clean.png`

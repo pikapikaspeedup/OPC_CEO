@@ -94,6 +94,14 @@ function writeKnowledgeMirror(
     scope: asset.scope,
     usageCount: asset.usageCount || 0,
     lastAccessedAt: asset.lastAccessedAt || asset.updatedAt,
+    tags: asset.tags || [],
+    sourceType: asset.source.type,
+    sourceRunId: asset.source.runId,
+    sourceArtifactPath: asset.source.artifactPath,
+    confidence: asset.confidence,
+    evidenceCount: asset.evidence?.refs.length || 0,
+    promotionLevel: asset.promotion?.level,
+    promotionSourceCandidateId: asset.promotion?.sourceCandidateId,
   };
   writeFileSync(path.join(knowledgeDir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf-8');
 
@@ -157,6 +165,14 @@ function updateMirrorMetadata(asset: KnowledgeAsset): void {
     scope: asset.scope,
     usageCount: asset.usageCount || 0,
     lastAccessedAt: asset.lastAccessedAt || asset.updatedAt,
+    tags: asset.tags || [],
+    sourceType: asset.source.type,
+    sourceRunId: asset.source.runId,
+    sourceArtifactPath: asset.source.artifactPath,
+    confidence: asset.confidence,
+    evidenceCount: asset.evidence?.refs.length || 0,
+    promotionLevel: asset.promotion?.level,
+    promotionSourceCandidateId: asset.promotion?.sourceCandidateId,
   };
   writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
 }

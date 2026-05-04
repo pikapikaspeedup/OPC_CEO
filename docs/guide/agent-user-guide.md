@@ -514,6 +514,7 @@ POST /api/departments/sync
 2. workspace 固定在 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`
 3. 基础记忆放在 `.department/memory/shared|codex|claude-engine/`
 4. 平台工程部自身 workspace 创建出来的项目，会默认开启平台工程治理字段
+5. 代码级自开发任务不直接改平台工程部 workspace，也不直接改主仓库；runner 会从目标仓库创建独立 git worktree，并把 evidence 写回平台工程部 workspace
 
 ### 6.1 Project 治理字段
 
@@ -611,6 +612,7 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 2. `native-codex` 的本地 conversation 也已统一走 `api-provider-conversations` / Claude Engine transcript
 3. `codex / claude-code` 现在属于执行工具层，不再作为 provider fallback 轨道暴露；是否调用它们由 Claude Engine toolset 与运行时策略决定
 4. `Native` 不再表示“我们手写的一般 provider transport”；它只保留给 `Antigravity IDE/runtime` 这类平台专有路径
+5. 平台工程部调用 Codex CLI 修改主软件时，使用独立 worktree、短 task packet、allowlist、`git diff --check` 和调用方验证命令生成准出 evidence；Codex CLI 不进入 Provider 层
 
 ### 8.1 Provider transport 与模型目录
 

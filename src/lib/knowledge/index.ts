@@ -20,6 +20,7 @@ export {
   listKnowledgeAssets,
   listLegacyFilesystemKnowledgeIds,
   listRecentKnowledgeAssets,
+  recordKnowledgeAssetAccess,
   updateKnowledgeAssetArtifact,
   updateKnowledgeAssetMetadata,
   upsertKnowledgeAsset,

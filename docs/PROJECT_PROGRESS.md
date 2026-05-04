@@ -1,3 +1,333 @@
+# 任务：系统改进待决策页重构为决策工作台
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/system-improvement-detail-drawer.tsx`
+   - 把原来的“系统改进详情抽屉”重构成“待决策工作台”视角
+   - 顶部不再展示泛化详情，而是直接展示当前决策问题，例如：
+     - 是否批准进入执行
+     - 是否继续修补失败项并重跑发布前检查
+     - 是否批准发布 / 确认合并 / 确认重启
+   - `当前操作` 区新增“执行这个动作会发生什么”，让管理动作与后果同层可见
+   - 默认主视图重构为单一 `决策依据`：
+     - 为什么会出现
+     - 这次会改什么
+     - 现在进行到哪
+     - 发布检查结果
+   - 删除默认可见区中重复的：
+     - `前因后果`
+     - `本次改动` 大段计划平铺
+     - `执行证据`
+     - 顶部项目 / run / 校验指标卡
+   - 受影响文件、保护范围、实施/测试/回滚计划、项目/run/worktree/证据路径、来源证据统一下沉到 `查看技术证据`
+   - 默认界面从“详情阅读”切换为“当前决策 + 决策依据 + 当前动作”
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/system-improvement-detail-drawer.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+浏览器实走通过：
+
+1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
+2. 抽屉顶部直接显示当前决策问题，而不是泛化详情摘要
+3. 默认可见区只保留：
+   - 当前决策问题
+   - 当前操作
+   - 决策依据
+   - 查看技术证据（折叠）
+4. `前因后果 / 执行证据 / 顶部项目-run-校验指标卡` 已不再默认出现
+5. 发布失败项直接在主视图内可见，不需要先进入技术证据层
+
+# 任务：系统改进详情抽屉收口为决策层与折叠证据层
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/system-improvement-detail-drawer.tsx`
+   - 删除默认可见区里的 `前因后果` 与 `执行证据` 平铺结构
+   - 顶部改为单一决策摘要，只保留：
+     - 当前结论
+     - 风险标签
+     - 来源/影响/校验/检查计数
+   - 删除顶部重复的 `平台工程项目 / 最近执行 / 改动与校验` 指标卡
+   - `本次改动` 只保留目标、影响文件、保护范围、实施/测试/回滚计划
+   - `发布检查` 只显示检查概况与失败项，不再重复项目/run/Codex 摘要
+   - 平台工程项目、最近执行、worktree、证据路径、来源证据统一下沉到 `查看技术证据` 折叠层
+   - 默认界面从“摘要层 + 叙事层 + 证据层并列平铺”收口为“决策层 + 业务层 + 折叠证据层”
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/system-improvement-detail-drawer.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+浏览器实走通过：
+
+1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
+2. 默认可见区不再出现：
+   - `前因后果`
+   - `执行证据`
+   - `平台工程项目 / 最近执行 / 改动与校验` 顶部指标卡
+3. 默认可见区只保留：
+   - 顶部结论摘要
+   - `本次改动`
+   - `发布检查`
+   - `当前操作`
+4. `查看技术证据` 已下沉为折叠层，避免证据与决策信息同层重复展开
+5. 抽屉宽度保持 `1440px`
+
+# 任务：系统改进详情抽屉去重收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/system-improvement-detail-drawer.tsx`
+   - 删除头部独立状态标签带，把状态标签合并进顶部 `管理摘要`
+   - 删除右侧独立 `执行概览`，避免与头部状态、主内容时间线重复表达
+   - 删除右侧独立 `跳转入口`，与 `快捷动作` 合并为单一 `当前操作` 区
+   - 顶部摘要改为：
+     - 当前阶段
+     - 平台工程项目
+     - 最近执行
+     - 改动与校验
+   - `前因后果` 时间线压缩为真正有增量的节点：
+     - 提案创建
+     - 审批状态
+     - 平台工程执行
+     - 发布检查
+   - `改什么` 区块只保留目标、范围和计划，不再重复展示执行状态
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/system-improvement-detail-drawer.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+浏览器实走通过：
+
+1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
+2. 抽屉顶部只保留一张 `管理摘要`，不再存在头部独立状态带
+3. 右侧只保留 `当前操作`，不再存在 `执行概览 / 快捷动作 / 跳转入口` 三段重复结构
+4. `前因后果` 里已不再拆成 `平台工程项目 / 最近一次执行 / Codex worktree 证据` 三段重复时间线
+5. 抽屉宽度保持 `1440px`
+
+# 任务：优化系统改进详情抽屉的宽度与信息布局
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/system-improvement-detail-drawer.tsx`
+   - 抽屉宽度从窄侧栏改为大尺寸右侧工作面，桌面端实际宽度提升到 `1440px`
+   - 头部保留状态标签，但正文改为：
+     - 顶部结论卡
+     - 左侧主叙事列
+     - 右侧执行概览 / 快捷动作 / 跳转入口侧栏
+   - 删除底部横向按钮带，避免按钮挤压、横向滚动和阅读断裂
+   - `受影响文件 / 保护范围 / 实施计划 / 测试计划 / 回滚计划` 改为更适合长文本的块状布局
+   - `Codex worktree` 与 `发布检查` 区改为更宽的信息卡，减少窄卡片内换行
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/system-improvement-detail-drawer.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+浏览器实走通过：
+
+1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
+2. 系统改进详情抽屉实际宽度为 `1440px`
+3. 页面已出现：
+   - `执行概览`
+   - `快捷动作`
+   - `跳转入口`
+4. 底部不再出现横向挤压的按钮条
+
+# 任务：系统改进决策链路产品化收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/system-improvement-detail-drawer.tsx`
+   - 新增系统改进详情抽屉
+   - 收口来源证据、提案摘要、执行时间线、平台工程项目、Codex worktree、发布检查和当前管理动作
+   - 支持直接执行：
+     - 审批并启动
+     - 拒绝提案
+     - 重跑 Codex
+     - 发布前检查
+     - 批准发布
+     - 标记已合并 / 已重启 / 开始观察 / 标记回滚
+2. `src/app/page.tsx`
+   - 新增全局系统改进详情抽屉状态
+   - CEO Office、Ops、Projects 现在复用同一条系统改进详情入口
+   - 抽屉内动作完成后会刷新自迭代相关页面数据
+3. `src/components/ceo-office-cockpit.tsx`
+   - CEO 决策队列点击系统改进事项，不再直接跳到 Ops
+   - 改为先打开系统改进详情抽屉
+   - 管理语言由“准出”收口为“发布检查 / 批准发布 / 可发布”
+4. `src/components/ops-dashboard.tsx`
+   - `准出证据` 区块改名为 `系统改进发布检查`
+   - 每条系统改进卡片新增 `查看完整详情`
+   - 操作文案统一为 `发布前检查 / 批准发布`
+5. `src/components/projects-panel.tsx`
+   - 平台工程项目头部不再直接渲染整段 proposal 原文目标
+   - 改为显示结构化系统改进摘要，并可返回系统改进详情
+6. `src/components/project-workbench.tsx`、`src/components/agent-run-detail.tsx`
+   - 平台工程 Codex CLI runner 的 Run 详情不再显示无效的 `查看 AI 对话`
+   - 改为提示该执行属于 worktree / diff / 校验 / 发布检查证据链，并提供回到系统改进详情的入口
+7. 文档同步：
+   - `User Story/CEO Office/CEO 办公室.md`
+   - `User Story/Ops/运维中心.md`
+   - `User Story/Projects/项目工作台.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/app/page.tsx src/components/system-improvement-detail-drawer.tsx src/components/ceo-office-cockpit.tsx src/components/ops-dashboard.tsx src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/agent-run-detail.tsx src/components/ceo-dashboard.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+浏览器实走通过：
+
+1. `CEO Office -> 决策队列 -> Self-evolution Codex runner smoke test`
+   - 直接打开系统改进详情抽屉
+2. `系统改进详情 -> 打开 Ops 发布检查`
+   - 到达 `Ops / 系统改进发布检查`
+   - 已不存在 `准出证据` 旧标题
+3. `Ops -> 查看项目执行`
+   - 到达关联平台工程项目详情
+   - 已显示结构化系统改进摘要
+   - 不再显示无效 `查看 AI 对话`
+4. `Ops / Projects -> 查看完整详情 / 查看系统改进详情`
+   - 都可重新打开同一条系统改进详情抽屉
+
+# 任务：固化平台工程部 Codex CLI worktree 自开发执行基线
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-01
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/platform-engineering-codex-runner.ts`
+   - 新增平台工程部代码任务 runner
+   - 支持 `checkpoint` 与 `snapshot` 两种执行基线
+   - 每次任务创建独立 git worktree 与独立 `ai/platform-*` 分支，避免复跑污染旧工作区
+   - 运行前生成短 task packet，把任务目标、allowlist、预期改动和验证命令传给 Codex CLI
+   - 运行后收集 `changedFiles / disallowedFiles / git diff --check / validationCommands`
+   - `expectEdits = true` 时，如果 Codex CLI 成功退出但没有产生文件改动，会被标记为失败证据
+   - evidence JSON 写入平台工程部 workspace 的 `evidence/codex-runs/`
+2. `src/lib/platform-engineering.ts`
+   - 新增平台工程部 `worktrees/` 与 `evidence/` 路径 helper
+3. `src/lib/bridge/codex-adapter.ts`
+   - `codex exec` 改为使用 `--cd <worktreePath> --sandbox workspace-write`
+   - 移除已废弃的 `--full-auto`
+   - 不再把空 `CODEX_API_KEY` 注入子进程，避免覆盖 Codex CLI OAuth 登录态
+   - 优先解析成熟 `codex-cli x.y.z` 二进制，避免 `npx/tsx` PATH 命中旧本地 `codex 0.2.3`
+4. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/design/self-evolution/platform-engineering-codex-worktree-execution-assessment-2026-05-01.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/platform-engineering-codex-runner.test.ts
+```
+
+结果：`1 file passed, 5 tests passed`
+
+```bash
+npx eslint src/lib/platform-engineering-codex-runner.ts src/lib/platform-engineering-codex-runner.test.ts src/lib/platform-engineering.ts src/lib/bridge/codex-adapter.ts
+```
+
+```bash
+npx tsc --noEmit
+```
+
+真实 Codex CLI adapter 探针通过：
+
+```bash
+npx tsx -e "<通过 codexExec 在临时 git repo 内追加 hello.txt 第二行>"
+```
+
+结果：`hello.txt` 被真实改为 `hello\nworld`，`git status --short` 返回 `M hello.txt`。
+
+真实 runner 端到端探针通过：
+
+```bash
+AG_GATEWAY_HOME=<tmp> npx tsx -e "<通过 runPlatformEngineeringCodexTask 在临时 git repo 内执行真实 Codex CLI>"
+```
+
+结果：`changedFiles = ["hello.txt"]`、`disallowedFiles = []`、`scopeCheckPassed = true`、`diffCheckPassed = true`、`git diff --check` 与 `tail -n 1 hello.txt | grep -qx world` 均通过，且 evidence 文件已写入临时平台工程部 workspace。
+
 # 任务：收口 Provider / ExecutionTool 边界并试跑平台工程部
 
 **状态**: ✅ 已完成
@@ -22226,3 +22556,95 @@ npx eslint src/lib/evolution/contracts.ts src/lib/evolution/store.ts src/lib/evo
 
 **状态**: ✅ 已完成
 **日期**: 2026-04-19
+## 2026-05-01：Self-Evolution 软件自开发产品化接线
+
+**状态**: ✅ 已完成并验证
+
+本轮把“Codex CLI worktree runner 作为自我软件开发执行器”接入主软件自迭代链路：
+
+1. `approved SystemImprovementProposal -> runPlatformEngineeringCodexTask()` 已接通。
+2. runner evidence 已归一到 `proposal.exitEvidence.codex`。
+3. CEO Office 决策队列已接入软件自迭代准入、准出和阻塞处理，不另建第二套待办。
+4. CEO Dashboard 的软件自迭代区域已调整为证据 / 状态视图，只展示 Codex worktree、测试和 merge gate。
+5. Ops “准出证据”已展示 worktree、branch、scope、validation、evidencePath，并支持阻塞任务重跑 Codex。
+6. CEO 决策队列点击软件自迭代 proposal 可一键进入 Ops 准出证据，URL 保留 `proposal` 深链，刷新后仍定位到同一证据包。
+7. Ops 准出证据可跳转到关联 Projects 执行记录。
+8. 自动边界仍止于 `ready-to-merge`；merge / restart 仍需 CEO / Ops 显式准出。
+
+验证通过：
+
+```bash
+npm test -- src/lib/app-url-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
+```
+
+结果：`3 files passed, 11 tests passed`
+
+```bash
+npx eslint src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/ops-dashboard.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实浏览器体验验证通过：
+
+1. CEO Office 决策队列可见 `Self-evolution Codex runner smoke test`。
+2. 点击后进入 `/?section=operations&proposal=system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950`。
+3. Ops 可见 `准出证据`、proposal 标题和 `查看项目执行`。
+4. 刷新后仍保留 proposal 深链并显示同一准出证据。
+5. `查看项目执行` 可跳到 `/?section=projects&project=7d8969c5-93db-417a-b933-813586c78d83`。
+
+## 2026-05-01：Self-Evolution Release Gate 产品化
+
+**状态**: ✅ 已完成并验证
+
+本轮把 `ready-to-merge` 之后的 CEO/Ops 准出门补齐为显式 release gate：
+
+1. `SystemImprovementExitEvidenceBundle` 新增 `releaseGate`。
+2. 新增 `runSystemImprovementReleaseAction()`，支持：
+   - `preflight`
+   - `approve`
+   - `mark-merged`
+   - `mark-restarted`
+   - `start-observation`
+   - `mark-rolled-back`
+3. `preflight` 会从 Codex worktree 生成 patch，并对当前主仓执行 `git apply --check --whitespace=error-all`。
+4. `merge/restart/rollback` 不静默修改主仓；它们作为 CEO/Ops 显式准出后的状态、命令包和证据记录。
+5. 新增 API：
+   - `POST /api/company/self-improvement/proposals/:id/release-gate`
+6. Ops 的“准出证据”卡片升级为 release gate 工作台，可查看 checks、patch、merge / verify / restart / rollback 命令，并执行准出状态流转。
+7. CEO Office 决策队列和 CEO Dashboard 已显示 release gate 状态摘要。
+
+验证通过：
+
+```bash
+npm test -- src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：`4 files passed, 13 tests passed`
+
+```bash
+npm test -- src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts
+```
+
+结果：`2 files passed, 5 tests passed`
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-observer.ts src/lib/company-kernel/contracts.ts src/lib/types.ts src/lib/api.ts src/components/ops-dashboard.tsx src/components/ceo-office-cockpit.tsx src/components/ceo-dashboard.tsx 'src/app/api/company/self-improvement/proposals/[id]/release-gate/route.ts' src/server/control-plane/company-routes.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+真实浏览器体验验证通过：
+
+1. Ops 深链 `/?section=operations&proposal=system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950` 可见 Release Gate。
+2. 点击 `准出预检` 会真实调用 release gate API。
+3. 当前 smoke proposal 因 worktree patch 存在 trailing whitespace 被预检挡住，状态显示 `预检失败`。
+4. 页面刷新后仍保留 release gate 状态。

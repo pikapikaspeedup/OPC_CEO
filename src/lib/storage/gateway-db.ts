@@ -41,7 +41,7 @@ export interface ConversationOwnerCacheRecord {
   payload: Record<string, unknown>;
 }
 
-export type WorkspaceCatalogSourceKind = 'manual-import' | 'antigravity-recent' | 'ceo-bootstrap';
+export type WorkspaceCatalogSourceKind = 'manual-import' | 'antigravity-recent' | 'ceo-bootstrap' | 'system-bootstrap';
 export type WorkspaceCatalogStatus = 'active' | 'hidden' | 'archived';
 
 export interface WorkspaceCatalogRecord {

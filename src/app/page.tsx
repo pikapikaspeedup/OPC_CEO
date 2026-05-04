@@ -1,43 +1,42 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import Sidebar, { type PrimarySection } from '@/components/sidebar';
 import Chat from '@/components/chat';
 import ChatInput from '@/components/chat-input';
 import KnowledgeWorkspace from '@/components/knowledge-panel';
-import DepartmentMemoryPanel from '@/components/department-memory-panel';
 import LogViewerPanel from '@/components/log-viewer-panel';
 import ProjectsPanel from '@/components/projects-panel';
-import AnalyticsDashboard from '@/components/analytics-dashboard';
-import TokenQuotaWidget from '@/components/token-quota-widget';
-import McpStatusWidget from '@/components/mcp-status-widget';
-import CodexWidget from '@/components/codex-widget';
 import CeoOfficeCockpit from '@/components/ceo-office-cockpit';
 import SettingsPanel, { type SettingsFocusTarget, type SettingsTabId } from '@/components/settings-panel';
-import SchedulerPanel from '@/components/scheduler-panel';
-import TunnelStatusWidget from '@/components/tunnel-status-widget';
-import AssetsManager from '@/components/assets-manager';
+import OpsDashboard from '@/components/ops-dashboard';
 import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
 import NotificationIndicators from '@/components/notification-indicators';
+import SystemImprovementDetailDrawer from '@/components/system-improvement-detail-drawer';
+import WorkspaceConceptShell from '@/components/workspace-concept-shell';
 import { useI18n } from '@/components/locale-provider';
 import { buildAppUrl, parseAppUrlState } from '@/lib/app-url-state';
 import { api, connectWs, type AuditEvent } from '@/lib/api';
-import { formatRelativeTime } from '@/lib/i18n/formatting';
 import type { AgentRun, Conversation, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
 import {
   Download,
+  AlertTriangle,
+  ChevronDown,
+  CheckCircle2,
+  Clock,
   FolderKanban,
   Menu,
   PanelLeftOpen,
+  Plus,
+  Search,
   Sparkles,
   Terminal,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   countConfiguredDepartments,
   getAgentStateRefreshMs,
@@ -45,10 +44,10 @@ import {
   type AppShellUtilityPanel,
 } from '@/lib/home-shell';
 import { dedupeAuditEvents } from '@/lib/ceo-office-home';
+import { mergeDepartmentConfigIntoWorkspaceMap } from '@/lib/department-config';
 import { buildWorkspaceOptions } from '@/lib/workspace-options';
 import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
-import { AppShell, StatusChip, WorkspaceHero, WorkspaceMetricCard } from '@/components/ui/app-shell';
-import { WorkspaceListItem, WorkspaceSurface } from '@/components/ui/workspace-primitives';
+import { AppShell, StatusChip } from '@/components/ui/app-shell';
 import { cn } from '@/lib/utils';
 
 type UtilityPanel = AppShellUtilityPanel;
@@ -62,9 +61,70 @@ type SettingsPanelRequest = {
   nonce: number;
 };
 
+type ProjectsMetricTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+
+const projectsMetricToneClasses: Record<ProjectsMetricTone, { icon: string; accent: string }> = {
+  neutral: {
+    icon: 'border-slate-200 bg-slate-50 text-slate-600',
+    accent: 'text-slate-600',
+  },
+  info: {
+    icon: 'border-sky-200 bg-sky-50 text-sky-700',
+    accent: 'text-sky-700',
+  },
+  success: {
+    icon: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    accent: 'text-emerald-700',
+  },
+  warning: {
+    icon: 'border-amber-200 bg-amber-50 text-amber-700',
+    accent: 'text-amber-700',
+  },
+  danger: {
+    icon: 'border-red-200 bg-red-50 text-red-700',
+    accent: 'text-red-700',
+  },
+};
+
+function ProjectsMetricTile({
+  icon,
+  label,
+  value,
+  detail,
+  tone = 'neutral',
+}: {
+  icon: ReactNode;
+  label: string;
+  value: ReactNode;
+  detail: ReactNode;
+  tone?: ProjectsMetricTone;
+}) {
+  const classes = projectsMetricToneClasses[tone];
+
+  return (
+    <div className="min-h-[78px] rounded-[10px] border border-[#dfe5ee] bg-white px-4 py-3 shadow-[0_8px_22px_rgba(28,44,73,0.05)]">
+      <div className="flex h-full items-center gap-4">
+        <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border', classes.icon)}>
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-semibold text-[var(--app-text-soft)]">{label}</div>
+          <div className="mt-1 text-2xl font-semibold leading-none tabular-nums text-[var(--app-text)]">{value}</div>
+          <div className={cn('mt-2 truncate text-xs font-medium', classes.accent)}>{detail}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type OpsAssetRequest = {
   tab: 'workflows' | 'skills' | 'rules';
   itemName: string | null;
+  nonce: number;
+};
+
+type OpsProposalRequest = {
+  proposalId: string | null;
   nonce: number;
 };
 
@@ -95,7 +155,7 @@ export default function Home() {
   const [sidebarSection, setSidebarSection] = useState<PrimarySection>('ceo');
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel>(null);
   const [settingsPanelRequest, setSettingsPanelRequest] = useState<SettingsPanelRequest>({
-    tab: 'provider',
+    tab: 'profile',
     focusTarget: null,
     nonce: 0,
   });
@@ -104,6 +164,12 @@ export default function Home() {
     itemName: null,
     nonce: 0,
   });
+  const [opsProposalRequest, setOpsProposalRequest] = useState<OpsProposalRequest>({
+    proposalId: null,
+    nonce: 0,
+  });
+  const [systemImprovementProposalId, setSystemImprovementProposalId] = useState<string | null>(null);
+  const [systemImprovementRefreshSignal, setSystemImprovementRefreshSignal] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState('Antigravity');
   const [activeConversationScope, setActiveConversationScope] = useState<ConversationScope>(null);
@@ -127,6 +193,9 @@ export default function Home() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [projectSearchQuery, setProjectSearchQuery] = useState('');
+  const [opsSearchQuery, setOpsSearchQuery] = useState('');
+  const [projectCreateRequestToken, setProjectCreateRequestToken] = useState(0);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null);
   const [agentServers, setAgentServers] = useState<Server[]>([]);
@@ -134,6 +203,7 @@ export default function Home() {
   const [hiddenWorkspaces, setHiddenWorkspaces] = useState<string[]>([]);
   const [selectedKnowledgeId, setSelectedKnowledgeId] = useState<string | null>(null);
   const [selectedKnowledgeTitle, setSelectedKnowledgeTitle] = useState('');
+  const [knowledgeSearchQuery, setKnowledgeSearchQuery] = useState('');
   const [knowledgeRefreshSignal, setKnowledgeRefreshSignal] = useState(0);
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [urlStateReady, setUrlStateReady] = useState(false);
@@ -361,7 +431,7 @@ export default function Home() {
   ) => {
     queueUrlSync(mode);
     setSettingsPanelRequest((prev) => ({
-      tab: options?.tab ?? 'provider',
+      tab: options?.tab ?? 'profile',
       focusTarget: options?.focusTarget ?? null,
       nonce: prev.nonce + 1,
     }));
@@ -409,6 +479,36 @@ export default function Home() {
     }));
   }, [activateSection]);
 
+  const openOpsPanel = useCallback((
+    options?: { proposalId?: string; query?: string },
+    mode: UrlNavigationMode = 'push',
+  ) => {
+    activateSection('operations', mode);
+    if (options?.proposalId) {
+      setOpsProposalRequest((prev) => ({
+        proposalId: options.proposalId || null,
+        nonce: prev.nonce + 1,
+      }));
+      setOpsSearchQuery(options.query || options.proposalId);
+    }
+  }, [activateSection]);
+
+  const openSystemImprovementProposal = useCallback((proposalId: string | null) => {
+    if (!proposalId) return;
+    setSystemImprovementProposalId(proposalId);
+  }, []);
+
+  const handleSystemImprovementDrawerOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) {
+      setSystemImprovementProposalId(null);
+    }
+  }, []);
+
+  const refreshSystemImprovementViews = useCallback(() => {
+    setSystemImprovementRefreshSignal((value) => value + 1);
+    void loadAgentState(selectedAgentRunId);
+  }, [loadAgentState, selectedAgentRunId]);
+
   const handleSelect = useCallback((id: string, title: string, targetSection?: PrimarySection, mode: UrlNavigationMode = 'push') => {
     const nextSection = targetSection || 'conversations';
     activateSection(nextSection, mode);
@@ -417,8 +517,31 @@ export default function Home() {
 
   const navigateToProject = useCallback((projectId: string | null, mode: UrlNavigationMode = 'push') => {
     activateSection('projects', mode);
+    setSelectedAgentRunId(null);
     setSelectedProjectId(projectId);
   }, [activateSection]);
+
+  const navigateToProjectRun = useCallback(async (runId: string, projectId?: string | null, mode: UrlNavigationMode = 'push') => {
+    activateSection('projects', mode);
+    setSelectedAgentRunId(runId);
+    if (projectId) {
+      setSelectedProjectId(projectId);
+      return;
+    }
+
+    const cachedRun = agentRuns.find((run) => run.runId === runId);
+    if (cachedRun?.projectId) {
+      setSelectedProjectId(cachedRun.projectId);
+      return;
+    }
+
+    try {
+      const fetchedRun = await api.agentRun(runId);
+      setSelectedProjectId(fetchedRun.projectId || null);
+    } catch {
+      setSelectedProjectId(null);
+    }
+  }, [activateSection, agentRuns]);
 
   const navigateToKnowledge = useCallback((knowledgeId: string | null, title: string | null, mode: UrlNavigationMode = 'push') => {
     activateSection('knowledge', mode);
@@ -436,12 +559,21 @@ export default function Home() {
     setMainMenuOpen(false);
 
     if (nextState.section === 'projects') {
+      setSelectedAgentRunId(null);
       setSelectedProjectId(nextState.projectId);
     }
 
     if (nextState.section === 'knowledge') {
       setSelectedKnowledgeId(nextState.knowledgeId);
       setSelectedKnowledgeTitle('');
+    }
+
+    if (nextState.section === 'operations') {
+      setOpsProposalRequest((prev) => ({
+        proposalId: nextState.opsProposalId,
+        nonce: nextState.opsProposalId ? prev.nonce + 1 : prev.nonce,
+      }));
+      setOpsSearchQuery(nextState.opsProposalId || '');
     }
 
     if (nextState.section === 'ceo' || nextState.section === 'conversations') {
@@ -509,21 +641,27 @@ export default function Home() {
   }, [handleSelect]);
 
   useEffect(() => {
-    if (sidebarSection === 'ceo') {
-      api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 1 }).then(data => {
-         const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === CEO_WORKSPACE_URI);
-         if (!isCurrentlyCeo) {
-           const ceoConv = data[0];
-           if (ceoConv) {
-             handleSelect(ceoConv.id, ceoConv.title || 'CEO Office', 'ceo', 'replace');
-           } else {
-             syncConversationSelection(null, null, 'ceo');
-           }
+    if (!urlStateReady || sidebarSection !== 'ceo' || utilityPanel !== null) return;
+
+    let cancelled = false;
+    api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 1 }).then(data => {
+       if (cancelled) return;
+       const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === CEO_WORKSPACE_URI);
+       if (!isCurrentlyCeo) {
+         const ceoConv = data[0];
+         if (ceoConv) {
+           handleSelect(ceoConv.id, ceoConv.title || 'CEO Office', 'ceo', 'replace');
+         } else {
+           syncConversationSelection(null, null, 'ceo');
          }
-      }).catch(() => {});
-    }
+       }
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sidebarSection]);
+  }, [sidebarSection, urlStateReady, utilityPanel]);
 
   useEffect(() => {
     if (sidebarSection !== 'ceo' && activeConversationScope !== 'ceo') return;
@@ -700,6 +838,10 @@ export default function Home() {
     navigateToKnowledge(id, title);
   }, [navigateToKnowledge]);
 
+  const handleKnowledgeBrowseSelect = useCallback((id: string, title: string, mode: UrlNavigationMode = 'replace') => {
+    navigateToKnowledge(id, title, mode);
+  }, [navigateToKnowledge]);
+
   const handleKnowledgeTitleChange = useCallback((title: string | null) => {
     setSelectedKnowledgeTitle(title || '');
   }, []);
@@ -745,6 +887,7 @@ export default function Home() {
         : null,
     projectId: sidebarSection === 'projects' ? selectedProjectId : null,
     knowledgeId: sidebarSection === 'knowledge' ? selectedKnowledgeId : null,
+    opsProposalId: sidebarSection === 'operations' ? opsProposalRequest.proposalId : null,
     settingsTab: settingsPanelRequest.tab,
     settingsFocus: settingsPanelRequest.focusTarget,
   }), [
@@ -753,6 +896,7 @@ export default function Home() {
     activeTitle,
     selectedKnowledgeId,
     selectedProjectId,
+    opsProposalRequest.proposalId,
     settingsPanelRequest.focusTarget,
     settingsPanelRequest.tab,
     sidebarSection,
@@ -779,6 +923,19 @@ export default function Home() {
   const departmentWorkspaces = workspaceOptions
     .filter(workspace => !workspace.hidden)
     .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
+
+  const handleCreateKnowledge = useCallback(async () => {
+    const defaultWorkspace = departmentWorkspaces[0];
+    const created = await api.createKnowledge({
+      title: '新建知识',
+      content: '# 新建知识\n\n补充这条知识的摘要、关键要点和正文内容。',
+      workspaceUri: defaultWorkspace?.uri,
+      category: 'domain-knowledge',
+      tags: defaultWorkspace?.name ? [defaultWorkspace.name] : [],
+    });
+    navigateToKnowledge(created.id, created.title);
+    setKnowledgeRefreshSignal((value) => value + 1);
+  }, [departmentWorkspaces, navigateToKnowledge]);
 
   // OPC Phase 3: load department configs for all workspaces
   const [departmentsMap, setDepartmentsMap] = useState<Map<string, DepartmentConfig>>(new Map());
@@ -882,6 +1039,20 @@ export default function Home() {
     () => projects.filter(project => project.status === 'completed').length,
     [projects],
   );
+  const completedProjectThisWeekCount = useMemo(() => {
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    const mondayOffset = (now.getDay() + 6) % 7;
+    startOfWeek.setDate(now.getDate() - mondayOffset);
+    startOfWeek.setHours(0, 0, 0, 0);
+    const weekStartTime = startOfWeek.getTime();
+
+    return projects.filter(project => {
+      if (project.status !== 'completed') return false;
+      const completedAt = new Date(project.updatedAt || project.createdAt).getTime();
+      return Number.isFinite(completedAt) && completedAt >= weekStartTime;
+    }).length;
+  }, [projects]);
   const failedProjectCount = useMemo(
     () => projects.filter(project => project.status === 'failed').length,
     [projects],
@@ -890,7 +1061,6 @@ export default function Home() {
     () => projects.filter(project => project.status === 'paused').length,
     [projects],
   );
-  const operationsAssetCount = skills.length + workflows.length + rules.length;
   const departmentSetupValue = departmentWorkspaces.length
     ? `${configuredDepartmentCount}/${departmentWorkspaces.length}`
     : '0';
@@ -953,33 +1123,55 @@ export default function Home() {
     activateSection('conversations');
   }, [activateSection, activeConversationScope, activeId, activeTitle, handleSelect]);
 
-  const projectAttentionItems = useMemo(
-    () => [...projects]
-      .filter(project => ['failed', 'paused', 'active'].includes(project.status))
-      .sort((a, b) => {
-        const priority = (status: string) => status === 'failed' ? 0 : status === 'paused' ? 1 : 2;
-        const leftPriority = priority(a.status);
-        const rightPriority = priority(b.status);
-        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-      })
-      .slice(0, 6),
-    [projects],
-  );
-
-  const recentProjectItems = useMemo(
-    () => [...projects]
-      .filter(project => !project.parentProjectId)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 5),
-    [projects],
-  );
   const useCeoOfficeShell = sidebarSection === 'ceo' && utilityPanel !== 'settings';
+  const useWorkspaceConceptShell = utilityPanel === 'settings'
+    || (utilityPanel === null && (sidebarSection === 'projects' || sidebarSection === 'knowledge' || sidebarSection === 'operations'));
+  const workspaceShellUtility = (
+    <div className="flex items-center gap-1.5">
+      <NotificationIndicators
+        events={ceoEvents}
+        activeRuns={headerActiveRuns}
+        projects={projects}
+        pendingApprovals={pendingApprovals}
+        onEventAction={(event, action) => {
+          const payload = action.payload || {};
+          const target = typeof payload.target === 'string' ? payload.target : undefined;
+          if (target === 'scheduler') {
+            activateSection('operations');
+            return;
+          }
+          const projectId = typeof payload.projectId === 'string' ? payload.projectId : event.projectId;
+          if (projectId) {
+            navigateToProject(projectId);
+          }
+        }}
+        onIntervene={async (runId, action) => {
+          await api.interveneRun(runId, { action });
+          loadAgentState();
+        }}
+        onNavigateToProject={navigateToProject}
+      />
+
+      <div className="mx-0.5 h-5 w-px bg-[#dfe5ee]" />
+
+      <LocaleToggle className="hidden md:inline-flex" />
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setLogViewerOpen(true)}
+        className="text-[#566176] hover:bg-white hover:text-[#111827]"
+        aria-label={t('shell.logs')}
+        title={t('shell.logs')}
+      >
+        <Terminal className="h-4 w-4" />
+      </Button>
+    </div>
+  );
 
   return (
     <>
       <AppShell
-        sidebar={showShellSidebar && !useCeoOfficeShell ? (
+        sidebar={showShellSidebar && !useCeoOfficeShell && !useWorkspaceConceptShell ? (
           <Sidebar
             activeId={activeId}
             onSelect={handleSelect}
@@ -1002,7 +1194,7 @@ export default function Home() {
             ceoDepartmentSetupComplete={!isOpcUnconfigured}
           />
         ) : null}
-        header={useCeoOfficeShell ? null : (
+        header={useCeoOfficeShell || useWorkspaceConceptShell ? null : (
           <header className="relative z-20 flex h-18 shrink-0 items-center gap-3 border-b border-[var(--app-border-soft)] bg-[rgba(255,255,255,0.84)] px-4 backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(255,255,255,0.76)] md:px-6">
             <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="icon" className="shrink-0 md:hidden" onClick={() => setMainMenuOpen(true)}>
@@ -1105,88 +1297,112 @@ export default function Home() {
         )}
       >
         {utilityPanel === 'settings' ? (
-          <div className="app-shell-stage relative flex-1 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
-            <ScrollArea className="h-full">
-              <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-                <WorkspaceHero
-                  eyebrow="Settings / Control"
-                  title="系统设置与执行偏好"
-                  metrics={(
-                    <>
-                      <WorkspaceMetricCard label="Models" value={models.length || '—'} detail="可选模型配置" tone="info" />
-                      <WorkspaceMetricCard label="Departments" value={departmentSetupValue} detail="已配置部门 / 全部部门" tone={isOpcUnconfigured ? 'warning' : 'success'} />
-                      <WorkspaceMetricCard label="Approvals" value={pendingApprovals} detail="待处理审批" tone={pendingApprovals ? 'warning' : 'success'} />
-                    </>
-                  )}
-                />
-                <SettingsPanel
-                  requestedTab={settingsPanelRequest.tab}
-                  focusTarget={settingsPanelRequest.focusTarget}
-                  requestToken={settingsPanelRequest.nonce}
-                />
-              </div>
-            </ScrollArea>
-          </div>
+          <WorkspaceConceptShell
+            activeSection="settings"
+            title="Settings"
+            subtitle="配置工作区"
+            headerVariant="compact"
+            utility={workspaceShellUtility}
+            onOpenCeo={() => activateSection('ceo')}
+            onOpenProjects={() => activateSection('projects')}
+            onOpenKnowledge={() => activateSection('knowledge')}
+            onOpenOps={() => openOpsPanel()}
+            onOpenSettings={() => openSettingsPanel()}
+          >
+            <SettingsPanel
+              requestedTab={settingsPanelRequest.tab}
+              focusTarget={settingsPanelRequest.focusTarget}
+              requestToken={settingsPanelRequest.nonce}
+            />
+          </WorkspaceConceptShell>
         ) : sidebarSection === 'projects' ? (
-          <div className="agent-stage relative flex-1 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 agent-grid opacity-30" />
-            <ScrollArea className="h-full">
-              <div className="relative mx-auto flex w-full max-w-[1580px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-                <WorkspaceHero
-                  eyebrow="OPC / Operating Center"
-                  title={selectedProject ? `项目总控：${selectedProject.name}` : '项目、部门与执行总控'}
-                  meta={(
-                    <>
-                      <StatusChip tone="accent">Projects</StatusChip>
-                      <StatusChip tone={isOpcUnconfigured ? 'warning' : 'success'}>{isOpcUnconfigured ? 'Setup incomplete' : 'Departments ready'}</StatusChip>
-                      {selectedProject ? <StatusChip tone="info">{selectedProject.status}</StatusChip> : null}
-                    </>
-                  )}
-                  actions={(
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={openOnboardingJourney}
-                        className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]"
-                      >
-                        部门设置
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => activateSection('operations')}
-                        className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]"
-                      >
-                        打开 Ops
-                      </Button>
-                    </div>
-                  )}
-                  metrics={(
-                    <>
-                      <WorkspaceMetricCard label="Projects" value={projects.length} detail={`${activeProjectCount} active · ${completedProjectCount} completed`} tone="accent" />
-                      <WorkspaceMetricCard label="Needs attention" value={failedProjectCount + pausedProjectCount} detail={`${failedProjectCount} failed · ${pausedProjectCount} paused`} tone={failedProjectCount ? 'danger' : pausedProjectCount ? 'warning' : 'success'} />
-                      <WorkspaceMetricCard label="Departments" value={departmentSetupValue} detail="CEO 派发任务依赖部门画像" tone={isOpcUnconfigured ? 'warning' : 'success'} />
-                      <WorkspaceMetricCard label="Templates" value={templates.length || '—'} detail="可用于项目派发" tone="info" />
-                    </>
-                  )}
-                />
+          <WorkspaceConceptShell
+            activeSection="projects"
+            title={selectedProject ? `Projects / ${selectedProject.name}` : 'Projects'}
+            subtitle="项目总览"
+            headerVariant="compact"
+            badges={(
+              <>
+                {selectedProject ? <StatusChip tone="info">{selectedProject.status}</StatusChip> : null}
+              </>
+            )}
+            actions={(
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative hidden lg:block">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#93a0b3]" />
+                  <input
+                    value={projectSearchQuery}
+                    onChange={(event) => setProjectSearchQuery(event.target.value)}
+                    aria-label="搜索项目"
+                    placeholder="搜索项目 / 工作区 / 关键词"
+                    className="h-10 w-[280px] rounded-[8px] border border-[#dfe5ee] bg-white pl-9 pr-3 text-sm text-[#111827] outline-none transition-colors placeholder:text-[#93a0b3] focus:border-[#9bbcff] focus:ring-4 focus:ring-[#2f6df6]/10 xl:w-[330px]"
+                  />
+                </div>
+                <Button
+                  onClick={() => setProjectCreateRequestToken(token => token + 1)}
+                  className="h-10 gap-2 rounded-[8px] bg-[#2f6df6] px-4 text-white shadow-[0_10px_22px_rgba(47,109,246,0.24)] hover:bg-[#245ee8]"
+                >
+                  <Plus className="h-4 w-4" />
+                  新建项目
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            utility={workspaceShellUtility}
+            onOpenCeo={() => activateSection('ceo')}
+            onOpenProjects={() => activateSection('projects')}
+            onOpenKnowledge={() => activateSection('knowledge')}
+            onOpenOps={() => openOpsPanel()}
+            onOpenSettings={() => openSettingsPanel()}
+          >
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <ProjectsMetricTile
+                    icon={<FolderKanban className="h-5 w-5" />}
+                    label="进行中项目"
+                    value={activeProjectCount}
+                    detail={`${completedProjectCount} completed total`}
+                    tone="info"
+                  />
+                  <ProjectsMetricTile
+                    icon={<AlertTriangle className="h-5 w-5" />}
+                    label="阻塞项目"
+                    value={failedProjectCount + pausedProjectCount}
+                    detail={`${failedProjectCount} failed · ${pausedProjectCount} paused`}
+                    tone={failedProjectCount ? 'danger' : pausedProjectCount ? 'warning' : 'success'}
+                  />
+                  <ProjectsMetricTile
+                    icon={<CheckCircle2 className="h-5 w-5" />}
+                    label="本周完成"
+                    value={completedProjectThisWeekCount}
+                    detail={`${completedProjectCount} completed total`}
+                    tone="success"
+                  />
+                  <ProjectsMetricTile
+                    icon={<Clock className="h-5 w-5" />}
+                    label="待评审"
+                    value={pendingApprovals}
+                    detail="待处理审批"
+                    tone={pendingApprovals ? 'warning' : 'neutral'}
+                  />
+                </div>
                 {isOpcUnconfigured && !onboardingDismissed && (
-                  <div className="rounded-[24px] border border-amber-300/30 bg-amber-50 px-6 py-4 shadow-[0_16px_36px_rgba(28,44,73,0.06)]">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Sparkles className="h-4 w-4 text-amber-700" />
-                          <span className="text-sm font-semibold text-[var(--app-text)]">部门画像仍未完整</span>
-                        </div>
-                        <p className="text-xs text-[var(--app-text-soft)]">
-                          检测到 {Math.max(departmentWorkspaces.length - configuredDepartmentCount, 0)} 个工作区尚未配置部门信息。配置后 CEO Agent 可以智能派发任务。
+                  <div className="rounded-[10px] border border-amber-200 bg-[#fffaf0] px-4 py-2.5 shadow-[0_8px_18px_rgba(28,44,73,0.04)]">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-amber-100 text-amber-700">
+                          <Sparkles className="h-4 w-4" />
+                        </span>
+                        <p className="min-w-0 truncate text-xs leading-5 text-[#6b5a24]">
+                          <span className="font-semibold text-[#1f2937]">部门画像仍未完整</span>
+                          <span className="mx-2 text-amber-500">/</span>
+                          检测到 {Math.max(departmentWorkspaces.length - configuredDepartmentCount, 0)} 个工作区尚未配置部门信息。左侧可以新建部门，这里用于补齐已有工作区的部门画像。
                         </p>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Button size="sm" onClick={openOnboardingJourney} className="rounded-full bg-[var(--app-accent)] text-white hover:brightness-105">
-                          开始配置
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button size="sm" onClick={openOnboardingJourney} className="h-8 rounded-[8px] bg-[var(--app-accent)] px-3 text-white hover:brightness-105">
+                          补齐已有工作区
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => setOnboardingDismissed(true)} className="rounded-full text-[var(--app-text-soft)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]">
+                        <Button variant="ghost" size="sm" onClick={() => setOnboardingDismissed(true)} className="h-8 rounded-[8px] px-3 text-[var(--app-text-soft)] hover:bg-white/70 hover:text-[var(--app-text)]">
                           稍后
                         </Button>
                       </div>
@@ -1194,16 +1410,16 @@ export default function Home() {
                   </div>
                 )}
                 {isOpcUnconfigured && onboardingDismissed ? (
-                  <div className="rounded-[24px] border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-5 py-4 shadow-[0_16px_36px_rgba(28,44,73,0.06)]">
+                  <div className="rounded-[10px] border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-2.5 shadow-[0_8px_18px_rgba(28,44,73,0.04)]">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div>
+                      <div className="min-w-0">
                         <div className="text-sm font-semibold text-[var(--app-text)]">部门初始化仍未完成</div>
-                        <div className="mt-1 text-xs leading-6 text-[var(--app-text-soft)]">
-                          当前已配置 {configuredDepartmentCount} / {departmentWorkspaces.length} 个部门。补齐后可以稳定派发任务。
+                        <div className="mt-0.5 truncate text-xs leading-5 text-[var(--app-text-soft)]">
+                          当前已配置 {configuredDepartmentCount} / {departmentWorkspaces.length} 个部门。左侧可新建部门，这里继续补齐已有工作区。
                         </div>
                       </div>
-                      <Button variant="outline" onClick={openOnboardingJourney} className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]">
-                        继续完成设置
+                      <Button variant="outline" onClick={openOnboardingJourney} className="h-8 rounded-[8px] border-[var(--app-border-soft)] bg-[var(--app-surface)] px-3 text-[var(--app-text)] hover:bg-[var(--app-raised-2)]">
+                        继续补齐已有工作区
                       </Button>
                     </div>
                   </div>
@@ -1218,170 +1434,138 @@ export default function Home() {
                     setOnboardingDismissed(true);
                   }}
                 />
-                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-                  <div className="min-w-0">
-                    <ProjectsPanel
-                      projects={projects}
-                      agentRuns={agentRuns}
-                      workspaces={departmentWorkspaces}
-                      selectedProjectId={selectedProjectId}
-                      departments={departmentsMap}
-                      onSelectProject={navigateToProject}
-                      onSelectRun={(runId) => {
-                        setSelectedAgentRunId(runId);
-                        // Note: NOT switching to agents section — this is only for legacy projects
-                        // Pipeline projects show run detail inline in the workbench
-                      }}
-                      templates={templates}
-                      models={models}
-                      onResume={handleResumeProject}
-                      onCancelRun={handleCancelAgentRun}
-                      onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
-                      onRefresh={() => loadAgentState(selectedAgentRunId)}
-                      onDepartmentSaved={(uri, config) => {
-                        setDepartmentsMap(prev => new Map(prev).set(uri, config));
-                        api.updateDepartment(uri, config).catch(() => { });
-                      }}
-                    />
-                  </div>
-
-                  <aside className="space-y-4">
-                    <WorkspaceSurface className="space-y-4">
-                      <div>
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--app-text-muted)]">Execution queue</div>
-                        <div className="mt-2 text-base font-semibold text-[var(--app-text)]">风险与最近推进</div>
-                      </div>
-                      <div className="space-y-2">
-                        {(projectAttentionItems.length ? projectAttentionItems : recentProjectItems).map(project => (
-                          <WorkspaceListItem
-                            key={project.projectId}
-                            tone={project.status === 'failed' ? 'danger' : project.status === 'paused' ? 'warning' : project.status === 'active' ? 'info' : 'neutral'}
-                            icon={<FolderKanban className="h-4 w-4" />}
-                            title={project.name}
-                            description={project.goal || project.workspace || 'Project workbench'}
-                            meta={(
-                              <>
-                                <span>{project.status}</span>
-                                <span>{formatRelativeTime(project.updatedAt, locale)}</span>
-                              </>
-                            )}
-                            onClick={() => navigateToProject(project.projectId)}
-                          />
-                        ))}
-                      </div>
-                    </WorkspaceSurface>
-                  </aside>
-                </div>
-              </div>
-            </ScrollArea>
-          </div>
-        ) : sidebarSection === 'knowledge' ? (
-          <div className="app-shell-stage relative flex-1 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
-            <ScrollArea className="h-full">
-              <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-                <WorkspaceHero
-                  eyebrow="Knowledge / Memory"
-                  title={selectedKnowledgeTitle || '知识资产与部门记忆'}
-                  meta={(
-                    <>
-                      <StatusChip tone="accent">Knowledge</StatusChip>
-                      <StatusChip tone={selectedKnowledgeId ? 'info' : 'neutral'}>{selectedKnowledgeId ? 'Entry selected' : 'Overview mode'}</StatusChip>
-                    </>
-                  )}
-                  metrics={(
-                    <>
-                      <WorkspaceMetricCard label="Departments" value={departmentWorkspaces.length || '—'} detail="部门记忆来源范围" tone="accent" />
-                      <WorkspaceMetricCard label="Active runs" value={headerActiveRuns.length} detail="运行中的 agent run" tone={headerActiveRuns.length ? 'warning' : 'success'} />
-                    </>
-                  )}
-                />
-                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-                  <div className="min-w-0">
-                    <KnowledgeWorkspace
-                      selectedId={selectedKnowledgeId}
-                      onTitleChange={handleKnowledgeTitleChange}
-                      onDeleted={handleKnowledgeDeleted}
-                    />
-                  </div>
-
-                  <aside className="space-y-4">
-                    <DepartmentMemoryPanel workspaces={departmentWorkspaces} />
-                  </aside>
-                </div>
-              </div>
-            </ScrollArea>
-          </div>
-        ) : sidebarSection === 'operations' ? (
-          <div className="app-shell-stage relative flex-1 overflow-hidden">
-            <div className="pointer-events-none absolute inset-0 agent-grid opacity-20" />
-            <ScrollArea className="h-full">
-              <div className="relative mx-auto flex w-full max-w-[1480px] flex-col gap-5 px-4 py-4 md:px-8 md:py-6">
-                <WorkspaceHero
-                  eyebrow="Ops / Runtime"
-                  title="运行、资产与系统健康"
-                  meta={(
-                    <>
-                      <StatusChip tone="accent">Runtime</StatusChip>
-                      <StatusChip tone="info">Assets</StatusChip>
-                      <StatusChip tone={headerActiveRuns.length ? 'warning' : 'success'}>{headerActiveRuns.length ? 'Runs active' : 'Quiet'}</StatusChip>
-                    </>
-                  )}
-                  actions={(
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        onClick={() => openSettingsPanel({ tab: 'provider', focusTarget: 'third-party-provider' })}
-                        className="rounded-full bg-[var(--app-accent)] px-4 text-white hover:brightness-105"
-                      >
-                        添加第三方 Provider
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => openSettingsPanel({ tab: 'api-keys' })}
-                        className="rounded-full border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)] hover:bg-[var(--app-raised-2)]"
-                      >
-                        管理 API Keys
-                      </Button>
-                    </div>
-                  )}
-                  metrics={(
-                    <>
-                      <WorkspaceMetricCard label="Assets" value={operationsAssetCount} detail={`${workflows.length} workflows · ${skills.length} skills · ${rules.length} rules`} tone="accent" />
-                      <WorkspaceMetricCard label="Active runs" value={headerActiveRuns.length} detail="当前运行中的 agent run" tone={headerActiveRuns.length ? 'warning' : 'success'} />
-                      <WorkspaceMetricCard label="Providers" value={models.length || '—'} detail="可选模型" tone="neutral" />
-                    </>
-                  )}
-                />
-                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-                  <div className="min-w-0 space-y-5">
-                    <SchedulerPanel />
-                    <AnalyticsDashboard />
-                  </div>
-
-                  <aside className="space-y-4">
-                    <TokenQuotaWidget workspaces={departmentWorkspaces} />
-                    <McpStatusWidget />
-                    <TunnelStatusWidget />
-                    <CodexWidget />
-                  </aside>
-                </div>
-                <AssetsManager
-                  workflows={workflows}
-                  skills={skills}
-                  rules={rules}
-                  discoveredWorkflows={discoveredWorkflows}
-                  discoveredSkills={discoveredSkills}
-                  discoveredRules={discoveredRules}
-                  requestedTab={opsAssetRequest.tab}
-                  requestedItemName={opsAssetRequest.itemName}
-                  requestToken={opsAssetRequest.nonce}
-                  onRefresh={() => {
-                    void loadOperationsAssets(true);
+                <ProjectsPanel
+                  projects={projects}
+                  agentRuns={agentRuns}
+	                  workspaces={departmentWorkspaces}
+	                  selectedProjectId={selectedProjectId}
+	                  selectedRunId={selectedAgentRunId}
+	                  departments={departmentsMap}
+	                  projectSearchQuery={projectSearchQuery}
+	                  onProjectSearchQueryChange={setProjectSearchQuery}
+	                  createProjectRequestToken={projectCreateRequestToken}
+	                  onSelectProject={navigateToProject}
+                  onSelectRun={(runId, projectId) => { void navigateToProjectRun(runId, projectId); }}
+                  templates={templates}
+                  models={models}
+                  onResume={handleResumeProject}
+                  onCancelRun={handleCancelAgentRun}
+                  onOpenConversation={(id, title) => handleSelect(id, title || t('shell.agents'))}
+                  onOpenImprovementProposal={openSystemImprovementProposal}
+                  onRefresh={() => loadAgentState(selectedAgentRunId)}
+                  refreshSignal={systemImprovementRefreshSignal}
+                  onDepartmentSaved={(uri, config) => {
+                    setDepartmentsMap(prev => mergeDepartmentConfigIntoWorkspaceMap(prev, uri, config));
                   }}
                 />
+          </WorkspaceConceptShell>
+        ) : sidebarSection === 'knowledge' ? (
+          <WorkspaceConceptShell
+            activeSection="knowledge"
+            title={(
+              <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span>Knowledge</span>
+                <span className="text-[0.72em] font-semibold text-[#475467]">知识库</span>
+              </span>
+            )}
+            subtitle="沉淀公司的知识资产，构建可检索、可复用、可追溯的集体记忆。"
+            actions={(
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative min-w-[220px] flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#93a0b3]" />
+                  <input
+                    value={knowledgeSearchQuery}
+                    onChange={(event) => setKnowledgeSearchQuery(event.target.value)}
+                    aria-label="搜索知识"
+                    placeholder="搜索知识 / 标签 / 来源 / 工作区"
+                    className="h-10 w-full min-w-[220px] rounded-[10px] border border-[#dfe5ee] bg-white pl-9 pr-3 text-sm text-[#111827] outline-none transition-colors placeholder:text-[#93a0b3] focus:border-[#9bbcff] focus:ring-4 focus:ring-[#2f6df6]/10 md:w-[300px] xl:w-[460px]"
+                  />
+                </div>
+                <Button
+                  onClick={() => void handleCreateKnowledge()}
+                  className="h-10 gap-2 rounded-[10px] bg-[#2f6df6] px-4 text-white shadow-[0_10px_22px_rgba(47,109,246,0.24)] hover:bg-[#245ee8]"
+                >
+                  <Plus className="h-4 w-4" />
+                  新建知识
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
               </div>
-            </ScrollArea>
-          </div>
+            )}
+            utility={workspaceShellUtility}
+            onOpenCeo={() => activateSection('ceo')}
+            onOpenProjects={() => activateSection('projects')}
+            onOpenKnowledge={() => activateSection('knowledge')}
+            onOpenOps={() => openOpsPanel()}
+            onOpenSettings={() => openSettingsPanel()}
+          >
+            <KnowledgeWorkspace
+              selectedId={selectedKnowledgeId}
+              searchQuery={knowledgeSearchQuery}
+              projects={projects}
+              workspaces={departmentWorkspaces}
+              refreshSignal={knowledgeRefreshSignal}
+              onSelectKnowledge={handleKnowledgeBrowseSelect}
+              onTitleChange={handleKnowledgeTitleChange}
+              onDeleted={handleKnowledgeDeleted}
+            />
+          </WorkspaceConceptShell>
+        ) : sidebarSection === 'operations' ? (
+          <WorkspaceConceptShell
+            activeSection="operations"
+            title="Ops"
+            subtitle="系统运行、调度、资产、连接、配额与执行健康控制面。"
+            badges={(
+              <>
+                <StatusChip tone="accent">运行态</StatusChip>
+                <StatusChip tone="info">资产</StatusChip>
+                <StatusChip tone={headerActiveRuns.length ? 'warning' : 'success'}>{headerActiveRuns.length ? '运行中' : '静默'}</StatusChip>
+              </>
+            )}
+            actions={(
+              <label className="relative flex h-11 min-w-[300px] items-center rounded-[12px] border border-[#dfe5ee] bg-white pl-10 pr-16 text-sm text-[#0f172a] shadow-[0_10px_28px_rgba(15,23,42,0.04)]">
+                <Search className="absolute left-3.5 h-4 w-4 text-[#7c8799]" />
+                <input
+                  value={opsSearchQuery}
+                  onChange={(event) => setOpsSearchQuery(event.target.value)}
+                  placeholder="筛选当前 Ops 的任务 / 状态 / 服务 / 资产 / 活动"
+                  className="h-full w-full bg-transparent outline-none placeholder:text-[#94a3b8]"
+                />
+                <span className="pointer-events-none absolute right-3 inline-flex h-6 items-center justify-center rounded-[8px] border border-[#dfe5ee] bg-[#f8fafc] px-2 text-[11px] font-semibold text-[#64748b]">
+                  本页
+                </span>
+              </label>
+            )}
+            utility={workspaceShellUtility}
+            onOpenCeo={() => activateSection('ceo')}
+            onOpenProjects={() => activateSection('projects')}
+            onOpenKnowledge={() => activateSection('knowledge')}
+            onOpenOps={() => openOpsPanel()}
+            onOpenSettings={() => openSettingsPanel()}
+          >
+            <OpsDashboard
+              searchQuery={opsSearchQuery}
+              workspaces={departmentWorkspaces}
+              skills={skills}
+              workflows={workflows}
+              rules={rules}
+              discoveredSkills={discoveredSkills}
+              discoveredWorkflows={discoveredWorkflows}
+              discoveredRules={discoveredRules}
+              requestedTab={opsAssetRequest.tab}
+              requestedItemName={opsAssetRequest.itemName}
+              requestToken={opsAssetRequest.nonce}
+              requestedProposalId={opsProposalRequest.proposalId}
+              proposalRequestToken={opsProposalRequest.nonce}
+              refreshSignal={systemImprovementRefreshSignal}
+              onRefreshAssets={() => {
+                void loadOperationsAssets(true);
+              }}
+              onOpenProviderSettings={() => openSettingsPanel({ tab: 'provider', focusTarget: 'third-party-provider' })}
+              onOpenApiKeys={() => openSettingsPanel({ tab: 'api-keys' })}
+              onNavigateToProject={navigateToProject}
+              onOpenImprovementProposal={openSystemImprovementProposal}
+            />
+          </WorkspaceConceptShell>
         ) : sidebarSection === 'ceo' ? (
           <div className="app-shell-stage relative flex-1 overflow-hidden">
             <CeoOfficeCockpit
@@ -1408,12 +1592,14 @@ export default function Home() {
               ceoHistory={ceoHistory}
               ceoPriorityTasks={ceoPriorityTasks}
               ceoRecentEvents={ceoRecentEvents}
+              refreshSignal={systemImprovementRefreshSignal}
               onCreateCeoConversation={() => void handleCreateCeoConversation('replace')}
               onOpenConversationWorkbench={openConversationWorkbench}
               onOpenProjects={() => activateSection('projects')}
               onOpenKnowledge={() => activateSection('knowledge')}
               onNavigateToKnowledge={navigateToKnowledge}
-              onOpenOps={() => activateSection('operations')}
+              onOpenOps={openOpsPanel}
+              onOpenImprovementProposal={openSystemImprovementProposal}
               onOpenSettings={() => openSettingsPanel()}
               onSelectConversation={(id, title, targetSection) => handleSelect(id, title, targetSection)}
               onNavigateToProject={navigateToProject}
@@ -1424,8 +1610,7 @@ export default function Home() {
               onModelChange={setCurrentModel}
               onAgenticModeChange={setAgenticMode}
               onDepartmentSaved={(uri, config) => {
-                setDepartmentsMap(prev => new Map(prev).set(uri, config));
-                api.updateDepartment(uri, config).catch(() => { });
+                setDepartmentsMap(prev => mergeDepartmentConfigIntoWorkspaceMap(prev, uri, config));
               }}
               onRefreshDashboard={() => {
                 void loadAgentState(selectedAgentRunId);
@@ -1528,6 +1713,14 @@ export default function Home() {
         </div>
       ) : null}
 
+      <SystemImprovementDetailDrawer
+        open={!!systemImprovementProposalId}
+        proposalId={systemImprovementProposalId}
+        onOpenChange={handleSystemImprovementDrawerOpenChange}
+        onNavigateToProject={navigateToProject}
+        onOpenOps={openOpsPanel}
+        onRefresh={refreshSystemImprovementViews}
+      />
       <LogViewerPanel open={logViewerOpen} onClose={() => setLogViewerOpen(false)} />
       <ActiveTasksPanel
         tasks={visibleActiveTasks}

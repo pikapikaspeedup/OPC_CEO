@@ -46,8 +46,15 @@ export type {
   ProtectedCorePolicy,
   RunCapsule,
   SystemImprovementArea,
+  SystemImprovementCodexExecutionSnapshot,
+  SystemImprovementExitEvidenceBundle,
   SystemImprovementProposal,
   SystemImprovementProposalStatus,
+  SystemImprovementReleaseCommandBundle,
+  SystemImprovementReleaseGateSnapshot,
+  SystemImprovementReleaseGateStatus,
+  SystemImprovementReleasePreflightCheck,
+  SystemImprovementReleasePreflightStatus,
   SystemImprovementRisk,
   SystemImprovementSeverity,
   SystemImprovementSignal,
@@ -239,6 +246,17 @@ export {
   ensureSystemImprovementApprovalRequest,
   rejectSystemImprovementProposal,
 } from './self-improvement-approval';
+export {
+  runApprovedSystemImprovementCodexTask,
+} from './self-improvement-codex-execution';
+export {
+  runSystemImprovementReleaseAction,
+} from './self-improvement-release-gate';
+export type {
+  SystemImprovementReleaseAction,
+  SystemImprovementReleaseActionInput,
+  SystemImprovementReleaseActionResult,
+} from './self-improvement-release-gate';
 export {
   observeSystemImprovementProposal,
 } from './self-improvement-observer';

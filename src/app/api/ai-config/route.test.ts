@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/providers/ai-config', () => ({
-  loadAIConfig: vi.fn(() => ({ defaultProvider: 'antigravity' })),
-  saveAIConfig: vi.fn(),
-  resetAIConfigCache: vi.fn(),
-}));
+vi.mock('@/lib/providers/ai-config', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/providers/ai-config')>('@/lib/providers/ai-config');
+  return {
+    ...actual,
+    loadAIConfig: vi.fn(() => ({ defaultProvider: 'antigravity' })),
+    saveAIConfig: vi.fn(),
+    resetAIConfigCache: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/providers/provider-inventory', () => ({
   getProviderInventory: vi.fn(),
 }));
 
-import { resetAIConfigCache, saveAIConfig } from '@/lib/providers/ai-config';
+import { normalizeAIConfig, resetAIConfigCache, saveAIConfig } from '@/lib/providers/ai-config';
 import { getProviderInventory } from '@/lib/providers/provider-inventory';
 import { PUT } from './route';
 
@@ -86,6 +90,6 @@ describe('PUT /api/ai-config', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(vi.mocked(resetAIConfigCache)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(saveAIConfig)).toHaveBeenCalledWith(body);
+    expect(vi.mocked(saveAIConfig)).toHaveBeenCalledWith(normalizeAIConfig(body));
   });
 });

@@ -19,6 +19,14 @@ export function getPlatformEngineeringWorkspacePath(): string {
   return path.join(GATEWAY_HOME, 'system-workspaces', PLATFORM_ENGINEERING_WORKSPACE_ALIAS);
 }
 
+export function getPlatformEngineeringWorktreesPath(): string {
+  return path.join(getPlatformEngineeringWorkspacePath(), 'worktrees');
+}
+
+export function getPlatformEngineeringEvidencePath(): string {
+  return path.join(getPlatformEngineeringWorkspacePath(), 'evidence');
+}
+
 export function getPlatformEngineeringWorkspaceUri(): string {
   return `file://${getPlatformEngineeringWorkspacePath()}`;
 }

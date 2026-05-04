@@ -1,4 +1,7 @@
-import { patchSystemImprovementProposal } from './self-improvement-store';
+import {
+  getSystemImprovementProposal,
+  patchSystemImprovementProposal,
+} from './self-improvement-store';
 
 export function observeSystemImprovementProposal(input: {
   proposalId: string;
@@ -6,10 +9,12 @@ export function observeSystemImprovementProposal(input: {
   linkedRunIds?: string[];
   metadata?: Record<string, unknown>;
 }) {
+  const existing = getSystemImprovementProposal(input.proposalId);
   const proposal = patchSystemImprovementProposal(input.proposalId, {
     status: 'observing',
     ...(input.linkedRunIds?.length ? { linkedRunIds: input.linkedRunIds } : {}),
     metadata: {
+      ...(existing?.metadata || {}),
       ...(input.metadata || {}),
       observationSummary: input.summary,
       observedAt: new Date().toISOString(),

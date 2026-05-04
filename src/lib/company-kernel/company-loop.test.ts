@@ -8,6 +8,15 @@ import type { OperatingAgendaItem } from './contracts';
 let tempHome: string;
 let previousHome: string | undefined;
 let previousGatewayHome: string | undefined;
+const NOTIFICATION_ENV_KEYS = [
+  'COMPANY_LOOP_WEBHOOK_URL',
+  'AG_COMPANY_LOOP_WEBHOOK_URL',
+  'COMPANY_LOOP_EMAIL_WEBHOOK_URL',
+  'AG_COMPANY_LOOP_EMAIL_WEBHOOK_URL',
+  'COMPANY_LOOP_EMAIL_RECIPIENTS',
+  'AG_COMPANY_LOOP_EMAIL_RECIPIENTS',
+] as const;
+let previousNotificationEnv: Record<(typeof NOTIFICATION_ENV_KEYS)[number], string | undefined>;
 
 async function loadModules() {
   vi.resetModules();
@@ -47,6 +56,9 @@ describe('company loop kernel', () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'company-loop-kernel-'));
     previousHome = process.env.HOME;
     previousGatewayHome = process.env.AG_GATEWAY_HOME;
+    previousNotificationEnv = Object.fromEntries(
+      NOTIFICATION_ENV_KEYS.map((key) => [key, process.env[key]]),
+    ) as Record<(typeof NOTIFICATION_ENV_KEYS)[number], string | undefined>;
     process.env.HOME = tempHome;
     process.env.AG_GATEWAY_HOME = path.join(tempHome, 'gateway-home');
   });
@@ -58,10 +70,21 @@ describe('company loop kernel', () => {
     else process.env.HOME = previousHome;
     if (previousGatewayHome === undefined) delete process.env.AG_GATEWAY_HOME;
     else process.env.AG_GATEWAY_HOME = previousGatewayHome;
+    for (const key of NOTIFICATION_ENV_KEYS) {
+      if (previousNotificationEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previousNotificationEnv[key];
+      }
+    }
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
   it('creates default policy and persists loop runs with digests', async () => {
+    process.env.COMPANY_LOOP_EMAIL_WEBHOOK_URL = 'https://mail.example.test/hook';
+    process.env.COMPANY_LOOP_EMAIL_RECIPIENTS = 'ceo@example.test';
+    process.env.COMPANY_LOOP_WEBHOOK_URL = 'https://hooks.example.test/company-loop';
+
     const modules = await loadModules();
     const policy = modules.loopPolicy.upsertCompanyLoopPolicy({
       ...modules.loopPolicy.getOrCreateCompanyLoopPolicy(),

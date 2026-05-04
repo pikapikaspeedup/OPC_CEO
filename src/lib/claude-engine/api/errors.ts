@@ -9,8 +9,6 @@
  * - is529Error() / isRetryableError() — 重试判断辅助
  */
 
-import { APIClientError } from './client';
-
 // ─── SSL/TLS Error Codes ─────────────────────────────────────────────────────
 
 const SSL_ERROR_CODES = new Set([

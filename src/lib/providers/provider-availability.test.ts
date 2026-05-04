@@ -7,6 +7,7 @@ import {
   getSelectableProviderOptions,
   isProviderAvailable,
   isCustomProviderConfigured,
+  listConfiguredProviderIds,
   type ProviderInventory,
 } from './provider-availability';
 
@@ -29,8 +30,6 @@ describe('provider-availability', () => {
     expect(options.map((option) => option.value)).toEqual([
       'antigravity',
       'native-codex',
-      'codex',
-      'claude-code',
       'claude-api',
       'openai-api',
       'gemini-api',
@@ -38,7 +37,6 @@ describe('provider-availability', () => {
       'custom',
     ]);
     expect(options.find((option) => option.value === 'antigravity')?.disabled).toBe(false);
-    expect(options.find((option) => option.value === 'codex')?.disabled).toBe(false);
     expect(options.find((option) => option.value === 'native-codex')).toMatchObject({
       disabled: true,
       label: expect.stringContaining('未配置'),
@@ -93,5 +91,49 @@ describe('provider-availability', () => {
       { path: 'scenes.review', provider: 'grok-api' },
     ]);
     expect(formatProviderValidationError(issues)).toContain('defaultProvider');
+  });
+
+  it('treats disabled native providers as unavailable in this system', () => {
+    const config: AIProviderConfig = {
+      defaultProvider: 'antigravity',
+      providerProfiles: {
+        'native-codex': { enabled: false },
+      },
+    };
+
+    expect(isProviderAvailable('native-codex', {
+      ...inventory,
+      providers: {
+        ...inventory.providers,
+        nativeCodex: { installed: true, loggedIn: true, authFilePath: '/tmp/auth.json' },
+      },
+    }, undefined, config)).toBe(false);
+  });
+
+  it('lists only configured and enabled providers for default selection', () => {
+    const config: AIProviderConfig = {
+      defaultProvider: 'antigravity',
+      customProvider: {
+        id: 'custom-default',
+        name: 'BaogaoAI',
+        baseUrl: 'https://new.baogaoai.com/v1',
+        apiKey: 'sk-test',
+      },
+      providerProfiles: {
+        'native-codex': { enabled: false },
+      },
+    };
+
+    const providers = listConfiguredProviderIds(config, {
+      ...inventory,
+      openai: { set: true },
+      providers: {
+        ...inventory.providers,
+        nativeCodex: { installed: true, loggedIn: true, authFilePath: '/tmp/auth.json' },
+      },
+    });
+
+    expect(providers).toEqual(expect.arrayContaining(['claude-api', 'openai-api', 'custom']));
+    expect(providers).not.toContain('native-codex');
   });
 });

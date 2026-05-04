@@ -1,10 +1,14 @@
-import { NextResponse } from 'next/server';
-import { readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+
+import { NextResponse } from 'next/server';
+
 import {
+  buildKnowledgeItemFromAsset,
   deleteKnowledgeAsset,
   getKnowledgeAsset,
+  recordKnowledgeAssetAccess,
   updateKnowledgeAssetMetadata,
   upsertKnowledgeAsset,
 } from '@/lib/knowledge';
@@ -24,14 +28,16 @@ function listArtifactFiles(artifactsDir: string, base = ''): string[] {
         files.push(rel);
       }
     }
-  } catch { /* dir missing */ }
+  } catch {
+    // dir missing
+  }
   return files;
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const kiDir = join(KNOWLEDGE_DIR, id);
-  const metaPath = join(kiDir, 'metadata.json');
+  const knowledgeDir = join(KNOWLEDGE_DIR, id);
+  const metaPath = join(knowledgeDir, 'metadata.json');
   const storedAsset = getKnowledgeAsset(id);
 
   if (!storedAsset && !existsSync(metaPath)) {
@@ -42,33 +48,68 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     if (storedAsset && !existsSync(metaPath)) {
       upsertKnowledgeAsset(storedAsset);
     }
-    const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+
+    const meta = existsSync(metaPath)
+      ? JSON.parse(readFileSync(metaPath, 'utf-8')) as Record<string, unknown>
+      : {};
     let timestamps = { created: '', modified: '', accessed: '' };
     try {
-      timestamps = JSON.parse(readFileSync(join(kiDir, 'timestamps.json'), 'utf-8'));
-    } catch { /* optional */ }
-
-    const artifactsDir = join(kiDir, 'artifacts');
-    const artifactFiles = listArtifactFiles(artifactsDir);
-
-    // Read all artifact contents
-    const artifacts: Record<string, string> = {};
-    for (const f of artifactFiles) {
-      try {
-        artifacts[f] = readFileSync(join(artifactsDir, f), 'utf-8');
-      } catch { /* skip unreadable */ }
+      timestamps = JSON.parse(readFileSync(join(knowledgeDir, 'timestamps.json'), 'utf-8')) as typeof timestamps;
+    } catch {
+      // optional
     }
 
-    return NextResponse.json({
+    const artifactsDir = join(knowledgeDir, 'artifacts');
+    const artifactFiles = listArtifactFiles(artifactsDir);
+    const artifacts: Record<string, string> = {};
+    for (const file of artifactFiles) {
+      try {
+        artifacts[file] = readFileSync(join(artifactsDir, file), 'utf-8');
+      } catch {
+        // skip unreadable
+      }
+    }
+
+    if (storedAsset) {
+      recordKnowledgeAssetAccess([id]);
+    }
+
+    const base = storedAsset ? buildKnowledgeItemFromAsset(storedAsset) : {
       id,
-      title: meta.title || id,
-      summary: meta.summary || '',
-      references: meta.references || [],
+      title: typeof meta.title === 'string' ? meta.title : id,
+      summary: typeof meta.summary === 'string' ? meta.summary : '',
+      references: Array.isArray(meta.references) ? meta.references as Array<{ type: string; value: string }> : [],
       timestamps,
       artifactFiles,
+      workspaceUri: typeof meta.workspaceUri === 'string' ? meta.workspaceUri : undefined,
+      category: typeof meta.category === 'string' ? meta.category : undefined,
+      status: typeof meta.status === 'string' ? meta.status : undefined,
+      usageCount: typeof meta.usageCount === 'number' ? meta.usageCount : undefined,
+      lastAccessedAt: typeof meta.lastAccessedAt === 'string' ? meta.lastAccessedAt : undefined,
+    };
+
+    return NextResponse.json({
+      ...base,
+      summary: typeof meta.summary === 'string' ? meta.summary : base.summary,
+      references: Array.isArray(meta.references) ? meta.references : base.references,
+      timestamps: {
+        created: timestamps.created || base.timestamps.created,
+        modified: timestamps.modified || base.timestamps.modified,
+        accessed: timestamps.accessed || base.timestamps.accessed,
+      },
+      artifactFiles,
       artifacts,
-      ...(typeof meta.usageCount === 'number' ? { usageCount: meta.usageCount } : {}),
-      ...(typeof meta.lastAccessedAt === 'string' ? { lastAccessedAt: meta.lastAccessedAt } : {}),
+      tags: storedAsset?.tags || (Array.isArray(meta.tags) ? meta.tags.filter((tag): tag is string => typeof tag === 'string') : []),
+      scope: storedAsset?.scope || (meta.scope === 'organization' ? 'organization' : meta.scope === 'department' ? 'department' : undefined),
+      sourceType: storedAsset?.source.type || (meta.sourceType === 'manual' || meta.sourceType === 'ceo' || meta.sourceType === 'system' || meta.sourceType === 'run'
+        ? meta.sourceType
+        : undefined),
+      sourceRunId: storedAsset?.source.runId || (typeof meta.sourceRunId === 'string' ? meta.sourceRunId : undefined),
+      sourceArtifactPath: storedAsset?.source.artifactPath || (typeof meta.sourceArtifactPath === 'string' ? meta.sourceArtifactPath : undefined),
+      confidence: storedAsset?.confidence || (typeof meta.confidence === 'number' ? meta.confidence : undefined),
+      evidenceCount: storedAsset?.evidence?.refs.length || (typeof meta.evidenceCount === 'number' ? meta.evidenceCount : undefined),
+      promotionLevel: storedAsset?.promotion?.level || (typeof meta.promotionLevel === 'string' ? meta.promotionLevel : undefined),
+      promotionSourceCandidateId: storedAsset?.promotion?.sourceCandidateId || (typeof meta.promotionSourceCandidateId === 'string' ? meta.promotionSourceCandidateId : undefined),
     });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
@@ -77,8 +118,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const kiDir = join(KNOWLEDGE_DIR, id);
-  const metaPath = join(kiDir, 'metadata.json');
+  const knowledgeDir = join(KNOWLEDGE_DIR, id);
+  const metaPath = join(knowledgeDir, 'metadata.json');
   const storedAsset = getKnowledgeAsset(id);
 
   if (!storedAsset && !existsSync(metaPath)) {
@@ -89,7 +130,6 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const body = await req.json();
     const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, 'utf-8')) : {};
 
-    // Update allowed fields
     if (body.title !== undefined) meta.title = body.title;
     if (body.summary !== undefined) meta.summary = body.summary;
 
@@ -100,12 +140,13 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
       });
     }
 
-    // Update timestamps
-    const tsPath = join(kiDir, 'timestamps.json');
+    const tsPath = join(knowledgeDir, 'timestamps.json');
     let timestamps = { created: '', modified: '', accessed: '' };
     try {
       timestamps = JSON.parse(readFileSync(tsPath, 'utf-8'));
-    } catch { /* */ }
+    } catch {
+      // optional
+    }
     timestamps.modified = new Date().toISOString();
     writeFileSync(tsPath, JSON.stringify(timestamps, null, 2), 'utf-8');
 
@@ -117,10 +158,10 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const kiDir = join(KNOWLEDGE_DIR, id);
+  const knowledgeDir = join(KNOWLEDGE_DIR, id);
   const storedAsset = getKnowledgeAsset(id);
 
-  if (!storedAsset && !existsSync(kiDir)) {
+  if (!storedAsset && !existsSync(knowledgeDir)) {
     return NextResponse.json({ error: 'Knowledge item not found' }, { status: 404 });
   }
 
@@ -128,7 +169,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
     if (storedAsset) {
       deleteKnowledgeAsset(id);
     }
-    rmSync(kiDir, { recursive: true, force: true });
+    rmSync(knowledgeDir, { recursive: true, force: true });
     return NextResponse.json({ ok: true, deleted: id });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

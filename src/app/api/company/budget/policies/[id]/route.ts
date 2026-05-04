@@ -13,6 +13,20 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+const DEFAULT_BUDGET_POLICY_INPUTS: Record<string, {
+  scope: BudgetScope;
+  period: BudgetPeriod;
+}> = {
+  'budget:organization:default:day': {
+    scope: 'organization',
+    period: 'day',
+  },
+  'budget:department:default:day': {
+    scope: 'department',
+    period: 'day',
+  },
+};
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -22,7 +36,10 @@ export async function GET(
   }
 
   const { id } = await params;
-  const policy = getBudgetPolicy(id);
+  const existing = getBudgetPolicy(id);
+  const policy = existing || (DEFAULT_BUDGET_POLICY_INPUTS[id]
+    ? upsertBudgetPolicy(buildDefaultBudgetPolicy(DEFAULT_BUDGET_POLICY_INPUTS[id]))
+    : null);
   if (!policy) {
     return NextResponse.json({ error: 'Budget policy not found' }, { status: 404 });
   }

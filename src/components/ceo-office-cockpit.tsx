@@ -97,12 +97,14 @@ type CeoOfficeCockpitProps = {
   ceoHistory: Conversation[];
   ceoPriorityTasks: ActiveTask[];
   ceoRecentEvents: AuditEvent[];
+  refreshSignal?: number;
   onCreateCeoConversation: () => void | Promise<void>;
   onOpenConversationWorkbench: () => void;
   onOpenProjects: () => void;
   onOpenKnowledge: () => void;
   onNavigateToKnowledge: (knowledgeId: string | null, title: string | null) => void;
-  onOpenOps: () => void;
+  onOpenOps: (options?: { proposalId?: string; query?: string }) => void;
+  onOpenImprovementProposal: (proposalId: string | null) => void;
   onOpenSettings: () => void;
   onSelectConversation: (id: string, title: string, targetSection?: 'ceo' | 'conversations') => void;
   onNavigateToProject: (projectId: string | null) => void;
@@ -121,7 +123,7 @@ type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'accent';
 function formatImprovementMergeGateLabel(proposal: SystemImprovementProposalFE): string {
   switch (proposal.exitEvidence?.mergeGate.status) {
     case 'ready-to-merge':
-      return '可准出';
+      return '可发布';
     case 'blocked':
       return '已阻塞';
     case 'pending':
@@ -131,12 +133,37 @@ function formatImprovementMergeGateLabel(proposal: SystemImprovementProposalFE):
   }
 }
 
+function formatImprovementReleaseGateLabel(proposal: SystemImprovementProposalFE): string | null {
+  switch (proposal.exitEvidence?.releaseGate?.status) {
+    case 'preflight-failed':
+      return '预检失败';
+    case 'ready-for-approval':
+      return '待批准发布';
+    case 'approved':
+      return '已批准发布';
+    case 'merged':
+      return '已合并';
+    case 'restarted':
+      return '已重启';
+    case 'observing':
+      return '观察中';
+    case 'rolled-back':
+      return '已回滚';
+    default:
+      return null;
+  }
+}
+
 function formatImprovementExecutionSummary(proposal: SystemImprovementProposalFE): string {
   const evidence = proposal.exitEvidence;
   if (!evidence) {
     return proposal.status;
   }
   const segments: string[] = [];
+  if (evidence.codex) {
+    segments.push(`Codex ${evidence.codex.decision}`);
+    segments.push(`${evidence.codex.changedFiles.length} files`);
+  }
   if (evidence.project) segments.push(`项目 ${evidence.project.status}`);
   if (evidence.latestRun) {
     segments.push(
@@ -156,8 +183,60 @@ function formatImprovementExecutionSummary(proposal: SystemImprovementProposalFE
       ? `测试 ${evidence.testing.passedCount}/${evidence.testing.evidenceCount}`
       : '未提交测试',
   );
-  segments.push(`准出 ${formatImprovementMergeGateLabel(proposal)}`);
+  segments.push(`发布 ${formatImprovementMergeGateLabel(proposal)}`);
+  const releaseLabel = formatImprovementReleaseGateLabel(proposal);
+  if (releaseLabel) {
+    segments.push(`发布 ${releaseLabel}`);
+  }
   return segments.join(' · ');
+}
+
+function getImprovementDecisionLabel(proposal: SystemImprovementProposalFE): string {
+  switch (proposal.exitEvidence?.releaseGate?.status) {
+    case 'preflight-failed':
+      return '预检失败';
+    case 'ready-for-approval':
+      return '待批准发布';
+    case 'approved':
+      return '待合并';
+    case 'merged':
+      return '待重启';
+    case 'restarted':
+      return '待观察';
+    default:
+      break;
+  }
+  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return '待发布检查';
+  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return '需处理';
+  if (proposal.status === 'approval-required') return '需准入';
+  if (proposal.status === 'approved') return '待执行';
+  if (proposal.status === 'testing') return '待验证';
+  return proposal.status;
+}
+
+function getImprovementDecisionPriority(proposal: SystemImprovementProposalFE): DecisionItem['priority'] {
+  if (
+    proposal.status === 'approval-required'
+    || proposal.exitEvidence?.mergeGate.status === 'ready-to-merge'
+    || proposal.exitEvidence?.mergeGate.status === 'blocked'
+    || proposal.risk === 'critical'
+    || proposal.risk === 'high'
+  ) {
+    return '高';
+  }
+  if (proposal.status === 'approved' || proposal.status === 'testing') return '中';
+  return '低';
+}
+
+function getImprovementDecisionTone(proposal: SystemImprovementProposalFE): Tone {
+  if (proposal.exitEvidence?.releaseGate?.status === 'preflight-failed') return 'danger';
+  if (proposal.exitEvidence?.releaseGate?.status === 'ready-for-approval') return 'success';
+  if (proposal.exitEvidence?.releaseGate?.status === 'approved' || proposal.exitEvidence?.releaseGate?.status === 'merged') return 'warning';
+  if (proposal.exitEvidence?.releaseGate?.status === 'restarted') return 'info';
+  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return 'success';
+  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return 'danger';
+  if (proposal.status === 'approval-required' || proposal.status === 'approved' || proposal.status === 'testing') return 'warning';
+  return 'info';
 }
 
 type DepartmentPulse = {
@@ -756,12 +835,14 @@ export default function CeoOfficeCockpit({
   ceoHistory,
   ceoPriorityTasks,
   ceoRecentEvents,
+  refreshSignal = 0,
   onCreateCeoConversation,
   onOpenConversationWorkbench,
   onOpenProjects,
   onOpenKnowledge,
   onNavigateToKnowledge,
   onOpenOps,
+  onOpenImprovementProposal,
   onOpenSettings,
   onSelectConversation,
   onNavigateToProject,
@@ -851,7 +932,7 @@ export default function CeoOfficeCockpit({
     return () => {
       cancelled = true;
     };
-  }, [projects.length, workspaces.length]);
+  }, [projects.length, refreshSignal, workspaces.length]);
 
   const runCompanyLoopFromOffice = async (kind: CompanyLoopRunKindFE) => {
     setRunningLoopKind(kind);
@@ -1048,8 +1129,35 @@ export default function CeoOfficeCockpit({
 	        onClick: onOpenKnowledge,
 	      }));
 
-	    return [...agendaItems, ...growthItems, ...taskItems, ...projectItems].slice(0, 6);
-	  }, [ceoPriorityTasks, growthProposals, locale, onNavigateToProject, onOpenKnowledge, onOpenProjects, onSelectConversation, operatingDay, projectAttentionItems]);
+    const improvementItems = improvementProposals
+      .filter((proposal) => (
+        proposal.status === 'approval-required'
+        || proposal.status === 'approved'
+        || proposal.status === 'testing'
+        || (
+          proposal.exitEvidence?.mergeGate.status === 'ready-to-merge'
+          && proposal.exitEvidence?.releaseGate?.status !== 'observing'
+          && proposal.exitEvidence?.releaseGate?.status !== 'rolled-back'
+        )
+        || proposal.exitEvidence?.mergeGate.status === 'blocked'
+      ))
+      .slice(0, 3)
+      .map((proposal) => ({
+        id: `self-improvement-${proposal.id}`,
+        title: proposal.title,
+        source: '软件自迭代',
+        eta: getImprovementDecisionLabel(proposal),
+        detail: formatImprovementExecutionSummary(proposal),
+        priority: getImprovementDecisionPriority(proposal),
+        tone: getImprovementDecisionTone(proposal),
+        icon: <PackageCheck className="h-4 w-4" />,
+        onClick: () => {
+          onOpenImprovementProposal(proposal.id);
+        },
+      }));
+
+	    return [...agendaItems, ...improvementItems, ...growthItems, ...taskItems, ...projectItems].slice(0, 6);
+	  }, [ceoPriorityTasks, growthProposals, improvementProposals, locale, onNavigateToProject, onOpenImprovementProposal, onOpenKnowledge, onOpenProjects, onSelectConversation, operatingDay, projectAttentionItems]);
 
   const departmentPulse = useMemo<DepartmentPulse[]>(
     () => workspaces.map((workspace) => {
@@ -1507,7 +1615,7 @@ export default function CeoOfficeCockpit({
                     {[
                       { label: 'Projects', caption: '项目工作台', icon: <BriefcaseBusiness className="h-4 w-4" />, onClick: onOpenProjects },
                       { label: 'Knowledge', caption: '知识库', icon: <BookOpen className="h-4 w-4" />, onClick: onOpenKnowledge },
-                      { label: 'Ops', caption: '运维中心', icon: <Radio className="h-4 w-4" />, onClick: onOpenOps },
+                      { label: 'Ops', caption: '运维中心', icon: <Radio className="h-4 w-4" />, onClick: () => onOpenOps() },
                       { label: 'Settings', caption: '配置中心', icon: <Settings2 className="h-4 w-4" />, onClick: onOpenSettings },
                     ].map(item => (
                       <button
@@ -1627,7 +1735,7 @@ export default function CeoOfficeCockpit({
 	            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
 	              <div className="flex items-center justify-between border-b border-[#edf1f7] px-4 py-4">
 	                <SectionHeader title="公司循环" />
-	                <button type="button" onClick={onOpenOps} className="inline-flex items-center gap-1 text-[12px] font-medium text-[#1768d9]">
+		                <button type="button" onClick={() => onOpenOps()} className="inline-flex items-center gap-1 text-[12px] font-medium text-[#1768d9]">
 	                  Ops
 	                  <ChevronRight className="h-4 w-4" />
 	                </button>
@@ -1639,7 +1747,7 @@ export default function CeoOfficeCockpit({
 	                  <WorkspaceMiniMetric label="派发" value={String(loopRuns[0]?.dispatchedRunIds.length || 0)} tone="accent" />
 	                </div>
 	                {loopDigests[0] ? (
-	                  <button type="button" onClick={onOpenOps} className="w-full rounded-xl border border-[#edf1f7] bg-[#fbfcff] p-3 text-left hover:bg-[#f8fbff]">
+		                  <button type="button" onClick={() => onOpenOps()} className="w-full rounded-xl border border-[#edf1f7] bg-[#fbfcff] p-3 text-left hover:bg-[#f8fbff]">
 	                    <div className="text-[12px] font-semibold text-[#111827]">{loopDigests[0].title}</div>
 	                    <div className="mt-1 line-clamp-2 text-[12px] leading-5 text-[#6b768a]">{loopDigests[0].operatingSummary}</div>
 	                  </button>
@@ -1694,16 +1802,7 @@ export default function CeoOfficeCockpit({
 	                        <button
 	                          key={proposal.id}
 	                          type="button"
-	                          onClick={() => {
-	                            const projectId = typeof proposal.exitEvidence?.project?.projectId === 'string'
-	                              ? proposal.exitEvidence.project.projectId
-	                              : null;
-	                            if (projectId) {
-	                              onNavigateToProject(projectId);
-	                              return;
-	                            }
-	                            onOpenOps();
-	                          }}
+	                          onClick={() => onOpenImprovementProposal(proposal.id)}
 	                          className="w-full rounded-xl border border-[#edf1f7] bg-[#fbfcff] p-3 text-left hover:bg-[#f8fbff]"
 	                        >
 	                          <div className="flex items-start justify-between gap-3">
@@ -1764,7 +1863,7 @@ export default function CeoOfficeCockpit({
                 {[
                   { label: 'Projects', detail: '项目看板', onClick: onOpenProjects },
                   { label: 'Knowledge', detail: '知识中心', onClick: onOpenKnowledge },
-                  { label: 'Ops', detail: '运维中心', onClick: onOpenOps },
+	                  { label: 'Ops', detail: '运维中心', onClick: () => onOpenOps() },
                 ].map(item => (
                   <button
                     key={item.label}

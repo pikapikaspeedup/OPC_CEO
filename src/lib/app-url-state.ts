@@ -12,6 +12,7 @@ export interface AppUrlState {
   conversationTitle: string | null;
   projectId: string | null;
   knowledgeId: string | null;
+  opsProposalId: string | null;
   settingsTab: AppUrlSettingsTab;
   settingsFocus: AppUrlSettingsFocus;
 }
@@ -47,9 +48,10 @@ export function parseAppUrlState(search: string | URLSearchParams): AppUrlState 
       : null,
     projectId: section === 'projects' ? cleanParam(params.get('project')) : null,
     knowledgeId: section === 'knowledge' ? cleanParam(params.get('knowledge')) : null,
+    opsProposalId: section === 'operations' ? cleanParam(params.get('proposal')) : null,
     settingsTab: rawTab && VALID_SETTINGS_TABS.has(rawTab as AppUrlSettingsTab)
       ? rawTab as AppUrlSettingsTab
-      : 'provider',
+      : 'profile',
     settingsFocus: rawFocus === 'third-party-provider' ? 'third-party-provider' : null,
   };
 }
@@ -82,6 +84,10 @@ export function buildAppUrl(pathname: string, state: AppUrlState): string {
 
   if (state.section === 'knowledge' && state.knowledgeId) {
     params.set('knowledge', state.knowledgeId);
+  }
+
+  if (state.section === 'operations' && state.opsProposalId) {
+    params.set('proposal', state.opsProposalId);
   }
 
   const query = params.toString();

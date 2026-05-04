@@ -3,10 +3,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 
-import { loadAIConfig, resetAIConfigCache, saveAIConfig } from '@/lib/providers/ai-config';
+import { loadAIConfig, normalizeAIConfig, resetAIConfigCache, saveAIConfig } from '@/lib/providers/ai-config';
+import { buildOpenAICompatibleModelsUrl } from '@/lib/providers/openai-compatible';
 import { findUnavailableProviders, formatProviderValidationError } from '@/lib/providers/provider-availability';
 import { getProviderInventory, getApiKeysPath, readStoredApiKeys, type StoredApiKeys } from '@/lib/providers/provider-inventory';
 import type { AIProviderConfig } from '@/lib/providers/types';
+import { getProviderModelCatalog, getProviderModelCatalogPath, type ProviderModelCatalogRequest } from '@/lib/provider-model-catalog';
+import { generateProviderImage, type ProviderImageGenerationRequest } from '@/lib/provider-image-generation';
 
 function json(body: unknown, init?: ResponseInit): Response {
   return Response.json(body, init);
@@ -49,7 +52,7 @@ export async function handleAIConfigGet(): Promise<Response> {
 
 export async function handleAIConfigPut(req: Request): Promise<Response> {
   try {
-    const body = await req.json() as AIProviderConfig;
+    const body = normalizeAIConfig(await req.json() as AIProviderConfig);
     if (!body.defaultProvider) {
       return json({ error: 'defaultProvider is required' }, { status: 400 });
     }
@@ -68,6 +71,65 @@ export async function handleAIConfigPut(req: Request): Promise<Response> {
     return json({ ok: true });
   } catch {
     return json({ error: 'Failed to save AI config' }, { status: 500 });
+  }
+}
+
+export async function handleProviderModelCatalogGet(req: Request): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const provider = url.searchParams.get('provider');
+    const refresh = url.searchParams.get('refresh') === '1';
+    if (!provider) {
+      return json({ error: 'provider is required' }, { status: 400 });
+    }
+
+    const entry = await getProviderModelCatalog({
+      provider: provider as ProviderModelCatalogRequest['provider'],
+      refresh,
+    });
+    return json({
+      entry,
+      cachePath: getProviderModelCatalogPath(),
+    });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : 'Failed to load provider model catalog' }, { status: 500 });
+  }
+}
+
+export async function handleProviderModelCatalogPost(req: Request): Promise<Response> {
+  try {
+    const body = await req.json() as ProviderModelCatalogRequest;
+    if (!body.provider) {
+      return json({ error: 'provider is required' }, { status: 400 });
+    }
+
+    const entry = await getProviderModelCatalog(body);
+    return json({
+      entry,
+      cachePath: getProviderModelCatalogPath(),
+    });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : 'Failed to refresh provider model catalog' }, { status: 500 });
+  }
+}
+
+export async function handleProviderImageGenerationPost(req: Request): Promise<Response> {
+  try {
+    const body = await req.json() as ProviderImageGenerationRequest;
+    if (!body.provider) {
+      return json({ error: 'provider is required' }, { status: 400 });
+    }
+    if (!body.prompt?.trim()) {
+      return json({ error: 'prompt is required' }, { status: 400 });
+    }
+
+    const result = await generateProviderImage(body);
+    return json(result);
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Failed to generate provider image' },
+      { status: 500 },
+    );
   }
 }
 
@@ -113,10 +175,45 @@ export async function handleApiKeysPut(req: Request): Promise<Response> {
 
 export async function handleApiKeysTestPost(req: Request): Promise<Response> {
   try {
-    const body = await req.json() as { provider: string; apiKey: string; baseUrl?: string };
-    const { provider, apiKey, baseUrl } = body;
+    const body = await req.json() as {
+      provider: string;
+      apiKey?: string;
+      baseUrl?: string;
+      connectionId?: string;
+      useStored?: boolean;
+    };
+    const { provider, baseUrl, connectionId, useStored } = body;
+    const storedKeys = readStoredApiKeys();
+    const aiConfig = loadAIConfig();
+    const customConnection = provider === 'custom'
+      ? (
+          (connectionId
+            ? aiConfig.customProviders?.find((item) => item.id === connectionId)
+            : aiConfig.customProvider)
+          ?? aiConfig.customProvider
+        )
+      : undefined;
 
-    if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+    const resolvedApiKey = typeof body.apiKey === 'string' && body.apiKey.trim()
+      ? body.apiKey.trim()
+      : useStored || !body.apiKey
+        ? (
+            provider === 'anthropic' || provider === 'claude-api' ? storedKeys.anthropic
+              : provider === 'openai' || provider === 'openai-api' ? storedKeys.openai
+                : provider === 'gemini' || provider === 'gemini-api' ? storedKeys.gemini
+                  : provider === 'grok' || provider === 'grok-api' ? storedKeys.grok
+                    : provider === 'custom' ? customConnection?.apiKey
+                      : undefined
+          )
+        : undefined;
+
+    const resolvedBaseUrl = typeof baseUrl === 'string' && baseUrl.trim()
+      ? baseUrl.trim()
+      : provider === 'custom'
+        ? customConnection?.baseUrl
+        : undefined;
+
+    if (!resolvedApiKey) {
       return json({ status: 'invalid', error: 'No API key provided' });
     }
 
@@ -124,12 +221,12 @@ export async function handleApiKeysTestPost(req: Request): Promise<Response> {
     const timeoutId = setTimeout(() => controller.abort(), 10_000);
 
     try {
-      if (provider === 'anthropic') {
+      if (provider === 'anthropic' || provider === 'claude-api') {
         const response = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           signal: controller.signal,
           headers: {
-            'x-api-key': apiKey.trim(),
+            'x-api-key': resolvedApiKey,
             'anthropic-version': '2023-06-01',
             'content-type': 'application/json',
           },
@@ -151,12 +248,12 @@ export async function handleApiKeysTestPost(req: Request): Promise<Response> {
       }
 
       if (provider === 'openai' || provider === 'openai-api') {
-        const endpoint = baseUrl?.replace(/\/+$/, '') || 'https://api.openai.com';
-        const response = await fetch(`${endpoint}/v1/models`, {
+        const endpoint = buildOpenAICompatibleModelsUrl(baseUrl?.trim() || 'https://api.openai.com');
+        const response = await fetch(endpoint, {
           method: 'GET',
           signal: controller.signal,
           headers: {
-            Authorization: `Bearer ${apiKey.trim()}`,
+            Authorization: `Bearer ${resolvedApiKey}`,
           },
         });
 
@@ -171,7 +268,7 @@ export async function handleApiKeysTestPost(req: Request): Promise<Response> {
       }
 
       if (provider === 'gemini' || provider === 'gemini-api') {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`, {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(resolvedApiKey)}`, {
           method: 'GET',
           signal: controller.signal,
         });
@@ -187,12 +284,12 @@ export async function handleApiKeysTestPost(req: Request): Promise<Response> {
       }
 
       if (provider === 'grok' || provider === 'grok-api') {
-        const endpoint = baseUrl?.replace(/\/+$/, '') || 'https://api.x.ai/v1';
-        const response = await fetch(`${endpoint}/models`, {
+        const endpoint = buildOpenAICompatibleModelsUrl(baseUrl?.trim() || 'https://api.x.ai/v1');
+        const response = await fetch(endpoint, {
           method: 'GET',
           signal: controller.signal,
           headers: {
-            Authorization: `Bearer ${apiKey.trim()}`,
+            Authorization: `Bearer ${resolvedApiKey}`,
           },
         });
 
@@ -207,22 +304,22 @@ export async function handleApiKeysTestPost(req: Request): Promise<Response> {
       }
 
       if (provider === 'custom') {
-        if (!baseUrl) {
+        if (!resolvedBaseUrl) {
           return json({ status: 'error', error: 'Custom provider requires baseUrl' });
         }
 
         let endpoint = '';
         try {
-          endpoint = new URL(baseUrl).toString().replace(/\/+$/, '');
+          endpoint = buildOpenAICompatibleModelsUrl(new URL(resolvedBaseUrl).toString());
         } catch {
           return json({ status: 'error', error: 'base URL invalid' });
         }
 
-        const response = await fetch(`${endpoint}/v1/models`, {
+        const response = await fetch(endpoint, {
           method: 'GET',
           signal: controller.signal,
           headers: {
-            Authorization: `Bearer ${apiKey.trim()}`,
+            Authorization: `Bearer ${resolvedApiKey}`,
           },
         });
 

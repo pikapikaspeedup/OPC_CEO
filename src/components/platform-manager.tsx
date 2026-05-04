@@ -290,14 +290,14 @@ export default function PlatformManager({ platforms }: PlatformManagerProps) {
         onClick={() => setAddOpen(true)}
       >
         <Plus className="mr-1.5 h-3 w-3" />
-        添加消息平台
+        添加会话平台
       </Button>
 
       {/* Add platform dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto border-[var(--app-border-soft)] bg-[var(--app-surface)] text-[var(--app-text)]">
           <DialogHeader>
-            <DialogTitle className="text-sm">添加消息平台</DialogTitle>
+            <DialogTitle className="text-sm">添加会话平台</DialogTitle>
             <DialogDescription className="text-xs text-[var(--app-text-muted)]">选择平台并填写凭证。</DialogDescription>
           </DialogHeader>
 

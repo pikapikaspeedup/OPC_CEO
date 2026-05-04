@@ -3,12 +3,17 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockExecuteDispatch } = vi.hoisted(() => ({
+const { mockExecuteDispatch, mockRunPlatformEngineeringCodexTask } = vi.hoisted(() => ({
   mockExecuteDispatch: vi.fn(),
+  mockRunPlatformEngineeringCodexTask: vi.fn(),
 }));
 
 vi.mock('../agents/dispatch-service', () => ({
   executeDispatch: (...args: unknown[]) => mockExecuteDispatch(...args),
+}));
+
+vi.mock('../platform-engineering-codex-runner', () => ({
+  runPlatformEngineeringCodexTask: (...args: unknown[]) => mockRunPlatformEngineeringCodexTask(...args),
 }));
 
 let tempHome: string;
@@ -20,6 +25,7 @@ async function loadModules() {
   delete (globalThis as Record<string, unknown>).__AG_GATEWAY_DB__;
   return {
     approval: await import('./self-improvement-approval'),
+    codexExecution: await import('./self-improvement-codex-execution'),
     execution: await import('./self-improvement-execution'),
     planner: await import('./self-improvement-planner'),
     platform: await import('../platform-engineering'),
@@ -37,12 +43,14 @@ describe('self-improvement execution', () => {
     process.env.HOME = tempHome;
     process.env.AG_GATEWAY_HOME = path.join(tempHome, 'gateway-home');
     mockExecuteDispatch.mockReset();
+    mockRunPlatformEngineeringCodexTask.mockReset();
   });
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__AG_GATEWAY_DB__;
     vi.resetModules();
     mockExecuteDispatch.mockReset();
+    mockRunPlatformEngineeringCodexTask.mockReset();
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
     if (previousGatewayHome === undefined) delete process.env.AG_GATEWAY_HOME;
@@ -50,8 +58,48 @@ describe('self-improvement execution', () => {
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it('approves a proposal and launches a platform engineering project', async () => {
-    mockExecuteDispatch.mockResolvedValue({ runId: 'run-improvement-1' });
+  function mockSuccessfulCodexRun(changedFiles: string[]) {
+    mockRunPlatformEngineeringCodexTask.mockResolvedValue({
+      worktree: {
+        runId: 'codex-run-1',
+        taskKey: 'system-improvement-task',
+        repoPath: process.cwd(),
+        worktreePath: path.join(tempHome, 'worktree'),
+        branch: 'ai/platform-system-improvement-task',
+        baseMode: 'snapshot',
+        requestedBaseRef: 'HEAD',
+        baseSha: 'abc123',
+        headSha: 'abc123',
+        snapshotSha: 'snapshot123',
+      },
+      codexOutput: 'done',
+      evidence: {
+        runId: 'codex-run-1',
+        taskKey: 'system-improvement-task',
+        baseSha: 'abc123',
+        headSha: 'abc123',
+        branch: 'ai/platform-system-improvement-task',
+        worktreePath: path.join(tempHome, 'worktree'),
+        evidencePath: path.join(tempHome, 'evidence.json'),
+        changedFiles,
+        disallowedFiles: [],
+        scopeCheckPassed: true,
+        diffCheckPassed: true,
+        validations: [
+          {
+            command: 'git diff --check',
+            passed: true,
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+          },
+        ],
+      },
+    });
+  }
+
+  it('approves a proposal and launches Codex worktree execution for platform engineering', async () => {
+    mockSuccessfulCodexRun(['src/lib/agents/scheduler.ts']);
     const modules = await loadModules();
     modules.platform.ensurePlatformEngineeringWorkspaceSkeleton();
 
@@ -82,9 +130,9 @@ describe('self-improvement execution', () => {
       launchExecution: true,
     });
 
-    expect(result.proposal.status).toBe('in-progress');
+    expect(result.proposal.status).toBe('ready-to-merge');
     expect(result.launch?.status).toBe('dispatched');
-    expect(result.launch?.runId).toBe('run-improvement-1');
+    expect(result.launch?.codexRunId).toBe('codex-run-1');
     expect(result.launch?.templateId).toBe('development-template-1');
 
     const project = modules.projectRegistry.getProject(String(result.launch?.projectId));
@@ -92,26 +140,26 @@ describe('self-improvement execution', () => {
     expect(project?.workspace).toBe(modules.platform.getPlatformEngineeringWorkspaceUri());
     expect(project?.governance?.platformEngineering?.source).toBe('proposal-created');
 
-    expect(mockExecuteDispatch).toHaveBeenCalledWith(expect.objectContaining({
-      workspace: modules.platform.getPlatformEngineeringWorkspaceUri(),
-      projectId: result.launch?.projectId,
-      templateId: 'development-template-1',
+    expect(mockRunPlatformEngineeringCodexTask).toHaveBeenCalledWith(expect.objectContaining({
+      repoPath: process.cwd(),
+      taskKey: proposal.id,
       prompt: expect.stringContaining(`Proposal ID: ${proposal.id}`),
-      taskEnvelope: expect.objectContaining({
-        proposalId: proposal.id,
-        proposalRisk: 'high',
-      }),
+      allowedPathPrefixes: ['src/lib/agents/scheduler.ts'],
+      expectEdits: true,
     }));
+    expect(mockExecuteDispatch).not.toHaveBeenCalled();
 
     const stored = modules.store.getSystemImprovementProposal(proposal.id);
     expect(stored?.metadata?.improvementProjectId).toBe(result.launch?.projectId);
-    expect(stored?.metadata?.improvementRunId).toBe('run-improvement-1');
-    expect(stored?.linkedRunIds).toContain('run-improvement-1');
+    expect(stored?.metadata?.codexRunId).toBe('codex-run-1');
+    expect(stored?.exitEvidence?.codex?.runId).toBe('codex-run-1');
+    expect(stored?.exitEvidence?.mergeGate.status).toBe('ready-to-merge');
+    expect(stored?.linkedRunIds).toContain(String(result.launch?.runId));
     expect(stored?.linkedRunIds).toContain('run-source-1');
   });
 
-  it('does not dispatch twice after a proposal is already in progress', async () => {
-    mockExecuteDispatch.mockResolvedValue({ runId: 'run-improvement-2' });
+  it('does not run Codex twice after runner evidence already exists', async () => {
+    mockSuccessfulCodexRun(['src/lib/knowledge/index.ts']);
     const modules = await loadModules();
     modules.platform.ensurePlatformEngineeringWorkspaceSkeleton();
 
@@ -142,11 +190,11 @@ describe('self-improvement execution', () => {
     });
     expect(first.launch?.status).toBe('dispatched');
 
-    mockExecuteDispatch.mockClear();
+    mockRunPlatformEngineeringCodexTask.mockClear();
 
-    const second = await modules.execution.ensureSystemImprovementProjectLaunched(proposal.id);
+    const second = await modules.codexExecution.runApprovedSystemImprovementCodexTask(proposal.id);
     expect(second.launch.status).toBe('already-running');
-    expect(second.launch.runId).toBe('run-improvement-2');
-    expect(mockExecuteDispatch).not.toHaveBeenCalled();
+    expect(second.launch.codexRunId).toBe('codex-run-1');
+    expect(mockRunPlatformEngineeringCodexTask).not.toHaveBeenCalled();
   });
 });

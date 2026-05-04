@@ -33,6 +33,37 @@ type SaveState = {
   message?: string;
 };
 
+const VERBOSITY_LABELS: Record<CEOProfileDraft['verbosity'], string> = {
+  brief: '精简',
+  normal: '中等',
+  detailed: '详细',
+};
+
+const ESCALATION_LABELS: Record<CEOProfileDraft['escalationStyle'], string> = {
+  aggressive: '强提醒',
+  balanced: '平衡',
+  minimal: '克制',
+};
+
+const RISK_LABELS: Record<CEOProfileDraft['riskTolerance'], string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+};
+
+const REVIEW_LABELS: Record<CEOProfileDraft['reviewPreference'], string> = {
+  'result-first': '结果优先',
+  'process-first': '过程优先',
+  balanced: '平衡',
+};
+
+const FEEDBACK_TYPE_LABELS: Record<FeedbackType, string> = {
+  preference: '偏好调整',
+  correction: '纠偏',
+  approval: '认可',
+  rejection: '否决',
+};
+
 function SectionCard({
   title,
   description,
@@ -47,7 +78,7 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <div className={cn('rounded-[24px] border border-[var(--app-border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.94))] p-5 shadow-[0_18px_48px_rgba(28,44,73,0.06)]', className)}>
+    <div className={cn('rounded-[20px] border border-[#dfe5ee] bg-white p-5 shadow-[0_14px_30px_rgba(28,44,73,0.05)]', className)}>
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-500/20 bg-sky-500/[0.08] text-sky-700">
           {icon}
@@ -245,23 +276,24 @@ export default function CEOProfileSettingsTab() {
   return (
     <div className="space-y-5">
       <SectionCard
-        title="CEO Profile"
+        title="个人信息"
+        description="用于管理你的身份、当前关注重点与 AI 默认协作语气。"
         icon={<Sparkles className="h-4 w-4" />}
-        className="border-sky-500/20 bg-[linear-gradient(135deg,rgba(47,109,246,0.08),rgba(255,255,255,0.98)_36%,rgba(248,250,252,0.94))]"
+        className="border-sky-500/15 bg-[linear-gradient(135deg,rgba(47,109,246,0.05),rgba(255,255,255,1)_34%,rgba(248,250,252,0.95))]"
       >
         <div className="grid gap-3 md:grid-cols-3">
           <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Identity</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">身份</div>
             <div className="mt-2 text-base font-semibold text-[var(--app-text)]">{profile.identity.name}</div>
             <div className="mt-1 text-xs text-[var(--app-text-soft)]">{profile.identity.tone || '未设置 tone'}</div>
           </div>
           <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Focus</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">关注点</div>
             <div className="mt-2 text-base font-semibold text-[var(--app-text)]">{profile.activeFocus?.length || 0}</div>
             <div className="mt-1 text-xs text-[var(--app-text-soft)]">当前活跃关注点</div>
           </div>
           <div className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Updated</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">最近更新</div>
             <div className="mt-2 text-base font-semibold text-[var(--app-text)]">
               {new Date(profile.updatedAt).toLocaleString()}
             </div>
@@ -272,10 +304,11 @@ export default function CEOProfileSettingsTab() {
       </SectionCard>
 
       <SectionCard
-        title="结构化偏好"
+        title="沟通偏好"
+        description="控制 AI 汇报详略、风险提醒强度与默认评审取向。"
         icon={<ShieldAlert className="h-4 w-4" />}
       >
-        <FieldRow label="CEO 名称" hint="用于结构化身份回显。">
+        <FieldRow label="显示名称" hint="用于结构化身份回显。">
           <Input
             value={draft.name}
             onChange={(event) => updateDraft('name', event.target.value)}
@@ -320,12 +353,12 @@ export default function CEOProfileSettingsTab() {
           <FieldRow label="信息详略" hint="决定汇报偏向简报还是展开说明。">
             <Select value={draft.verbosity} onValueChange={(value) => updateDraft('verbosity', value as CEOProfileDraft['verbosity'])}>
               <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
-                <SelectValue />
+                <SelectValue>{VERBOSITY_LABELS[draft.verbosity]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="brief">Brief</SelectItem>
-                <SelectItem value="normal">Normal</SelectItem>
-                <SelectItem value="detailed">Detailed</SelectItem>
+                <SelectItem value="brief">精简</SelectItem>
+                <SelectItem value="normal">中等</SelectItem>
+                <SelectItem value="detailed">详细</SelectItem>
               </SelectContent>
             </Select>
           </FieldRow>
@@ -333,12 +366,12 @@ export default function CEOProfileSettingsTab() {
           <FieldRow label="升级风格" hint="遇到风险时是更激进提醒，还是更克制。">
             <Select value={draft.escalationStyle} onValueChange={(value) => updateDraft('escalationStyle', value as CEOProfileDraft['escalationStyle'])}>
               <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
-                <SelectValue />
+                <SelectValue>{ESCALATION_LABELS[draft.escalationStyle]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="aggressive">Aggressive</SelectItem>
-                <SelectItem value="balanced">Balanced</SelectItem>
-                <SelectItem value="minimal">Minimal</SelectItem>
+                <SelectItem value="aggressive">强提醒</SelectItem>
+                <SelectItem value="balanced">平衡</SelectItem>
+                <SelectItem value="minimal">克制</SelectItem>
               </SelectContent>
             </Select>
           </FieldRow>
@@ -346,12 +379,12 @@ export default function CEOProfileSettingsTab() {
           <FieldRow label="风险容忍度" hint="影响默认取舍语境。">
             <Select value={draft.riskTolerance} onValueChange={(value) => updateDraft('riskTolerance', value as CEOProfileDraft['riskTolerance'])}>
               <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
-                <SelectValue />
+                <SelectValue>{RISK_LABELS[draft.riskTolerance]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="low">低</SelectItem>
+                <SelectItem value="medium">中</SelectItem>
+                <SelectItem value="high">高</SelectItem>
               </SelectContent>
             </Select>
           </FieldRow>
@@ -359,12 +392,12 @@ export default function CEOProfileSettingsTab() {
           <FieldRow label="评审偏好" hint="更关心结果、过程，还是折中。">
             <Select value={draft.reviewPreference} onValueChange={(value) => updateDraft('reviewPreference', value as CEOProfileDraft['reviewPreference'])}>
               <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
-                <SelectValue />
+                <SelectValue>{REVIEW_LABELS[draft.reviewPreference]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="result-first">Result First</SelectItem>
-                <SelectItem value="process-first">Process First</SelectItem>
-                <SelectItem value="balanced">Balanced</SelectItem>
+                <SelectItem value="result-first">结果优先</SelectItem>
+                <SelectItem value="process-first">过程优先</SelectItem>
+                <SelectItem value="balanced">平衡</SelectItem>
               </SelectContent>
             </Select>
           </FieldRow>
@@ -381,7 +414,7 @@ export default function CEOProfileSettingsTab() {
             ) : (
               <Save className="mr-1.5 h-4 w-4" />
             )}
-            保存结构化偏好
+            保存偏好
           </Button>
           <StatusMessage state={saveState} />
         </div>
@@ -389,19 +422,20 @@ export default function CEOProfileSettingsTab() {
 
       <SectionCard
         title="反馈信号"
+        description="把长期有效的协作偏好持续写入，帮助 AI 调整后续行为。"
         icon={<MessageSquareQuote className="h-4 w-4" />}
       >
         <div className="grid gap-4 xl:grid-cols-[minmax(0,0.36fr)_minmax(0,1fr)]">
           <FieldRow label="反馈类型" hint="用于后续区分偏好、纠偏、审批通过等。">
             <Select value={feedbackType} onValueChange={(value) => setFeedbackType(value as FeedbackType)}>
               <SelectTrigger className={cn('h-10', workspaceFieldClassName)}>
-                <SelectValue />
+                <SelectValue>{FEEDBACK_TYPE_LABELS[feedbackType]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="preference">Preference</SelectItem>
-                <SelectItem value="correction">Correction</SelectItem>
-                <SelectItem value="approval">Approval</SelectItem>
-                <SelectItem value="rejection">Rejection</SelectItem>
+                <SelectItem value="preference">偏好调整</SelectItem>
+                <SelectItem value="correction">纠偏</SelectItem>
+                <SelectItem value="approval">认可</SelectItem>
+                <SelectItem value="rejection">否决</SelectItem>
               </SelectContent>
             </Select>
           </FieldRow>
@@ -427,19 +461,19 @@ export default function CEOProfileSettingsTab() {
             ) : (
               <CheckCircle2 className="mr-1.5 h-4 w-4" />
             )}
-            记录反馈信号
+            提交反馈
           </Button>
           <StatusMessage state={feedbackState} />
         </div>
 
         <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">Recent Signals</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">最近反馈</div>
           {recentFeedback.length > 0 ? (
             <div className="space-y-2">
-              {recentFeedback.map((item) => (
+	              {recentFeedback.map((item) => (
                 <div key={`${item.timestamp}:${item.content}`} className="rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-4 py-3">
                   <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-muted)]">
-                    <span>{item.type}</span>
+                    <span>{FEEDBACK_TYPE_LABELS[item.type]}</span>
                     <span className="text-[var(--app-border-strong)]">•</span>
                     <span>{new Date(item.timestamp).toLocaleString()}</span>
                   </div>

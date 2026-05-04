@@ -1,7 +1,6 @@
 import type { AgentRunState } from './agents/group-types';
 import { readRunHistory } from './agents/run-history';
 import { getCodexConversation } from './providers/codex-executor';
-import { getNativeCodexConversation } from './providers/native-codex-executor';
 import {
   buildConversationStepsFromMessages,
   type LocalProviderId,
@@ -62,11 +61,6 @@ export function readLocalProviderTranscriptMessages(
   handle: string,
   run?: Pick<AgentRunState, 'runId' | 'prompt'> | null,
 ): TranscriptMessage[] | null {
-  if (provider === 'native-codex') {
-    const messages = getNativeCodexConversation(handle);
-    if (messages?.length) return messages;
-  }
-
   if (provider === 'codex') {
     const messages = getCodexConversation(handle);
     if (messages?.length) return messages;

@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { CheckCircle2, Settings, Building2, UserRound, FlaskConical, Radio, Hammer } from 'lucide-react';
+import { CheckCircle2, Settings, Building2, UserRound, FlaskConical, Radio, Hammer, Bot, GitBranch, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import DepartmentSetupDialog from '@/components/department-setup-dialog';
+import LocalFolderImportDialog from '@/components/local-folder-import-dialog';
 import DailyDigestCard from '@/components/daily-digest-card';
 import DepartmentDetailDrawer from '@/components/department-detail-drawer';
 import AuditLogWidget from '@/components/audit-log-widget';
 import DepartmentComparisonWidget from '@/components/department-comparison-widget';
+import { Button } from '@/components/ui/button';
 import {
   WorkspaceBadge,
   WorkspaceInteractiveSurface,
@@ -18,6 +20,11 @@ import {
 } from '@/components/ui/workspace-primitives';
 import { api } from '@/lib/api';
 import { isTauriDesktop, selectLocalFolder } from '@/lib/desktop-folder-picker';
+import {
+  getDepartmentBoundWorkspaceUris,
+  getDepartmentGroupKey,
+  workspaceNameFromUri,
+} from '@/lib/department-config';
 import type {
   Workspace,
   Project,
@@ -26,6 +33,7 @@ import type {
   CEORoutineSummaryFE,
   ManagementOverviewFE,
   EvolutionProposalFE,
+  SystemImprovementProposalFE,
 } from '@/lib/types';
 
 interface CEODashboardProps {
@@ -36,6 +44,84 @@ interface CEODashboardProps {
   onDepartmentSaved?: (uri: string, config: DepartmentConfig) => void;
   onRefresh?: () => void;
   onNavigateToProject?: (projectId: string) => void;
+}
+
+function getSelfIterationTone(proposal: SystemImprovementProposalFE): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
+  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return 'success';
+  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return 'danger';
+  if (proposal.status === 'approval-required') return 'warning';
+  if (proposal.status === 'in-progress' || proposal.status === 'testing') return 'info';
+  if (proposal.status === 'rejected' || proposal.status === 'rolled-back') return 'danger';
+  return 'neutral';
+}
+
+function formatSelfIterationStatus(proposal: SystemImprovementProposalFE): string {
+  switch (proposal.exitEvidence?.releaseGate?.status) {
+    case 'preflight-failed':
+      return '预检失败';
+    case 'ready-for-approval':
+      return '待批准发布';
+    case 'approved':
+      return '已批准发布';
+    case 'merged':
+      return '已合并待重启';
+    case 'restarted':
+      return '已重启';
+    case 'observing':
+      return '观察中';
+    case 'rolled-back':
+      return '已回滚';
+    default:
+      break;
+  }
+  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return '待发布检查';
+  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return '证据阻塞';
+  switch (proposal.status) {
+    case 'approval-required':
+      return '待准入审批';
+    case 'approved':
+      return '已批准待执行';
+    case 'in-progress':
+      return 'Codex 执行中';
+    case 'testing':
+      return '待验证';
+    case 'ready-to-merge':
+      return '待发布检查';
+    case 'published':
+      return '已合并';
+    case 'observing':
+      return '观察中';
+    case 'rejected':
+      return '已拒绝';
+    case 'needs-evidence':
+      return '待补证据';
+    default:
+      return '草稿';
+  }
+}
+
+function buildSelfIterationEvidenceLine(proposal: SystemImprovementProposalFE): string {
+  if (proposal.exitEvidence?.releaseGate) {
+    const releaseGate = proposal.exitEvidence.releaseGate;
+    return [
+      `release ${releaseGate.status}`,
+      `${releaseGate.checks.filter((item) => item.status === 'passed').length}/${releaseGate.checks.length} checks`,
+      releaseGate.patchPath ? releaseGate.patchPath.split('/').pop() : 'no patch',
+    ].join(' · ');
+  }
+  const codex = proposal.exitEvidence?.codex;
+  if (codex) {
+    return [
+      `${codex.changedFiles.length} files`,
+      `${codex.passedValidationCount}/${codex.validationCount} checks`,
+      codex.disallowedFiles.length ? `${codex.disallowedFiles.length} out-of-scope` : 'scope ok',
+      codex.branch,
+    ].join(' · ');
+  }
+  if (proposal.exitEvidence?.latestRun) {
+    return `Run ${proposal.exitEvidence.latestRun.status} · ${proposal.exitEvidence.latestRun.changedFilesCount} files`;
+  }
+  return proposal.affectedFiles.length ? proposal.affectedFiles.slice(0, 3).join(', ') : proposal.summary;
 }
 
 export default function CEODashboard({
@@ -53,6 +139,8 @@ export default function CEODashboard({
   const [evolutionProposals, setEvolutionProposals] = useState<EvolutionProposalFE[]>([]);
   const [evolutionLoading, setEvolutionLoading] = useState(true);
   const [evolutionBusyId, setEvolutionBusyId] = useState<string | null>(null);
+  const [selfIterationProposals, setSelfIterationProposals] = useState<SystemImprovementProposalFE[]>([]);
+  const [selfIterationLoading, setSelfIterationLoading] = useState(true);
 
   // Load digests for all workspaces (supports day/week/month period)
   const wsKey = useMemo(() => workspaces.map(w => w.uri).join(','), [workspaces]);
@@ -99,6 +187,22 @@ export default function CEODashboard({
     void refreshEvolutionData();
   }, [refreshEvolutionData]);
 
+  const refreshSelfIterationData = useCallback(async () => {
+    setSelfIterationLoading(true);
+    try {
+      const result = await api.systemImprovementProposals({ pageSize: 8 });
+      setSelfIterationProposals(result.items || []);
+    } catch {
+      setSelfIterationProposals([]);
+    } finally {
+      setSelfIterationLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSelfIterationData();
+  }, [refreshSelfIterationData]);
+
   const handleGenerateEvolution = useCallback(async () => {
     setEvolutionBusyId('__generate__');
     try {
@@ -142,6 +246,8 @@ export default function CEODashboard({
   const [setupWorkspaceUri, setSetupWorkspaceUri] = useState<string | null>(null);
   const [drillDownUri, setDrillDownUri] = useState<string | null>(null);
   const [extraWorkspaces, setExtraWorkspaces] = useState<Workspace[]>([]);
+  const [departmentImportDialogOpen, setDepartmentImportDialogOpen] = useState(false);
+  const [departmentImportPath, setDepartmentImportPath] = useState('');
   const [importingDepartment, setImportingDepartment] = useState(false);
   const [departmentImportError, setDepartmentImportError] = useState<string | null>(null);
   const allWorkspaces = useMemo(() => {
@@ -154,27 +260,77 @@ export default function CEODashboard({
     }
     return [...merged.values()];
   }, [extraWorkspaces, workspaces]);
+  const departmentCards = useMemo(() => {
+    const seen = new Set<string>();
+    return allWorkspaces.flatMap((workspace) => {
+      const config = departments.get(workspace.uri) ?? null;
+      const groupKey = config
+        ? getDepartmentGroupKey(config, workspace.uri, workspace.name)
+        : workspace.uri;
+      if (seen.has(groupKey)) {
+        return [];
+      }
+      seen.add(groupKey);
+
+      const primaryWorkspace = allWorkspaces.find((entry) => entry.uri === groupKey) ?? workspace;
+      const boundWorkspaceUris = config
+        ? getDepartmentBoundWorkspaceUris(config, primaryWorkspace.uri, primaryWorkspace.name)
+        : [primaryWorkspace.uri];
+      const boundWorkspaces = boundWorkspaceUris.map((uri) => (
+        allWorkspaces.find((entry) => entry.uri === uri) ?? { uri, name: workspaceNameFromUri(uri) }
+      ));
+      const scopedProjects = projects.filter((project) => project.workspace && boundWorkspaceUris.includes(project.workspace));
+
+      return [{
+        key: groupKey,
+        workspace: primaryWorkspace,
+        config,
+        boundWorkspaces,
+        projects: scopedProjects,
+      }];
+    }).sort((left, right) => {
+      const leftConfigured = left.config ? 1 : 0;
+      const rightConfigured = right.config ? 1 : 0;
+      if (leftConfigured !== rightConfigured) return rightConfigured - leftConfigured;
+      return (left.config?.name || left.workspace.name).localeCompare(right.config?.name || right.workspace.name);
+    });
+  }, [allWorkspaces, departments, projects]);
   const setupWs = setupWorkspaceUri ? allWorkspaces.find(w => w.uri === setupWorkspaceUri) : null;
   const setupDept = setupWorkspaceUri ? (departments.get(setupWorkspaceUri) ?? { name: setupWs?.name ?? '', type: 'build' as const, skills: [], okr: null }) : null;
+  const drillDownCard = drillDownUri
+    ? departmentCards.find((card) => card.key === drillDownUri) || null
+    : null;
 
-  const handleAddDepartment = useCallback(async () => {
+  const handleAddDepartment = useCallback(() => {
+    setDepartmentImportError(null);
+    setDepartmentImportPath('');
+    setDepartmentImportDialogOpen(true);
+  }, []);
+
+  const handleBrowseDepartment = useCallback(async () => {
+    const selectedPath = await selectLocalFolder('选择要作为部门的文件夹');
+    if (!selectedPath) return;
+    setDepartmentImportPath(selectedPath);
+  }, []);
+
+  const handleConfirmDepartmentImport = useCallback(async () => {
+    const normalizedPath = departmentImportPath.trim();
+    if (!normalizedPath) {
+      setDepartmentImportError('请输入部门主目录路径');
+      return;
+    }
+
     setDepartmentImportError(null);
     setImportingDepartment(true);
     try {
-      const selectedPath = isTauriDesktop()
-        ? await selectLocalFolder('选择要作为部门的文件夹')
-        : window.prompt('输入新部门的工作区路径（如 /Users/xxx/my-project）')?.trim() || null;
-
-      if (!selectedPath) {
-        return;
-      }
-
-      const result = await api.importWorkspace(selectedPath);
+      const result = await api.importWorkspace(normalizedPath);
       setExtraWorkspaces(prev => {
         const merged = new Map(prev.map((workspace) => [workspace.uri, workspace]));
         merged.set(result.workspace.uri, result.workspace);
         return [...merged.values()];
       });
+      setDepartmentImportDialogOpen(false);
+      setDepartmentImportPath('');
       setSetupWorkspaceUri(result.workspace.uri);
       onRefresh?.();
     } catch (error) {
@@ -182,7 +338,7 @@ export default function CEODashboard({
     } finally {
       setImportingDepartment(false);
     }
-  }, [onRefresh]);
+  }, [departmentImportPath, onRefresh]);
 
   return (
     <div className="space-y-6">
@@ -260,6 +416,96 @@ export default function CEODashboard({
           )}
         </WorkspaceSurface>
       )}
+
+      <WorkspaceSurface className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--app-text-soft)]">
+              <Bot className="h-4 w-4 text-[var(--app-accent)]" />
+              软件自迭代证据
+            </h3>
+            <p className="text-xs text-[var(--app-text-muted)]">这里展示 Codex worktree 执行、测试证据和发布状态；需要 CEO 动作的项目进入上方决策队列。</p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            <WorkspaceBadge tone="warning">
+              {selfIterationProposals.filter(item => item.status === 'approval-required').length} 准入
+            </WorkspaceBadge>
+            <WorkspaceBadge tone="info">
+              {selfIterationProposals.filter(item => item.status === 'approved' || item.status === 'in-progress' || item.status === 'testing').length} 执行
+            </WorkspaceBadge>
+            <WorkspaceBadge tone="success">
+              {selfIterationProposals.filter(item => item.exitEvidence?.mergeGate.status === 'ready-to-merge').length} 待发布
+            </WorkspaceBadge>
+          </div>
+        </div>
+
+        {selfIterationLoading ? (
+          <div className="flex items-center gap-2 text-xs text-[var(--app-text-soft)]">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading self-iteration proposals…
+          </div>
+        ) : selfIterationProposals.length > 0 ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {selfIterationProposals.slice(0, 6).map((proposal) => {
+              const projectId = proposal.exitEvidence?.project?.projectId;
+              return (
+                <WorkspaceSurface key={proposal.id} padding="sm" tone={getSelfIterationTone(proposal)} className="space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-[var(--app-text)]">{proposal.title}</div>
+                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--app-text-soft)]">{proposal.summary}</div>
+                    </div>
+                    <WorkspaceBadge tone={getSelfIterationTone(proposal)}>
+                      {formatSelfIterationStatus(proposal)}
+                    </WorkspaceBadge>
+                  </div>
+
+                  <div className="grid gap-2 text-[11px] text-[var(--app-text-soft)] sm:grid-cols-3">
+                    <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2.5 py-2">
+                      <div className="text-[var(--app-text-muted)]">Risk</div>
+                      <div className="mt-1 font-semibold text-[var(--app-text)]">{proposal.risk}</div>
+                    </div>
+                    <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2.5 py-2">
+                      <div className="text-[var(--app-text-muted)]">Scope</div>
+                      <div className="mt-1 truncate font-semibold text-[var(--app-text)]">{proposal.affectedFiles.length || 0} files</div>
+                    </div>
+                    <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2.5 py-2">
+                      <div className="text-[var(--app-text-muted)]">Gate</div>
+                      <div className="mt-1 font-semibold text-[var(--app-text)]">{proposal.exitEvidence?.mergeGate.status || 'pending'}</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-[11px] leading-5 text-[var(--app-text-soft)]">
+                    <div className="flex items-center gap-1.5 font-medium text-[var(--app-text)]">
+                      <GitBranch className="h-3.5 w-3.5" />
+                      {buildSelfIterationEvidenceLine(proposal)}
+                    </div>
+                    {proposal.exitEvidence?.mergeGate.reasons?.[0] ? (
+                      <div className="mt-1 text-[var(--app-text-muted)]">{proposal.exitEvidence.mergeGate.reasons[0]}</div>
+                    ) : null}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {projectId ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className={cn('h-8 rounded-[8px] px-2.5 text-xs', workspaceOutlineActionClassName)}
+                        onClick={() => onNavigateToProject?.(projectId)}
+                      >
+                        查看项目
+                      </Button>
+                    ) : null}
+                  </div>
+                </WorkspaceSurface>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-xs text-[var(--app-text-soft)]">暂无软件自迭代 proposal。</div>
+        )}
+      </WorkspaceSurface>
 
       <WorkspaceSurface className="space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -363,14 +609,18 @@ export default function CEODashboard({
             <Building2 className="h-4 w-4 text-[var(--app-accent)]" /> 部门
           </h3>
           <div className="flex items-center gap-2">
-            <button
-              className="text-xs text-sky-400/70 transition-colors hover:text-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className={cn('h-8 gap-1.5 rounded-[8px]', workspaceOutlineActionClassName)}
               onClick={() => void handleAddDepartment()}
               disabled={importingDepartment}
             >
-              {importingDepartment ? '导入中...' : '+ 新建部门'}
-            </button>
-            <span className="text-xs text-[var(--app-text-muted)]">{allWorkspaces.length} 部门</span>
+              <Building2 className="h-3.5 w-3.5" />
+              {importingDepartment ? '导入中…' : '新建部门'}
+            </Button>
+            <span className="text-xs text-[var(--app-text-muted)]">{departmentCards.length} 部门</span>
           </div>
         </div>
         {departmentImportError && (
@@ -379,8 +629,7 @@ export default function CEODashboard({
           </div>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {allWorkspaces.map(ws => {
-            const dept = departments.get(ws.uri);
+          {departmentCards.map(({ key, workspace, config: dept, boundWorkspaces, projects: wsProjects }) => {
             const deptType = dept?.type || 'build';
             const TypeIcon = deptType === 'ceo'
               ? UserRound
@@ -389,28 +638,28 @@ export default function CEODashboard({
                 : deptType === 'operations'
                   ? Radio
                   : Hammer;
-            const wsProjects = projects.filter(p => p.workspace === ws.uri);
             const activeCount = wsProjects.filter(p => p.status === 'active').length;
             const completedCount = wsProjects.filter(p => p.status === 'completed').length;
             const failedCount = wsProjects.filter(p => p.status === 'failed').length;
+            const workspaceSummary = boundWorkspaces.map((entry) => entry.name).join(' · ');
 
             return (
               <WorkspaceInteractiveSurface
-                key={ws.uri}
+                key={key}
                 className="relative flex flex-col gap-2"
-                onClick={() => setDrillDownUri(ws.uri)}
+                onClick={() => setDrillDownUri(key)}
               >
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-accent)]">
                     <TypeIcon className="h-4 w-4" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-[var(--app-text)] truncate">{dept?.name || ws.name}</div>
-                    <div className="text-[10px] text-[var(--app-text-muted)] truncate">{ws.uri.split('/').pop()}</div>
+                    <div className="text-sm font-semibold text-[var(--app-text)] truncate">{dept?.name || workspace.name}</div>
+                    <div className="text-[10px] text-[var(--app-text-muted)] truncate">{workspaceSummary || workspace.uri.split('/').pop()}</div>
                   </div>
                   <button
                     className="rounded-md p-1.5 text-[var(--app-text-muted)] opacity-0 transition-all hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)] group-hover:opacity-100"
-                    onClick={(e) => { e.stopPropagation(); setSetupWorkspaceUri(ws.uri); }}
+                    onClick={(e) => { e.stopPropagation(); setSetupWorkspaceUri(workspace.uri); }}
                     title="部门设置"
                   >
                     <Settings className="h-4 w-4" />
@@ -418,6 +667,9 @@ export default function CEODashboard({
                 </div>
                 {/* Status indicators */}
                 <div className="flex flex-wrap gap-1.5 text-[10px]">
+                  <span className="rounded-full border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2 py-0.5 text-[var(--app-text-muted)]">
+                    {boundWorkspaces.length} 个工作区
+                  </span>
                   {activeCount > 0 && (
                     <span className="flex items-center gap-1 rounded-full bg-sky-500/10 border border-sky-500/20 px-2 py-0.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
@@ -497,14 +749,50 @@ export default function CEODashboard({
         );
       })()}
 
+      <LocalFolderImportDialog
+        open={departmentImportDialogOpen}
+        title="新建部门"
+        description="先指定一个部门主目录。导入成功后会立刻打开部门配置，你可以继续补齐职责、模板、技能、多目录绑定和上下文文档。"
+        inputLabel="部门主目录"
+        placeholder="/Users/xxx/my-project"
+        helperText={isTauriDesktop()
+          ? '桌面模式下可直接浏览本机文件夹；也可以手动输入绝对路径。'
+          : '当前是 Web 模式，请输入本机绝对路径。若要使用系统文件夹选择器，请从 Tauri 桌面壳进入。'}
+        confirmLabel="导入并继续配置"
+        value={departmentImportPath}
+        error={departmentImportError}
+        submitting={importingDepartment}
+        supportsNativeBrowse={isTauriDesktop()}
+        onValueChange={setDepartmentImportPath}
+        onOpenChange={(open) => {
+          setDepartmentImportDialogOpen(open);
+          if (!open) {
+            setDepartmentImportPath('');
+            setDepartmentImportError(null);
+            setImportingDepartment(false);
+          }
+        }}
+        onBrowse={handleBrowseDepartment}
+        onConfirm={handleConfirmDepartmentImport}
+      />
+
       {/* Department Setup Dialog */}
       {setupWs && setupDept && (
         <DepartmentSetupDialog
           workspaceUri={setupWs.uri}
           workspaceName={setupWs.name}
           initialConfig={setupDept}
+          availableWorkspaces={allWorkspaces}
           open={!!setupWorkspaceUri}
           onOpenChange={open => { if (!open) setSetupWorkspaceUri(null); }}
+          onWorkspaceImported={(workspace) => {
+            setExtraWorkspaces(prev => {
+              const merged = new Map(prev.map((entry) => [entry.uri, entry]));
+              merged.set(workspace.uri, workspace);
+              return [...merged.values()];
+            });
+            onRefresh?.();
+          }}
           onSaved={(config) => {
             onDepartmentSaved?.(setupWs.uri, config);
             setSetupWorkspaceUri(null);
@@ -513,10 +801,10 @@ export default function CEODashboard({
       )}
 
       {/* Department Detail Drawer (SimCity drill-down) */}
-      {drillDownUri && (() => {
-        const ddWs = allWorkspaces.find(w => w.uri === drillDownUri);
-        const ddConfig = departments.get(drillDownUri) ?? { name: ddWs?.name ?? '', type: 'build' as const, skills: [], okr: null };
-        const ddProjects = projects.filter(p => p.workspace === drillDownUri);
+      {drillDownCard && (() => {
+        const ddWs = drillDownCard.workspace;
+        const ddConfig = drillDownCard.config ?? { name: ddWs.name, type: 'build' as const, skills: [], okr: null };
+        const ddProjects = drillDownCard.projects;
         return ddWs ? (
           <DepartmentDetailDrawer
             open={!!drillDownUri}
@@ -524,6 +812,7 @@ export default function CEODashboard({
             workspace={ddWs}
             config={ddConfig}
             projects={ddProjects}
+            allWorkspaces={allWorkspaces}
             onNavigateToProject={(id) => {
               setDrillDownUri(null);
               onNavigateToProject?.(id);

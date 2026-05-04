@@ -5,6 +5,7 @@
 #   1. 安装 cc-connect:  go install github.com/chenhg5/cc-connect@latest
 #   2. 扫码绑定微信:     cc-connect weixin setup --project antigravity
 #   3. 启动:             cc-connect
+#   4. 可选：在 Settings -> 会话平台 里修复默认配置并直接启动/停止
 #
 # 命令分工:
 #   cc-connect 内置: /new, /list, /switch, /help, /status, /model, /workspace
@@ -40,3 +41,10 @@ type = "weixin"
 # base_url = "https://ilinkai.weixin.qq.com"
 # account_id = "xxx"
 allow_from = "*"
+
+# Management API（供 Web 端 Settings -> 会话平台 探测 / 启停本地 cc-connect）
+[management]
+enabled = true
+port = 9820
+token = "ag-mgmt-2026"
+cors_origins = ["http://localhost:3000"]

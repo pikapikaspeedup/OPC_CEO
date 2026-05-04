@@ -191,8 +191,8 @@ export default function OnboardingWizard({
               <DialogHeader>
                 <DialogTitle className="text-lg">配置你的虚拟公司</DialogTitle>
                 <DialogDescription className="text-sm leading-relaxed pt-1">
-                  你有 <strong className="text-foreground">{workspaces.length}</strong> 个工作区，每个工作区对应一个部门。
-                  配置部门名称、类型和定位后，CEO 就能精准派活了。
+                  当前有 <strong className="text-foreground">{workspaces.length}</strong> 个已导入工作区还没补齐部门画像。
+                  这里用于完善已有工作区；如果要新增部门，请从 Projects 左侧直接新建部门。
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground leading-relaxed">
@@ -205,7 +205,7 @@ export default function OnboardingWizard({
                   跳过
                 </Button>
                 <Button onClick={() => setStep(1)} size="sm">
-                  开始配置
+                  开始补齐
                 </Button>
               </div>
             </>

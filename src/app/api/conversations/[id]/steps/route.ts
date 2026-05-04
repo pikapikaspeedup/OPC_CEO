@@ -38,8 +38,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const localProvider = inferLocalProviderFromConversation(cascadeId, conversationRecord?.provider);
     if (localProvider) {
       if (isApiConversationProvider(localProvider)) {
-        const apiSteps = await readApiConversationSteps(conversationRecord?.sessionHandle || cascadeId);
-        return NextResponse.json({ cascadeId, steps: apiSteps });
+        const sessionHandle = conversationRecord?.sessionHandle || cascadeId;
+        const apiSteps = await readApiConversationSteps(sessionHandle);
+        if (apiSteps.length > 0 || localProvider !== 'native-codex') {
+          return NextResponse.json({ cascadeId, steps: apiSteps });
+        }
       }
 
       const conversationId = conversationRecord?.id || cascadeId;

@@ -15,7 +15,7 @@ import {
 import { cn } from '@/lib/utils';
 import { resolveRoleAvatar, resolveRoleDisplayName, resolveRoleStatusText } from '@/lib/role-utils';
 import { useI18n } from '@/components/locale-provider';
-import type { PipelineStageProgressFE, BranchProgressFE, RoleProgressFE } from '@/lib/types';
+import type { PipelineStageProgressFE, RoleProgressFE } from '@/lib/types';
 
 interface PipelineStageCardProps {
   stage: PipelineStageProgressFE;
@@ -27,6 +27,7 @@ interface PipelineStageCardProps {
   onClick: () => void;
   onSelectRole?: (roleKey: string) => void;
   onNavigateToProject?: (projectId: string) => void;
+  showBranchList?: boolean;
 }
 
 const stageStatusConfig: Record<string, {
@@ -41,49 +42,49 @@ const stageStatusConfig: Record<string, {
     color: 'text-white/40',
     bg: 'bg-white/5',
     border: 'border-white/8',
-    label: 'Pending',
+    label: '待开始',
   },
   running: {
     icon: <Loader2 className="h-4 w-4 animate-spin" />,
     color: 'text-sky-400',
     bg: 'bg-sky-400/10',
     border: 'border-sky-400/20',
-    label: 'Running',
+    label: '执行中',
   },
   completed: {
     icon: <CheckCircle2 className="h-4 w-4" />,
     color: 'text-emerald-400',
     bg: 'bg-emerald-400/10',
     border: 'border-emerald-400/20',
-    label: 'Completed',
+    label: '已完成',
   },
   failed: {
     icon: <AlertTriangle className="h-4 w-4" />,
     color: 'text-red-400',
     bg: 'bg-red-400/10',
     border: 'border-red-400/20',
-    label: 'Failed',
+    label: '失败',
   },
   blocked: {
     icon: <AlertTriangle className="h-4 w-4" />,
     color: 'text-amber-400',
     bg: 'bg-amber-400/10',
     border: 'border-amber-400/20',
-    label: 'Blocked',
+    label: '阻塞',
   },
   cancelled: {
     icon: <Clock className="h-4 w-4" />,
     color: 'text-slate-300',
     bg: 'bg-slate-300/10',
     border: 'border-slate-300/20',
-    label: 'Cancelled',
+    label: '已取消',
   },
   skipped: {
     icon: <SkipForward className="h-4 w-4" />,
     color: 'text-slate-400',
     bg: 'bg-slate-400/10',
     border: 'border-slate-400/20',
-    label: 'Skipped',
+    label: '已跳过',
   },
 };
 
@@ -96,12 +97,6 @@ const roleStatusIcons: Record<string, { icon: React.ReactNode; color: string }> 
   blocked:   { icon: <AlertTriangle className="h-3 w-3" />,             color: 'text-amber-400' },
   failed:    { icon: <AlertTriangle className="h-3 w-3" />,             color: 'text-red-400' },
   cancelled: { icon: <Clock className="h-3 w-3" />,                     color: 'text-slate-300' },
-};
-
-const reviewDecisionColors: Record<string, string> = {
-  approved: 'bg-emerald-500/15 text-emerald-400',
-  revise: 'bg-amber-500/15 text-amber-400',
-  rejected: 'bg-red-500/15 text-red-400',
 };
 
 function formatElapsedTime(startedAt?: string, finishedAt?: string): string | null {
@@ -132,6 +127,7 @@ export default function PipelineStageCard({
   onClick,
   onSelectRole,
   onNavigateToProject,
+  showBranchList = true,
 }: PipelineStageCardProps) {
   const { locale } = useI18n();
   const config = stageStatusConfig[stage.status] || stageStatusConfig.pending;
@@ -146,7 +142,7 @@ export default function PipelineStageCard({
         role="button"
         tabIndex={0}
         aria-label={`${displayTitle} stage`}
-        aria-selected={isSelected}
+        aria-pressed={isSelected}
         className={cn(
           'group relative cursor-pointer rounded-2xl border p-4 transition-all duration-200',
           isPending && 'opacity-50',
@@ -188,7 +184,12 @@ export default function PipelineStageCard({
               )}
               {roles && roles.length > 0 && (
                 <span className="shrink-0 rounded-full bg-white/8 px-1.5 py-0.5 text-[10px] font-medium text-white/40">
-                  {roles.length} roles
+                  {roles.length} 角色
+                </span>
+              )}
+              {stage.branches && stage.branches.length > 0 && (
+                <span className="shrink-0 rounded-full bg-violet-400/12 px-1.5 py-0.5 text-[10px] font-medium text-violet-300/75">
+                  {stage.branches.length} 分支
                 </span>
               )}
             </div>
@@ -210,9 +211,9 @@ export default function PipelineStageCard({
                   stage.gateApproval?.status === 'rejected' ? 'text-red-400/70' :
                   'text-amber-400/70'
                 )}>
-                  {stage.gateApproval?.status === 'approved' ? 'Approved' :
-                   stage.gateApproval?.status === 'rejected' ? 'Rejected' :
-                   'Awaiting approval'}
+                  {stage.gateApproval?.status === 'approved' ? '已批准' :
+                   stage.gateApproval?.status === 'rejected' ? '已驳回' :
+                   '待审批'}
                 </span>
               </div>
             )}
@@ -220,7 +221,7 @@ export default function PipelineStageCard({
               <div className="mt-1.5 flex items-center gap-1.5">
                 <RotateCw className="h-3 w-3 text-violet-400/70" />
                 <span className="text-[10px] font-medium text-violet-400/70">
-                  Iteration {stage.loopIteration}
+                  循环 {stage.loopIteration}
                 </span>
               </div>
             )}
@@ -288,12 +289,12 @@ export default function PipelineStageCard({
         </div>
       )}
       {/* Fan-out Branch sub-nodes */}
-      {stage.branches && stage.branches.length > 0 && (
+      {showBranchList && stage.branches && stage.branches.length > 0 && (
         <div className="relative ml-[18px] border-l border-violet-400/15 pl-5 pt-1 pb-1">
           <div className="flex items-center gap-1.5 px-3 pb-1">
             <GitBranch className="h-3 w-3 text-violet-400/50" />
             <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-400/50">
-              Branches ({stage.branches.filter(b => b.status === 'completed').length}/{stage.branches.length})
+              分支 ({stage.branches.filter(b => b.status === 'completed').length}/{stage.branches.length})
             </span>
           </div>
           {stage.branches.map((branch) => {
@@ -327,10 +328,10 @@ export default function PipelineStageCard({
                         onNavigateToProject(branch.subProjectId);
                       }}
                       className="ml-auto flex items-center gap-1 rounded-full bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-[10px] font-medium text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/15 transition-colors"
-                      title="Open sub-project"
+                      title="打开子项目"
                     >
                       <ExternalLink className="h-2.5 w-2.5" />
-                      Open
+                      打开
                     </button>
                   )}
                 </div>

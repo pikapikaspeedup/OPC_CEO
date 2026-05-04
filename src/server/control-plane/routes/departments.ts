@@ -9,9 +9,14 @@ import {
   type MemoryCategory,
 } from '@/lib/agents/department-memory';
 import { syncRulesToAllIDEs, syncRulesToIDE, type IDETarget } from '@/lib/agents/department-sync';
+import {
+  getDepartmentBoundWorkspaceUris,
+  normalizeDepartmentConfig,
+} from '@/lib/department-config';
 import { getJournalEntriesForDate, getProjectsByWorkspace, templateSummary } from '@/lib/agents/digest-helpers';
 import { getQuotaSummary } from '@/lib/approval/token-quota';
 import { getKnownWorkspace } from '@/lib/workspace-catalog';
+import type { DepartmentConfig } from '@/lib/types';
 
 function json(body: unknown, init?: ResponseInit): Response {
   return Response.json(body, init);
@@ -22,7 +27,9 @@ function resolveWorkspace(req: Request): string | null {
   return url.searchParams.get('workspace') || null;
 }
 
-function resolveKnownWorkspace(req: Request): { uri: string; path: string } | Response {
+type KnownWorkspace = NonNullable<ReturnType<typeof getKnownWorkspace>>;
+
+function resolveKnownWorkspace(req: Request): KnownWorkspace | Response {
   const workspaceUri = resolveWorkspace(req);
   if (!workspaceUri) {
     return json({ error: 'Missing workspace' }, { status: 400 });
@@ -57,16 +64,20 @@ export async function handleDepartmentsGet(req: Request): Promise<Response> {
 
   const configPath = path.join(workspace.path, '.department', 'config.json');
   if (!fs.existsSync(configPath)) {
-    return json({
+    return json(normalizeDepartmentConfig({
       name: path.basename(workspace.path),
       type: 'build',
       skills: [],
       okr: null,
-    });
+    }, workspace.uri, workspace.name));
   }
 
   try {
-    return json(JSON.parse(fs.readFileSync(configPath, 'utf-8')));
+    return json(normalizeDepartmentConfig(
+      JSON.parse(fs.readFileSync(configPath, 'utf-8')) as unknown as DepartmentConfig,
+      workspace.uri,
+      workspace.name,
+    ));
   } catch {
     return json({ error: 'Invalid .department/config.json format' }, { status: 422 });
   }
@@ -78,10 +89,25 @@ export async function handleDepartmentsPut(req: Request): Promise<Response> {
     return workspace;
   }
 
-  const config = await req.json();
-  const dir = path.join(workspace.path, '.department');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config, null, 2));
+  const config = normalizeDepartmentConfig(await req.json(), workspace.uri, workspace.name);
+  const workspaceTargets = getDepartmentBoundWorkspaceUris(config, workspace.uri, workspace.name)
+    .map((workspaceUri) => {
+      const targetWorkspace = workspaceUri === workspace.uri
+        ? workspace
+        : getKnownWorkspace(workspaceUri);
+      return targetWorkspace ?? null;
+    })
+    .filter((entry): entry is KnownWorkspace => Boolean(entry));
+
+  if (workspaceTargets.length === 0) {
+    return json({ error: 'No writable workspaces resolved for department config' }, { status: 400 });
+  }
+
+  for (const target of workspaceTargets) {
+    const dir = path.join(target.path, '.department');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config, null, 2));
+  }
 
   return json({ ok: true, syncPending: true });
 }

@@ -16,7 +16,7 @@ Knowledge Items (KI) are Antigravity's persistent knowledge base.
 
 ```
 knowledge/{ki_id}/
-├── metadata.json       ← {title, summary, references[]}
+├── metadata.json       ← {title, summary, references[], tags[], source*, ...}
 ├── timestamps.json     ← {created, modified, accessed}
 └── artifacts/          ← Markdown knowledge files
     ├── overview.md
@@ -45,9 +45,14 @@ GET /api/knowledge
 
 - `workspace`：可选，按 workspace URI 过滤
 - `category`：可选，按知识分类过滤
+- `status`：可选，按知识状态过滤
+- `scope`：可选，按 `department / organization` 过滤
+- `tag`：可选，按单个标签过滤
+- `q`：可选，按标题 / 摘要 / 标签 / 来源 / workspace 模糊搜索
+- `sort`：可选，`recent / created / updated / alpha / reuse`
 - `limit`：可选，限制返回数量
 
-**Response**: `KnowledgeItem[]` sorted by last accessed / modified (most recent first)
+**Response**: `KnowledgeItem[]`
 
 ```json
 [
@@ -68,10 +73,47 @@ GET /api/knowledge
     "artifactFiles": ["overview.md", "features/detail.md"],
     "workspaceUri": "file:///path/to/project",
     "category": "decision",
-    "status": "active"
+    "status": "active",
+    "tags": ["frontend", "decision"],
+    "scope": "department",
+    "sourceType": "run",
+    "sourceRunId": "run-123",
+    "confidence": 0.93,
+    "evidenceCount": 2,
+    "promotionLevel": "l2-fact"
   }
 ]
 ```
+
+---
+
+### Create Knowledge Item
+
+```
+POST /api/knowledge
+Content-Type: application/json
+```
+
+**Body** (all fields optional):
+
+```json
+{
+  "title": "Manual note",
+  "summary": "Short summary",
+  "content": "# Manual note\n\nBody",
+  "workspaceUri": "file:///path/to/project",
+  "category": "domain-knowledge",
+  "tags": ["manual", "draft"]
+}
+```
+
+**行为**:
+
+- 创建 `manual` source 的结构化 `KnowledgeAsset`
+- 同步写入 filesystem mirror
+- 默认 artifact 为 `content.md`
+
+**Response**: `201 Created`，返回新建后的 `KnowledgeDetail`
 
 ---
 
@@ -93,6 +135,12 @@ Returns full KI with all artifact file contents.
   "references": [...],
   "timestamps": {...},
   "artifactFiles": ["overview.md"],
+  "tags": ["frontend", "decision"],
+  "scope": "department",
+  "sourceType": "run",
+  "sourceRunId": "run-123",
+  "confidence": 0.93,
+  "evidenceCount": 2,
   "artifacts": {
     "overview.md": "# Full markdown content..."
   }
@@ -127,6 +175,39 @@ Content-Type: application/json
 对于旧版 filesystem-only 知识条目：
 
 - 仍按旧逻辑直接更新镜像文件
+
+---
+
+### Generate AI Summary
+
+```
+POST /api/knowledge/:id/summary
+```
+
+**功能**:
+
+- 读取指定 Knowledge 条目
+- 通过 `resolveProvider('knowledge-summary', workspacePath)` 解析当前 provider/model
+- 调用统一 provider transport 生成结构化摘要
+- 将结果回写到 Knowledge metadata 的 `summary`
+
+**Response**:
+
+```json
+{
+  "ok": true,
+  "summary": "本文适合用于判断 AI 从单点模型竞争转向 Agent 系统落地的行业趋势。",
+  "provider": "native-codex",
+  "model": "gpt-5.4",
+  "source": "department",
+  "scene": "knowledge-summary"
+}
+```
+
+说明：
+
+- `provider` / `model` 来自当前组织级 provider routing，而不是 Knowledge 自己维护第二套配置。
+- 若当前 scene/provider 未配置，接口会返回错误，不再伪造摘要结果。
 
 ---
 
@@ -189,10 +270,12 @@ Creates parent directories if needed. Updates `timestamps.modified`.
 The Knowledge panel is accessible from the sidebar's **KI** tab.
 
 **Features**:
-- List all KIs with title, summary, artifact count, and last access time
-- Click any KI to view details: metadata, timestamps, references, artifacts
-- Click title or summary to inline-edit and save
-- Click any artifact file to open full-screen markdown editor
-- Delete KIs with confirmation dialog
+- 默认进入 browse-first 工作台：目录 / 列表 / 正文 / 右侧上下文栏
+- 支持浏览态与治理态切换；治理态保留候选记忆、增长提案和部门记忆
+- 顶部支持知识搜索与手动新建知识项
+- 点击任意 KI 可查看详情：metadata、references、projects、timeline、artifacts
+- 详情页支持 `AI 摘要`，直接复用 `knowledge-summary` scene 调用当前 provider
+- 支持标题、摘要、artifact Markdown 编辑与保存
+- 删除 KI 时带确认弹窗
 
 **Responsive**: Works on both desktop and mobile (full-screen overlay).

@@ -106,8 +106,11 @@ interface AgentRunDetailProps {
   onEvaluateRun?: (runId: string) => Promise<void>;
   onOpenConversation?: (id: string, title: string) => void;
   onOpenChatTab?: (id: string, title: string) => void;
+  onOpenImprovementProposal?: (proposalId: string | null) => void;
   renderChat?: () => React.ReactNode;
   executiveMode?: boolean;
+  systemImprovementProposalId?: string | null;
+  systemImprovementProposalTitle?: string | null;
 }
 
 export default function AgentRunDetail({
@@ -119,8 +122,11 @@ export default function AgentRunDetail({
   onEvaluateRun,
   onOpenConversation,
   onOpenChatTab,
+  onOpenImprovementProposal,
   renderChat,
   executiveMode = false,
+  systemImprovementProposalId = null,
+  systemImprovementProposalTitle = null,
 }: AgentRunDetailProps) {
   const { locale, t } = useI18n();
   const [tab, setTab] = useState<'result' | 'files' | 'review' | 'envelope' | 'trace' | 'chat'>('result');
@@ -131,7 +137,10 @@ export default function AgentRunDetail({
   const [conversationLoading, setConversationLoading] = useState(false);
   const [conversationData, setConversationData] = useState<RunConversationFE | null>(null);
   const [conversationRunId, setConversationRunId] = useState<string | null>(null);
-  const hasConversationLink = !!(run?.childConversationId || run?.sessionProvenance?.handle);
+  const linkedProposalIdFromRun = run?.taskEnvelope?.constraints?.find((item) => item.startsWith('proposalId='))?.slice('proposalId='.length) || null;
+  const linkedImprovementProposalId = systemImprovementProposalId || linkedProposalIdFromRun;
+  const isSystemImprovementCodexRun = !!run && run.provider === 'codex-cli' && run.executorKind === 'prompt' && !!linkedImprovementProposalId;
+  const hasConversationLink = !isSystemImprovementCodexRun && !!(run?.childConversationId || run?.sessionProvenance?.handle);
 
   const isRunActive = run ? ['queued', 'starting', 'running'].includes(run.status) : false;
   const { text: streamingText, isStreaming } = useRunStream({
@@ -170,6 +179,9 @@ export default function AgentRunDetail({
   const duration = getAgentRunDuration(run);
   const modelLabel = getModelLabel(run.model, models, { emptyLabel: t('agent.groupDefault') });
   const statusLabel = t(`common.status.${run.status}`);
+  const displayTitle = isSystemImprovementCodexRun && systemImprovementProposalTitle
+    ? systemImprovementProposalTitle
+    : run.prompt;
   const summary = run.result?.summary?.trim() || '';
   const changedFiles = run.result?.changedFiles || [];
   const blockers = run.result?.blockers || [];
@@ -294,7 +306,7 @@ export default function AgentRunDetail({
           <div className="min-w-0 flex-1">
             <PaneHeader
               eyebrow={executiveMode ? '结果检查' : t('agent.selectedRun')}
-              title={<span className="line-clamp-3">{run.prompt}</span>}
+              title={<span className="line-clamp-3">{displayTitle}</span>}
               meta={(
                 <>
                   <StatusChip tone={status.tone}>{statusLabel}</StatusChip>
@@ -413,16 +425,34 @@ export default function AgentRunDetail({
                 {t('agent.openConversation')}
               </Button>
             )}
-            <Button
-              variant="outline"
-              className="h-11 rounded-[18px] border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
-              onClick={handleToggleConversationPanel}
-            >
-              <ExternalLink className="mr-2 h-4 w-4" />
-              {showConversationPanel ? '收起 AI 对话' : '查看 AI 对话'}
-            </Button>
+            {!isSystemImprovementCodexRun ? (
+              <Button
+                variant="outline"
+                className="h-11 rounded-[18px] border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+                onClick={handleToggleConversationPanel}
+              >
+                <ExternalLink className="mr-2 h-4 w-4" />
+                {showConversationPanel ? '收起 AI 对话' : '查看 AI 对话'}
+              </Button>
+            ) : null}
+            {isSystemImprovementCodexRun && linkedImprovementProposalId && onOpenImprovementProposal ? (
+              <Button
+                variant="outline"
+                className="h-11 rounded-[18px] border-[var(--app-border-soft)] bg-[var(--app-raised)] text-[var(--app-text-soft)] hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+                onClick={() => onOpenImprovementProposal(linkedImprovementProposalId)}
+              >
+                <FileCode2 className="mr-2 h-4 w-4" />
+                查看系统改进详情
+              </Button>
+            ) : null}
           </div>
         </div>
+
+        {isSystemImprovementCodexRun ? (
+          <div className="rounded-[20px] border border-sky-400/18 bg-sky-400/10 px-4 py-3 text-sm leading-7 text-sky-100">
+            这次执行来自 Codex CLI worktree runner。主证据是 worktree、diff、校验和发布检查，不是普通 AI 对话。
+          </div>
+        ) : null}
 
         {run.lastError && (
           <div className="rounded-[20px] border border-red-400/18 bg-red-400/10 px-4 py-3 text-sm leading-7 text-red-100">
@@ -436,7 +466,7 @@ export default function AgentRunDetail({
           </div>
         )}
 
-        {showConversationPanel && (
+        {showConversationPanel && !isSystemImprovementCodexRun && (
           <SurfaceCard title="AI 对话">
             {conversationLoading ? (
               <div className="flex items-center gap-2 text-sm text-[var(--app-text-soft)]">

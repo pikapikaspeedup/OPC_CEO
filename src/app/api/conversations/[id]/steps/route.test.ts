@@ -30,7 +30,7 @@ vi.mock('@/lib/local-provider-conversations', () => ({
 }));
 
 vi.mock('@/lib/api-provider-conversations', () => ({
-  isApiConversationProvider: vi.fn((provider: string | null | undefined) => provider === 'claude-api'),
+  isApiConversationProvider: vi.fn((provider: string | null | undefined) => provider === 'claude-api' || provider === 'native-codex'),
   readApiConversationSteps: vi.fn(async () => []),
 }));
 
@@ -83,12 +83,17 @@ describe('GET /api/conversations/[id]/steps', () => {
     vi.mocked(readLocalProviderTranscriptMessages).mockReset();
   });
 
-  it('returns local provider transcript steps for native-codex conversations', async () => {
+  it('returns API transcript steps for native-codex conversations when a session handle exists', async () => {
     vi.mocked(resolveConversationRecord).mockReturnValue({
       id: 'local-native-codex-1',
       provider: 'native-codex',
+      sessionHandle: 'native-codex-session-1',
     } as never);
     vi.mocked(inferLocalProviderFromConversation).mockReturnValue('native-codex');
+    vi.mocked(readApiConversationSteps).mockResolvedValue([
+      { type: 'CORTEX_STEP_TYPE_USER_INPUT' },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' },
+    ] as never);
 
     const res = await GET(new Request('http://localhost/api/conversations/local-native-codex-1/steps'), params('local-native-codex-1'));
 
@@ -100,12 +105,14 @@ describe('GET /api/conversations/[id]/steps', () => {
         expect.objectContaining({ type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' }),
       ]),
     });
-    expect(vi.mocked(readLocalProviderConversationSteps)).toHaveBeenCalledWith('local-native-codex-1');
+    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('native-codex-session-1');
+    expect(vi.mocked(readLocalProviderConversationSteps)).not.toHaveBeenCalled();
   });
 
-  it('reconstructs steps for legacy native-codex handle urls', async () => {
+  it('falls back to transcript reconstruction for legacy native-codex handles with no API transcript', async () => {
     vi.mocked(resolveConversationRecord).mockReturnValue(null as never);
     vi.mocked(inferLocalProviderFromConversation).mockReturnValue('native-codex');
+    vi.mocked(readApiConversationSteps).mockResolvedValue([]);
     vi.mocked(readLocalProviderConversationSteps).mockReturnValue([]);
     vi.mocked(findRunRecordByConversationRef).mockReturnValue({
       runId: 'run-1',

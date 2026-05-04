@@ -37,7 +37,7 @@ export async function handleMeGet(): Promise<Response> {
 }
 
 export async function handleModelsGet(): Promise<Response> {
-  const fallback = buildProviderAwareModelResponse();
+  const fallback = await buildProviderAwareModelResponse();
   try {
     const data = await tryAllServers((port, csrf, apiKey) => grpc.getModelConfigs(port, csrf, apiKey));
     return json(mergeModelResponses(data, fallback));

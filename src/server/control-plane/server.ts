@@ -55,6 +55,9 @@ import {
   handleApiKeysGet,
   handleApiKeysPut,
   handleApiKeysTestPost,
+  handleProviderModelCatalogGet,
+  handleProviderModelCatalogPost,
+  handleProviderImageGenerationPost,
   handleMcpConfigGet,
   handleMcpServersDelete,
   handleMcpServersPost,
@@ -343,6 +346,27 @@ export function createControlPlaneRoutes(options: { includeHealth?: boolean } = 
         handler: async (req) => {
           if (req.method === 'POST') {
             return handleApiKeysTestPost(req);
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/provider-model-catalog$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleProviderModelCatalogGet(req);
+          }
+          if (req.method === 'POST') {
+            return handleProviderModelCatalogPost(req);
+          }
+          return methodNotAllowedResponse(['GET', 'POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/provider-image-generation$/,
+        handler: async (req) => {
+          if (req.method === 'POST') {
+            return handleProviderImageGenerationPost(req);
           }
           return methodNotAllowedResponse(['POST']);
         },

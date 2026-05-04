@@ -3,11 +3,32 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import LocalFolderImportDialog from '@/components/local-folder-import-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { NativeSelect } from '@/components/ui/native-select';
-import type { DepartmentConfig, DepartmentOKR, DepartmentRoster, Skill, TokenQuota, TemplateSummaryFE, Workflow } from '@/lib/types';
+import { isTauriDesktop, selectLocalFolder } from '@/lib/desktop-folder-picker';
+import {
+  getDepartmentContextDocumentPaths,
+  getDepartmentWorkspaceBindings,
+  listWorkspaceChoices,
+  normalizeDepartmentConfig,
+  workspaceNameFromUri,
+} from '@/lib/department-config';
+import type {
+  DepartmentConfig,
+  DepartmentOKR,
+  DepartmentRoster,
+  DepartmentWorkspaceBinding,
+  DepartmentWorkspaceRole,
+  Skill,
+  TokenQuota,
+  TemplateSummaryFE,
+  Workflow,
+  Workspace,
+} from '@/lib/types';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -15,8 +36,10 @@ export interface DepartmentSetupDialogProps {
   workspaceUri: string;
   workspaceName: string;
   initialConfig: DepartmentConfig;
+  availableWorkspaces?: Workspace[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onWorkspaceImported?: (workspace: Workspace) => void | Promise<void>;
   onSaved: (config: DepartmentConfig) => void;
 }
 
@@ -135,8 +158,10 @@ export default function DepartmentSetupDialog({
   workspaceUri,
   workspaceName,
   initialConfig,
+  availableWorkspaces = [],
   open,
   onOpenChange,
+  onWorkspaceImported,
   onSaved,
 }: DepartmentSetupDialogProps) {
   const [name, setName] = useState(initialConfig.name);
@@ -153,6 +178,18 @@ export default function DepartmentSetupDialog({
   const [provider, setProvider] = useState<DepartmentConfig['provider']>(initialConfig.provider);
   const [tokenQuotaDaily, setTokenQuotaDaily] = useState<number>(initialConfig.tokenQuota?.daily ?? 0);
   const [tokenQuotaMonthly, setTokenQuotaMonthly] = useState<number>(initialConfig.tokenQuota?.monthly ?? 0);
+  const [workspaceBindings, setWorkspaceBindings] = useState<DepartmentWorkspaceBinding[]>(
+    getDepartmentWorkspaceBindings(initialConfig, workspaceUri, workspaceName),
+  );
+  const [workspaceToAdd, setWorkspaceToAdd] = useState('');
+  const [workspaceRoleToAdd, setWorkspaceRoleToAdd] = useState<DepartmentWorkspaceRole>('execution');
+  const [workspaceImportDialogOpen, setWorkspaceImportDialogOpen] = useState(false);
+  const [workspaceImportPath, setWorkspaceImportPath] = useState('');
+  const [contextDocumentText, setContextDocumentText] = useState(
+    getDepartmentContextDocumentPaths(initialConfig).join('\n'),
+  );
+  const [importingWorkspace, setImportingWorkspace] = useState(false);
+  const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
   const [savingMode, setSavingMode] = useState<'save' | 'save-and-sync' | null>(null);
   const [templates, setTemplates] = useState<TemplateSummaryFE[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -178,6 +215,24 @@ export default function DepartmentSetupDialog({
     const withFallback = skills.filter(skill => (skill.skillRefs ?? []).some(ref => ref.trim())).length;
     return { total, withWorkflow, withFallback };
   }, [skills]);
+  const workspaceChoices = useMemo(
+    () => listWorkspaceChoices(
+      availableWorkspaces,
+      { ...initialConfig, workspaceBindings },
+      workspaceUri,
+      workspaceName,
+    ),
+    [availableWorkspaces, initialConfig, workspaceBindings, workspaceName, workspaceUri],
+  );
+  const primaryWorkspaceUri = useMemo(
+    () => workspaceBindings.find((binding) => binding.role === 'primary')?.workspaceUri || workspaceUri,
+    [workspaceBindings, workspaceUri],
+  );
+  const boundWorkspaceCount = workspaceBindings.length;
+  const contextDocumentCount = useMemo(
+    () => contextDocumentText.split('\n').map((entry) => entry.trim()).filter(Boolean).length,
+    [contextDocumentText],
+  );
 
   // ── Derived: all roleIds from selected templates ────────────────────────
 
@@ -207,8 +262,15 @@ export default function DepartmentSetupDialog({
       setProvider(initialConfig.provider);
       setTokenQuotaDaily(initialConfig.tokenQuota?.daily ?? 0);
       setTokenQuotaMonthly(initialConfig.tokenQuota?.monthly ?? 0);
+      setWorkspaceBindings(getDepartmentWorkspaceBindings(initialConfig, workspaceUri, workspaceName));
+      setWorkspaceToAdd('');
+      setWorkspaceRoleToAdd('execution');
+      setWorkspaceImportDialogOpen(false);
+      setWorkspaceImportPath('');
+      setContextDocumentText(getDepartmentContextDocumentPaths(initialConfig).join('\n'));
+      setWorkspaceActionError(null);
     }
-  }, [open, initialConfig]);
+  }, [open, initialConfig, workspaceName, workspaceUri]);
 
   // ── Load templates ─────────────────────────────────────────────────
 
@@ -359,6 +421,108 @@ export default function DepartmentSetupDialog({
     setSkills(prev => prev.filter((_, i) => i !== index));
   }
 
+  function getWorkspaceDisplayName(targetUri: string) {
+    return workspaceBindings.find((binding) => binding.workspaceUri === targetUri)?.alias
+      || availableWorkspaces.find((workspace) => workspace.uri === targetUri)?.name
+      || workspaceNameFromUri(targetUri);
+  }
+
+  function normalizeBindingDraft(
+    bindings: DepartmentWorkspaceBinding[],
+    preferredPrimaryUri?: string,
+  ): DepartmentWorkspaceBinding[] {
+    return getDepartmentWorkspaceBindings(
+      {
+        name: name.trim() || workspaceName,
+        type: isCustomType ? customType.trim() || type || 'build' : type,
+        skills: [],
+        okr: null,
+        workspaceBindings: bindings.map((binding) => ({
+          workspaceUri: binding.workspaceUri,
+          alias: binding.alias?.trim() || undefined,
+          role: binding.role,
+          writeAccess: binding.role !== 'context',
+        })),
+        executionPolicy: preferredPrimaryUri
+          ? { defaultWorkspaceUri: preferredPrimaryUri }
+          : undefined,
+      },
+      workspaceUri,
+      workspaceName,
+    );
+  }
+
+  function updateWorkspaceBinding(targetUri: string, patch: Partial<DepartmentWorkspaceBinding>) {
+    setWorkspaceBindings((prev) => {
+      const next = prev.map((binding) => (
+        binding.workspaceUri === targetUri
+          ? {
+              ...binding,
+              ...patch,
+              alias: patch.alias ?? binding.alias,
+            }
+          : binding
+      ));
+      const preferredPrimaryUri = patch.role === 'primary'
+        ? targetUri
+        : next.find((binding) => binding.role === 'primary')?.workspaceUri;
+      return normalizeBindingDraft(next, preferredPrimaryUri);
+    });
+  }
+
+  function addWorkspaceBinding(targetUri: string, role: DepartmentWorkspaceRole = 'execution') {
+    if (!targetUri) return;
+    setWorkspaceBindings((prev) => normalizeBindingDraft([
+      ...prev,
+      {
+        workspaceUri: targetUri,
+        alias: undefined,
+        role,
+        writeAccess: role !== 'context',
+      },
+    ], role === 'primary' ? targetUri : undefined));
+    setWorkspaceToAdd('');
+  }
+
+  function removeWorkspaceBinding(targetUri: string) {
+    if (targetUri === workspaceUri) {
+      setWorkspaceActionError('当前主部门入口目录不能移除，但可以切换为执行目录。');
+      return;
+    }
+    setWorkspaceActionError(null);
+    setWorkspaceBindings((prev) => normalizeBindingDraft(
+      prev.filter((binding) => binding.workspaceUri !== targetUri),
+    ));
+  }
+
+  async function handleImportWorkspaceBinding() {
+    const normalizedPath = workspaceImportPath.trim();
+    if (!normalizedPath) {
+      setWorkspaceActionError('请输入要绑定的目录路径');
+      return;
+    }
+
+    setWorkspaceActionError(null);
+    setImportingWorkspace(true);
+    try {
+      const result = await api.importWorkspace(normalizedPath);
+      await onWorkspaceImported?.(result.workspace);
+      addWorkspaceBinding(result.workspace.uri, workspaceRoleToAdd);
+      setWorkspaceImportDialogOpen(false);
+      setWorkspaceImportPath('');
+    } catch (error) {
+      setWorkspaceActionError(error instanceof Error ? error.message : '导入工作区失败');
+    } finally {
+      setImportingWorkspace(false);
+    }
+  }
+
+  async function handleBrowseWorkspaceImport() {
+    const selectedPath = await selectLocalFolder('选择要绑定到该部门的文件夹');
+    if (!selectedPath) return;
+    setWorkspaceImportPath(selectedPath);
+  }
+
   // ── Save ───────────────────────────────────────────────────────────────
 
   async function handleSave(options: { syncAfterSave?: boolean } = {}) {
@@ -375,8 +539,14 @@ export default function DepartmentSetupDialog({
             canRequestMore: initialConfig.tokenQuota?.canRequestMore ?? true,
           }
         : null;
+      const normalizedBindings = normalizeBindingDraft(workspaceBindings, primaryWorkspaceUri);
+      const contextDocumentPaths = contextDocumentText
+        .split('\n')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
 
-      const config: DepartmentConfig = {
+      const config = normalizeDepartmentConfig({
+        departmentId: initialConfig.departmentId,
         name: name.trim() || workspaceName,
         type: resolvedType,
         ...(resolvedIcon ? { typeIcon: resolvedIcon } : {}),
@@ -396,7 +566,17 @@ export default function DepartmentSetupDialog({
         // Preserve map editor data (roomLayout/roomBg) — these are managed by RoomEditor, not this dialog
         ...(initialConfig.roomLayout?.length ? { roomLayout: initialConfig.roomLayout } : {}),
         ...(initialConfig.roomBg ? { roomBg: initialConfig.roomBg } : {}),
-      };
+        workspaceBindings: normalizedBindings.map((binding) => ({
+          workspaceUri: binding.workspaceUri,
+          alias: binding.alias?.trim() || undefined,
+          role: binding.role,
+          writeAccess: binding.role !== 'context',
+        })),
+        executionPolicy: {
+          defaultWorkspaceUri: primaryWorkspaceUri,
+          contextDocumentPaths,
+        },
+      }, workspaceUri, workspaceName);
       await api.updateDepartment(workspaceUri, config);
       if (options.syncAfterSave) {
         try {
@@ -418,7 +598,7 @@ export default function DepartmentSetupDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl h-[70vh] flex flex-col p-0 overflow-hidden">
+      <DialogContent className="h-[80vh] max-w-3xl flex flex-col p-0 overflow-hidden">
         <div className="px-6 pt-6 pb-2 shrink-0">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg">
@@ -434,6 +614,9 @@ export default function DepartmentSetupDialog({
         <Tabs defaultValue="basic" className="px-6 flex flex-col min-h-0 flex-1">
           <TabsList className="w-full shrink-0">
             <TabsTrigger value="basic" className="text-xs">基本信息</TabsTrigger>
+            <TabsTrigger value="workspaces" className="text-xs">
+              工作区 ({boundWorkspaceCount})
+            </TabsTrigger>
             <TabsTrigger value="templates" className="text-xs">
               模板{selectedTemplateIds.length > 0 && ` (${selectedTemplateIds.length})`}
             </TabsTrigger>
@@ -530,9 +713,7 @@ export default function DepartmentSetupDialog({
               >
                 <option value="auto">自动选择</option>
                 <option value="antigravity">Antigravity (gRPC)</option>
-                <option value="codex">Codex (MCP)</option>
                 <option value="native-codex">Codex Native (OAuth)</option>
-                <option value="claude-code">Claude Code (CLI)</option>
                 <option value="claude-api">Claude API (直连)</option>
                 <option value="openai-api">OpenAI API</option>
                 <option value="gemini-api">Gemini API</option>
@@ -540,7 +721,7 @@ export default function DepartmentSetupDialog({
                 <option value="custom">OpenAI Compatible / Custom</option>
               </NativeSelect>
               <p className="text-xs text-muted-foreground">
-                设置该部门 Agent 任务使用的 AI 服务商
+                设置该部门 Agent 任务使用的推理 Provider；本机 CLI 会作为执行工具在运行时被调用，不在这里配置。
               </p>
             </div>
 
@@ -583,6 +764,151 @@ export default function DepartmentSetupDialog({
               )}
               <p className="text-xs text-muted-foreground">
                 设置为 0 表示不限制。超出配额后将触发审批。
+              </p>
+            </div>
+          </TabsContent>
+
+          {/* ── Workspaces Tab ─────────────────────────────────────────── */}
+          <TabsContent value="workspaces" className="space-y-5 pt-4 pb-2 overflow-y-auto">
+            <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground sm:grid-cols-3">
+              <div>绑定目录：<span className="font-medium text-foreground">{boundWorkspaceCount}</span></div>
+              <div>主执行目录：<span className="font-medium text-foreground">{getWorkspaceDisplayName(primaryWorkspaceUri)}</span></div>
+              <div>上下文文档：<span className="font-medium text-foreground">{contextDocumentCount}</span></div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                <div className="flex-1 space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">添加现有工作区</label>
+                  <NativeSelect
+                    value={workspaceToAdd}
+                    onChange={(event) => setWorkspaceToAdd(event.target.value)}
+                    className="text-xs"
+                  >
+                    <option value="">选择已有文件夹工作区…</option>
+                    {workspaceChoices.map((workspace) => (
+                      <option key={workspace.uri} value={workspace.uri}>
+                        {workspace.name} · {workspace.uri}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </div>
+                <div className="w-full lg:w-40 space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">绑定角色</label>
+                  <NativeSelect
+                    value={workspaceRoleToAdd}
+                    onChange={(event) => setWorkspaceRoleToAdd(event.target.value as DepartmentWorkspaceRole)}
+                    className="text-xs"
+                  >
+                    <option value="execution">执行目录</option>
+                    <option value="context">上下文目录</option>
+                    <option value="primary">主执行目录</option>
+                  </NativeSelect>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!workspaceToAdd}
+                    onClick={() => addWorkspaceBinding(workspaceToAdd, workspaceRoleToAdd)}
+                  >
+                    绑定已有目录
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={importingWorkspace}
+                    onClick={() => {
+                      setWorkspaceImportPath('');
+                      setWorkspaceActionError(null);
+                      setWorkspaceImportDialogOpen(true);
+                    }}
+                  >
+                    {importingWorkspace ? '导入中…' : '导入并绑定目录'}
+                  </Button>
+                </div>
+              </div>
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                一个部门可以绑定多个目录。通常只保留一个主执行目录，其余目录按执行目录或上下文目录挂入。
+              </p>
+              {workspaceActionError ? (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                  {workspaceActionError}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-3">
+              {workspaceBindings.map((binding) => {
+                const isAnchorWorkspace = binding.workspaceUri === workspaceUri;
+                return (
+                  <div key={binding.workspaceUri} className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {getWorkspaceDisplayName(binding.workspaceUri)}
+                        </div>
+                        <div className="mt-1 truncate text-[11px] text-muted-foreground">{binding.workspaceUri}</div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={isAnchorWorkspace}
+                        onClick={() => removeWorkspaceBinding(binding.workspaceUri)}
+                      >
+                        移除
+                      </Button>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">显示别名</label>
+                        <Input
+                          value={binding.alias ?? ''}
+                          onChange={(event) => updateWorkspaceBinding(binding.workspaceUri, { alias: event.target.value })}
+                          placeholder={workspaceNameFromUri(binding.workspaceUri)}
+                          className="h-9 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">角色</label>
+                        <NativeSelect
+                          value={binding.role}
+                          onChange={(event) => updateWorkspaceBinding(binding.workspaceUri, { role: event.target.value as DepartmentWorkspaceRole })}
+                          className="text-xs"
+                        >
+                          <option value="primary">主执行目录</option>
+                          <option value="execution">执行目录</option>
+                          <option value="context">上下文目录</option>
+                        </NativeSelect>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] leading-5 text-muted-foreground">
+                      {binding.role === 'primary'
+                        ? '主执行目录：默认写入、派发任务优先落在这里。'
+                        : binding.role === 'execution'
+                          ? '执行目录：允许作为任务执行候选目录。'
+                          : '上下文目录：默认只读，用于补充代码或文档上下文。'}
+                      {isAnchorWorkspace ? ' 当前入口目录会始终保留在该部门绑定内。' : ''}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">潜在上下文文档</label>
+              <Textarea
+                value={contextDocumentText}
+                onChange={(event) => setContextDocumentText(event.target.value)}
+                placeholder={'docs/context.md\nplaybooks/department-handbook.md\n/Users/shared/company-context.md'}
+                className="min-h-[140px] text-xs leading-5"
+              />
+              <p className="text-xs text-muted-foreground">
+                每行一个文档路径。支持相对主目录路径和绝对路径，执行任务时会作为补充只读上下文。
               </p>
             </div>
           </TabsContent>
@@ -992,6 +1318,32 @@ export default function DepartmentSetupDialog({
             </Button>
           </div>
         </div>
+
+        <LocalFolderImportDialog
+          open={workspaceImportDialogOpen}
+          title="导入并绑定目录"
+          description="把新的文件夹注册为 workspace 后，立即绑定到当前部门。导入完成后仍会保留你当前选中的绑定角色。"
+          inputLabel="目录路径"
+          placeholder="/Users/xxx/shared-docs"
+          helperText={isTauriDesktop()
+            ? '桌面模式下可直接浏览本机文件夹；也可以手动输入绝对路径。'
+            : '当前是 Web 模式，请输入本机绝对路径。若要使用系统文件夹选择器，请从 Tauri 桌面壳进入。'}
+          confirmLabel="导入并绑定"
+          value={workspaceImportPath}
+          error={workspaceActionError}
+          submitting={importingWorkspace}
+          supportsNativeBrowse={isTauriDesktop()}
+          onValueChange={setWorkspaceImportPath}
+          onOpenChange={(nextOpen) => {
+            setWorkspaceImportDialogOpen(nextOpen);
+            if (!nextOpen) {
+              setWorkspaceImportPath('');
+              setWorkspaceActionError(null);
+            }
+          }}
+          onBrowse={handleBrowseWorkspaceImport}
+          onConfirm={handleImportWorkspaceBinding}
+        />
       </DialogContent>
     </Dialog>
   );

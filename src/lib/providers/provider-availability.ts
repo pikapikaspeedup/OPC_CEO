@@ -1,7 +1,7 @@
-import type { AIProviderConfig, ProviderId } from './types';
+import type { AIProviderConfig, AIProviderId } from './types';
 
 export type ProviderOption = {
-  value: ProviderId;
+  value: AIProviderId;
   label: string;
 };
 
@@ -24,8 +24,6 @@ export type ProviderInventory = {
 export const PROVIDER_OPTIONS: ProviderOption[] = [
   { value: 'antigravity', label: 'Antigravity (Native)' },
   { value: 'native-codex', label: 'Codex Native (OAuth)' },
-  { value: 'codex', label: 'Codex (MCP)' },
-  { value: 'claude-code', label: 'Claude Code (CLI)' },
   { value: 'claude-api', label: 'Claude API' },
   { value: 'openai-api', label: 'OpenAI API' },
   { value: 'gemini-api', label: 'Gemini API' },
@@ -35,15 +33,22 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
 
 export const PROVIDER_LABELS = Object.fromEntries(
   PROVIDER_OPTIONS.map((option) => [option.value, option.label]),
-) as Record<ProviderId, string>;
+) as Record<AIProviderId, string>;
 
 export type ProviderValidationIssue = {
   path: string;
-  provider: ProviderId;
+  provider: AIProviderId;
 };
 
 function hasText(value?: string): boolean {
   return Boolean(value?.trim());
+}
+
+export function isProviderEnabledInConfig(
+  providerId: AIProviderId,
+  config?: AIProviderConfig | null,
+): boolean {
+  return config?.providerProfiles?.[providerId]?.enabled !== false;
 }
 
 export function isCustomProviderConfigured(customProvider?: AIProviderConfig['customProvider']): boolean {
@@ -52,20 +57,16 @@ export function isCustomProviderConfigured(customProvider?: AIProviderConfig['cu
     && hasText(customProvider?.apiKey);
 }
 
-export function isProviderAvailable(
-  providerId: ProviderId,
+export function isProviderTechnicallyAvailable(
+  providerId: AIProviderId,
   inventory: ProviderInventory | null | undefined,
   customProvider?: AIProviderConfig['customProvider'],
 ): boolean {
   switch (providerId) {
     case 'antigravity':
       return true;
-    case 'codex':
-      return Boolean(inventory?.providers.codex.installed);
     case 'native-codex':
       return Boolean(inventory?.providers.nativeCodex.loggedIn);
-    case 'claude-code':
-      return Boolean(inventory?.providers.claudeCode.installed && inventory?.providers.claudeCode.loginDetected);
     case 'claude-api':
       return Boolean(inventory?.anthropic.set);
     case 'openai-api':
@@ -81,14 +82,25 @@ export function isProviderAvailable(
   }
 }
 
+export function isProviderAvailable(
+  providerId: AIProviderId,
+  inventory: ProviderInventory | null | undefined,
+  customProvider?: AIProviderConfig['customProvider'],
+  config?: AIProviderConfig | null,
+): boolean {
+  return isProviderEnabledInConfig(providerId, config)
+    && isProviderTechnicallyAvailable(providerId, inventory, customProvider);
+}
+
 export function getSelectableProviderOptions(
   inventory: ProviderInventory | null | undefined,
   customProvider?: AIProviderConfig['customProvider'],
-  _currentProvider?: ProviderId,
+  _currentProvider?: AIProviderId,
+  config?: AIProviderConfig | null,
 ): SelectableProviderOption[] {
   void _currentProvider;
   return PROVIDER_OPTIONS.map((option) => {
-    const available = isProviderAvailable(option.value, inventory, customProvider);
+    const available = isProviderAvailable(option.value, inventory, customProvider, config);
     return {
       ...option,
       label: available ? option.label : `${option.label} (未配置)`,
@@ -103,9 +115,9 @@ export function findUnavailableProviders(
 ): ProviderValidationIssue[] {
   const issues: ProviderValidationIssue[] = [];
 
-  const pushIfUnavailable = (path: string, provider: ProviderId | undefined) => {
+  const pushIfUnavailable = (path: string, provider: AIProviderId | undefined) => {
     if (!provider) return;
-    if (!isProviderAvailable(provider, inventory, config.customProvider)) {
+    if (!isProviderAvailable(provider, inventory, config.customProvider, config)) {
       issues.push({ path, provider });
     }
   };
@@ -130,4 +142,15 @@ export function formatProviderValidationError(issues: ProviderValidationIssue[])
 
   const [{ path, provider }] = issues;
   return `Provider "${PROVIDER_LABELS[provider]}" at "${path}" is not configured and cannot be selected`;
+}
+
+export function listConfiguredProviderIds(
+  config: AIProviderConfig,
+  inventory: ProviderInventory | null | undefined,
+  options?: { includeAntigravity?: boolean },
+): AIProviderId[] {
+  return PROVIDER_OPTIONS
+    .map((option) => option.value)
+    .filter((providerId) => (options?.includeAntigravity ? true : providerId !== 'antigravity'))
+    .filter((providerId) => isProviderAvailable(providerId, inventory, config.customProvider, config));
 }

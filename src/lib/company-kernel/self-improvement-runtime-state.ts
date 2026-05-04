@@ -2,12 +2,14 @@ import type { AgentRunState, RunStatus } from '../agents/group-types';
 import { getProject } from '../agents/project-registry';
 import type { ProjectDefinition } from '../agents/project-types';
 import type {
+  SystemImprovementCodexExecutionSnapshot,
   SystemImprovementExecutionProjectSnapshot,
   SystemImprovementExecutionRunSnapshot,
   SystemImprovementExitEvidenceBundle,
   SystemImprovementMergeGateSummary,
   SystemImprovementProposal,
   SystemImprovementProposalStatus,
+  SystemImprovementReleaseGateSnapshot,
 } from './contracts';
 import {
   getSystemImprovementProposal,
@@ -56,8 +58,54 @@ function getLaunchStatus(proposal: SystemImprovementProposal): string | null {
   return typeof value === 'string' && value ? value : null;
 }
 
+function getCodexEvidence(proposal: SystemImprovementProposal): SystemImprovementCodexExecutionSnapshot | null {
+  const value = proposal.metadata?.codexRunnerEvidence;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Partial<SystemImprovementCodexExecutionSnapshot>;
+  if (
+    typeof candidate.runId !== 'string'
+    || typeof candidate.taskKey !== 'string'
+    || typeof candidate.branch !== 'string'
+    || typeof candidate.worktreePath !== 'string'
+    || typeof candidate.baseSha !== 'string'
+    || typeof candidate.headSha !== 'string'
+    || !Array.isArray(candidate.changedFiles)
+    || !Array.isArray(candidate.allowedPathPrefixes)
+    || !Array.isArray(candidate.disallowedFiles)
+  ) {
+    return null;
+  }
+  return candidate as SystemImprovementCodexExecutionSnapshot;
+}
+
+function getReleaseGate(proposal: SystemImprovementProposal): SystemImprovementReleaseGateSnapshot | null {
+  const value = proposal.exitEvidence?.releaseGate || proposal.metadata?.releaseGate;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Partial<SystemImprovementReleaseGateSnapshot>;
+  if (
+    typeof candidate.status !== 'string'
+    || typeof candidate.preflightStatus !== 'string'
+    || !Array.isArray(candidate.checks)
+    || !candidate.commands
+    || typeof candidate.commands !== 'object'
+    || typeof candidate.updatedAt !== 'string'
+  ) {
+    return null;
+  }
+  return candidate as SystemImprovementReleaseGateSnapshot;
+}
+
 function hasRuntimeExecutionContext(proposal: SystemImprovementProposal): boolean {
-  return Boolean(getImprovementProjectId(proposal) || getImprovementRunId(proposal) || getLaunchStatus(proposal));
+  return Boolean(
+    getImprovementProjectId(proposal)
+    || getImprovementRunId(proposal)
+    || getLaunchStatus(proposal)
+    || getCodexEvidence(proposal),
+  );
 }
 
 function summarizeProject(project: ProjectDefinition): SystemImprovementExecutionProjectSnapshot {
@@ -147,17 +195,22 @@ function buildExitEvidenceBundle(input: {
   latestRun: AgentRunState | null;
 }): SystemImprovementExitEvidenceBundle {
   const latestTest = input.proposal.testEvidence.at(-1);
+  const codexEvidence = getCodexEvidence(input.proposal);
+  const releaseGate = getReleaseGate(input.proposal);
   const deliveryReady = input.project?.status === 'completed'
-    || (!input.project && input.latestRun?.status === 'completed');
+    || (!input.project && input.latestRun?.status === 'completed')
+    || Boolean(codexEvidence?.evidencePath);
   const deliveryBlocked = input.project?.status === 'failed'
     || input.project?.status === 'cancelled'
     || input.project?.status === 'paused'
     || (input.latestRun ? FAILED_RUN_STATUSES.has(input.latestRun.status) : false)
-    || getLaunchStatus(input.proposal) === 'dispatch-failed';
+    || getLaunchStatus(input.proposal) === 'dispatch-failed'
+    || getLaunchStatus(input.proposal) === 'codex-failed';
 
   return {
     ...(input.project ? { project: summarizeProject(input.project) } : {}),
     ...(input.latestRun ? { latestRun: summarizeRun(input.latestRun) } : {}),
+    ...(codexEvidence ? { codex: codexEvidence } : {}),
     testing: {
       plannedCount: input.proposal.testPlan.length,
       evidenceCount: input.proposal.testEvidence.length,
@@ -173,6 +226,7 @@ function buildExitEvidenceBundle(input: {
       deliveryReady: Boolean(deliveryReady),
       deliveryBlocked: Boolean(deliveryBlocked),
     }),
+    ...(releaseGate ? { releaseGate } : {}),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -214,7 +268,7 @@ function deriveLaunchStatus(input: {
   nextStatus: SystemImprovementProposalStatus;
 }): string | null {
   const current = getLaunchStatus(input.proposal);
-  if (current === 'dispatch-failed') return current;
+  if (current === 'dispatch-failed' || current === 'codex-failed') return current;
   if (input.project?.status === 'completed' || input.nextStatus === 'ready-to-merge' || input.nextStatus === 'testing') {
     return 'delivery-complete';
   }
