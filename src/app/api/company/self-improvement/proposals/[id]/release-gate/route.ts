@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import {
   runSystemImprovementReleaseAction,
   type SystemImprovementReleaseAction,
@@ -35,7 +36,7 @@ export async function POST(
   }
 
   try {
-    return NextResponse.json(await runSystemImprovementReleaseAction(id, {
+    const result = await runSystemImprovementReleaseAction(id, {
       action: body.action,
       actor: body.actor,
       note: body.note,
@@ -44,7 +45,11 @@ export async function POST(
       healthCheckSummary: body.healthCheckSummary,
       observationSummary: body.observationSummary,
       rollbackReason: body.rollbackReason,
-    }));
+    });
+    return NextResponse.json({
+      ...result,
+      proposal: buildSystemImprovementProposalView(result.proposal),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes('not found') ? 404 : 400;

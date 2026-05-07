@@ -174,6 +174,16 @@ export function createCompanyControlPlaneRoutes(): RouteDefinition[] {
       },
     },
     {
+      pattern: /^\/api\/company\/ceo\/decisions$/,
+      handler: async (req) => {
+        if (req.method === 'GET') {
+          const { GET } = await import('@/app/api/company/ceo/decisions/route');
+          return GET(req);
+        }
+        return methodNotAllowedResponse(['GET']);
+      },
+    },
+    {
       pattern: /^\/api\/company\/budget\/policies$/,
       handler: async (req) => {
         if (req.method === 'GET') {

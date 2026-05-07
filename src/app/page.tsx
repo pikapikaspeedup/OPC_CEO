@@ -14,11 +14,12 @@ import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
 import NotificationIndicators from '@/components/notification-indicators';
 import SystemImprovementDetailDrawer from '@/components/system-improvement-detail-drawer';
+import GrowthProposalDetailDrawer from '@/components/growth-proposal-detail-drawer';
 import WorkspaceConceptShell from '@/components/workspace-concept-shell';
 import { useI18n } from '@/components/locale-provider';
 import { buildAppUrl, parseAppUrlState } from '@/lib/app-url-state';
 import { api, connectWs, type AuditEvent } from '@/lib/api';
-import type { AgentRun, Conversation, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
+import type { AgentRun, Conversation, DecisionTargetFE, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
 import {
@@ -168,7 +169,9 @@ export default function Home() {
     proposalId: null,
     nonce: 0,
   });
+  const [activeDecisionTarget, setActiveDecisionTarget] = useState<DecisionTargetFE | null>(null);
   const [systemImprovementProposalId, setSystemImprovementProposalId] = useState<string | null>(null);
+  const [growthProposalId, setGrowthProposalId] = useState<string | null>(null);
   const [systemImprovementRefreshSignal, setSystemImprovementRefreshSignal] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState('Antigravity');
@@ -291,15 +294,18 @@ export default function Home() {
   }, [loadModels]);
 
   useEffect(() => {
-    if (sidebarSection === 'projects' || sidebarSection === 'ceo') {
-      void loadTemplates();
-    }
-    if (sidebarSection === 'ceo' || sidebarSection === 'conversations') {
-      void loadChatAssets();
-    }
-    if (sidebarSection === 'operations') {
-      void loadOperationsAssets();
-    }
+    const timer = window.setTimeout(() => {
+      if (sidebarSection === 'projects' || sidebarSection === 'ceo') {
+        void loadTemplates();
+      }
+      if (sidebarSection === 'ceo' || sidebarSection === 'conversations') {
+        void loadChatAssets();
+      }
+      if (sidebarSection === 'operations') {
+        void loadOperationsAssets();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [loadChatAssets, loadOperationsAssets, loadTemplates, sidebarSection]);
 
   useEffect(() => {
@@ -388,11 +394,16 @@ export default function Home() {
   );
 
   useEffect(() => {
-    void loadAgentState();
+    const initialTimer = window.setTimeout(() => {
+      void loadAgentState(selectedAgentRunId);
+    }, 0);
     const timer = setInterval(() => {
       void loadAgentState(selectedAgentRunId);
     }, agentStatePollMs);
-    return () => clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialTimer);
+      clearInterval(timer);
+    };
   }, [agentStatePollMs, loadAgentState, selectedAgentRunId]);
 
   const loadSteps = useCallback(async (id: string) => {
@@ -419,6 +430,7 @@ export default function Home() {
 
   const activateSection = useCallback((section: PrimarySection, mode: UrlNavigationMode = 'push') => {
     queueUrlSync(mode);
+    setActiveDecisionTarget(null);
     setSidebarSection(section);
     setUtilityPanel(null);
     setSidebarOpen(false);
@@ -430,6 +442,7 @@ export default function Home() {
     mode: UrlNavigationMode = 'push',
   ) => {
     queueUrlSync(mode);
+    setActiveDecisionTarget(null);
     setSettingsPanelRequest((prev) => ({
       tab: options?.tab ?? 'profile',
       focusTarget: options?.focusTarget ?? null,
@@ -501,6 +514,14 @@ export default function Home() {
   const handleSystemImprovementDrawerOpenChange = useCallback((nextOpen: boolean) => {
     if (!nextOpen) {
       setSystemImprovementProposalId(null);
+      setActiveDecisionTarget((target) => target?.kind === 'system-improvement-proposal' ? null : target);
+    }
+  }, []);
+
+  const handleGrowthProposalDrawerOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) {
+      setGrowthProposalId(null);
+      setActiveDecisionTarget((target) => target?.kind === 'growth-proposal' ? null : target);
     }
   }, []);
 
@@ -549,6 +570,54 @@ export default function Home() {
     setSelectedKnowledgeTitle(title || '');
   }, [activateSection]);
 
+  const selectedProjectStageId = activeDecisionTarget?.kind === 'project-stage-gate'
+    && activeDecisionTarget.projectId === selectedProjectId
+    ? activeDecisionTarget.stageId
+    : null;
+
+  const openDecisionTarget = useCallback((target: DecisionTargetFE, mode: UrlNavigationMode = 'push') => {
+    switch (target.kind) {
+      case 'system-improvement-proposal':
+        queueUrlSync(mode);
+        setSystemImprovementProposalId(target.proposalId);
+        setActiveDecisionTarget(target);
+        return;
+      case 'growth-proposal':
+        queueUrlSync(mode);
+        setGrowthProposalId(target.proposalId);
+        setActiveDecisionTarget(target);
+        return;
+      case 'project':
+        navigateToProject(target.projectId, mode);
+        setActiveDecisionTarget(target);
+        return;
+      case 'project-stage-gate':
+        navigateToProject(target.projectId, mode);
+        setActiveDecisionTarget(target);
+        return;
+      case 'run':
+        void navigateToProjectRun(target.runId, target.projectId, mode);
+        setActiveDecisionTarget(target);
+        return;
+      case 'knowledge':
+        navigateToKnowledge(target.knowledgeId, null, mode);
+        setActiveDecisionTarget(target);
+        return;
+      case 'conversation':
+        handleSelect(target.conversationId, target.title || target.conversationId.slice(0, 8), target.section || 'ceo', mode);
+        setActiveDecisionTarget(target);
+        return;
+      case 'ops':
+        openOpsPanel({ proposalId: target.proposalId, query: target.query }, mode);
+        setActiveDecisionTarget(target);
+        return;
+      case 'settings':
+        openSettingsPanel({ tab: target.tab, focusTarget: target.focus || null }, mode);
+        setActiveDecisionTarget(target);
+        return;
+    }
+  }, [handleSelect, navigateToKnowledge, navigateToProject, navigateToProjectRun, openOpsPanel, openSettingsPanel, queueUrlSync]);
+
   const applyUrlState = useCallback((search: string) => {
     const nextState = parseAppUrlState(search);
 
@@ -591,12 +660,21 @@ export default function Home() {
         nonce: prev.nonce + 1,
       }));
     }
-  }, [syncConversationSelection]);
+
+    if (nextState.decisionTarget) {
+      openDecisionTarget(nextState.decisionTarget, 'replace');
+      return;
+    }
+
+  }, [openDecisionTarget, syncConversationSelection]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    applyUrlState(window.location.search);
-    setUrlStateReady(true);
+    const timer = window.setTimeout(() => {
+      applyUrlState(window.location.search);
+      setUrlStateReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [applyUrlState]);
 
   useEffect(() => {
@@ -641,7 +719,7 @@ export default function Home() {
   }, [handleSelect]);
 
   useEffect(() => {
-    if (!urlStateReady || sidebarSection !== 'ceo' || utilityPanel !== null) return;
+    if (!urlStateReady || sidebarSection !== 'ceo' || utilityPanel !== null || activeDecisionTarget) return;
 
     let cancelled = false;
     api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 1 }).then(data => {
@@ -660,8 +738,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sidebarSection, urlStateReady, utilityPanel]);
+  }, [activeDecisionTarget, activeId, handleSelect, sidebarSection, syncConversationSelection, urlStateReady, utilityPanel]);
 
   useEffect(() => {
     if (sidebarSection !== 'ceo' && activeConversationScope !== 'ceo') return;
@@ -876,23 +953,29 @@ export default function Home() {
     section: sidebarSection,
     utilityPanel,
     conversationId:
-      (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
-      || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
+      !activeDecisionTarget && (
+        (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
+        || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
+      )
         ? activeId
         : null,
     conversationTitle:
-      (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
-      || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
+      !activeDecisionTarget && (
+        (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
+        || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
+      )
         ? activeTitle
         : null,
-    projectId: sidebarSection === 'projects' ? selectedProjectId : null,
-    knowledgeId: sidebarSection === 'knowledge' ? selectedKnowledgeId : null,
-    opsProposalId: sidebarSection === 'operations' ? opsProposalRequest.proposalId : null,
+    projectId: !activeDecisionTarget && sidebarSection === 'projects' ? selectedProjectId : null,
+    knowledgeId: !activeDecisionTarget && sidebarSection === 'knowledge' ? selectedKnowledgeId : null,
+    opsProposalId: !activeDecisionTarget && sidebarSection === 'operations' ? opsProposalRequest.proposalId : null,
     settingsTab: settingsPanelRequest.tab,
     settingsFocus: settingsPanelRequest.focusTarget,
+    decisionTarget: activeDecisionTarget,
   }), [
     activeConversationScope,
     activeId,
+    activeDecisionTarget,
     activeTitle,
     selectedKnowledgeId,
     selectedProjectId,
@@ -1439,6 +1522,7 @@ export default function Home() {
                   agentRuns={agentRuns}
 	                  workspaces={departmentWorkspaces}
 	                  selectedProjectId={selectedProjectId}
+	                  selectedStageId={selectedProjectStageId}
 	                  selectedRunId={selectedAgentRunId}
 	                  departments={departmentsMap}
 	                  projectSearchQuery={projectSearchQuery}
@@ -1603,6 +1687,7 @@ export default function Home() {
               onOpenSettings={() => openSettingsPanel()}
               onSelectConversation={(id, title, targetSection) => handleSelect(id, title, targetSection)}
               onNavigateToProject={navigateToProject}
+              onOpenDecisionTarget={openDecisionTarget}
               onSend={handleSend}
               onCancel={handleCancel}
               onProceed={handleProceed}
@@ -1720,6 +1805,12 @@ export default function Home() {
         onNavigateToProject={navigateToProject}
         onOpenOps={openOpsPanel}
         onRefresh={refreshSystemImprovementViews}
+      />
+      <GrowthProposalDetailDrawer
+        open={!!growthProposalId}
+        proposalId={growthProposalId}
+        onOpenChange={handleGrowthProposalDrawerOpenChange}
+        onChanged={refreshSystemImprovementViews}
       />
       <LogViewerPanel open={logViewerOpen} onClose={() => setLogViewerOpen(false)} />
       <ActiveTasksPanel

@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { ShieldCheck, ShieldAlert, Clock, CheckCircle2, XCircle, MessageCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
-import type { ApprovalRequestFE, ApprovalSummaryFE } from '@/lib/types';
+import type { ApprovalRequestFE, ApprovalSummaryFE, DecisionTargetFE } from '@/lib/types';
 
 // ---------------------------------------------------------------------------
 // Urgency badge
@@ -62,9 +62,10 @@ function StatusIcon({ status }: { status: ApprovalRequestFE['status'] }) {
 interface RequestCardProps {
   request: ApprovalRequestFE;
   onRespond: (id: string, action: 'approved' | 'rejected' | 'feedback', message?: string) => Promise<void>;
+  onOpenTarget?: (target: DecisionTargetFE) => void;
 }
 
-function RequestCard({ request, onRespond }: RequestCardProps) {
+function RequestCard({ request, onRespond, onOpenTarget }: RequestCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [responding, setResponding] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
@@ -232,6 +233,15 @@ function RequestCard({ request, onRespond }: RequestCardProps) {
           {/* Action buttons (only for pending) */}
           {request.status === 'pending' && (
             <div className="flex items-center gap-2">
+              {onOpenTarget && request.target ? (
+                <button
+                  className="flex items-center gap-1.5 rounded-lg bg-white/5 border border-white/10 px-3 py-1.5 text-xs font-medium text-white/70 hover:bg-white/10 transition-colors"
+                  onClick={() => onOpenTarget(request.target)}
+                  disabled={responding}
+                >
+                  查看详情
+                </button>
+              ) : null}
               <button
                 className="flex items-center gap-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/25 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-40"
                 onClick={() => handleAction('approved')}
@@ -292,9 +302,10 @@ function RequestCard({ request, onRespond }: RequestCardProps) {
 export interface ApprovalPanelProps {
   /** Auto-refresh interval in ms (default: 30000) */
   refreshInterval?: number;
+  onOpenTarget?: (target: DecisionTargetFE) => void;
 }
 
-export default function ApprovalPanel({ refreshInterval = 30_000 }: ApprovalPanelProps) {
+export default function ApprovalPanel({ refreshInterval = 30_000, onOpenTarget }: ApprovalPanelProps) {
   const [requests, setRequests] = useState<ApprovalRequestFE[]>([]);
   const [summary, setSummary] = useState<ApprovalSummaryFE | null>(null);
   const [loading, setLoading] = useState(true);
@@ -385,7 +396,7 @@ export default function ApprovalPanel({ refreshInterval = 30_000 }: ApprovalPane
         ) : (
           <div className="space-y-2">
             {requests.map(req => (
-              <RequestCard key={req.id} request={req} onRespond={handleRespond} />
+              <RequestCard key={req.id} request={req} onRespond={handleRespond} onOpenTarget={onOpenTarget} />
             ))}
           </div>
         )}

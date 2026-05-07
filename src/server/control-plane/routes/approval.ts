@@ -1,6 +1,7 @@
 import { getRequestSummary, getApprovalRequest, listApprovalRequests } from '@/lib/approval/request-store';
 import { handleApprovalResponse, submitApprovalRequest, verifyApprovalToken } from '@/lib/approval/handler';
 import type { CreateApprovalInput } from '@/lib/approval/types';
+import { isDecisionTarget } from '@/lib/decision-control';
 
 function json(body: unknown, init?: ResponseInit): Response {
   return Response.json(body, init);
@@ -29,9 +30,9 @@ export async function handleApprovalCreatePost(req: Request): Promise<Response> 
     return json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  if (!body.title || !body.description || !body.type || !body.workspace) {
+  if (!body.title || !body.description || !body.type || !body.workspace || !isDecisionTarget(body.target)) {
     return json(
-      { error: 'Missing required fields: title, description, type, workspace' },
+      { error: 'Missing required fields: title, description, type, workspace, target' },
       { status: 400 },
     );
   }

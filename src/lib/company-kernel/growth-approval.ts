@@ -14,6 +14,7 @@ export async function ensureGrowthProposalApprovalRequest(
 
   const request = await submitApprovalRequest({
     type: 'proposal_publish',
+    target: { kind: 'growth-proposal', proposalId: proposal.id },
     workspace: proposal.workspaceUri || 'organization',
     title: `Publish growth proposal: ${proposal.title}`,
     description: [
@@ -42,6 +43,7 @@ export async function ensureGrowthProposalApprovalRequest(
   });
 
   return patchGrowthProposal(proposal.id, {
+    status: 'approval-required',
     approvalRequestId: request.id,
   }) || proposal;
 }

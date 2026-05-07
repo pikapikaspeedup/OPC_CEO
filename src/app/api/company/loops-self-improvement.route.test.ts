@@ -18,6 +18,7 @@ async function loadModules() {
     loopRunsRoute: await import('./loops/runs/route'),
     selfSignalsRoute: await import('./self-improvement/signals/route'),
     selfGenerateRoute: await import('./self-improvement/proposals/generate/route'),
+    selfProposalDetailRoute: await import('./self-improvement/proposals/[id]/route'),
     selfProposalsRoute: await import('./self-improvement/proposals/route'),
     selfAttachEvidenceRoute: await import('./self-improvement/proposals/[id]/attach-test-evidence/route'),
   };
@@ -112,6 +113,20 @@ describe('/api/company loops and self-improvement routes', () => {
     const proposalBody = await proposalRes.json();
     expect(proposalRes.status).toBe(201);
     expect(proposalBody.proposal.risk).toBe('low');
+    expect(proposalBody.proposal.controlState.stage).toBe('blocked');
+
+    const highRiskProposalRes = await modules.selfGenerateRoute.POST(new Request('http://localhost/api/company/self-improvement/proposals/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        signalIds: [signalBody.signal.id],
+        affectedFiles: ['src/lib/agents/scheduler.ts'],
+      }),
+    }));
+    const highRiskProposalBody = await highRiskProposalRes.json();
+    expect(highRiskProposalRes.status).toBe(201);
+    expect(highRiskProposalBody.proposal.controlState.stage).toBe('entry-review');
+    expect(highRiskProposalBody.proposal.entryApprovalSummary?.status).toBe('pending');
 
     const evidenceRes = await modules.selfAttachEvidenceRoute.POST(new Request(`http://localhost/api/company/self-improvement/proposals/${proposalBody.proposal.id}/attach-test-evidence`, {
       method: 'POST',
@@ -125,10 +140,23 @@ describe('/api/company loops and self-improvement routes', () => {
       params: Promise.resolve({ id: proposalBody.proposal.id }),
     });
     expect(evidenceRes.status).toBe(200);
-    expect((await evidenceRes.json()).proposal.status).toBe('ready-to-merge');
+    const evidenceBody = await evidenceRes.json();
+    expect(evidenceBody.proposal.status).toBe('ready-to-merge');
+    expect(evidenceBody.proposal.controlState.stage).toBe('ai-preflight');
 
     const listRes = await modules.selfProposalsRoute.GET(new Request('http://localhost/api/company/self-improvement/proposals?pageSize=5'));
-    expect((await listRes.json()).total).toBe(1);
+    const listBody = await listRes.json();
+    expect(listBody.total).toBe(2);
+    expect(listBody.items.some((item: { controlState: { stage: string } }) => item.controlState.stage === 'ai-preflight')).toBe(true);
+    expect(listBody.items.some((item: { controlState: { stage: string } }) => item.controlState.stage === 'entry-review')).toBe(true);
+
+    const detailRes = await modules.selfProposalDetailRoute.GET(new Request(`http://localhost/api/company/self-improvement/proposals/${proposalBody.proposal.id}`), {
+      params: Promise.resolve({ id: proposalBody.proposal.id }),
+    });
+    const detailBody = await detailRes.json();
+    expect(detailRes.status).toBe(200);
+    expect(detailBody.controlState.stage).toBe('ai-preflight');
+    expect(detailBody.entryApprovalSummary).toBeUndefined();
   });
 
   it('proxies loop API from web role to control-plane', async () => {

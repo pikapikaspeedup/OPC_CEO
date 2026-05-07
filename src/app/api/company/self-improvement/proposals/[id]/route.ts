@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import { syncSystemImprovementProposalRuntimeState } from '@/lib/company-kernel/self-improvement-runtime-state';
 import {
   proxyToControlPlane,
@@ -21,5 +22,5 @@ export async function GET(
   if (!proposal) {
     return NextResponse.json({ error: 'System improvement proposal not found' }, { status: 404 });
   }
-  return NextResponse.json(proposal);
+  return NextResponse.json(buildSystemImprovementProposalView(proposal));
 }

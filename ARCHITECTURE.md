@@ -313,20 +313,21 @@ Company Kernel 是 run 执行记录、组织学习、经营议程和自增长候
 3. `MemoryCandidate`：run 完成后的自动沉淀先进入候选，不直接写长期 active knowledge；空证据、高冲突、volatile 候选不会被系统自动晋升。
 4. `Promotion`：显式 promote 后才写入 `knowledge_assets`，并携带 evidence / promotion 元数据；`promoted/auto-promoted/rejected/archived` 等闭合状态不会被后续候选重生成回滚。
 5. `OperatingSignal` / `OperatingAgendaItem` / `CompanyOperatingDay`：把 run failure、reusable learning、scheduler routine/risk、approval lifecycle、knowledge candidate 变成可排序议程；CEO Office 读取 `/api/company/operating-day`，不再只依赖前端拼接。
-6. `OperatingBudgetPolicy` / `BudgetLedgerEntry` / `CircuitBreaker`：agenda dispatch、scheduler dispatch、growth generate/evaluate 前先返回 allow/warn/block 与拦截原因；打开的 circuit breaker 会阻止 dispatch，scheduler 被拦截时返回 `skipped` 且不创建 run。
-7. Budget reservation 会在 run 创建后绑定 `runId`；run 进入 completed/failed/blocked/cancelled/timeout 等终态后统一 commit/release，ledger 汇总会忽略已被终态流水覆盖的 reserved，避免重复计数；没有 target workspace 的 agenda 不会先占用预算。
-8. `CircuitBreaker` 会从真实 run terminal 状态更新部门、scheduler job、provider、workflow 维度，连续失败打开熔断；`recoverAt` 到期后进入 `half-open` 探测态，成功终态会 reset 对应 breaker。
-9. `GrowthProposal` / `GrowthObservation`：从 RunCapsule、promoted knowledge、候选记忆生成 SOP/workflow/skill/script/rule 提案；promoted `pattern/lesson` knowledge 可生成 SOP，三次以上同类成功 RunCapsule 生成 workflow proposal，高风险提案默认创建 approval request，审批通过后才 publish。
-10. 已发布的 workflow/skill GrowthProposal 会进入 Prompt Mode 执行解析，下一次相似任务可自动注入 canonical workflow/skill；Observation 记录命中 run、成功率、估算 token saving 与 regression signals。
-11. `CompanyLoopPolicy` / `CompanyLoopRun` / `CompanyLoopDigest`：在同一 Company Kernel 内组织 daily/weekly/growth/risk loop。loop 只选择 Top-N agenda，dispatch cap 默认 1，所有 dispatch 仍走 budget gate；scheduler 只新增 cron 型内置 job，不新增 5s interval 或第二套 worker，且内置 daily/weekly cron 从 loop policy 读取 cadence、timezone 和 enabled。`CompanyLoopRun.metadata.skippedAgenda` 保留每个 skipped item 的结构化原因。
-12. `CompanyLoop` 的摘要投递会先经过 `company-loop-notification-targets` 可用性清洗：`web` 固定启用，`email/webhook` 只在接入完成后进入有效策略；digest 上记录的 `notificationIds` 是 CEO event ids，不是第三方消息平台 message ids。
-13. `SystemImprovementSignal` / `SystemImprovementProposal`：把性能、UX、测试失败、运行错误、用户反馈转成受控系统改进 proposal。主线生命周期是 `generate/evaluate -> approval-required -> approve/reject -> in-progress -> testing -> ready-to-merge -> release-gate -> observing/rolled-back`；高风险/critical 涉及 scheduler、provider、approval、database、runtime、company API 等 protected core 时必须生成 approval request；passed test evidence 不能绕过审批状态，审批会持久化为 proposal metadata。proposal 一旦被 approve，会自动在内置平台工程部创建 Project，并派发 `development-template-1` 首跑，把 admission gate 交给 CEO、把中间 AI loop 交给平台工程部；proposal 详情会持久化 `exitEvidence.project/latestRun/testing/mergeGate/releaseGate` 作为准出证据包，供 CEO/Ops 直接消费。release gate 的 `preflight` 会从 Codex worktree 生成 patch 并对主仓执行 `git apply --check`；merge/restart/rollback 作为 CEO/Ops 显式准出状态和命令包记录，不静默 auto push/deploy。
-14. 内置 `平台工程部` 作为系统默认自开发部门，workspace 固定在 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`；它复用现有 Department / Project / Company Kernel / Approval / Scheduler 机制，不新增第二套模型。平台工程部项目默认开启观察与自动提案治理字段。
-15. 被平台工程部观察的项目在出现 `failed / blocked / timeout` run 时，会自动生成 `SystemImprovementSignal`；若项目同时允许自动提案，则会继续生成 `SystemImprovementProposal`，直接进入 CEO 可见的系统改进面板。
-16. `User Story` 文档中的 `[不支持]` 场景会被同步成结构化 `SystemImprovementSignal`，作为长期改进池；第一版默认不批量自动生成 proposal，避免淹没 CEO 决策队列。
-17. `/api/company/*`：同时挂载到 Next App Route 和 split `api/control-plane` 路由表；control-plane 使用独立 `company-routes` 懒加载 App Route handler，`AG_ROLE=web` 会代理到 control-plane，不直接读写本地 DB。
-18. Knowledge 页面已收口为 browse-first + governance 双层工作面：默认首屏是目录 / 列表 / 正文 / 上下文右栏，治理态继续提供候选记忆详情审核、候选到 GrowthProposal 生成入口、KnowledgeAsset 关联 GrowthProposal 下钻与部门记忆；CEO Office 展示真实 agenda、loop 摘要与系统改进摘要，并可 pause/resume autonomous loop；Ops 展示 Company Loops、Self Improvement evidence/test/rollback/approval 审计、Operating Signals、预算 ledger、open breaker 与 scheduler 摘要。前端不新增高频轮询，不新增后台 job。
-19. Settings 提供 `Autonomy 预算`入口，可配置组织级 budget、部门默认 budget、loop policy、并发、失败预算、operation cooldown 与 high-risk approval threshold；审批策略由 `autonomy-policy` 读取组织预算策略元数据，不再写死在 publisher。
+6. `DecisionTarget` / `DecisionItemView`：CEO 决策控制面统一为 `DecisionItemView -> DecisionTarget -> 业务对象详情`。`/api/company/ceo/decisions` 只聚合系统改进、Growth proposal 和 Project stage gate 这三类正式业务决策；前端不再本地拼多类 decision item，也不把 Project 当系统改进或 Growth 的兜底详情入口。ApprovalPanel 只保留通用审批收件箱，不再承担正式决策控制面。Decision deep link 使用紧凑 token，而不是把整段 JSON 暴露在 URL 上，例如 `?decision=si~<proposalId>`。
+7. `OperatingBudgetPolicy` / `BudgetLedgerEntry` / `CircuitBreaker`：agenda dispatch、scheduler dispatch、growth generate/evaluate 前先返回 allow/warn/block 与拦截原因；打开的 circuit breaker 会阻止 dispatch，scheduler 被拦截时返回 `skipped` 且不创建 run。
+8. Budget reservation 会在 run 创建后绑定 `runId`；run 进入 completed/failed/blocked/cancelled/timeout 等终态后统一 commit/release，ledger 汇总会忽略已被终态流水覆盖的 reserved，避免重复计数；没有 target workspace 的 agenda 不会先占用预算。
+9. `CircuitBreaker` 会从真实 run terminal 状态更新部门、scheduler job、provider、workflow 维度，连续失败打开熔断；`recoverAt` 到期后进入 `half-open` 探测态，成功终态会 reset 对应 breaker。
+10. `GrowthProposal` / `GrowthObservation`：从 RunCapsule、promoted knowledge、候选记忆生成 SOP/workflow/skill/script/rule 提案；promoted `pattern/lesson` knowledge 可生成 SOP，三次以上同类成功 RunCapsule 生成 workflow proposal，高风险提案默认创建带 `DecisionTarget` 的 approval request，审批通过后才 publish。
+11. 已发布的 workflow/skill GrowthProposal 会进入 Prompt Mode 执行解析，下一次相似任务可自动注入 canonical workflow/skill；Observation 记录命中 run、成功率、估算 token saving 与 regression signals。
+12. `CompanyLoopPolicy` / `CompanyLoopRun` / `CompanyLoopDigest`：在同一 Company Kernel 内组织 daily/weekly/growth/risk loop。loop 只选择 Top-N agenda，dispatch cap 默认 1，所有 dispatch 仍走 budget gate；scheduler 只新增 cron 型内置 job，不新增 5s interval 或第二套 worker，且内置 daily/weekly cron 从 loop policy 读取 cadence、timezone 和 enabled。`CompanyLoopRun.metadata.skippedAgenda` 保留每个 skipped item 的结构化原因。
+13. `CompanyLoop` 的摘要投递会先经过 `company-loop-notification-targets` 可用性清洗：`web` 固定启用，`email/webhook` 只在接入完成后进入有效策略；digest 上记录的 `notificationIds` 是 CEO event ids，不是第三方消息平台 message ids。
+14. `SystemImprovementSignal` / `SystemImprovementProposal`：把性能、UX、测试失败、运行错误、用户反馈转成受控系统改进 proposal。主线生命周期是 `generate/evaluate -> approval-required -> approve/reject -> in-progress -> testing -> ready-to-merge -> release-gate -> observing/rolled-back`；高风险/critical 涉及 scheduler、provider、approval、database、runtime、company API 等 protected core 时必须生成带 `DecisionTarget` 的 approval request；passed test evidence 不能绕过审批状态，审批会持久化为 proposal metadata。proposal 一旦被 approve，会自动在内置平台工程部创建 Project，并进入 2026-05-04 收敛后的 direct Codex 链：创建 self-improvement Codex tracking run、准备隔离 worktree、执行 Codex、回写 evidence / preflight / release gate；不会再回到 `development-template-1` 首跑。准入接口只等待“执行已派发”，不再同步卡住整条 Codex 链。平台工程 Project governance 会显式记录 `systemImprovementProposalId`，Projects 只作为执行证据入口，不再通过 goal 文本反推 proposal；同一事实也用于阻断 self-iteration 失败后的递归 follow-up proposal。proposal 详情会持久化 `exitEvidence.project/latestRun/testing/mergeGate/releaseGate` 作为准出证据包，同时由 `self-improvement-control-state` 派生统一 `controlState + entryApprovalSummary`，给 CEO/Ops 页面固定输出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`；若准入审批事实已经是 `rejected`，即使旧 proposal 状态仍停在 `approval-required`，控制面也会把它视为终态，不再重新进入 CEO 队列。release gate 的 `preflight` 会从 Codex worktree 生成 patch 并对主仓执行 `git apply --check`；Codex 受控执行成功后，如果 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 仍是 `not-run`，系统会自动触发一次 `preflight`，run 同步只做幂等兜底。`releaseGate` 只以 `exitEvidence.releaseGate` 为事实源，不再写 `metadata.releaseGate`。对于确定性的 whitespace 失败，系统会直接在 worktree 内自动修复并重跑 `preflight`；如果 patch 生成阶段碰到瞬时 `index.lock`，release gate 会先重试同一批 git 命令；如果 `主仓 apply check` 表明旧 patch 已不再适配当前主仓，系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 继续 `preflight`。旧 `codexRunnerEvidence` / `launchStatus` 只保留审计价值，不再单独构成 active runtime context。删除系统改进 proposal 时会同步删除其 linked approval request，避免在 ApprovalPanel 残留 orphan pending；审批响应会先持久化再 best-effort 执行 callback，不把已经成功的 CEO 操作伪装成失败。merge/restart/rollback 作为 CEO/Ops 显式准出状态和命令包记录，不静默 auto push/deploy。
+15. 内置 `平台工程部` 作为系统默认自开发部门，workspace 固定在 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`；它复用现有 Department / Project / Company Kernel / Approval / Scheduler 机制，不新增第二套模型。平台工程部项目默认开启观察与自动提案治理字段。
+16. 被平台工程部观察的项目在出现 `failed / blocked / timeout` run 时，会自动生成 `SystemImprovementSignal`；若项目同时允许自动提案，则会继续生成 `SystemImprovementProposal`，并在同一条主线内同步生成准入审批请求。若准入审批请求创建失败，半残 proposal 会被直接清除，不保留 legacy fallback。
+17. `User Story` 文档中的 `[不支持]` 场景会被同步成结构化 `SystemImprovementSignal`，作为长期改进池；第一版默认不批量自动生成 proposal，避免淹没 CEO 决策队列。
+18. `/api/company/*`：同时挂载到 Next App Route 和 split `api/control-plane` 路由表；control-plane 使用独立 `company-routes` 懒加载 App Route handler，`AG_ROLE=web` 会代理到 control-plane，不直接读写本地 DB。
+19. Knowledge 页面已收口为 browse-first + governance 双层工作面：默认首屏是目录 / 列表 / 正文 / 上下文右栏，治理态继续提供候选记忆详情审核、候选到 GrowthProposal 生成入口、KnowledgeAsset 关联 GrowthProposal 下钻与部门记忆；CEO Office 展示真实 agenda、loop 摘要与系统改进摘要，并可 pause/resume autonomous loop；Ops 展示 Company Loops、Self Improvement evidence/test/rollback/approval 审计、Operating Signals、预算 ledger、open breaker 与 scheduler 摘要。前端不新增高频轮询，不新增后台 job。
+20. Settings 提供 `Autonomy 预算`入口，可配置组织级 budget、部门默认 budget、loop policy、并发、失败预算、operation cooldown 与 high-risk approval threshold；审批策略由 `autonomy-policy` 读取组织预算策略元数据，不再写死在 publisher。
 
 新增持久化表：
 
@@ -708,7 +709,6 @@ sequenceDiagram
 | `src/lib/knowledge/store.ts` | 结构化 `KnowledgeAsset` 存储（SQLite + filesystem mirror） |
 | `src/lib/knowledge/retrieval.ts` | 按 workspace / prompt / workflow / skill 召回相关知识 |
 | `src/lib/execution/contracts.ts` | `ExecutionProfile` 合同与 run/scheduler 推导逻辑 |
-| `src/lib/agents/approval-triggers.ts` | 异常时自动触发审批请求 |
 
 ---
 
@@ -1614,6 +1614,7 @@ sequenceDiagram
 1. 审批请求主真相源是 `~/.gemini/antigravity/requests/*.json`
 2. Web 通知事件流只保留最近事件回放，属于 UI push buffer，不是长期审计账本
 3. callback 可能触发真实副作用，例如发布 evolution proposal、批准 growth proposal、或推进 system improvement proposal
+4. `ApprovalRequest.target` 是必填的 `DecisionTarget`；通用 approval inbox 只作为收件箱，点击详情必须按 target 进入业务对象详情。无 target 的审批创建请求会被拒绝。
 
 ### 费用控制与过程检视
 
@@ -1679,9 +1680,11 @@ workspace/
 | `src/lib/evolution/generator.ts` | 从 knowledge / repeated runs 生成 workflow/skill proposal |
 | `src/lib/evolution/evaluator.ts` | 基于历史 runs 对 proposal 做评估 |
 | `src/lib/evolution/publisher.ts` | proposal 审批发布与 rollout observe |
+| `src/lib/decision-control.ts` | CEO 决策 target 与统一决策读模型 contract |
+| `src/lib/company-kernel/ceo-decision-control.ts` | 聚合 CEO 决策队列，输出 `DecisionItemView[]` |
 | `src/lib/approval/types.ts` | 审批数据模型（`ApprovalRequest` / `ApprovalResponse`） |
 | `src/lib/approval/notification-events.ts` | Web 审批通知事件总线与最近事件回放 |
-| `src/lib/approval/approval-urls.ts` | 审批 inbox / signed feedback URL 生成 |
+| `src/lib/approval/approval-urls.ts` | 基于 `DecisionTarget` 的审批详情深链 / signed feedback URL 生成 |
 | `src/lib/approval/tokens.ts` | 审批一键链接 HMAC token 生成与验证 |
 | `src/lib/approval/channels/web.ts` | Web UI 通知通道 |
 | `src/lib/approval/channels/webhook.ts` | Slack/Discord Webhook 通道 |
@@ -1693,6 +1696,7 @@ workspace/
 | `src/app/api/ceo/profile/feedback/route.ts` | CEO 反馈信号写入 API |
 | `src/app/api/ceo/routine/route.ts` | CEO routine summary API |
 | `src/app/api/ceo/events/route.ts` | CEO 事件流 API |
+| `src/app/api/company/ceo/decisions/route.ts` | CEO 决策控制面统一列表 API |
 | `src/app/api/management/overview/route.ts` | 组织/部门经营概览 API |
 | `src/app/api/evolution/proposals/route.ts` | Evolution proposal 列表 API |
 | `src/app/api/evolution/proposals/[id]/publish/route.ts` | Evolution proposal 发布审批入口 |
@@ -2134,8 +2138,8 @@ flowchart TB
 | `/api/conversations/{id}/revert-preview` | GET | Conversation | 回退预览 ⚠️ *后端未实现* |
 | `/api/conversations/{id}/files` | GET | Conversation | 对话关联的文件列表 |
 | `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run；GET 改为分页 list view，重字段留在 `/api/agent-runs/{id}`；手动调度会写 Company Kernel token/runtime ledger，但不消耗 autonomous dispatch quota |
-| `/api/agent-runs/{id}` | GET / DELETE | Agent | 详情 / 取消 Run |
-| `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate；prompt-mode 支持 cancel/evaluate) |
+| `/api/agent-runs/{id}` | GET / DELETE | Agent | 详情 / 取消 Run；若命中 self-improvement Codex tracking run，会优先终止真实 `codex exec` child process，再把 tracking run / project / proposal 收口到取消终态 |
+| `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate；prompt-mode 支持 cancel/evaluate)。`cancel` 对 self-improvement Codex tracking run 也会走同一条真实 child-process 终止路径 |
 | `/api/scope-check` | POST | Agent | 写入范围校验 |
 | `/api/projects` | GET / POST | Project | 列表 / 创建项目；GET 支持 `page/pageSize` 分页 envelope；POST 允许附带 `governance.platformEngineering.observe/allowProposal` |
 | `/api/projects/{id}` | GET / PATCH / DELETE | Project | 项目 CRUD；PATCH 允许更新平台工程治理字段 |
@@ -2184,6 +2188,7 @@ flowchart TB
 | `/api/company/agenda/{id}/dispatch-check` | POST | Company Kernel | 预算 / 熔断 gate，仅检查不创建 run |
 | `/api/company/agenda/{id}/dispatch` | POST | Company Kernel | gate 通过后创建 queued prompt run，并标记 agenda dispatched |
 | `/api/company/operating-day` | GET | Company Kernel | CEO Office 今日经营读模型 |
+| `/api/company/ceo/decisions` | GET | Company Kernel | CEO 决策控制面统一列表，返回 `DecisionItemView[]`；每项必须带 `DecisionTarget` |
 | `/api/company/budget/policies` / `/api/company/budget/policies/{id}` | GET / PUT | Company Kernel | 预算策略列表与单条策略更新；默认预算 ID 首次读取会自动创建，避免 Settings 首次打开出现 404；Autonomy 预算页使用该接口保存组织级预算、冷却与审批阈值 |
 | `/api/company/budget/ledger` | GET | Company Kernel | 预算流水列表 |
 | `/api/company/circuit-breakers` | GET | Company Kernel | 熔断器列表 |
@@ -2200,11 +2205,11 @@ flowchart TB
 | `/api/company/loops/digests` / `/api/company/loops/digests/{id}` | GET | Company Kernel | CompanyLoopDigest 分页列表与详情 |
 | `/api/company/loops/runs/{id}/retry` | POST | Company Kernel | 只允许 retry failed/skipped loop run |
 | `/api/company/self-improvement/signals` | GET / POST | Company Kernel | SystemImprovementSignal 列表与创建；平台工程部会自动把 observed project 失败 run 和 `[不支持]` User Story gap 同步到该信号池 |
-| `/api/company/self-improvement/proposals` | GET | Company Kernel | SystemImprovementProposal 列表；返回 runtime-synced `exitEvidence` |
+| `/api/company/self-improvement/proposals` | GET | Company Kernel | SystemImprovementProposal 列表；返回 runtime-synced `exitEvidence`，以及派生 `controlState` / `entryApprovalSummary` |
 | `/api/company/self-improvement/proposals/generate` | POST | Company Kernel | 从 signals 生成带风险、测试计划、回滚计划的 proposal |
-| `/api/company/self-improvement/proposals/{id}` | GET | Company Kernel | 系统改进 proposal 详情 |
+| `/api/company/self-improvement/proposals/{id}` | GET | Company Kernel | 系统改进 proposal 详情；直接聚合准入审批事实和统一控制面读模型 |
 | `/api/company/self-improvement/proposals/{id}/evaluate` | POST | Company Kernel | 重新评估 protected core 风险并按需创建 approval request |
-| `/api/company/self-improvement/proposals/{id}/approve` / `reject` | POST | Company Kernel | 更新系统改进 proposal 审批状态；`approve` 会自动创建平台工程 Project 并派发首个 strict template run |
+| `/api/company/self-improvement/proposals/{id}/approve` / `reject` | POST | Company Kernel | 更新系统改进 proposal 审批状态；`approve` 会自动创建平台工程 Project，并派发首个 self-improvement Codex tracking run，进入 direct Codex worktree/evidence/release-gate 链 |
 | `/api/company/self-improvement/proposals/{id}/attach-test-evidence` | POST | Company Kernel | 追加测试证据；high/critical 必须已有持久 approval metadata 才能进入 ready-to-merge，最新测试结果决定当前测试态 |
 | `/api/company/self-improvement/proposals/{id}/release-gate` | POST | Company Kernel | 自迭代准出门；支持 preflight、CEO/Ops 准出、标记合并、标记重启、观察和回滚，preflight 会生成 patch 并做 `git apply --check` |
 | `/api/company/self-improvement/proposals/{id}/observe` | POST | Company Kernel | 将 proposal 进入 observing 并记录观察摘要 |
@@ -2244,7 +2249,7 @@ flowchart TB
 | `/api/codex/sessions` | POST | Codex | 创建多轮 MCP 会话 |
 | `/api/codex/sessions/{threadId}` | POST | Codex | 多轮会话续接 |
 | `/api/ceo/command` | POST | Control Plane | CEO 命令解析；即时部门任务会先创建 `Ad-hoc Project`，再派发 template/prompt run |
-| `/api/approval` | GET / POST | Control Plane | 审批请求列表 / 提交 |
+| `/api/approval` | GET / POST | Control Plane | 审批请求列表 / 提交；POST 必须提供 `target: DecisionTarget` |
 | `/api/approval/{id}` | GET / PATCH | Control Plane | 审批详情 / 更新 |
 | `/api/approval/{id}/feedback` | GET / POST | Control Plane | 审批反馈 |
 | `/api/approval/events` | GET | Control Plane | 审批 SSE 推送事件流 |

@@ -1,4 +1,5 @@
 import type { AIProviderId } from './providers/types';
+import type { DecisionItemView, DecisionTarget } from './decision-control';
 
 // === API Response Types ===
 
@@ -480,6 +481,7 @@ export interface PlatformEngineeringProjectGovernanceFE {
   allowProposal: boolean;
   departmentId?: string;
   source?: 'default' | 'manual' | 'proposal-created';
+  systemImprovementProposalId?: string;
   updatedAt?: string;
 }
 
@@ -1339,6 +1341,94 @@ export type SystemImprovementProposalStatusFE =
   | 'rolled-back'
   | 'observing';
 
+export type SystemImprovementAutomationStatusFE =
+  | 'queued'
+  | 'executing'
+  | 'validating'
+  | 'remediating'
+  | 'blocked'
+  | 'exit-ready';
+
+export interface SystemImprovementAutomationStateFE {
+  status: SystemImprovementAutomationStatusFE;
+  summary: string;
+  updatedAt: string;
+}
+
+export type SystemImprovementHumanGateStateFE =
+  | 'none'
+  | 'entry-approval-required'
+  | 'exit-approval-required';
+
+export interface SystemImprovementHumanGateFE {
+  state: SystemImprovementHumanGateStateFE;
+  title: string;
+  summary: string;
+  updatedAt: string;
+}
+
+export type SystemImprovementControlStageFE =
+  | 'entry-review'
+  | 'ai-executing'
+  | 'ai-preflight'
+  | 'exit-review'
+  | 'ops-merge'
+  | 'ops-restart'
+  | 'published'
+  | 'observing'
+  | 'rolled-back'
+  | 'blocked';
+
+export type SystemImprovementControlOwnerFE = 'ceo' | 'ai' | 'ops' | 'none';
+
+export type SystemImprovementControlNextActionFE =
+  | 'approve-entry'
+  | 'run-preflight'
+  | 'approve-exit'
+  | 'mark-merged'
+  | 'mark-restarted'
+  | 'start-observation'
+  | 'mark-rolled-back'
+  | 'resolve-blocker'
+  | 'none';
+
+export type SystemImprovementControlPageModeFE = 'entry-review' | 'exit-review' | 'progress';
+
+export type SystemImprovementControlMilestoneKeyFE =
+  | 'entry-approval'
+  | 'ai-execution'
+  | 'ai-preflight'
+  | 'exit-approval'
+  | 'ops-merge'
+  | 'ops-restart'
+  | 'observation';
+
+export interface SystemImprovementControlMilestoneFE {
+  key: SystemImprovementControlMilestoneKeyFE;
+  label: string;
+  status: 'done' | 'current' | 'pending';
+  detail: string;
+  timestamp?: string;
+}
+
+export interface SystemImprovementControlStateFE {
+  stage: SystemImprovementControlStageFE;
+  currentOwner: SystemImprovementControlOwnerFE;
+  nextAction: SystemImprovementControlNextActionFE;
+  pageMode: SystemImprovementControlPageModeFE;
+  headline: string;
+  subline: string;
+  milestones: SystemImprovementControlMilestoneFE[];
+}
+
+export interface SystemImprovementEntryApprovalSummaryFE {
+  requestId: string;
+  status: 'pending' | 'approved' | 'rejected' | 'feedback';
+  actedBy?: string;
+  actedAt?: string;
+  message?: string;
+}
+
 export type SystemImprovementRiskFE = 'low' | 'medium' | 'high' | 'critical';
 
 export interface SystemImprovementTestEvidenceFE {
@@ -1424,6 +1514,19 @@ export type SystemImprovementReleaseGateStatusFE =
 
 export type SystemImprovementReleasePreflightStatusFE = 'not-run' | 'passed' | 'failed';
 
+export type SystemImprovementReleaseFailureCategoryFE =
+  | 'none'
+  | 'auto-fixable'
+  | 'quality-blocking'
+  | 'policy-blocking'
+  | 'infra-blocking';
+
+export type SystemImprovementReleaseRemediationStatusFE =
+  | 'not-needed'
+  | 'attempted'
+  | 'fixed'
+  | 'failed';
+
 export type SystemImprovementReleaseActionFE =
   | 'preflight'
   | 'approve'
@@ -1450,6 +1553,10 @@ export interface SystemImprovementReleaseCommandBundleFE {
 export interface SystemImprovementReleaseGateSnapshotFE {
   status: SystemImprovementReleaseGateStatusFE;
   preflightStatus: SystemImprovementReleasePreflightStatusFE;
+  failureCategory?: SystemImprovementReleaseFailureCategoryFE;
+  remediationStatus?: SystemImprovementReleaseRemediationStatusFE;
+  remediationAttempts?: number;
+  remediationSummary?: string;
   checks: SystemImprovementReleasePreflightCheckFE[];
   commands: SystemImprovementReleaseCommandBundleFE;
   patchPath?: string;
@@ -1481,6 +1588,10 @@ export interface SystemImprovementExitEvidenceBundleFE {
 export interface SystemImprovementProposalFE {
   id: string;
   status: SystemImprovementProposalStatusFE;
+  humanGate?: SystemImprovementHumanGateFE;
+  automationState?: SystemImprovementAutomationStateFE;
+  controlState?: SystemImprovementControlStateFE;
+  entryApprovalSummary?: SystemImprovementEntryApprovalSummaryFE;
   title: string;
   summary: string;
   sourceSignalIds: string[];
@@ -2004,6 +2115,7 @@ export type ApprovalStatusFE = 'pending' | 'approved' | 'rejected' | 'feedback';
 export interface ApprovalRequestFE {
   id: string;
   type: ApprovalRequestTypeFE;
+  target: DecisionTargetFE;
   workspace: string;
   runId?: string;
   title: string;
@@ -2034,3 +2146,6 @@ export interface ApprovalSummaryFE {
   rejected: number;
   feedback: number;
 }
+
+export type DecisionTargetFE = DecisionTarget;
+export type DecisionItemViewFE = DecisionItemView;

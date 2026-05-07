@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import { attachSystemImprovementTestEvidence } from '@/lib/company-kernel/self-improvement-store';
 import { syncSystemImprovementProposalRuntimeState } from '@/lib/company-kernel/self-improvement-runtime-state';
 import {
@@ -36,5 +37,5 @@ export async function POST(
     return NextResponse.json({ error: 'System improvement proposal not found' }, { status: 404 });
   }
   const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
-  return NextResponse.json({ proposal: synced || proposal });
+  return NextResponse.json({ proposal: buildSystemImprovementProposalView(synced || proposal) });
 }

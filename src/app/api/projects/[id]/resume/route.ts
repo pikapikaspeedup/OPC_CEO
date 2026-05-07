@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { getProject, getFirstActionableStage, incrementStageAttempts, updatePipelineStage, updatePipelineStageByStageId } from '@/lib/agents/project-registry';
 import { getRun, recoverInterruptedRun, updateRun } from '@/lib/agents/run-registry';
 import { cancelRun, interveneRun, InterventionConflictError } from '@/lib/agents/group-runtime';
+import {
+  cancelSystemImprovementCodexRun,
+  isSystemImprovementCodexTrackingRun,
+} from '@/lib/company-kernel/self-improvement-codex-execution';
 import { emitProjectEvent } from '@/lib/agents/project-events';
 import { createLogger } from '@/lib/logger';
 import {
@@ -97,7 +101,7 @@ export async function POST(
 
     let effectiveProjectId = projectId;
     let effectiveStage = targetStage;
-    let effectiveBranchIndex = requestedBranchIndex;
+    const effectiveBranchIndex = requestedBranchIndex;
     if (requestedBranchIndex !== undefined) {
       const branch = targetStage.branches?.find(item => item.branchIndex === requestedBranchIndex);
       if (!branch?.subProjectId) {
@@ -300,10 +304,10 @@ export async function POST(
 
       incrementStageAttempts(effectiveProjectId, effectiveStage.stageId || effectiveStage.stageIndex);
       try {
-        interveneRun(existingRun.runId, 'nudge', prompt, roleId).catch((err: any) => {
-          log.error({ projectId: shortProjectId, err: err.message }, 'Resume nudge failed');
+        interveneRun(existingRun.runId, 'nudge', prompt, roleId).catch((err: unknown) => {
+          log.error({ projectId: shortProjectId, err: err instanceof Error ? err.message : String(err) }, 'Resume nudge failed');
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (err instanceof InterventionConflictError) {
           return NextResponse.json({ error: err.message, requestedAction: action }, { status: 409 });
         }
@@ -337,10 +341,10 @@ export async function POST(
 
       incrementStageAttempts(effectiveProjectId, effectiveStage.stageId || effectiveStage.stageIndex);
       try {
-        interveneRun(existingRun.runId, 'restart_role', prompt, roleId).catch((err: any) => {
-          log.error({ projectId: shortProjectId, err: err.message }, 'Resume restart_role failed');
+        interveneRun(existingRun.runId, 'restart_role', prompt, roleId).catch((err: unknown) => {
+          log.error({ projectId: shortProjectId, err: err instanceof Error ? err.message : String(err) }, 'Resume restart_role failed');
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (err instanceof InterventionConflictError) {
           return NextResponse.json({ error: err.message, requestedAction: action }, { status: 409 });
         }
@@ -371,7 +375,11 @@ export async function POST(
       );
     }
 
-    await cancelRun(existingRun.runId);
+    if (isSystemImprovementCodexTrackingRun(existingRun)) {
+      await cancelSystemImprovementCodexRun(existingRun.runId);
+    } else {
+      await cancelRun(existingRun.runId);
+    }
     return responseForAction({
       status: 'cancelled',
       requestedAction: action,
@@ -383,8 +391,9 @@ export async function POST(
       branchIndex: effectiveBranchIndex,
       activeConversationId: existingRun.activeConversationId,
     });
-  } catch (err: any) {
-    log.error({ err: err.message }, 'Resume failed');
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message }, 'Resume failed');
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

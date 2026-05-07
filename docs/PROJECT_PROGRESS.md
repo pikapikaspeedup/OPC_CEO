@@ -1,3 +1,838 @@
+# 任务：修复 2026-05-04 direct Codex 自迭代链的取消、递归提案与 stale evidence 问题
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-07
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/bridge/codex-adapter.ts`
+   - 新增可取消的一次性 `startCodexExec()` 句柄，返回：
+     - `pid`
+     - `completion`
+     - `cancel()`
+   - 保留现有 `codexExec()` 兼容包装，但内部已经改为走可取消句柄。
+2. `src/lib/platform-engineering-codex-runner.ts`
+   - direct Codex runner 新增 `onCodexExecHandle` 回调。
+   - 保留原有 worktree / validation / evidence helper 角色，但允许 self-improvement 链拿到真实 `codex exec` child handle。
+3. `src/lib/company-kernel/self-improvement-codex-execution.ts`
+   - 在模块内部增加 `trackingRunId -> active codex exec handle` 私有映射，不暴露为全局机制。
+   - tracking run metadata 增加 self-improvement Codex 事实：
+     - `systemImprovementProposalId`
+     - `systemImprovementCodexTracking=true`
+   - tracking project governance 恢复并补齐 `systemImprovementProposalId`。
+   - 新执行开始前会清空旧执行指针：
+     - `metadata.codexRunnerEvidence`
+     - `metadata.codexEvidencePath`
+     - `metadata.codexWorktreePath`
+     - `metadata.codexBranch`
+     - `metadata.codexRunId`
+     - 当前 `exitEvidence`
+   - completion 回写前会重新读取最新 tracking run；若 run 已经 `cancelled` 或其它 terminal，则停止 late overwrite。
+   - 新增 `cancelSystemImprovementCodexRun(runId)`，统一：
+     - kill active child process
+     - tracking run -> `cancelled`
+     - tracking project -> `cancelled`
+     - proposal/controlState -> `blocked`
+4. `src/app/api/agent-runs/[id]/intervene/route.ts`、`src/app/api/agent-runs/[id]/route.ts`、`src/app/api/projects/[id]/resume/route.ts`、`src/mcp/server.ts`
+   - `cancel` 现在优先识别 self-improvement Codex tracking run。
+   - 命中后不再走普通 prompt cancel，而是调用 `cancelSystemImprovementCodexRun()` 真实终止当前 `codex exec`。
+5. `src/lib/company-kernel/platform-engineering-observer.ts`
+   - observer 识别 self-improvement tracking run / governance 里的 `systemImprovementProposalId`。
+   - 这类 run 失败后不再生成新的 `platform-run-failure` signal 或 follow-up self-improvement proposal。
+   - self-iteration fail 只回写原 proposal 为 `blocked`。
+6. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - `hasRuntimeExecutionContext()` 不再把 `codexRunnerEvidence` 或 `launchStatus` 当成 active runtime context。
+   - stale evidence / stale launch metadata 继续保留审计价值，但不再把 proposal 误判成“仍在执行”。
+7. `src/lib/company-kernel/self-improvement-release-gate.ts`
+   - `preflight` 在 patch 生成阶段对瞬时 `.git/index.lock` 增加重试。
+   - 真实修复了 direct Codex 成功后因 transient git lock 导致 auto-preflight 误失败的问题。
+8. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/bridge/codex-adapter.ts src/lib/bridge/codex-adapter.test.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/platform-engineering-observer.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/platform-engineering-codex-runner.ts src/app/api/agent-runs/[id]/intervene/route.ts src/app/api/agent-runs/[id]/intervene/route.test.ts src/app/api/agent-runs/[id]/route.ts src/app/api/agent-runs/[id]/route.test.ts src/app/api/projects/[id]/resume/route.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/bridge/codex-adapter.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/app/api/agent-runs/[id]/intervene/route.test.ts src/app/api/agent-runs/[id]/route.test.ts
+```
+
+结果：7 个测试文件、24 个测试全部通过。
+
+```bash
+git diff --check
+```
+
+真实链路回放通过：
+
+1. 阻塞链
+   - approval request：`823d177b-1eca-4073-af11-6298e0515ee3`
+   - proposal：`system-improvement-proposal:platform-run-failure:b829ef4a-a25f-4d8d-bc5e-2ccd3619a948`
+   - tracking run：`7004c611-989a-4506-931e-c18594595692`
+   - 准入批准后进入 `ai-executing`
+   - 再通过标准 cancel 入口回收 direct Codex child
+   - 最终确认：
+     - `latestRun.status = cancelled`
+     - `controlState.stage = blocked`
+     - `followup_count_for_run = 0`
+2. 成功链
+   - 最终成功 proposal：`system-improvement-proposal-ca9b331c-c50f-46ba-baca-1b9b582f5af5`
+   - approval request：`10ef357e-97a5-46d3-9e25-6d09d5578334`
+   - tracking run：`7120f9c3-9697-4c8e-856e-ac7564a9d4b5`
+   - live `ps` 可见真实 `codex exec --cd ...` 以及后续 `tsc --noEmit --pretty false` 校验子进程
+   - 修复 `.git/index.lock` 重试后，链路稳定进入：
+     - `stage = exit-review`
+     - `mergeGate.status = ready-to-merge`
+   - 再完成：
+     - `approve`
+     - `mark-merged`
+     - `mark-restarted`
+     - `start-observation`
+   - 最终确认：
+     - `status = observing`
+     - `controlState.stage = observing`
+     - `latestRun.status = completed`
+     - `project.status = completed`
+     - `releaseGate.status = observing`
+3. 结束态回看
+   - `GET /api/approval?status=pending&summary=true` => `0`
+   - `GET /api/company/ceo/decisions?limit=20` => `0`
+   - `ps -ax -o pid,command | rg 'codex exec'` => 无残留 direct Codex child process
+
+# 任务：系统改进准入审批改为异步派发，并收口 rejected/orphan 审批坏态
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-06
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/self-improvement-codex-execution.ts`
+   - 把系统改进准入后的执行主线拆成：
+     - 同步准备与派发
+     - 后台执行与回写
+   - 新增异步派发入口，CEO 准入审批不再同步等待整条 Codex 实现链完成。
+2. `src/lib/company-kernel/self-improvement-approval.ts`、`src/lib/approval/dispatcher.ts`
+   - 系统改进准入审批 callback 改为 `waitForExecution: false`
+   - `/api/approval/:id` 触发的 CEO 批准现在只要求执行被派发成功并立即返回。
+3. `src/app/api/company/self-improvement/proposals/[id]/approve/route.ts`、`src/app/api/company/self-improvement/proposals/[id]/run-codex/route.ts`
+   - 系统改进 approve / run-codex 路由统一改为异步派发语义，不再把接口耗时绑在后台执行完成上。
+4. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - 补齐 `published / observing / rolled-back` 终态的 `automationState / humanGate` 摘要派生
+   - 不再在已发布/观察中的 proposal 上保留旧的“等待发布前检查”摘要。
+5. `src/lib/company-kernel/self-improvement-control-state.ts`
+   - 收紧控制面规则：如果准入审批事实已经是 `rejected`，即使旧 proposal 状态仍停在 `approval-required`，也会被视为终态
+   - 不再把这类坏态 proposal 重新送回 CEO 决策队列。
+6. `src/lib/approval/handler.ts`
+   - 审批响应改为先持久化 request 状态，再 best-effort 执行 callback
+   - callback 失败不再把已经成功的 CEO 操作伪装成接口 `500`。
+7. `src/lib/approval/request-store.ts`、`src/lib/company-kernel/self-improvement-store.ts`
+   - 新增 approval request 删除能力
+   - 删除系统改进 proposal 时会同步删除 linked approval request，避免 ApprovalPanel 遗留 orphan pending。
+8. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/design/decision-control-plane-audit-2026-05-06.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/approval/__tests__/handler.test.ts
+```
+
+结果：6 个测试文件、27 个测试全部通过。
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-control-state.ts src/lib/company-kernel/self-improvement-store.ts src/lib/approval/request-store.ts src/lib/approval/handler.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/approval/dispatcher.ts src/app/api/company/self-improvement/proposals/[id]/approve/route.ts src/app/api/company/self-improvement/proposals/[id]/run-codex/route.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实链路回放通过：
+
+1. fresh 系统改进 proposal `system-improvement-proposal-a79fac75-c40d-4b9a-a6b0-41141de9dd5f`
+   - `PATCH /api/approval/784c791d-1e48-4f74-9bbd-b4e2b85b5928`
+   - 返回 `HTTP 200`
+   - 总耗时 `0.074790s`
+   - proposal 立即进入：
+     - `status = in-progress`
+     - `controlState.stage = ai-executing`
+     - `currentOwner = ai`
+2. reject 路径 live 回放：
+   - 历史 run-failure pending approval `aed3a956-a261-4e8d-9be0-c4d4ca73d1a1`
+   - `PATCH /api/approval/:id` 返回 `HTTP 200`
+   - 不再出现 callback 抛错导致的 `500`
+3. orphan target live 回放：
+   - 人工创建缺失 target 的系统改进审批 `4c70881f-d969-48a1-906d-3295c9472b14`
+   - `PATCH /api/approval/:id` 返回 `HTTP 200`
+   - request 正确落为 `status = rejected`
+4. 队列与收件箱回看：
+   - `GET /api/company/ceo/decisions?limit=20` 返回 `items = []`
+   - `GET /api/approval?status=pending&summary=true` 返回 `requests = []`
+5. 终态摘要回看：
+   - `system-improvement-proposal-c28a4e7f-4380-491d-920d-7f7ce162c7e1`
+   - `status = observing`
+   - `controlState.stage = observing`
+   - `automationState.summary = "live summary sync check"`
+   - `humanGate.summary = "live summary sync check"`
+
+# 任务：CEO 决策与审批链路硬切换收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-06
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/decision-control.ts`、`src/lib/company-kernel/ceo-decision-control.ts`
+   - `DecisionTarget` 删除 `agenda-item`
+   - CEO 决策队列只保留三类正式业务决策：
+     - `system-improvement-proposal`
+     - `growth-proposal`
+     - `project-stage-gate`
+   - 从服务端读模型中彻底移除：
+     - `agenda-item`
+     - `project` failed / paused
+     - `run` failed / blocked / timeout
+     - 原始 pending `ApprovalRequest`
+2. `src/components/ceo-office-cockpit.tsx`
+   - CEO Office 决策队列删除 agenda 内联展开块与相关本地状态
+   - 队列行只保留正式决策事实：
+     - 标题
+     - 状态
+     - 当前责任方
+     - 下一动作
+     - 优先级
+   - 不再混入 agenda / run / raw approval 的本地拼装逻辑
+3. `src/app/page.tsx`、`src/components/projects-panel.tsx`
+   - `openDecisionTarget()` 删除 `agenda-item` 路由分支
+   - `project-stage-gate` 深链显式透传 `stageId`
+   - Project 工作台在有显式 `stageId` 时直接定位对应 stage，不再依赖启发式选 stage
+4. `src/lib/approval/request-store.ts`
+   - persisted approval requests 在加载时进行硬清理
+   - 任何缺失 `target` 的旧审批文件都会被直接删除，不保留 legacy fallback
+5. `src/lib/company-kernel/self-improvement-store.ts`
+   - 系统改进 proposal 列表/计数路径增加 demo 脏数据清理
+   - `status=approval-required` 且缺失 `approvalRequestId` 的旧 proposal 会被直接删除
+6. `src/lib/approval/handler.ts`、`src/lib/company-kernel/self-improvement-approval.ts`、`src/lib/agents/run-registry.ts`
+   - 新增同步提交审批请求主线，用于系统自迭代准入
+   - 平台工程 run failure 生成高风险 proposal 后，会在同一条主线内同步生成 `approvalRequestId`
+   - 若审批请求创建失败，半残 `SystemImprovementProposal` 会被立即删除，不再留在控制面里
+7. `src/server/workers/scheduler-worker.ts`
+   - 移除普通 `stage failed/blocked/timeout` 到 CEO 审批的旧噪音链路初始化
+   - 删除 `src/lib/agents/approval-triggers.ts`
+8. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/design/decision-control-plane-audit-2026-05-06.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/decision-control.ts src/lib/company-kernel/ceo-decision-control.ts src/lib/approval/request-store.ts src/lib/approval/handler.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement-store.ts src/lib/agents/run-registry.ts src/components/ceo-office-cockpit.tsx src/app/page.tsx src/components/projects-panel.tsx src/lib/approval/__tests__/request-store.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/lib/agents/run-registry.test.ts src/server/workers/scheduler-worker.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/decision-control.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/lib/agents/run-registry.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
+```
+
+结果：8 个测试文件、23 个测试全部通过。
+
+```bash
+git diff --check
+```
+
+真实环境回看通过：
+
+1. `GET /api/company/ceo/decisions?limit=20`
+   - 当前只返回 1 条正式系统改进决策
+   - 不再出现 `agenda-item / run / project / raw approval request`
+2. `GET /api/approval?status=pending&summary=true`
+   - 返回 `requests=[]`
+   - 旧的无 `target` pending approvals 已被硬清理
+3. `GET /api/company/self-improvement/proposals?pageSize=20`
+   - 旧的 `approval-required` 且缺 `approvalRequestId` proposal 已不在结果中
+4. 使用 `bb-browser` 打开：
+   - `http://localhost:3000/?section=ceo`
+   - `http://localhost:3000/?decision=%7B%22kind%22%3A%22system-improvement-proposal%22%2C%22proposalId%22%3A%22system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6%22%7D`
+5. 页面验证结果：
+   - CEO 决策队列只显示 1 条正式决策
+   - 队列行已显示状态、责任方、下一动作、优先级
+   - 系统改进 decision deep link 可直接打开详情抽屉
+   - `bb-browser errors` 返回 `没有 JS 错误`
+
+# 任务：CEO 决策控制面收敛为 DecisionTarget 主线
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-06
+
+### 本轮实施
+
+已完成：
+
+1. 新增 `src/lib/decision-control.ts`
+   - 定义正式 `DecisionTarget` 与 `DecisionItemView`
+   - 支持 `system-improvement-proposal / growth-proposal / project / project-stage-gate / run / agenda-item / knowledge / conversation / ops / settings`
+   - `?decision=` 深链改为单次 URL 编码，并兼容读取旧双编码 target
+2. 新增 `GET /api/company/ceo/decisions`
+   - 服务端统一聚合系统改进、Growth proposal、Project stage gate、Project / Run 异常、Operating agenda 与 pending ApprovalRequest
+   - split control-plane 路由表已挂载 `/api/company/ceo/decisions`
+3. `ApprovalRequest.target` 改为必填
+   - 无 target 的审批创建请求会失败
+   - 所有 `submitApprovalRequest()` 调用点显式传入 target
+   - approval 链接统一生成 `?decision=<target>`，不再保留 `panel=approvals&approval=...` 运行时入口
+4. 前端决策入口收敛
+   - CEO Office 决策队列只消费 `DecisionItemView[]`
+   - `openDecisionTarget()` 统一处理所有决策入口
+   - ApprovalPanel 退回审批收件箱，点击详情按 target 打开业务对象
+   - 系统改进审批仍在 `SystemImprovementDetailDrawer`
+   - Growth 审批新增 `GrowthProposalDetailDrawer`
+5. Project 边界收敛
+   - Project 只保留执行、阶段、run 与 gate
+   - 平台工程 Project governance 显式记录 `systemImprovementProposalId`
+   - Projects 不再通过 `goal` 文本正则反推系统改进 proposal
+6. Release gate 事实源收敛
+   - `releaseGate` 只写入 `exitEvidence.releaseGate`
+   - 不再继续写 `metadata.releaseGate`
+7. 文档同步
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/design/decision-control-plane-audit-2026-05-06.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/decision-control.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/notification-events.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/server/control-plane/server.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/app/api/company/loops-self-improvement.route.test.ts
+```
+
+结果：13 个测试文件、29 个测试全部通过。
+
+```bash
+npx eslint src/lib/decision-control.ts src/lib/decision-control.test.ts src/lib/company-kernel/ceo-decision-control.ts src/app/api/company/ceo/decisions/route.ts src/server/control-plane/company-routes.ts src/server/control-plane/server.test.ts src/lib/approval/types.ts src/lib/approval/request-store.ts src/lib/approval/approval-urls.ts src/lib/approval/channels/web.ts src/lib/approval/channels/im.ts src/lib/approval/channels/webhook.ts src/server/control-plane/routes/approval.ts src/components/ceo-office-cockpit.tsx src/components/approval-panel.tsx src/components/growth-proposal-detail-drawer.tsx src/components/system-improvement-detail-drawer.tsx src/components/projects-panel.tsx src/app/page.tsx src/lib/app-url-state.ts src/lib/api.ts src/lib/types.ts src/lib/agents/approval-triggers.ts src/lib/agents/project-types.ts src/lib/agents/run-registry.ts src/lib/company-kernel/growth-approval.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement-execution.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/approval/__tests__/request-store.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/notification-events.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/app/api/company/loops-self-improvement.route.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+页面验证：
+
+1. `curl http://localhost:3000/api/company/ceo/decisions?limit=3` 返回 `items[]`，每项包含明确 `target`
+2. 使用 `bb-browser` 打开 `?decision={"kind":"system-improvement-proposal","proposalId":"system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950"}`
+3. 系统改进详情能直接打开，URL 不再被 CEO conversation 自动覆盖
+4. URL 保持单次编码，不再出现 `%257B`
+5. `bb-browser errors` 未发现 JS 错误
+
+# 任务：系统改进 blocked 状态增加 patch 漂移自愈闭环
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-06
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/self-improvement-release-gate.ts`
+   - 在现有 `preflight` 自愈链上补齐第二层自动收口：
+     - 仍然保留 whitespace 类失败的直接自动修复
+     - 新增 `主仓 apply check` 漂移识别：
+       - `patch does not apply`
+       - `patch failed`
+       - `already exists in working directory`
+     - 当旧 patch 已不再适配当前主仓时，不再直接停在 `blocked`
+     - 系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 重新生成 patch 并继续 `preflight`
+   - 自动收口结果继续统一写回：
+     - `releaseGate.failureCategory`
+     - `releaseGate.remediationStatus`
+     - `releaseGate.remediationAttempts`
+     - `releaseGate.remediationSummary`
+2. `src/lib/company-kernel/self-improvement-codex-execution.ts`
+   - `runApprovedSystemImprovementCodexTask()` 新增内部执行选项：
+     - `skipAutoPreflight`
+     - `remediationPrompt`
+   - 允许 release gate 在同一条系统改进主线上强制重跑 Codex，并携带“旧 patch 已失配”的控制上下文。
+3. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - runtime sync 改为优先使用已持久化 proposal 作为基准，避免调用方传入的旧对象覆盖 `codexRunnerEvidence`
+4. `src/lib/company-kernel/self-improvement-release-gate.ts`
+   - 修正 `preflight` 持久化时的 base proposal 选择
+   - release gate 不再把重跑 Codex 后的新 codex evidence 覆盖回旧值
+5. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts
+```
+
+```bash
+npx vitest run src/app/api/company/loops-self-improvement.route.test.ts
+```
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-control-state.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实链路验证：
+
+1. 对真实 proposal `system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6` 重新触发：
+
+```bash
+POST /api/company/self-improvement/proposals/:id/release-gate { "action": "preflight" }
+```
+
+2. 实际观察到系统起了一条新的 `codex exec`：
+   - worktree 为新的 `system-improvement-proposal-4e55...-<runId>`
+   - prompt 内明确带上了：
+     - `Previous preflight failed because the generated patch no longer applies cleanly to the current repository snapshot`
+     - apply-check 摘要
+3. 为避免长时间占用本地资源，这条 live remediation run 在确认触发成功后已手动回收；后台不再残留由本次验证产生的 Codex 进程。
+
+# 任务：系统改进链路收敛为统一控制面，CEO/Ops 页面改为只消费 controlState
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-05
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/contracts.ts`、`src/lib/types.ts`
+   - 为系统改进 proposal 增加正式控制面 contract：
+     - `controlState`
+     - `entryApprovalSummary`
+   - `controlState` 固定输出：
+     - `stage`
+     - `currentOwner`
+     - `nextAction`
+     - `pageMode`
+     - `headline`
+     - `subline`
+     - `milestones`
+2. `src/lib/company-kernel/self-improvement-control-state.ts`
+   - 新增服务端派生读模型，统一从现有：
+     - `proposal`
+     - `approvalRequest`
+     - `automationState`
+     - `exitEvidence`
+     - `releaseGate`
+     推导 CEO / Ops 唯一控制面口径。
+   - 当前阶段统一收敛为：
+     - `entry-review`
+     - `ai-executing`
+     - `ai-preflight`
+     - `exit-review`
+     - `ops-merge`
+     - `ops-restart`
+     - `published`
+     - `observing`
+     - `rolled-back`
+     - `blocked`
+3. `src/lib/company-kernel/self-improvement-codex-execution.ts`、`src/lib/company-kernel/self-improvement-release-gate.ts`、`src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - 把 `preflight` 正式挂进现有执行主线：
+     - Codex 受控执行成功、且 proposal 已达到 `mergeGate.ready-to-merge`
+     - 并且 release gate 仍未进入 preflight 结果态时
+     - 系统会自动触发一次 `preflight`
+   - `syncSystemImprovementProposalsForRun()` 保留为幂等兜底，不承担主触发责任。
+4. `src/app/api/company/self-improvement/proposals/**`
+   - proposal 列表、详情与相关 mutation 返回值统一带上：
+     - `controlState`
+     - `entryApprovalSummary`
+   - 前端不再需要自己拼 `proposal.status / humanGate / automationState / releaseGate`。
+5. `src/components/ceo-dashboard.tsx`、`src/components/ceo-office-cockpit.tsx`、`src/components/ops-dashboard.tsx`、`src/components/system-improvement-detail-drawer.tsx`
+   - CEO Dashboard、CEO Office、Ops Dashboard、系统改进详情页全部改为统一消费 `controlState`。
+   - 系统改进详情页正式拆成三种模式：
+     - `entry-review`
+     - `exit-review`
+     - `progress`
+   - `progress` 模式只保留：
+     - 当前阶段
+     - 当前责任方
+     - 下一动作
+     - 里程碑进度
+     - 项目/Ops 深链入口
+   - 不再在共享详情页暴露：
+     - `重跑 preflight`
+     - `标记已合并`
+     - `标记已重启`
+     - `开始观察`
+     这类 AI / Ops 内部推进按钮。
+6. `src/components/ops-dashboard.tsx`
+   - 修正最近活动列表的 audit key 生成，去掉重复 key 告警。
+7. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/system-improvement-control-view.ts src/lib/company-kernel/self-improvement-control-state.ts src/components/system-improvement-detail-drawer.tsx src/components/ops-dashboard.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-cockpit.tsx src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/app/api/company/self-improvement/proposals/route.ts src/app/api/company/self-improvement/proposals/[id]/route.ts src/app/api/company/self-improvement/proposals/[id]/approve/route.ts src/app/api/company/self-improvement/proposals/[id]/release-gate/route.ts src/lib/types.ts src/lib/company-kernel/contracts.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实链路验证通过：
+
+1. API 回看：
+   - `GET /api/company/self-improvement/proposals?pageSize=3`
+   - 返回 proposal 已统一带上 `controlState`
+   - `system-improvement-proposal-8012b3c4-...` 当前为：
+     - `stage = ops-merge`
+     - `currentOwner = ops`
+     - `nextAction = mark-merged`
+   - `system-improvement-proposal-4e55adf5-...` 在补跑一次历史 preflight 后当前为：
+     - `stage = blocked`
+     - `currentOwner = ai`
+     - `nextAction = resolve-blocker`
+     - `entryApprovalSummary.status = approved`
+     - 阻塞原因：主仓 `git apply --check` 失败，旧 patch 已不再适配当前主仓文件
+2. 页面回看：
+   - 打开 `Ops`
+   - 点击 `查看完整详情`
+   - 验证结果：
+     - 详情页会按当前控制面状态显示统一阶段文案，例如 `已阻塞` / `待 Ops 合并`
+     - 详情页显示 `当前责任方`
+     - 详情页保留 `查看 Ops 详情`
+     - 共享详情页不再出现 `重跑 preflight / 标记已合并 / 标记已重启 / 开始观察`
+     - 浏览器控制台不再出现最近活动列表的重复 key 告警
+   - 再打开 `Self-evolution Codex runner smoke test`
+   - 页面可直接看到：
+     - `待 Ops 合并`
+     - `当前责任方 Ops`
+     - `下一动作 标记已合并`
+
+# 任务：系统改进详情页显式展示 Ops 发布进度
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-05
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/system-improvement-detail-drawer.tsx`
+   - 修正系统改进详情页在 `releaseGate.status = approved / merged / restarted / observing` 时的展示口径：
+     - 不再把 CEO 已批过的事项继续显示成 `待准出`
+     - 改为明确显示：
+       - `待 Ops 合并`
+       - `待 Ops 重启`
+       - `已发布`
+       - `观察中`
+   - 顶部标题、状态标签、当前操作说明都会随发布阶段变化。
+   - 新增 `CEO 准出 / Ops 合并 / Ops 重启与健康检查` 三段发布进度，让 CEO 可以直接判断 Ops 到底有没有执行、执行到哪一步。
+   - 右侧入口文案同步改成 `打开 Ops 发布进度`，避免继续用模糊的“内部处理”。
+2. `src/components/ceo-dashboard.tsx`
+   - CEO 首页的软件自迭代摘要同步使用新的发布阶段口径，不再把 `approved / merged` 都折叠成 `待准出`。
+3. `src/components/ceo-office-cockpit.tsx`
+   - CEO Office 决策/摘要列表同步显示 `待 Ops 合并 / 待 Ops 重启 / 已发布 / 观察中`，与详情页保持一致。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/components/system-improvement-detail-drawer.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-cockpit.tsx
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实页面验证通过：
+
+1. 打开 `CEO Office`
+2. 点击 `Self-evolution Codex runner smoke test`
+3. 验证结果：
+   - 页面中出现 `待 Ops 合并`
+   - 页面中出现 `Ops 合并`
+   - 页面中出现 `Ops 重启与健康检查`
+   - 页面中不再出现旧的 `待准出`
+
+# 任务：系统改进准入提案在无 runtime context 时也进入 CEO 准入队列
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-05
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - 为系统改进运行态同步补上治理态兜底：
+     - 当 proposal 还没有 `project / run / codex / launchStatus` 这类 runtime context
+     - 但当前状态已经是 `approval-required`
+     - 仍然会继续推导：
+       - `humanGate = entry-approval-required`
+       - `automationState = queued`
+   - 这样 AI 自启发刚生成的高风险提案，不需要先进入执行主线，也能立刻进入 CEO 准入链路。
+2. `src/lib/company-kernel/self-improvement-runtime-state.test.ts`
+   - 新增回归测试：
+     - 高风险 proposal 在尚未创建平台工程 project/run 时
+     - 依然能同步出 `entry-approval-required`
+     - 不再出现审批请求已创建、但 CEO 自迭代准入队列看不到的断点
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-runtime-state.test.ts
+```
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实链路验证通过：
+
+1. 选中自动信号：
+   - `system-improvement-signal:user-story-gap:13b61ad02a59`
+   - 来源：`User Story/CEO Office/CEO 办公室.md`
+2. 生成真实提案：
+   - `system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6`
+   - 标题：`系统改进：系统改进详情支持 URL 深链恢复`
+3. API 回看确认：
+   - `status = approval-required`
+   - `humanGate.state = entry-approval-required`
+   - `automationState.status = queued`
+   - `approvalRequestId = cb8fa569-215c-4138-97e6-6422024b9cdf`
+4. 页面回看确认：
+   - `CEO Office` 页面中已能看到该提案
+   - 页面中已能看到 `待准入`
+
+# 任务：release gate 增加自动修复层，whitespace 失败不再卡在人类审批前
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/contracts.ts`、`src/lib/types.ts`
+   - 为 `SystemImprovementReleaseGateSnapshot` 新增：
+     - `failureCategory`
+     - `remediationStatus`
+     - `remediationAttempts`
+     - `remediationSummary`
+2. `src/lib/company-kernel/self-improvement-release-gate.ts`
+   - 为 preflight 增加失败分类：
+     - `none`
+     - `auto-fixable`
+     - `quality-blocking`
+     - `policy-blocking`
+     - `infra-blocking`
+   - 增加最小 auto-remediation：
+     - 当失败仅由 whitespace 类 `worktree diff check / 主仓 apply check` 触发时
+     - 自动在 Codex worktree 中移除 changed files 的 trailing whitespace
+     - 重新生成 patch
+     - 重新执行 `git diff --check`
+     - 重新执行 `git apply --check --whitespace=error-all`
+   - remediation 结果会写回 release gate，而不是继续把这种低层失败上浮给 CEO
+3. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - `preflight-failed` 时优先读取 `releaseGate.remediationSummary`
+   - 让 AI / Ops 内部阻塞态带上更具体的自动修复结果
+4. `src/components/ops-dashboard.tsx`
+   - 发布检查摘要增加 `auto-fixed / auto-fix failed`
+   - 发布检查卡片显示 remediation summary，方便 Ops 看内部处理结果
+5. 文档同步：
+   - `docs/design/self-evolution/human-entry-exit-gate-redesign-2026-05-04.md`
+   - `docs/guide/agent-user-guide.md`
+   - `docs/guide/gateway-api.md`
+   - `docs/guide/cli-api-reference.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/contracts.ts src/lib/types.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/components/ops-dashboard.tsx
+```
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实链路验证通过：
+
+1. 对现有 proposal `system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950` 重新执行：
+
+```bash
+POST /api/company/self-improvement/proposals/:id/release-gate { "action": "preflight" }
+```
+
+2. 返回结果确认：
+   - `releaseGate.status = ready-for-approval`
+   - `releaseGate.preflightStatus = passed`
+   - `releaseGate.remediationStatus = fixed`
+   - `releaseGate.remediationAttempts = 1`
+   - `releaseGate.remediationSummary = 已自动移除 1 个文件中的 2 处行尾空格，并重跑发布前检查。`
+   - `proposal.humanGate.state = exit-approval-required`
+   - `proposal.automationState.status = exit-ready`
+3. 浏览器实走：
+   - `CEO Office / 决策队列` 中，`Self-evolution Codex runner smoke test` 重新出现为 `待准出`
+   - 打开后出现 `批准合入`
+   - 审批页文案明确表示：技术问题已清零，只剩最终准出
+
+# 任务：软件自迭代改为准入 / 准出双门，CEO 不再承接 AI 中间失败态
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-04
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/company-kernel/contracts.ts`、`src/lib/types.ts`
+   - 为系统改进 proposal 新增：
+     - `humanGate`
+     - `automationState`
+   - 把“是否需要人类审批”和“AI 当前内部运行到哪一步”拆成两套明确字段。
+2. `src/lib/company-kernel/self-improvement-runtime-state.ts`
+   - 新增 `deriveAutomationState()`
+   - 新增 `deriveHumanGate()`
+   - 修正 `deriveProposalStatus()`：
+     - 不再出现 `ready-to-merge + preflight-failed` 这种语义冲突
+     - `preflight-failed` 不再被推导成可进入 CEO 准出
+3. `src/lib/company-kernel/self-improvement-release-gate.ts`
+   - 发布前检查及后续 release action 完成后，统一再次同步 runtime state
+   - 确保 API 返回给前端的是最新的 `humanGate / automationState`
+4. `src/components/ceo-office-cockpit.tsx`
+   - CEO 决策队列只保留：
+     - `entry-approval-required`
+     - `exit-approval-required`
+   - 不再把 `approved / testing / mergeGate.ready-to-merge / preflight-failed / blocked` 这类 AI 内部状态直接上浮到 CEO 队列
+5. `src/components/ceo-dashboard.tsx`
+   - 软件自迭代摘要改为产品化审批态：
+     - 待准入
+     - AI 执行中 / 验证中 / 阻塞
+     - 待准出
+   - 不再用 merge gate / release gate 的技术标签直接充当 CEO 视图
+6. `src/components/system-improvement-detail-drawer.tsx`
+   - 抽屉改成真正的 CEO 审批页
+   - 默认主视图只表达：
+     - 解决的问题
+     - 影响范围与风险
+     - 批准后 AI 会做什么 / 准出结论
+   - 当前没有 `humanGate` 时：
+     - 不再展示批准动作
+     - 明确提示这条改进仍留在 AI / Ops 内部处理，不进入 CEO 待决策
+   - 技术证据继续下沉到折叠层
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/company-kernel/contracts.ts src/lib/types.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-release-gate.ts src/components/ceo-office-cockpit.tsx src/components/ceo-dashboard.tsx src/components/system-improvement-detail-drawer.tsx src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts
+```
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts
+```
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+浏览器实走通过：
+
+1. 打开 `CEO Office`
+2. `决策队列` 片段中不再出现 `Self-evolution Codex runner smoke test`
+3. 在 CEO 页其他软件自迭代卡片中手动打开该 proposal：
+   - 不再出现 `批准并启动 / 批准合入`
+   - 明确显示：
+     - `当前没有需要 CEO 审批的动作`
+     - `这条改进当前留在 AI / Ops 内部处理，不会进入 CEO 的待决策队列`
+
 # 任务：系统改进待决策页重构为决策工作台
 
 **状态**: ✅ 已完成
@@ -22648,3 +23483,93 @@ npx tsc --noEmit --pretty false
 2. 点击 `准出预检` 会真实调用 release gate API。
 3. 当前 smoke proposal 因 worktree patch 存在 trailing whitespace 被预检挡住，状态显示 `预检失败`。
 4. 页面刷新后仍保留 release gate 状态。
+# 任务：系统改进待审批 ghost 与决策深链收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-06
+
+### 本轮实施
+
+已完成：
+
+1. `src/lib/decision-control.ts`
+   - `DecisionTarget` URL 编码从整段 JSON 收口为紧凑 token
+   - 现在系统改进、Growth、Project stage gate 等 deep link 统一生成例如：
+     - `?decision=si~<proposalId>`
+     - `?decision=gp~<proposalId>`
+     - `?decision=sg~<projectId>~<stageId>`
+2. `src/lib/company-kernel/self-improvement-control-state.ts`
+   - 修正系统改进准入事实聚合：
+     - 当 approval request 已丢失，但 proposal 自身已经持久化 `approvedAt / approvedBy / approvalStatus`
+     - `entryApprovalSummary` 会优先回放持久审批事实，不再把 ghost request 错判成 `pending`
+   - `entry-review` 不再被“丢失的 pending approval request”强行触发
+   - 已被后续关闭的 proposal，会保留真实发生过的准入批准事实，不再被终态 `rejected` 覆盖掉
+3. `src/lib/company-kernel/self-improvement-store.ts`
+   - 清理条件扩展为：
+     - `status=approval-required` 且缺 `approvalRequestId`
+     - `status=approval-required` 但 `approvalRequestId` 指向的审批记录不存在
+   - 这类 demo 坏态 proposal 会被直接删除，不再继续污染 CEO 决策队列
+4. `src/lib/bridge/codex-adapter.ts`
+   - `codex exec` 改为使用 `PROMPT = -` 并通过 stdin 显式写入 prompt
+   - 不再把完整 prompt 直接塞进 argv
+   - 实际修复了系统改进重跑时的 `Reading additional input from stdin...` 崩溃路径
+5. live 数据收口
+   - 原待审批 proposal `system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6`
+   - 已确认不是“真的待 CEO 审批”，而是旧治理事实断链后的 ghost item
+   - 该 proposal 对应能力已经落在主仓，已通过 reject API 关闭为：
+     - `Superseded by landed change. URL deep-link recovery is already shipped on the main branch.`
+6. 文档同步：
+   - `ARCHITECTURE.md`
+   - `docs/design/decision-control-plane-audit-2026-05-06.md`
+   - `docs/guide/agent-user-guide.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx eslint src/lib/decision-control.ts src/lib/decision-control.test.ts src/lib/company-kernel/self-improvement-control-state.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-store.ts src/lib/company-kernel/self-improvement.test.ts src/lib/bridge/codex-adapter.ts src/lib/bridge/codex-adapter.test.ts
+```
+
+```bash
+npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/decision-control.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/bridge/codex-adapter.test.ts
+```
+
+结果：4 个测试文件、14 个测试全部通过。
+
+```bash
+cp .next/types/routes.d.ts .next/dev/types/routes.d.ts
+npx tsc --noEmit --pretty false
+```
+
+```bash
+git diff --check
+```
+
+真实链路验证通过：
+
+1. `GET /api/company/ceo/decisions?limit=20`
+   - 返回 `items=[]`
+   - CEO 决策队列已不存在 ghost 系统改进待审批
+2. `GET /api/company/self-improvement/proposals/system-improvement-proposal-4e55...`
+   - 返回：
+     - `status = rejected`
+     - `controlState.currentOwner = none`
+     - `controlState.nextAction = none`
+     - `entryApprovalSummary.status = approved`
+   - 说明：
+     - 真实准入批准事实仍保留
+     - 该 proposal 已按“主仓已落地”关闭，不再进入 CEO 队列
+3. `GET /api/company/self-improvement/proposals/:id/run-codex`
+   - 在 `localhost:3000` 现有 web watcher 重新加载后返回 `405 Method Not Allowed`
+   - 说明路由已被正确挂载，不再是之前的 `404`
+4. `POST /api/company/self-improvement/proposals/:id/run-codex`（经 `localhost:3101` 真实触发）
+   - 实际观察到新的子进程：
+     - `codex exec --cd <worktree> --sandbox workspace-write -`
+   - 已不再复现旧错误 `Reading additional input from stdin...`
+   - 随后因为我触发了 watcher 重载，live run 被打断为：
+     - `Process restarted while run was in progress`
+   - 说明 stdin 崩溃路径已消失，后续剩余的是正常服务重载副作用，而不是旧执行器 bug
+5. 短 URL 验证：
+   - `GET http://localhost:3000/?decision=si~system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6`
+   - 返回 `HTTP/1.1 200 OK`

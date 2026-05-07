@@ -36,6 +36,7 @@ describe('approval request-store', () => {
     const { requestStore, ceoProfileStore } = await loadModules();
     const request = requestStore.createApprovalRequest({
       type: 'proposal_publish',
+      target: { kind: 'knowledge', knowledgeId: 'knowledge-1' },
       workspace: 'file:///tmp/research',
       title: '发布提案',
       description: '测试审批持久化',
@@ -60,5 +61,38 @@ describe('approval request-store', () => {
 
     const { ceoProfileStore: finalProfileStore } = await loadModules();
     expect(finalProfileStore.getCEOProfile().pendingIssues).toEqual([]);
+  });
+
+  it('rejects approval requests without a decision target', async () => {
+    const { requestStore } = await loadModules();
+    expect(() => requestStore.createApprovalRequest({
+      type: 'proposal_publish',
+      workspace: 'file:///tmp/research',
+      title: '发布提案',
+      description: 'missing target',
+    } as never)).toThrow('ApprovalRequest.target is required');
+  });
+
+  it('deletes persisted legacy approval requests without a decision target', async () => {
+    const requestDir = path.join(tempHome, '.gemini', 'antigravity', 'requests');
+    fs.mkdirSync(requestDir, { recursive: true });
+    const filePath = path.join(requestDir, 'legacy-request.json');
+    fs.writeFileSync(filePath, JSON.stringify({
+      id: 'legacy-request',
+      type: 'other',
+      workspace: 'file:///tmp/legacy',
+      title: '旧审批',
+      description: 'missing target should be deleted',
+      urgency: 'normal',
+      status: 'pending',
+      createdAt: '2026-05-06T09:00:00.000Z',
+      updatedAt: '2026-05-06T09:00:00.000Z',
+      notifications: [],
+    }), 'utf-8');
+
+    const { requestStore } = await loadModules();
+    expect(requestStore.loadPersistedRequests()).toBe(0);
+    expect(requestStore.listApprovalRequests()).toEqual([]);
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 });

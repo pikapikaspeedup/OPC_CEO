@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 
-import { codexExec } from './bridge/codex-adapter';
+import { codexExec, startCodexExec, type CodexExecHandle } from './bridge/codex-adapter';
 import { createLogger } from './logger';
 import {
   getPlatformEngineeringEvidencePath,
@@ -67,6 +67,7 @@ export interface RunPlatformEngineeringCodexTaskInput {
   seedPaths?: string[];
   allowedPathPrefixes?: string[];
   validationCommands?: string[];
+  onCodexExecHandle?: (handle: CodexExecHandle) => void;
 }
 
 export interface RunPlatformEngineeringCodexTaskResult {
@@ -549,12 +550,23 @@ export async function runPlatformEngineeringCodexTask(
     expectEdits: input.expectEdits,
   });
 
-  const codexOutput = await codexExec(taskPacket, {
-    cwd: worktree.worktreePath,
-    model: input.model,
-    sandbox: 'workspace-write',
-    timeoutMs: input.timeoutMs ?? 0,
-  });
+  const codexOutput = input.onCodexExecHandle
+    ? await (() => {
+        const handle = startCodexExec(taskPacket, {
+          cwd: worktree.worktreePath,
+          model: input.model,
+          sandbox: 'workspace-write',
+          timeoutMs: input.timeoutMs ?? 0,
+        });
+        input.onCodexExecHandle?.(handle);
+        return handle.completion;
+      })()
+    : await codexExec(taskPacket, {
+        cwd: worktree.worktreePath,
+        model: input.model,
+        sandbox: 'workspace-write',
+        timeoutMs: input.timeoutMs ?? 0,
+      });
 
   const evidence = await collectPlatformEngineeringExitEvidence({
     repoPath: input.repoPath,

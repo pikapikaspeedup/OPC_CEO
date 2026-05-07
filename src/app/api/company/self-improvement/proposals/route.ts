@@ -9,6 +9,7 @@ import {
   countSystemImprovementProposals,
   listSystemImprovementProposals,
 } from '@/lib/company-kernel/self-improvement-store';
+import { buildSystemImprovementProposalViews } from '@/lib/company-kernel/self-improvement-control-state';
 import { syncAllActiveSystemImprovementProposals } from '@/lib/company-kernel/self-improvement-runtime-state';
 import {
   proxyToControlPlane,
@@ -39,5 +40,5 @@ export async function GET(req: Request) {
     limit: pagination.limit,
     offset: pagination.offset,
   });
-  return NextResponse.json(buildPaginatedResponse(items, total, pagination));
+  return NextResponse.json(buildPaginatedResponse(buildSystemImprovementProposalViews(items), total, pagination));
 }

@@ -50,7 +50,7 @@ export class WebChannel implements NotificationChannel {
    * Generate approval URL for the Web UI.
    * CEO clicks this link to open the approval page.
    */
-  getApprovalUrl(requestId: string): string {
-    return getApprovalInboxUrl(this.gatewayUrl, requestId);
+  getApprovalUrl(requestId: string, target: ApprovalRequest['target']): string {
+    return getApprovalInboxUrl(this.gatewayUrl, requestId, target);
   }
 }

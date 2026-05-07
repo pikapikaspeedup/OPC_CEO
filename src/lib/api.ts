@@ -8,6 +8,7 @@ import type {
   JournalEntryFE, CheckpointFE,
   DepartmentConfig,
   DailyDigestFE,
+  DecisionItemViewFE,
   Deliverable,
   TemplateDetailFE,
   ApprovalRequestFE,
@@ -1446,6 +1447,13 @@ export const api = {
       body: JSON.stringify({ command, ...(options?.model ? { model: options.model } : {}) }),
     }),
 
+  ceoDecisions: (params?: { limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.limit) sp.set('limit', String(params.limit));
+    const qs = sp.toString();
+    return fetchJson<{ items: DecisionItemViewFE[] }>(`/api/company/ceo/decisions${qs ? `?${qs}` : ''}`);
+  },
+
   // CEO Approval Framework
   listApprovals: (params?: { status?: string; workspace?: string; type?: string }) => {
     const sp = new URLSearchParams();
@@ -1463,6 +1471,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, message: message || '', channel: 'web' }),
     }).then((response) => response.request),
+  approvalRequest: (id: string) =>
+    fetchJson<{ request: ApprovalRequestFE }>(`/api/approval/${encodeURIComponent(id)}`)
+      .then((response) => response.request),
 
   evolutionProposals: (params?: { workspaceUri?: string; kind?: 'workflow' | 'skill'; status?: string }) => {
     const sp = new URLSearchParams();

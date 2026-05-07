@@ -1,4 +1,5 @@
 import type { AppShellSection } from './home-shell';
+import { decodeDecisionTarget, encodeDecisionTarget, type DecisionTarget } from './decision-control';
 
 export type AppUrlSection = AppShellSection;
 export type AppUrlUtilityPanel = 'settings' | null;
@@ -15,6 +16,7 @@ export interface AppUrlState {
   opsProposalId: string | null;
   settingsTab: AppUrlSettingsTab;
   settingsFocus: AppUrlSettingsFocus;
+  decisionTarget: DecisionTarget | null;
 }
 
 const VALID_SECTIONS = new Set<AppUrlSection>(['conversations', 'projects', 'knowledge', 'operations', 'ceo']);
@@ -39,6 +41,7 @@ export function parseAppUrlState(search: string | URLSearchParams): AppUrlState 
 
   return {
     section,
+    decisionTarget: decodeDecisionTarget(params.get('decision')),
     utilityPanel: cleanParam(params.get('panel')) === 'settings' ? 'settings' : null,
     conversationId: section === 'ceo' || section === 'conversations'
       ? cleanParam(params.get('conversation'))
@@ -69,6 +72,10 @@ export function buildAppUrl(pathname: string, state: AppUrlState): string {
     if (state.settingsFocus) {
       params.set('focus', state.settingsFocus);
     }
+  }
+
+  if (state.decisionTarget) {
+    params.set('decision', encodeDecisionTarget(state.decisionTarget));
   }
 
   if ((state.section === 'ceo' || state.section === 'conversations') && state.conversationId) {

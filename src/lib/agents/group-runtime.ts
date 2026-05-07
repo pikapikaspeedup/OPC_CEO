@@ -1042,6 +1042,9 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     try {
       await submitApprovalRequest({
         type: 'token_increase' as const,
+        target: input.projectId
+          ? { kind: 'project' as const, projectId: input.projectId }
+          : { kind: 'settings' as const, tab: 'autonomy' },
         workspace: workspacePath,
         title: `Token 配额超限: ${resolvedStageId}`,
         description: `部门 ${workspacePath} 的 Token 配额已用尽，无法执行新任务。`,
@@ -1054,6 +1057,9 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
     try {
       await submitApprovalRequest({
         type: 'token_increase' as const,
+        target: input.projectId
+          ? { kind: 'project' as const, projectId: input.projectId }
+          : { kind: 'settings' as const, tab: 'autonomy' },
         workspace: workspacePath,
         title: `Token 配额预警: ${resolvedStageId}`,
         description: `部门 ${workspacePath} 的 Token 使用量即将达到上限（剩余 ${quotaCheck.remaining}），建议增加配额。`,

@@ -93,6 +93,7 @@ export interface PlatformEngineeringProjectGovernance {
   allowProposal: boolean;
   departmentId?: string;
   source?: 'default' | 'manual' | 'proposal-created';
+  systemImprovementProposalId?: string;
   updatedAt?: string;
 }
 

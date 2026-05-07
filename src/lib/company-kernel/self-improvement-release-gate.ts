@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 
 import { getPlatformEngineeringEvidencePath } from '../platform-engineering';
 import type {
+  SystemImprovementReleaseFailureCategory,
   SystemImprovementProposal,
   SystemImprovementReleaseCommandBundle,
   SystemImprovementReleaseGateSnapshot,
@@ -17,6 +18,10 @@ import {
 import { syncSystemImprovementProposalRuntimeState } from './self-improvement-runtime-state';
 
 const execFile = promisify(execFileCallback);
+const TRAILING_WHITESPACE_PATTERN = /[ \t]+$/gm;
+const MAX_AUTO_REMEDIATION_ATTEMPTS = 2;
+const GIT_INDEX_LOCK_RETRY_ATTEMPTS = 10;
+const GIT_INDEX_LOCK_RETRY_DELAY_MS = 200;
 
 export type SystemImprovementReleaseAction =
   | 'preflight'
@@ -40,6 +45,10 @@ export interface SystemImprovementReleaseActionInput {
 export interface SystemImprovementReleaseActionResult {
   proposal: SystemImprovementProposal;
   releaseGate: SystemImprovementReleaseGateSnapshot;
+}
+
+export interface MaybeAutoRunSystemImprovementPreflightInput {
+  proposal: SystemImprovementProposal;
 }
 
 function shellQuote(value: string): string {
@@ -68,6 +77,33 @@ function normalizeRelativePath(value: string): string {
 
 function normalizeCommand(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function isGitIndexLockFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /index\.lock|another git process seems to be running|unable to create '.*index\.lock'/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function withGitIndexLockRetry<T>(task: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < GIT_INDEX_LOCK_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await task();
+    } catch (error: unknown) {
+      lastError = error;
+      if (!isGitIndexLockFailure(error) || attempt === GIT_INDEX_LOCK_RETRY_ATTEMPTS - 1) {
+        throw error;
+      }
+      await sleep(GIT_INDEX_LOCK_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function isRunnableValidationCommand(command: string): boolean {
@@ -117,6 +153,9 @@ function defaultReleaseGate(proposal: SystemImprovementProposal): SystemImprovem
   return {
     status: 'not-started',
     preflightStatus: 'not-run',
+    failureCategory: 'none',
+    remediationStatus: 'not-needed',
+    remediationAttempts: 0,
     checks: [],
     commands: buildCommandBundle({ proposal }),
     updatedAt: new Date().toISOString(),
@@ -124,7 +163,7 @@ function defaultReleaseGate(proposal: SystemImprovementProposal): SystemImprovem
 }
 
 function getExistingReleaseGate(proposal: SystemImprovementProposal): SystemImprovementReleaseGateSnapshot {
-  const value = proposal.exitEvidence?.releaseGate || proposal.metadata?.releaseGate;
+  const value = proposal.exitEvidence?.releaseGate;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return defaultReleaseGate(proposal);
   }
@@ -168,7 +207,7 @@ function releaseEvidencePath(proposalId: string): string {
 }
 
 async function listUntrackedFiles(worktreePath: string): Promise<string[]> {
-  const raw = await runGit(worktreePath, ['ls-files', '--others', '--exclude-standard']);
+  const raw = await withGitIndexLockRetry(() => runGit(worktreePath, ['ls-files', '--others', '--exclude-standard']));
   return raw.split('\n').map(normalizeRelativePath).filter(Boolean);
 }
 
@@ -188,10 +227,10 @@ async function writeWorktreePatch(input: {
   const untracked = new Set(await listUntrackedFiles(input.worktreePath));
   const untrackedChangedFiles = changedFiles.filter((file) => untracked.has(file));
   if (untrackedChangedFiles.length > 0) {
-    await runGit(input.worktreePath, ['add', '-N', '--', ...untrackedChangedFiles]);
+    await withGitIndexLockRetry(() => runGit(input.worktreePath, ['add', '-N', '--', ...untrackedChangedFiles]));
   }
 
-  const patch = await runGitRaw(input.worktreePath, ['diff', '--binary', '--no-ext-diff', '--', ...changedFiles]);
+  const patch = await withGitIndexLockRetry(() => runGitRaw(input.worktreePath, ['diff', '--binary', '--no-ext-diff', '--', ...changedFiles]));
   const patchPath = releaseEvidencePath(input.proposal.id);
   fs.writeFileSync(patchPath, patch, 'utf-8');
 
@@ -228,7 +267,7 @@ async function runApplyCheck(repoPath: string, patchPath: string): Promise<Syste
 
 async function runDiffCheck(worktreePath: string): Promise<SystemImprovementReleasePreflightCheck> {
   try {
-    await runGit(worktreePath, ['diff', '--check']);
+    await withGitIndexLockRetry(() => runGit(worktreePath, ['diff', '--check']));
     return check('worktree diff check', true, 'worktree diff --check 通过', 'git diff --check');
   } catch (error: unknown) {
     return check(
@@ -240,9 +279,123 @@ async function runDiffCheck(worktreePath: string): Promise<SystemImprovementRele
   }
 }
 
-async function preflightRelease(proposal: SystemImprovementProposal): Promise<SystemImprovementReleaseGateSnapshot> {
-  const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
-  const current = synced || proposal;
+function isWhitespaceFailureText(value: string): boolean {
+  return /(trailing whitespace|whitespace error|space before tab|new blank line at eof|行尾空格)/i.test(value);
+}
+
+function isPatchApplyDriftFailureText(value: string): boolean {
+  return /(patch does not apply|patch failed:|cannot apply binary patch|corrupt patch at line|already exists in working directory)/i.test(value);
+}
+
+function isAutoFixableWhitespaceCheck(checkItem: SystemImprovementReleasePreflightCheck): boolean {
+  if (checkItem.status !== 'failed') return false;
+  if (checkItem.label !== 'worktree diff check' && checkItem.label !== '主仓 apply check') {
+    return false;
+  }
+  return isWhitespaceFailureText(`${checkItem.detail}\n${checkItem.command || ''}`);
+}
+
+function classifyFailureCategory(checks: SystemImprovementReleasePreflightCheck[]): SystemImprovementReleaseFailureCategory {
+  const failed = checks.filter((item) => item.status === 'failed');
+  if (failed.length === 0) return 'none';
+  const whitespaceCheckLabels = new Set(['worktree diff check', '主仓 apply check']);
+  const onlyWhitespaceRelatedChecks = failed.every((item) => whitespaceCheckLabels.has(item.label));
+  if (onlyWhitespaceRelatedChecks && failed.some(isAutoFixableWhitespaceCheck)) {
+    return 'auto-fixable';
+  }
+  if (failed.some((item) => item.label === 'worktree exists' || item.label === 'Codex evidence' || item.label === '生成 patch')) {
+    return 'infra-blocking';
+  }
+  if (failed.some((item) => item.label === 'scope')) {
+    return 'policy-blocking';
+  }
+  if (failed.some((item) => item.label === '主仓 apply check')) {
+    return 'policy-blocking';
+  }
+  return 'quality-blocking';
+}
+
+function isCodexRerunEligibleFailure(checks: SystemImprovementReleasePreflightCheck[]): boolean {
+  const failed = checks.filter((item) => item.status === 'failed');
+  if (!failed.length) return false;
+
+  const blockingLabels = new Set([
+    'merge gate',
+    '测试证据',
+    '回滚计划',
+    'Codex evidence',
+    'scope',
+    'runner validations',
+    'worktree exists',
+    '生成 patch',
+  ]);
+  if (failed.some((item) => blockingLabels.has(item.label))) {
+    return false;
+  }
+
+  return failed.some((item) => (
+    item.label === '主仓 apply check'
+    && isPatchApplyDriftFailureText(`${item.detail}\n${item.command || ''}`)
+  ));
+}
+
+function summarizePatchApplyFailure(checks: SystemImprovementReleasePreflightCheck[]): string {
+  const failedApplyCheck = checks.find((item) => (
+    item.status === 'failed'
+    && item.label === '主仓 apply check'
+  ));
+  if (!failedApplyCheck) {
+    return '上一轮 patch 已不再适配当前主仓。';
+  }
+  const detail = `${failedApplyCheck.detail}`.trim().split('\n').slice(0, 4).join('\n');
+  return detail || '上一轮 patch 已不再适配当前主仓。';
+}
+
+function buildCodexRerunPrompt(checks: SystemImprovementReleasePreflightCheck[]): string {
+  return [
+    'Previous preflight failed because the generated patch no longer applies cleanly to the current repository snapshot.',
+    'Keep the original proposal goal and file scope, but reconcile the implementation against the latest repository state.',
+    'Apply-check excerpt:',
+    summarizePatchApplyFailure(checks),
+  ].join('\n\n');
+}
+
+function stripTrailingWhitespaceFromText(content: string): { content: string; trimmedLines: number } {
+  const matches = content.match(TRAILING_WHITESPACE_PATTERN);
+  return {
+    content: content.replace(TRAILING_WHITESPACE_PATTERN, ''),
+    trimmedLines: matches?.length || 0,
+  };
+}
+
+async function remediateTrailingWhitespace(input: {
+  worktreePath: string;
+  changedFiles: string[];
+}): Promise<{ touchedFiles: number; trimmedLines: number }> {
+  let touchedFiles = 0;
+  let trimmedLines = 0;
+
+  for (const relativeFile of input.changedFiles.map(normalizeRelativePath).filter(Boolean)) {
+    const absolutePath = path.join(input.worktreePath, relativeFile);
+    if (!fs.existsSync(absolutePath)) continue;
+    const buffer = fs.readFileSync(absolutePath);
+    if (buffer.includes(0)) continue;
+    const original = buffer.toString('utf-8');
+    const stripped = stripTrailingWhitespaceFromText(original);
+    if (stripped.trimmedLines === 0 || stripped.content === original) continue;
+    fs.writeFileSync(absolutePath, stripped.content, 'utf-8');
+    touchedFiles += 1;
+    trimmedLines += stripped.trimmedLines;
+  }
+
+  return { touchedFiles, trimmedLines };
+}
+
+async function collectPreflightChecks(current: SystemImprovementProposal): Promise<{
+  checks: SystemImprovementReleasePreflightCheck[];
+  patchPath?: string;
+  patchBytes: number;
+}> {
   const codex = current.exitEvidence?.codex;
   const mergeGate = current.exitEvidence?.mergeGate;
   const checks: SystemImprovementReleasePreflightCheck[] = [
@@ -253,6 +406,7 @@ async function preflightRelease(proposal: SystemImprovementProposal): Promise<Sy
   ];
 
   let patchPath: string | undefined;
+  let patchBytes = 0;
   if (codex) {
     checks.push(
       check('scope', codex.scopeCheckPassed && codex.disallowedFiles.length === 0, `${codex.disallowedFiles.length} 个越界文件`),
@@ -266,22 +420,102 @@ async function preflightRelease(proposal: SystemImprovementProposal): Promise<Sy
         changedFiles: codex.changedFiles,
       });
       patchPath = patchResult.patchPath;
+      patchBytes = patchResult.patchBytes;
       checks.push(patchResult.check);
       checks.push(await runDiffCheck(codex.worktreePath));
-      if (patchPath && patchResult.patchBytes > 0) {
+      if (patchPath && patchBytes > 0) {
         checks.push(await runApplyCheck(process.cwd(), patchPath));
       }
     }
   }
 
+  return { checks, patchPath, patchBytes };
+}
+
+async function preflightRelease(proposal: SystemImprovementProposal): Promise<SystemImprovementReleaseGateSnapshot> {
+  const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
+  const current = synced || proposal;
+  const existingReleaseGate = getExistingReleaseGate(current);
+  let codex = current.exitEvidence?.codex;
+  let proposalForChecks = current;
+  let { checks, patchPath } = await collectPreflightChecks(proposalForChecks);
+  let failureCategory = classifyFailureCategory(checks);
+  let remediationStatus: SystemImprovementReleaseGateSnapshot['remediationStatus'] = existingReleaseGate.remediationStatus || 'not-needed';
+  let remediationAttempts = existingReleaseGate.remediationAttempts || 0;
+  let remediationSummary: string | undefined;
+
+  if (failureCategory === 'auto-fixable' && codex && fs.existsSync(codex.worktreePath) && remediationAttempts < MAX_AUTO_REMEDIATION_ATTEMPTS) {
+    remediationAttempts += 1;
+    const remediation = await remediateTrailingWhitespace({
+      worktreePath: codex.worktreePath,
+      changedFiles: codex.changedFiles,
+    });
+    if (remediation.touchedFiles > 0) {
+      const rerun = await collectPreflightChecks(current);
+      const rerunPassed = rerun.checks.every((item) => item.status === 'passed');
+      remediationStatus = rerunPassed ? 'fixed' : 'failed';
+      remediationSummary = rerunPassed
+        ? `已自动移除 ${remediation.touchedFiles} 个文件中的 ${remediation.trimmedLines} 处行尾空格，并重跑发布前检查。`
+        : `已尝试移除 ${remediation.touchedFiles} 个文件中的 ${remediation.trimmedLines} 处行尾空格，但仍有失败项需要内部继续处理。`;
+      checks = [
+        ...rerun.checks,
+        check('auto remediation', rerunPassed, remediationSummary),
+      ];
+      patchPath = rerun.patchPath;
+      failureCategory = classifyFailureCategory(rerun.checks);
+    } else {
+      remediationStatus = 'failed';
+      remediationSummary = '已识别为 whitespace 类失败，但 worktree 中没有找到可自动修复的行尾空格。';
+      checks = [...checks, check('auto remediation', false, remediationSummary)];
+    }
+  }
+
+  if (
+    !checks.every((item) => item.status === 'passed')
+    && isCodexRerunEligibleFailure(checks)
+    && remediationAttempts < MAX_AUTO_REMEDIATION_ATTEMPTS
+  ) {
+    remediationAttempts += 1;
+    try {
+      const { runApprovedSystemImprovementCodexTask } = await import('./self-improvement-codex-execution');
+      const rerun = await runApprovedSystemImprovementCodexTask(proposalForChecks.id, {
+        force: true,
+        skipAutoPreflight: true,
+        remediationPrompt: buildCodexRerunPrompt(checks),
+      });
+      proposalForChecks = await syncSystemImprovementProposalRuntimeState(rerun.proposal.id, { proposal: rerun.proposal }) || rerun.proposal;
+      codex = proposalForChecks.exitEvidence?.codex;
+      const rerunChecks = await collectPreflightChecks(proposalForChecks);
+      const rerunPassed = rerunChecks.checks.every((item) => item.status === 'passed');
+      remediationStatus = rerunPassed ? 'fixed' : 'failed';
+      remediationSummary = rerunPassed
+        ? '检测到旧 patch 已不再适配当前主仓，已自动重跑 Codex 并重新生成可应用补丁。'
+        : '检测到旧 patch 已不再适配当前主仓，已自动重跑 Codex，但新的发布前检查仍未通过。';
+      checks = [
+        ...rerunChecks.checks,
+        check('auto remediation', rerunPassed, remediationSummary),
+      ];
+      patchPath = rerunChecks.patchPath;
+      failureCategory = classifyFailureCategory(rerunChecks.checks);
+    } catch (error: unknown) {
+      remediationStatus = 'failed';
+      remediationSummary = `检测到旧 patch 已不再适配当前主仓，并已尝试自动重跑 Codex，但执行失败：${error instanceof Error ? error.message : String(error)}`;
+      checks = [...checks, check('auto remediation', false, remediationSummary)];
+    }
+  }
+
   const passed = checks.every((item) => item.status === 'passed');
   return {
-    ...getExistingReleaseGate(current),
+    ...existingReleaseGate,
     status: passed ? 'ready-for-approval' : 'preflight-failed',
     preflightStatus: passed ? 'passed' : 'failed',
+    failureCategory: passed ? 'none' : failureCategory,
+    remediationStatus: passed && remediationAttempts === 0 ? 'not-needed' : remediationStatus,
+    remediationAttempts,
+    ...(remediationSummary ? { remediationSummary } : {}),
     checks,
     ...(patchPath ? { patchPath } : {}),
-    commands: buildCommandBundle({ proposal: current, patchPath }),
+    commands: buildCommandBundle({ proposal: proposalForChecks, patchPath }),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -324,16 +558,56 @@ function persistReleaseGate(
       releaseGate,
       updatedAt: new Date().toISOString(),
     },
-    metadata: {
-      ...(proposal.metadata || {}),
-      ...(patch.metadata || {}),
-      releaseGate,
-    },
+    ...(patch.metadata ? {
+      metadata: {
+        ...(proposal.metadata || {}),
+        ...patch.metadata,
+      },
+    } : {}),
   });
   if (!updated) {
     throw new Error(`System improvement proposal not found: ${proposal.id}`);
   }
   return updated;
+}
+
+async function persistAndSyncReleaseGate(
+  proposal: SystemImprovementProposal,
+  releaseGate: SystemImprovementReleaseGateSnapshot,
+  patch: Partial<SystemImprovementProposal> = {},
+): Promise<SystemImprovementProposal> {
+  const updated = persistReleaseGate(proposal, releaseGate, patch);
+  return await syncSystemImprovementProposalRuntimeState(updated.id, { proposal: updated }) || updated;
+}
+
+export async function maybeAutoRunSystemImprovementPreflight(
+  input: MaybeAutoRunSystemImprovementPreflightInput,
+): Promise<SystemImprovementProposal> {
+  const proposal = input.proposal;
+  const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
+  const current = synced || proposal;
+  const mergeGate = current.exitEvidence?.mergeGate;
+  if (mergeGate?.status !== 'ready-to-merge') {
+    return current;
+  }
+
+  const releaseGate = current.exitEvidence?.releaseGate;
+  if (
+    releaseGate
+    && typeof releaseGate === 'object'
+    && !Array.isArray(releaseGate)
+    && 'preflightStatus' in releaseGate
+    && 'status' in releaseGate
+  ) {
+    const preflightStatus = releaseGate.preflightStatus;
+    const status = releaseGate.status;
+    if (preflightStatus !== 'not-run' && status !== 'not-started') {
+      return current;
+    }
+  }
+
+  const result = await runSystemImprovementReleaseAction(current.id, { action: 'preflight' });
+  return result.proposal;
 }
 
 export async function runSystemImprovementReleaseAction(
@@ -346,8 +620,11 @@ export async function runSystemImprovementReleaseAction(
   }
 
   if (input.action === 'preflight') {
-    const releaseGate = await preflightRelease(proposal);
-    const updated = persistReleaseGate(proposal, releaseGate);
+    const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
+    const current = synced || proposal;
+    const releaseGate = await preflightRelease(current);
+    const latestProposal = getSystemImprovementProposal(proposalId) || current;
+    const updated = await persistAndSyncReleaseGate(latestProposal, releaseGate);
     return { proposal: updated, releaseGate };
   }
 
@@ -368,7 +645,7 @@ export async function runSystemImprovementReleaseAction(
       ...(input.note ? { approvalNote: input.note } : {}),
       updatedAt: now,
     };
-    const updated = persistReleaseGate(proposal, next);
+    const updated = await persistAndSyncReleaseGate(proposal, next);
     return { proposal: updated, releaseGate: next };
   }
 
@@ -385,7 +662,7 @@ export async function runSystemImprovementReleaseAction(
       ...(input.mergeCommitSha ? { mergeCommitSha: input.mergeCommitSha } : {}),
       updatedAt: now,
     };
-    const updated = persistReleaseGate(proposal, next);
+    const updated = await persistAndSyncReleaseGate(proposal, next);
     return { proposal: updated, releaseGate: next };
   }
 
@@ -403,7 +680,7 @@ export async function runSystemImprovementReleaseAction(
       healthCheckSummary: input.healthCheckSummary || releaseGate.commands.healthCheckCommand || 'Restart marked by Ops.',
       updatedAt: now,
     };
-    const updated = persistReleaseGate(proposal, next, { status: 'published' });
+    const updated = await persistAndSyncReleaseGate(proposal, next, { status: 'published' });
     return { proposal: updated, releaseGate: next };
   }
 
@@ -420,7 +697,7 @@ export async function runSystemImprovementReleaseAction(
       observationSummary: input.observationSummary || input.note || 'Release observation started.',
       updatedAt: now,
     };
-    const updated = persistReleaseGate(proposal, next, {
+    const updated = await persistAndSyncReleaseGate(proposal, next, {
       status: 'observing',
       metadata: {
         ...(proposal.metadata || {}),
@@ -440,7 +717,7 @@ export async function runSystemImprovementReleaseAction(
       rollbackReason: input.rollbackReason || input.note || 'Rollback marked by Ops.',
       updatedAt: now,
     };
-    const updated = persistReleaseGate(proposal, next, { status: 'rolled-back' });
+    const updated = await persistAndSyncReleaseGate(proposal, next, { status: 'rolled-back' });
     return { proposal: updated, releaseGate: next };
   }
 

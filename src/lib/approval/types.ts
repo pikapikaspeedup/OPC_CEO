@@ -11,6 +11,8 @@
  * - TokenQuota: department-level token budget (placeholder)
  */
 
+import type { DecisionTarget } from '../decision-control';
+
 // ---------------------------------------------------------------------------
 // Approval Request
 // ---------------------------------------------------------------------------
@@ -48,6 +50,8 @@ export interface ApprovalCallback {
 export interface ApprovalRequest {
   id: string
   type: ApprovalRequestType
+  /** Business object that owns the approval context. */
+  target: DecisionTarget
   /** Workspace URI that originated the request (identifies the department). */
   workspace: string
   /** Associated run ID, if any. */
@@ -78,6 +82,7 @@ export interface ApprovalRequest {
 /** Input for creating a new request. */
 export interface CreateApprovalInput {
   type: ApprovalRequestType
+  target: DecisionTarget
   workspace: string
   runId?: string
   title: string
@@ -136,9 +141,10 @@ export interface NotificationChannel {
    * Example: `{gateway}/api/approval/{id}/feedback?action=approve&token={hmac}`
    *
    * @param requestId — The approval request ID.
+   * @param target — Business object opened by the approval link.
    * @returns Fully qualified URL string.
    */
-  getApprovalUrl(requestId: string): string
+  getApprovalUrl(requestId: string, target: DecisionTarget): string
 }
 
 // ---------------------------------------------------------------------------

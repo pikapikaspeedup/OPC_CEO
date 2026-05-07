@@ -587,6 +587,94 @@ export type SystemImprovementProposalStatus =
   | 'rolled-back'
   | 'observing';
 
+export type SystemImprovementAutomationStatus =
+  | 'queued'
+  | 'executing'
+  | 'validating'
+  | 'remediating'
+  | 'blocked'
+  | 'exit-ready';
+
+export interface SystemImprovementAutomationState {
+  status: SystemImprovementAutomationStatus;
+  summary: string;
+  updatedAt: string;
+}
+
+export type SystemImprovementHumanGateState =
+  | 'none'
+  | 'entry-approval-required'
+  | 'exit-approval-required';
+
+export interface SystemImprovementHumanGate {
+  state: SystemImprovementHumanGateState;
+  title: string;
+  summary: string;
+  updatedAt: string;
+}
+
+export type SystemImprovementControlStage =
+  | 'entry-review'
+  | 'ai-executing'
+  | 'ai-preflight'
+  | 'exit-review'
+  | 'ops-merge'
+  | 'ops-restart'
+  | 'published'
+  | 'observing'
+  | 'rolled-back'
+  | 'blocked';
+
+export type SystemImprovementControlOwner = 'ceo' | 'ai' | 'ops' | 'none';
+
+export type SystemImprovementControlNextAction =
+  | 'approve-entry'
+  | 'run-preflight'
+  | 'approve-exit'
+  | 'mark-merged'
+  | 'mark-restarted'
+  | 'start-observation'
+  | 'mark-rolled-back'
+  | 'resolve-blocker'
+  | 'none';
+
+export type SystemImprovementControlPageMode = 'entry-review' | 'exit-review' | 'progress';
+
+export type SystemImprovementControlMilestoneKey =
+  | 'entry-approval'
+  | 'ai-execution'
+  | 'ai-preflight'
+  | 'exit-approval'
+  | 'ops-merge'
+  | 'ops-restart'
+  | 'observation';
+
+export interface SystemImprovementControlMilestone {
+  key: SystemImprovementControlMilestoneKey;
+  label: string;
+  status: 'done' | 'current' | 'pending';
+  detail: string;
+  timestamp?: string;
+}
+
+export interface SystemImprovementControlState {
+  stage: SystemImprovementControlStage;
+  currentOwner: SystemImprovementControlOwner;
+  nextAction: SystemImprovementControlNextAction;
+  pageMode: SystemImprovementControlPageMode;
+  headline: string;
+  subline: string;
+  milestones: SystemImprovementControlMilestone[];
+}
+
+export interface SystemImprovementEntryApprovalSummary {
+  requestId: string;
+  status: 'pending' | 'approved' | 'rejected' | 'feedback';
+  actedBy?: string;
+  actedAt?: string;
+  message?: string;
+}
+
 export type SystemImprovementRisk = 'low' | 'medium' | 'high' | 'critical';
 
 export interface SystemImprovementTestEvidence {
@@ -672,6 +760,19 @@ export type SystemImprovementReleaseGateStatus =
 
 export type SystemImprovementReleasePreflightStatus = 'not-run' | 'passed' | 'failed';
 
+export type SystemImprovementReleaseFailureCategory =
+  | 'none'
+  | 'auto-fixable'
+  | 'quality-blocking'
+  | 'policy-blocking'
+  | 'infra-blocking';
+
+export type SystemImprovementReleaseRemediationStatus =
+  | 'not-needed'
+  | 'attempted'
+  | 'fixed'
+  | 'failed';
+
 export interface SystemImprovementReleasePreflightCheck {
   label: string;
   status: 'passed' | 'failed';
@@ -690,6 +791,10 @@ export interface SystemImprovementReleaseCommandBundle {
 export interface SystemImprovementReleaseGateSnapshot {
   status: SystemImprovementReleaseGateStatus;
   preflightStatus: SystemImprovementReleasePreflightStatus;
+  failureCategory?: SystemImprovementReleaseFailureCategory;
+  remediationStatus?: SystemImprovementReleaseRemediationStatus;
+  remediationAttempts?: number;
+  remediationSummary?: string;
   checks: SystemImprovementReleasePreflightCheck[];
   commands: SystemImprovementReleaseCommandBundle;
   patchPath?: string;
@@ -721,6 +826,8 @@ export interface SystemImprovementExitEvidenceBundle {
 export interface SystemImprovementProposal {
   id: string;
   status: SystemImprovementProposalStatus;
+  humanGate?: SystemImprovementHumanGate;
+  automationState?: SystemImprovementAutomationState;
   title: string;
   summary: string;
   sourceSignalIds: string[];
@@ -739,6 +846,11 @@ export interface SystemImprovementProposal {
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface SystemImprovementProposalView extends SystemImprovementProposal {
+  controlState: SystemImprovementControlState;
+  entryApprovalSummary?: SystemImprovementEntryApprovalSummary;
 }
 
 export interface ProtectedCorePolicy {

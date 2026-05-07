@@ -25,6 +25,12 @@ import {
   getDepartmentGroupKey,
   workspaceNameFromUri,
 } from '@/lib/department-config';
+import {
+  getSystemImprovementOwnerLabel,
+  getSystemImprovementQueueSummary,
+  getSystemImprovementStageLabel,
+  getSystemImprovementStageTone,
+} from '@/lib/system-improvement-control-view';
 import type {
   Workspace,
   Project,
@@ -44,84 +50,6 @@ interface CEODashboardProps {
   onDepartmentSaved?: (uri: string, config: DepartmentConfig) => void;
   onRefresh?: () => void;
   onNavigateToProject?: (projectId: string) => void;
-}
-
-function getSelfIterationTone(proposal: SystemImprovementProposalFE): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
-  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return 'success';
-  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return 'danger';
-  if (proposal.status === 'approval-required') return 'warning';
-  if (proposal.status === 'in-progress' || proposal.status === 'testing') return 'info';
-  if (proposal.status === 'rejected' || proposal.status === 'rolled-back') return 'danger';
-  return 'neutral';
-}
-
-function formatSelfIterationStatus(proposal: SystemImprovementProposalFE): string {
-  switch (proposal.exitEvidence?.releaseGate?.status) {
-    case 'preflight-failed':
-      return '预检失败';
-    case 'ready-for-approval':
-      return '待批准发布';
-    case 'approved':
-      return '已批准发布';
-    case 'merged':
-      return '已合并待重启';
-    case 'restarted':
-      return '已重启';
-    case 'observing':
-      return '观察中';
-    case 'rolled-back':
-      return '已回滚';
-    default:
-      break;
-  }
-  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return '待发布检查';
-  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return '证据阻塞';
-  switch (proposal.status) {
-    case 'approval-required':
-      return '待准入审批';
-    case 'approved':
-      return '已批准待执行';
-    case 'in-progress':
-      return 'Codex 执行中';
-    case 'testing':
-      return '待验证';
-    case 'ready-to-merge':
-      return '待发布检查';
-    case 'published':
-      return '已合并';
-    case 'observing':
-      return '观察中';
-    case 'rejected':
-      return '已拒绝';
-    case 'needs-evidence':
-      return '待补证据';
-    default:
-      return '草稿';
-  }
-}
-
-function buildSelfIterationEvidenceLine(proposal: SystemImprovementProposalFE): string {
-  if (proposal.exitEvidence?.releaseGate) {
-    const releaseGate = proposal.exitEvidence.releaseGate;
-    return [
-      `release ${releaseGate.status}`,
-      `${releaseGate.checks.filter((item) => item.status === 'passed').length}/${releaseGate.checks.length} checks`,
-      releaseGate.patchPath ? releaseGate.patchPath.split('/').pop() : 'no patch',
-    ].join(' · ');
-  }
-  const codex = proposal.exitEvidence?.codex;
-  if (codex) {
-    return [
-      `${codex.changedFiles.length} files`,
-      `${codex.passedValidationCount}/${codex.validationCount} checks`,
-      codex.disallowedFiles.length ? `${codex.disallowedFiles.length} out-of-scope` : 'scope ok',
-      codex.branch,
-    ].join(' · ');
-  }
-  if (proposal.exitEvidence?.latestRun) {
-    return `Run ${proposal.exitEvidence.latestRun.status} · ${proposal.exitEvidence.latestRun.changedFilesCount} files`;
-  }
-  return proposal.affectedFiles.length ? proposal.affectedFiles.slice(0, 3).join(', ') : proposal.summary;
 }
 
 export default function CEODashboard({
@@ -424,17 +352,19 @@ export default function CEODashboard({
               <Bot className="h-4 w-4 text-[var(--app-accent)]" />
               软件自迭代证据
             </h3>
-            <p className="text-xs text-[var(--app-text-muted)]">这里展示 Codex worktree 执行、测试证据和发布状态；需要 CEO 动作的项目进入上方决策队列。</p>
           </div>
           <div className="flex flex-wrap gap-2 text-[11px]">
             <WorkspaceBadge tone="warning">
-              {selfIterationProposals.filter(item => item.status === 'approval-required').length} 准入
+              {selfIterationProposals.filter(item => item.controlState?.stage === 'entry-review').length} 准入
             </WorkspaceBadge>
             <WorkspaceBadge tone="info">
-              {selfIterationProposals.filter(item => item.status === 'approved' || item.status === 'in-progress' || item.status === 'testing').length} 执行
+              {selfIterationProposals.filter(item => (
+                item.controlState?.stage === 'ai-executing'
+                || item.controlState?.stage === 'ai-preflight'
+              )).length} 执行
             </WorkspaceBadge>
             <WorkspaceBadge tone="success">
-              {selfIterationProposals.filter(item => item.exitEvidence?.mergeGate.status === 'ready-to-merge').length} 待发布
+              {selfIterationProposals.filter(item => item.controlState?.stage === 'exit-review').length} 待准出
             </WorkspaceBadge>
           </div>
         </div>
@@ -448,15 +378,17 @@ export default function CEODashboard({
           <div className="grid gap-3 lg:grid-cols-2">
             {selfIterationProposals.slice(0, 6).map((proposal) => {
               const projectId = proposal.exitEvidence?.project?.projectId;
+              const tone = getSystemImprovementStageTone(proposal.controlState?.stage);
+              const statusLabel = getSystemImprovementStageLabel(proposal.controlState?.stage);
               return (
-                <WorkspaceSurface key={proposal.id} padding="sm" tone={getSelfIterationTone(proposal)} className="space-y-3">
+                <WorkspaceSurface key={proposal.id} padding="sm" tone={tone} className="space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-semibold text-[var(--app-text)]">{proposal.title}</div>
                       <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--app-text-soft)]">{proposal.summary}</div>
                     </div>
-                    <WorkspaceBadge tone={getSelfIterationTone(proposal)}>
-                      {formatSelfIterationStatus(proposal)}
+                    <WorkspaceBadge tone={tone}>
+                      {statusLabel}
                     </WorkspaceBadge>
                   </div>
 
@@ -470,19 +402,16 @@ export default function CEODashboard({
                       <div className="mt-1 truncate font-semibold text-[var(--app-text)]">{proposal.affectedFiles.length || 0} files</div>
                     </div>
                     <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2.5 py-2">
-                      <div className="text-[var(--app-text-muted)]">Gate</div>
-                      <div className="mt-1 font-semibold text-[var(--app-text)]">{proposal.exitEvidence?.mergeGate.status || 'pending'}</div>
+                      <div className="text-[var(--app-text-muted)]">Owner</div>
+                      <div className="mt-1 font-semibold text-[var(--app-text)]">{getSystemImprovementOwnerLabel(proposal.controlState?.currentOwner)}</div>
                     </div>
                   </div>
 
                   <div className="rounded-lg border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2 text-[11px] leading-5 text-[var(--app-text-soft)]">
                     <div className="flex items-center gap-1.5 font-medium text-[var(--app-text)]">
                       <GitBranch className="h-3.5 w-3.5" />
-                      {buildSelfIterationEvidenceLine(proposal)}
+                      {getSystemImprovementQueueSummary(proposal)}
                     </div>
-                    {proposal.exitEvidence?.mergeGate.reasons?.[0] ? (
-                      <div className="mt-1 text-[var(--app-text-muted)]">{proposal.exitEvidence.mergeGate.reasons[0]}</div>
-                    ) : null}
                   </div>
 
                   <div className="flex flex-wrap gap-2">

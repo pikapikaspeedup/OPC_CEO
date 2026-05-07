@@ -29,6 +29,11 @@ import {
 } from 'lucide-react';
 
 import { api, type AuditEvent, type SchedulerJobResponse } from '@/lib/api';
+import {
+  getSystemImprovementQueueSummary,
+  getSystemImprovementStageLabel,
+  getSystemImprovementStageTone,
+} from '@/lib/system-improvement-control-view';
 import type {
   BudgetLedgerEntryFE,
   CircuitBreakerFE,
@@ -270,48 +275,6 @@ function formatProposalRisk(risk: SystemImprovementProposalFE['risk']): string {
   }
 }
 
-function formatProposalStatus(status: SystemImprovementProposalFE['status']): string {
-  switch (status) {
-    case 'draft':
-      return '草稿';
-    case 'needs-evidence':
-      return '待补证据';
-    case 'approval-required':
-      return '待审批';
-    case 'approved':
-      return '已批准';
-    case 'in-progress':
-      return '进行中';
-    case 'testing':
-      return '测试中';
-    case 'ready-to-merge':
-      return '待合并';
-    case 'published':
-      return '已发布';
-    case 'observing':
-      return '观察中';
-    case 'rejected':
-      return '已拒绝';
-    case 'rolled-back':
-      return '已回滚';
-    default:
-      return '处理中';
-  }
-}
-
-function formatProposalMergeGateStatus(status?: 'pending' | 'ready-to-merge' | 'blocked'): string {
-  switch (status) {
-    case 'ready-to-merge':
-      return '可发布';
-    case 'blocked':
-      return '已阻塞';
-    case 'pending':
-      return '待补齐';
-    default:
-      return '待收口';
-  }
-}
-
 function formatProposalReleaseStatus(status?: SystemImprovementReleaseGateSnapshotFE['status']): string {
   switch (status) {
     case 'preflight-failed':
@@ -351,66 +314,14 @@ function getProposalReleaseTone(status?: SystemImprovementReleaseGateSnapshotFE[
   }
 }
 
-function getProposalMergeGateTone(proposal: SystemImprovementProposalFE): StatusTone {
-  const gateStatus = proposal.exitEvidence?.mergeGate.status;
-  if (gateStatus === 'ready-to-merge') return 'success';
-  if (gateStatus === 'blocked') return 'danger';
-  if (proposal.status === 'testing' || proposal.status === 'in-progress') return 'warning';
-  return proposal.risk === 'high' ? 'warning' : 'info';
-}
-
-function formatImprovementRunStatus(status?: string): string {
-  switch (status) {
-    case 'queued':
-      return '排队中';
-    case 'starting':
-      return '启动中';
-    case 'running':
-      return '执行中';
-    case 'completed':
-      return '已完成';
-    case 'blocked':
-      return '已阻塞';
-    case 'failed':
-      return '已失败';
-    case 'cancelled':
-      return '已取消';
-    case 'timeout':
-      return '已超时';
-    default:
-      return '未启动';
-  }
-}
-
 function buildProposalEvidenceDetail(proposal: SystemImprovementProposalFE): string {
-  const evidence = proposal.exitEvidence;
-  if (!evidence) {
-    return proposal.summary || `影响文件 ${proposal.affectedFiles.length} 个`;
-  }
-  const segments: string[] = [];
-  if (evidence.codex) {
-    segments.push(`Codex ${evidence.codex.decision}`);
-    segments.push(`${evidence.codex.changedFiles.length} files`);
-  }
-  if (evidence.project) {
-    segments.push(`项目 ${evidence.project.status}`);
-  }
-  if (evidence.latestRun) {
-    segments.push(`Run ${formatImprovementRunStatus(evidence.latestRun.status)}`);
-  }
-  if (evidence.testing.evidenceCount > 0) {
-    segments.push(`测试 ${evidence.testing.passedCount} 过 / ${evidence.testing.failedCount} 失败`);
-  } else {
-    segments.push('未提交测试');
-  }
-  segments.push(`发布 ${formatProposalMergeGateStatus(evidence.mergeGate.status)}`);
-  return segments.join(' · ');
+  return getSystemImprovementQueueSummary(proposal);
 }
 
 function buildProposalEvidenceReason(proposal: SystemImprovementProposalFE): string {
   const reasons = proposal.exitEvidence?.mergeGate.reasons || [];
   if (reasons.length > 0) return reasons[0];
-  return proposal.summary || `影响文件 ${proposal.affectedFiles.length} 个`;
+  return proposal.controlState?.subline || proposal.summary || `影响文件 ${proposal.affectedFiles.length} 个`;
 }
 
 function buildReleaseGateDetail(releaseGate?: SystemImprovementReleaseGateSnapshotFE): string {
@@ -419,7 +330,12 @@ function buildReleaseGateDetail(releaseGate?: SystemImprovementReleaseGateSnapsh
     ? `${releaseGate.checks.filter((item) => item.status === 'passed').length}/${releaseGate.checks.length} checks`
     : '0 checks';
   const patch = releaseGate.patchPath ? releaseGate.patchPath.split('/').pop() : 'no patch';
-  return `${checks} · ${patch}`;
+  const remediation = releaseGate.remediationStatus === 'fixed'
+    ? 'auto-fixed'
+    : releaseGate.remediationStatus === 'failed'
+      ? 'auto-fix failed'
+      : null;
+  return [checks, patch, remediation].filter(Boolean).join(' · ');
 }
 
 function formatServerType(type?: McpServer['type']): string {
@@ -987,12 +903,12 @@ export default function OpsDashboard({
       title: proposal.title,
       category: '系统改进',
       detail: buildProposalEvidenceDetail(proposal),
-      statusLabel: `${formatProposalRisk(proposal.risk)} · ${formatProposalStatus(proposal.status)}`,
+      statusLabel: `${formatProposalRisk(proposal.risk)} · ${getSystemImprovementStageLabel(proposal.controlState?.stage)}`,
       timestamp: proposal.updatedAt,
-      tone: getProposalMergeGateTone(proposal),
+      tone: getSystemImprovementStageTone(proposal.controlState?.stage),
     }));
-    const auditItems = auditEvents.map((event) => ({
-      id: `audit-${event.timestamp}-${event.kind}`,
+    const auditItems = auditEvents.map((event, index) => ({
+      id: `audit-${event.timestamp}-${event.kind}-${event.projectId || event.jobId || event.message}-${index}`,
       type: 'audit' as const,
       title: formatAuditMessage(event.message),
       category: '系统审计',
@@ -1040,10 +956,14 @@ export default function OpsDashboard({
   const exitEvidenceRows = useMemo(() => improvementProposals
     .filter((proposal) => (
       proposal.exitEvidence
-      || proposal.status === 'approved'
-      || proposal.status === 'in-progress'
-      || proposal.status === 'testing'
-      || proposal.status === 'ready-to-merge'
+      || proposal.controlState?.stage === 'ai-executing'
+      || proposal.controlState?.stage === 'ai-preflight'
+      || proposal.controlState?.stage === 'exit-review'
+      || proposal.controlState?.stage === 'ops-merge'
+      || proposal.controlState?.stage === 'ops-restart'
+      || proposal.controlState?.stage === 'published'
+      || proposal.controlState?.stage === 'observing'
+      || proposal.controlState?.stage === 'blocked'
     ))
     .filter((proposal) => matchesSearch(
       searchQuery,
@@ -1545,7 +1465,7 @@ export default function OpsDashboard({
         <div ref={exitEvidenceRef}>
           <OpsPanel
             title="系统改进发布检查"
-            subtitle="这里收口系统改进的执行证据、发布前检查、合并状态和发布后观察。"
+            subtitle="当前阶段、owner、发布检查与发布结果。"
             actions={<StatusPill tone={exitEvidenceRows.length ? 'warning' : 'neutral'} label={`${exitEvidenceRows.length} 条`} />}
           >
             {exitEvidenceRows.length === 0 ? (
@@ -1555,22 +1475,25 @@ export default function OpsDashboard({
               />
             ) : (
               <div className="space-y-3">
-                {exitEvidenceRows.map((proposal) => (
-                  <div
-                    key={proposal.id}
-                    className={cn(
-                      'rounded-[12px] border bg-[#fbfdff] px-3.5 py-3 transition-colors',
-                      highlightedProposalId === proposal.id
-                        ? 'border-[#2f6df6] ring-4 ring-[#2f6df6]/10'
-                        : 'border-[#eef2f7]',
-                    )}
-                  >
+                {exitEvidenceRows.map((proposal) => {
+                  const stageTone = getSystemImprovementStageTone(proposal.controlState?.stage);
+                  const stageLabel = getSystemImprovementStageLabel(proposal.controlState?.stage);
+                  return (
+                    <div
+                      key={proposal.id}
+                      className={cn(
+                        'rounded-[12px] border bg-[#fbfdff] px-3.5 py-3 transition-colors',
+                        highlightedProposalId === proposal.id
+                          ? 'border-[#2f6df6] ring-4 ring-[#2f6df6]/10'
+                          : 'border-[#eef2f7]',
+                      )}
+                    >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-[13px] font-semibold text-[#0f172a]">{proposal.title}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <StatusPill tone={getProposalMergeGateTone(proposal)} label={formatProposalMergeGateStatus(proposal.exitEvidence?.mergeGate.status)} />
-                        <div className="text-[12px] text-[#64748b]">{formatProposalStatus(proposal.status)}</div>
+                        <StatusPill tone={stageTone} label={stageLabel} />
+                        <div className="text-[12px] text-[#64748b]">{proposal.controlState?.currentOwner || 'none'}</div>
                         <div className="text-[12px] text-[#64748b]">{formatProposalRisk(proposal.risk)}</div>
                       </div>
                     </div>
@@ -1621,6 +1544,11 @@ export default function OpsDashboard({
                     {proposal.exitEvidence?.releaseGate ? (
                       <div className="grid gap-3 px-3 py-2 text-[12px] text-[#475569] lg:grid-cols-[1fr_1fr]">
                         <div className="min-w-0">
+                          {proposal.exitEvidence.releaseGate.remediationSummary ? (
+                            <div className="mb-2 rounded-[8px] border border-[#e6edf6] bg-[#f8fafc] px-2.5 py-2 text-[11px] leading-5 text-[#64748b]">
+                              {proposal.exitEvidence.releaseGate.remediationSummary}
+                            </div>
+                          ) : null}
                           <div className="text-[11px] font-semibold uppercase tracking-wide text-[#94a3b8]">检查项</div>
                           <div className="mt-1 space-y-1">
                             {proposal.exitEvidence.releaseGate.checks.slice(0, 4).map((item) => (
@@ -1762,7 +1690,8 @@ export default function OpsDashboard({
                     ) : null}
                   </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </OpsPanel>

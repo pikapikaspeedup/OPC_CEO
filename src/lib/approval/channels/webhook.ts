@@ -135,7 +135,7 @@ export class WebhookChannel implements NotificationChannel {
 
     for (const endpoint of enabledEndpoints) {
       try {
-        const approvalUrl = this.getApprovalUrl(request.id);
+        const approvalUrl = this.getApprovalUrl(request.id, request.target);
         const approveUrl = getApprovalFeedbackUrl(this.gatewayUrl, request.id, 'approve');
         const rejectUrl = getApprovalFeedbackUrl(this.gatewayUrl, request.id, 'reject');
         const urls = { approvalUrl, approveUrl, rejectUrl };
@@ -185,7 +185,7 @@ export class WebhookChannel implements NotificationChannel {
     };
   }
 
-  getApprovalUrl(requestId: string): string {
-    return getApprovalInboxUrl(this.gatewayUrl, requestId);
+  getApprovalUrl(requestId: string, target: ApprovalRequest['target']): string {
+    return getApprovalInboxUrl(this.gatewayUrl, requestId, target);
   }
 }

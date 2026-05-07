@@ -1,4 +1,5 @@
 import { generateApprovalToken } from './tokens';
+import { encodeDecisionTarget, type DecisionTarget } from '../decision-control';
 
 export type ApprovalLinkAction = 'approve' | 'reject' | 'feedback';
 
@@ -6,10 +7,9 @@ function normalizeGatewayUrl(gatewayUrl: string): string {
   return gatewayUrl.replace(/\/+$/, '');
 }
 
-export function getApprovalInboxUrl(gatewayUrl: string, requestId: string): string {
+export function getApprovalInboxUrl(gatewayUrl: string, _requestId: string, target: DecisionTarget): string {
   const url = new URL(normalizeGatewayUrl(gatewayUrl));
-  url.searchParams.set('panel', 'approvals');
-  url.searchParams.set('approval', requestId);
+  url.searchParams.set('decision', encodeDecisionTarget(target));
   return url.toString();
 }
 

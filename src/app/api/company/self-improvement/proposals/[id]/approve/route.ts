@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { approveSystemImprovementProposal } from '@/lib/company-kernel/self-improvement-approval';
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -18,8 +19,14 @@ export async function POST(
 
   const { id } = await params;
   try {
-    const result = await approveSystemImprovementProposal(id, { launchExecution: true });
-    return NextResponse.json(result);
+    const result = await approveSystemImprovementProposal(id, {
+      launchExecution: true,
+      waitForExecution: false,
+    });
+    return NextResponse.json({
+      ...result,
+      proposal: buildSystemImprovementProposalView(result.proposal),
+    });
   } catch (err) {
     return NextResponse.json({
       error: err instanceof Error ? err.message : String(err),

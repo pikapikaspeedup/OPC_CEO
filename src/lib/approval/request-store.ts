@@ -22,6 +22,7 @@ import { createLogger } from '../logger';
 import type { ApprovalRequest, ApprovalResponse, CreateApprovalInput, NotificationDelivery } from './types';
 import { appendCEOEvent } from '../organization/ceo-event-store';
 import { appendCEOPendingIssue, removeCEOPendingIssue } from '../organization/ceo-profile-store';
+import { isDecisionTarget } from '../decision-control';
 
 const log = createLogger('RequestStore');
 
@@ -57,6 +58,18 @@ function persistRequest(request: ApprovalRequest): void {
   }
 }
 
+function deletePersistedRequestFile(filePath: string, requestId?: string): void {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    return;
+  }
+  if (requestId) {
+    requests.delete(requestId);
+    removeCEOPendingIssue(`approval:${requestId}`);
+  }
+}
+
 function ensureRequestsLoaded(): void {
   const dir = getStoreDir();
   if (loadedStoreDir === dir) return;
@@ -68,11 +81,14 @@ function ensureRequestsLoaded(): void {
   try {
     for (const file of fs.readdirSync(dir)) {
       if (!file.endsWith('.json')) continue;
+      const filePath = path.join(dir, file);
       try {
-        const data = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8'));
-        if (data.id) {
-          requests.set(data.id, data);
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (typeof data?.id !== 'string' || !isDecisionTarget(data.target)) {
+          deletePersistedRequestFile(filePath, typeof data?.id === 'string' ? data.id : undefined);
+          continue;
         }
+        requests.set(data.id, data);
       } catch {
         // Skip invalid files
       }
@@ -94,10 +110,14 @@ function ensureRequestsLoaded(): void {
  */
 export function createApprovalRequest(input: CreateApprovalInput): ApprovalRequest {
   ensureRequestsLoaded();
+  if (!isDecisionTarget(input.target)) {
+    throw new Error('ApprovalRequest.target is required');
+  }
   const now = new Date().toISOString();
   const request: ApprovalRequest = {
     id: randomUUID(),
     type: input.type,
+    target: input.target,
     workspace: input.workspace,
     runId: input.runId,
     title: input.title,
@@ -141,6 +161,23 @@ export function createApprovalRequest(input: CreateApprovalInput): ApprovalReque
 export function getApprovalRequest(id: string): ApprovalRequest | undefined {
   ensureRequestsLoaded();
   return requests.get(id);
+}
+
+export function deleteApprovalRequest(id: string): boolean {
+  ensureRequestsLoaded();
+  const request = requests.get(id);
+  if (!request) return false;
+  requests.delete(id);
+  removeCEOPendingIssue(`approval:${id}`);
+  try {
+    const filePath = path.join(getStoreDir(), `${id}.json`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch {
+    // Best-effort cleanup for demo-state records.
+  }
+  return true;
 }
 
 /**

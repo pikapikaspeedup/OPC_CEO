@@ -98,7 +98,7 @@ function buildProjectGoal(proposal: SystemImprovementProposal): string {
   return sections.join('\n').trim();
 }
 
-function buildProposalCreatedGovernance(): ProjectDefinition['governance'] {
+function buildProposalCreatedGovernance(proposalId: string): ProjectDefinition['governance'] {
   const now = new Date().toISOString();
   return {
     ...defaultPlatformEngineeringProjectGovernance(),
@@ -107,6 +107,7 @@ function buildProposalCreatedGovernance(): ProjectDefinition['governance'] {
       allowProposal: true,
       departmentId: PLATFORM_ENGINEERING_DEPARTMENT_ID,
       source: 'proposal-created',
+      systemImprovementProposalId: proposalId,
       updatedAt: now,
     },
   };
@@ -150,7 +151,7 @@ export async function ensureSystemImprovementProjectLaunched(
       workspace: workspaceUri,
       templateId,
       projectType: 'strategic',
-      governance: buildProposalCreatedGovernance(),
+      governance: buildProposalCreatedGovernance(proposal.id),
     });
     createdProject = true;
     proposal = mergeMetadata(proposal, {

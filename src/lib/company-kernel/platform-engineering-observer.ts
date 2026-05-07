@@ -36,6 +36,22 @@ function supportsPlatformEngineeringObservation(run: AgentRunState): boolean {
   return project?.governance?.platformEngineering?.observe === true;
 }
 
+function isSelfImprovementTrackingRun(run: AgentRunState): boolean {
+  if (run.triggerContext?.intentSummary?.startsWith('system-improvement-codex:')) {
+    return true;
+  }
+  if (Array.isArray(run.taskEnvelope?.constraints)) {
+    if (run.taskEnvelope.constraints.includes('systemImprovementCodexTracking=true')) {
+      return true;
+    }
+  }
+  if (!run.projectId) {
+    return false;
+  }
+  const project = getProject(run.projectId);
+  return Boolean(project?.governance?.platformEngineering?.systemImprovementProposalId);
+}
+
 function supportsPlatformEngineeringProposal(run: AgentRunState): boolean {
   if (isPlatformEngineeringWorkspaceUri(run.workspace)) return true;
   if (!run.projectId) return false;
@@ -140,6 +156,9 @@ export function observeRunFailureForPlatformEngineering(
     return {};
   }
   if (!supportsPlatformEngineeringObservation(run)) {
+    return {};
+  }
+  if (isSelfImprovementTrackingRun(run)) {
     return {};
   }
 

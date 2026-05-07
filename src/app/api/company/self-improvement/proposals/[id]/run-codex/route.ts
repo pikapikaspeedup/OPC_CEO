@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { runApprovedSystemImprovementCodexTask } from '@/lib/company-kernel/self-improvement-codex-execution';
+import { dispatchApprovedSystemImprovementCodexTask } from '@/lib/company-kernel/self-improvement-codex-execution';
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -19,8 +20,11 @@ export async function POST(
   const { id } = await params;
   const body = await req.json().catch(() => ({})) as { force?: boolean };
   try {
-    const result = await runApprovedSystemImprovementCodexTask(id, { force: Boolean(body.force) });
-    return NextResponse.json(result);
+    const result = await dispatchApprovedSystemImprovementCodexTask(id, { force: Boolean(body.force) });
+    return NextResponse.json({
+      ...result,
+      proposal: buildSystemImprovementProposalView(result.proposal),
+    });
   } catch (err) {
     return NextResponse.json({
       error: err instanceof Error ? err.message : String(err),

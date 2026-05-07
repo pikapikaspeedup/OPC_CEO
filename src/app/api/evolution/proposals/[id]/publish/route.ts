@@ -33,6 +33,7 @@ export async function POST(
 
   const approval = await submitApprovalRequest({
     type: 'proposal_publish',
+    target: { kind: 'knowledge', knowledgeId: proposal.targetRef || proposal.id },
     workspace: proposal.workspaceUri || 'organization',
     title: `发布提案：${proposal.title}`,
     description: [

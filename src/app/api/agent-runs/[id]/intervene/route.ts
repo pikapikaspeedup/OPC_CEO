@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { getRun } from '@/lib/agents/run-registry';
 import { interveneRun, cancelRun, InterventionConflictError } from '@/lib/agents/group-runtime';
 import { cancelPromptRun, evaluatePromptRun } from '@/lib/agents/prompt-executor';
+import {
+  cancelSystemImprovementCodexRun,
+  isSystemImprovementCodexTrackingRun,
+} from '@/lib/company-kernel/self-improvement-codex-execution';
 import { createLogger } from '@/lib/logger';
 import {
   proxyToControlPlane,
@@ -52,12 +56,14 @@ export async function POST(
     // V3.5: Sync admission check (InterventionConflictError is thrown
     // before the first await inside interveneRun, so try/catch works here).
     // The actual intervention work is fire-and-forget to avoid blocking the HTTP response.
-    try {
-      let resultPromise;
+      try {
+        let resultPromise;
       if (action === 'cancel') {
-        resultPromise = run?.executorKind === 'prompt'
-          ? cancelPromptRun(runId)
-          : cancelRun(runId);
+        resultPromise = isSystemImprovementCodexTrackingRun(run)
+          ? cancelSystemImprovementCodexRun(runId)
+          : run?.executorKind === 'prompt'
+            ? cancelPromptRun(runId)
+            : cancelRun(runId);
       } else if (action === 'evaluate' && run?.executorKind === 'prompt') {
         resultPromise = evaluatePromptRun(runId);
       } else {

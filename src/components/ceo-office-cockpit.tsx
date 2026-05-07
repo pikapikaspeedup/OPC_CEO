@@ -39,21 +39,25 @@ import { getDepartmentBoundWorkspaceUris } from '@/lib/department-config';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { pickLatestDailyDigest } from '@/lib/ceo-office-home';
 import type { Locale } from '@/lib/i18n';
+import {
+  getSystemImprovementQueueSummary,
+  getSystemImprovementStageLabel,
+  getSystemImprovementStageTone,
+} from '@/lib/system-improvement-control-view';
 import type {
   AgentRun,
   CompanyLoopDigestFE,
   CompanyLoopPolicyFE,
   CompanyLoopRunFE,
   CompanyLoopRunKindFE,
-  CompanyOperatingDayFE,
   CEORoutineSummaryFE,
   Conversation,
 	  DailyDigestFE,
+  DecisionItemViewFE,
+  DecisionTargetFE,
 	  DepartmentConfig,
 	  GrowthProposalFE,
 	  ManagementOverviewFE,
-  OperatingAgendaItemFE,
-  OperatingSignalFE,
   SystemImprovementProposalFE,
   ModelConfig,
   Project,
@@ -108,6 +112,7 @@ type CeoOfficeCockpitProps = {
   onOpenSettings: () => void;
   onSelectConversation: (id: string, title: string, targetSection?: 'ceo' | 'conversations') => void;
   onNavigateToProject: (projectId: string | null) => void;
+  onOpenDecisionTarget: (target: DecisionTargetFE) => void;
   onSend: ChatInputSend;
   onCancel: () => void;
   onProceed: (uri: string) => void;
@@ -121,122 +126,15 @@ type CeoOfficeCockpitProps = {
 type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'accent';
 
 function formatImprovementMergeGateLabel(proposal: SystemImprovementProposalFE): string {
-  switch (proposal.exitEvidence?.mergeGate.status) {
-    case 'ready-to-merge':
-      return '可发布';
-    case 'blocked':
-      return '已阻塞';
-    case 'pending':
-      return '待补齐';
-    default:
-      return '待收口';
-  }
-}
-
-function formatImprovementReleaseGateLabel(proposal: SystemImprovementProposalFE): string | null {
-  switch (proposal.exitEvidence?.releaseGate?.status) {
-    case 'preflight-failed':
-      return '预检失败';
-    case 'ready-for-approval':
-      return '待批准发布';
-    case 'approved':
-      return '已批准发布';
-    case 'merged':
-      return '已合并';
-    case 'restarted':
-      return '已重启';
-    case 'observing':
-      return '观察中';
-    case 'rolled-back':
-      return '已回滚';
-    default:
-      return null;
-  }
+  return getSystemImprovementStageLabel(proposal.controlState?.stage);
 }
 
 function formatImprovementExecutionSummary(proposal: SystemImprovementProposalFE): string {
-  const evidence = proposal.exitEvidence;
-  if (!evidence) {
-    return proposal.status;
-  }
-  const segments: string[] = [];
-  if (evidence.codex) {
-    segments.push(`Codex ${evidence.codex.decision}`);
-    segments.push(`${evidence.codex.changedFiles.length} files`);
-  }
-  if (evidence.project) segments.push(`项目 ${evidence.project.status}`);
-  if (evidence.latestRun) {
-    segments.push(
-      evidence.latestRun.status === 'completed'
-        ? 'Run 已完成'
-        : evidence.latestRun.status === 'running'
-          ? 'Run 执行中'
-          : evidence.latestRun.status === 'blocked'
-            ? 'Run 阻塞'
-            : evidence.latestRun.status === 'failed'
-              ? 'Run 失败'
-              : `Run ${evidence.latestRun.status}`,
-    );
-  }
-  segments.push(
-    evidence.testing.evidenceCount > 0
-      ? `测试 ${evidence.testing.passedCount}/${evidence.testing.evidenceCount}`
-      : '未提交测试',
-  );
-  segments.push(`发布 ${formatImprovementMergeGateLabel(proposal)}`);
-  const releaseLabel = formatImprovementReleaseGateLabel(proposal);
-  if (releaseLabel) {
-    segments.push(`发布 ${releaseLabel}`);
-  }
-  return segments.join(' · ');
-}
-
-function getImprovementDecisionLabel(proposal: SystemImprovementProposalFE): string {
-  switch (proposal.exitEvidence?.releaseGate?.status) {
-    case 'preflight-failed':
-      return '预检失败';
-    case 'ready-for-approval':
-      return '待批准发布';
-    case 'approved':
-      return '待合并';
-    case 'merged':
-      return '待重启';
-    case 'restarted':
-      return '待观察';
-    default:
-      break;
-  }
-  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return '待发布检查';
-  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return '需处理';
-  if (proposal.status === 'approval-required') return '需准入';
-  if (proposal.status === 'approved') return '待执行';
-  if (proposal.status === 'testing') return '待验证';
-  return proposal.status;
-}
-
-function getImprovementDecisionPriority(proposal: SystemImprovementProposalFE): DecisionItem['priority'] {
-  if (
-    proposal.status === 'approval-required'
-    || proposal.exitEvidence?.mergeGate.status === 'ready-to-merge'
-    || proposal.exitEvidence?.mergeGate.status === 'blocked'
-    || proposal.risk === 'critical'
-    || proposal.risk === 'high'
-  ) {
-    return '高';
-  }
-  if (proposal.status === 'approved' || proposal.status === 'testing') return '中';
-  return '低';
+  return getSystemImprovementQueueSummary(proposal);
 }
 
 function getImprovementDecisionTone(proposal: SystemImprovementProposalFE): Tone {
-  if (proposal.exitEvidence?.releaseGate?.status === 'preflight-failed') return 'danger';
-  if (proposal.exitEvidence?.releaseGate?.status === 'ready-for-approval') return 'success';
-  if (proposal.exitEvidence?.releaseGate?.status === 'approved' || proposal.exitEvidence?.releaseGate?.status === 'merged') return 'warning';
-  if (proposal.exitEvidence?.releaseGate?.status === 'restarted') return 'info';
-  if (proposal.exitEvidence?.mergeGate.status === 'ready-to-merge') return 'success';
-  if (proposal.exitEvidence?.mergeGate.status === 'blocked') return 'danger';
-  if (proposal.status === 'approval-required' || proposal.status === 'approved' || proposal.status === 'testing') return 'warning';
-  return 'info';
+  return getSystemImprovementStageTone(proposal.controlState?.stage);
 }
 
 type DepartmentPulse = {
@@ -253,12 +151,14 @@ type DecisionItem = {
   id: string;
   title: string;
   source: string;
-  eta: string;
+  status: string;
+  owner: string;
+  nextAction: string;
   priority: '高' | '中' | '低';
   tone: Tone;
   icon: ReactNode;
   detail?: string;
-  onClick?: () => void;
+  target: DecisionTargetFE;
 };
 
 type RoutineItem = {
@@ -301,21 +201,6 @@ function getCompanyName(user: UserInfo | null): string {
   const domain = user?.email?.split('@')[1];
   if (!domain) return 'AI 未来科技有限公司';
   return domain.split('.')[0]?.toUpperCase() || 'OPC';
-}
-
-function getProjectPriority(project: Project): number {
-  if (project.status === 'failed') return 0;
-  if (project.status === 'paused') return 1;
-  if (project.status === 'active') return 2;
-  return 3;
-}
-
-function getProjectTone(status: Project['status']): Tone {
-  if (status === 'failed') return 'danger';
-  if (status === 'paused') return 'warning';
-  if (status === 'active') return 'info';
-  if (status === 'completed') return 'success';
-  return 'neutral';
 }
 
 function formatAuditKind(kind: string): string {
@@ -675,12 +560,12 @@ function Sparkline({
   );
 }
 
-function DecisionRow({ item }: { item: DecisionItem }) {
+function DecisionRow({ item, onOpen }: { item: DecisionItem; onOpen: (target: DecisionTargetFE) => void }) {
   return (
     <button
       type="button"
-      onClick={item.onClick}
-      className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-[#edf1f7] px-3 py-3 text-left last:border-b-0 hover:bg-[#f8fbff]"
+      onClick={() => onOpen(item.target)}
+      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-[#edf1f7] px-3 py-3 text-left last:border-b-0 hover:bg-[#f8fbff]"
     >
       <div className="flex min-w-0 items-center gap-3">
         <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border', toneClasses(item.tone))}>
@@ -688,20 +573,44 @@ function DecisionRow({ item }: { item: DecisionItem }) {
         </div>
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-[#1f2937]">{item.title}</div>
-          <div className="mt-0.5 truncate text-[12px] text-[#7c8799]">来自：{item.source}</div>
+          <div className="mt-0.5 truncate text-[12px] text-[#7c8799]">{item.source}</div>
           {item.detail ? <div className="mt-1 line-clamp-1 text-[11px] text-[#98a2b3]">{item.detail}</div> : null}
         </div>
       </div>
-      <div className="hidden text-[12px] text-[#566176] sm:block">{item.eta}</div>
-      <span className={cn(
-        'rounded-md px-2 py-1 text-[11px] font-semibold',
-        item.priority === '高' ? 'bg-red-50 text-red-600' : item.priority === '中' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-600',
-      )}
-      >
-        {item.priority}
-      </span>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="rounded-md bg-[#edf2fa] px-2 py-1 text-[11px] font-semibold text-[#566176]">{item.status}</span>
+        <span className="rounded-md bg-[#f5f7fb] px-2 py-1 text-[11px] font-medium text-[#677489]">{item.owner}</span>
+        <span className="rounded-md bg-[#f5f7fb] px-2 py-1 text-[11px] font-medium text-[#677489]">{item.nextAction}</span>
+        <span className={cn(
+          'rounded-md px-2 py-1 text-[11px] font-semibold',
+          item.priority === '高' ? 'bg-red-50 text-red-600' : item.priority === '中' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-600',
+        )}
+        >
+          {item.priority}
+        </span>
+      </div>
     </button>
   );
+}
+
+function formatDecisionOwner(owner: DecisionItemViewFE['currentOwner']): string {
+  if (owner === 'ceo') return 'CEO';
+  if (owner === 'ops') return 'Ops';
+  if (owner === 'ai') return 'AI';
+  return '无';
+}
+
+function formatDecisionAction(action: DecisionItemViewFE['nextAction']): string {
+  switch (action) {
+    case 'approve-entry':
+      return '批准准入';
+    case 'approve-exit':
+      return '批准准出';
+    case 'approve-stage-gate':
+      return '批准阶段';
+    default:
+      return action;
+  }
 }
 
 function DepartmentRow({
@@ -833,7 +742,6 @@ export default function CeoOfficeCockpit({
   departments,
   configuredDepartmentCount,
   ceoHistory,
-  ceoPriorityTasks,
   ceoRecentEvents,
   refreshSignal = 0,
   onCreateCeoConversation,
@@ -846,6 +754,7 @@ export default function CeoOfficeCockpit({
   onOpenSettings,
   onSelectConversation,
   onNavigateToProject,
+  onOpenDecisionTarget,
   onSend,
   onCancel,
   onProceed,
@@ -858,7 +767,7 @@ export default function CeoOfficeCockpit({
   const [user, setUser] = useState<UserInfo | null>(null);
   const [routine, setRoutine] = useState<CEORoutineSummaryFE | null>(null);
   const [managementOverview, setManagementOverview] = useState<ManagementOverviewFE | null>(null);
-  const [operatingDay, setOperatingDay] = useState<CompanyOperatingDayFE | null>(null);
+  const [decisionViews, setDecisionViews] = useState<DecisionItemViewFE[]>([]);
   const [growthProposals, setGrowthProposals] = useState<GrowthProposalFE[]>([]);
   const [loopPolicy, setLoopPolicy] = useState<CompanyLoopPolicyFE | null>(null);
   const [loopRuns, setLoopRuns] = useState<CompanyLoopRunFE[]>([]);
@@ -873,7 +782,6 @@ export default function CeoOfficeCockpit({
   const [showDeepWorkbench, setShowDeepWorkbench] = useState(false);
   const [showApprovalInbox, setShowApprovalInbox] = useState(false);
   const [selectedDepartmentUri, setSelectedDepartmentUri] = useState<string | null>(null);
-  const [selectedAgendaItemId, setSelectedAgendaItemId] = useState<string | null>(null);
   const [clockNow, setClockNow] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -908,17 +816,16 @@ export default function CeoOfficeCockpit({
 	    Promise.all([
 	      api.ceoRoutine().catch(() => null),
 	      api.managementOverview().catch(() => null),
-	      api.companyOperatingDay({ limit: 12 }).catch(() => null),
 	      api.companyGrowthProposals({ pageSize: 4 }).catch(() => ({ items: [] as GrowthProposalFE[] })),
 	      api.companyLoopPolicies({ pageSize: 20 }).catch(() => ({ items: [] as CompanyLoopPolicyFE[] })),
 	      api.companyLoopRuns({ pageSize: 4 }).catch(() => ({ items: [] as CompanyLoopRunFE[] })),
 	      api.companyLoopDigests({ pageSize: 2 }).catch(() => ({ items: [] as CompanyLoopDigestFE[] })),
 	      api.systemImprovementProposals({ pageSize: 4 }).catch(() => ({ items: [] as SystemImprovementProposalFE[] })),
-	    ]).then(([nextRoutine, nextOverview, nextOperatingDay, nextGrowthProposals, nextLoopPolicies, nextLoopRuns, nextLoopDigests, nextImprovementProposals]) => {
+	      api.ceoDecisions({ limit: 8 }).catch(() => ({ items: [] as DecisionItemViewFE[] })),
+	    ]).then(([nextRoutine, nextOverview, nextGrowthProposals, nextLoopPolicies, nextLoopRuns, nextLoopDigests, nextImprovementProposals, nextDecisions]) => {
 	      if (cancelled) return;
 	      setRoutine(nextRoutine as CEORoutineSummaryFE | null);
 	      setManagementOverview(nextOverview as ManagementOverviewFE | null);
-	      setOperatingDay(nextOperatingDay as CompanyOperatingDayFE | null);
 	      setGrowthProposals((nextGrowthProposals as { items?: GrowthProposalFE[] } | null)?.items || []);
 	      setLoopPolicy(
 	        ((nextLoopPolicies as { items?: CompanyLoopPolicyFE[] } | null)?.items || [])
@@ -927,6 +834,7 @@ export default function CeoOfficeCockpit({
 	      setLoopRuns((nextLoopRuns as { items?: CompanyLoopRunFE[] } | null)?.items || []);
 	      setLoopDigests((nextLoopDigests as { items?: CompanyLoopDigestFE[] } | null)?.items || []);
 	      setImprovementProposals((nextImprovementProposals as { items?: SystemImprovementProposalFE[] } | null)?.items || []);
+	      setDecisionViews((nextDecisions as { items?: DecisionItemViewFE[] } | null)?.items || []);
 	    });
 
     return () => {
@@ -1051,113 +959,31 @@ export default function CeoOfficeCockpit({
   const schedulerRuntime = managementOverview?.schedulerRuntime;
   const activeSchedulers = schedulerRuntime?.enabledJobCount ?? managementOverview?.activeSchedulers ?? routine?.activeSchedulers ?? 0;
 
-  const projectAttentionItems = useMemo(
-    () => [...projects]
-      .filter(project => ['failed', 'paused', 'active'].includes(project.status))
-      .sort((a, b) => {
-        const priorityDiff = getProjectPriority(a) - getProjectPriority(b);
-        if (priorityDiff) return priorityDiff;
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-      })
-      .slice(0, 5),
-    [projects],
+  const decisionRows = useMemo<DecisionItem[]>(
+    () => decisionViews.slice(0, 6).map((item) => {
+      const icon = item.target.kind === 'system-improvement-proposal'
+        ? <PackageCheck className="h-4 w-4" />
+        : item.target.kind === 'growth-proposal'
+          ? <Sparkles className="h-4 w-4" />
+          : item.target.kind === 'project-stage-gate'
+            ? <BriefcaseBusiness className="h-4 w-4" />
+            : <Command className="h-4 w-4" />;
+      return {
+        id: item.id,
+        title: item.title,
+        source: item.source,
+        status: item.status,
+        owner: formatDecisionOwner(item.currentOwner),
+        nextAction: formatDecisionAction(item.nextAction),
+        detail: item.detail,
+        priority: item.priority,
+        tone: item.tone as Tone,
+        icon,
+        target: item.target,
+      };
+    }),
+    [decisionViews],
   );
-
-  const decisionItems = useMemo<DecisionItem[]>(() => {
-    const agendaItems = (operatingDay?.agenda || []).slice(0, 4).map((item) => ({
-      id: `agenda-${item.id}`,
-	      title: item.title,
-	      source: item.recommendedAction === 'dispatch' ? '经营议程 · 可派发' : '经营议程',
-	      eta: item.status === 'blocked' ? '需决策' : `${item.priority.toUpperCase()} · ${Math.round(item.score)}`,
-	      detail: `${item.reason} · evidence ${item.evidenceRefs.length} · ${item.signalIds.length} signals`,
-	      priority: (item.priority === 'p0' || item.priority === 'p1' ? '高' : item.priority === 'p2' ? '中' : '低') as DecisionItem['priority'],
-      tone: item.status === 'blocked'
-        ? 'danger' as Tone
-        : item.priority === 'p0' || item.priority === 'p1'
-          ? 'warning' as Tone
-          : 'info' as Tone,
-      icon: item.recommendedAction === 'dispatch'
-        ? <Command className="h-4 w-4" />
-        : <Bell className="h-4 w-4" />,
-      onClick: () => {
-        setSelectedAgendaItemId(item.id);
-        if (item.recommendedAction === 'approve') {
-          setShowApprovalInbox(value => !value);
-          return;
-        }
-        if (item.recommendedAction === 'observe') {
-          onOpenKnowledge();
-          return;
-        }
-        onOpenProjects();
-      },
-    }));
-
-    const taskItems = ceoPriorityTasks.slice(0, 3).map((task, index) => ({
-      id: `task-${task.cascadeId}`,
-      title: task.title,
-      source: task.workspace || 'CEO 线程',
-      eta: task.isActive ? '执行中' : `${task.stepCount} steps`,
-      priority: (index === 0 && task.isActive ? '高' : '中') as DecisionItem['priority'],
-      tone: task.isActive ? 'warning' as Tone : 'info' as Tone,
-      icon: <Sparkles className="h-4 w-4" />,
-      onClick: () => onSelectConversation(task.cascadeId, task.title, 'ceo'),
-    }));
-
-	    const projectItems = projectAttentionItems.map((project) => ({
-      id: `project-${project.projectId}`,
-      title: project.name,
-      source: project.workspace || 'OPC',
-      eta: formatRelativeTime(project.updatedAt, locale),
-      priority: (project.status === 'failed' ? '高' : project.status === 'paused' ? '中' : '低') as DecisionItem['priority'],
-      tone: getProjectTone(project.status),
-      icon: project.status === 'failed' ? <ShieldAlert className="h-4 w-4" /> : <BriefcaseBusiness className="h-4 w-4" />,
-      onClick: () => onNavigateToProject(project.projectId),
-	    }));
-
-	    const growthItems = growthProposals
-	      .filter((proposal) => proposal.risk === 'high' && proposal.status !== 'published' && proposal.status !== 'observing' && proposal.status !== 'rejected')
-	      .slice(0, 2)
-	      .map((proposal) => ({
-	        id: `growth-${proposal.id}`,
-	        title: proposal.title,
-	        source: `增长提案 · ${proposal.kind}`,
-	        eta: proposal.status === 'approval-required' ? '需审批' : `${proposal.score} 分`,
-	        priority: '高' as DecisionItem['priority'],
-	        tone: 'warning' as Tone,
-	        icon: <Sparkles className="h-4 w-4" />,
-	        onClick: onOpenKnowledge,
-	      }));
-
-    const improvementItems = improvementProposals
-      .filter((proposal) => (
-        proposal.status === 'approval-required'
-        || proposal.status === 'approved'
-        || proposal.status === 'testing'
-        || (
-          proposal.exitEvidence?.mergeGate.status === 'ready-to-merge'
-          && proposal.exitEvidence?.releaseGate?.status !== 'observing'
-          && proposal.exitEvidence?.releaseGate?.status !== 'rolled-back'
-        )
-        || proposal.exitEvidence?.mergeGate.status === 'blocked'
-      ))
-      .slice(0, 3)
-      .map((proposal) => ({
-        id: `self-improvement-${proposal.id}`,
-        title: proposal.title,
-        source: '软件自迭代',
-        eta: getImprovementDecisionLabel(proposal),
-        detail: formatImprovementExecutionSummary(proposal),
-        priority: getImprovementDecisionPriority(proposal),
-        tone: getImprovementDecisionTone(proposal),
-        icon: <PackageCheck className="h-4 w-4" />,
-        onClick: () => {
-          onOpenImprovementProposal(proposal.id);
-        },
-      }));
-
-	    return [...agendaItems, ...improvementItems, ...growthItems, ...taskItems, ...projectItems].slice(0, 6);
-	  }, [ceoPriorityTasks, growthProposals, improvementProposals, locale, onNavigateToProject, onOpenImprovementProposal, onOpenKnowledge, onOpenProjects, onSelectConversation, operatingDay, projectAttentionItems]);
 
   const departmentPulse = useMemo<DepartmentPulse[]>(
     () => workspaces.map((workspace) => {
@@ -1255,16 +1081,6 @@ export default function CeoOfficeCockpit({
         : project.workspace === selectedDepartmentUri
     ))
     : [];
-  const selectedAgendaItem = useMemo<OperatingAgendaItemFE | null>(() => {
-    if (!selectedAgendaItemId) return null;
-    return operatingDay?.agenda.find((item) => item.id === selectedAgendaItemId) || null;
-  }, [operatingDay, selectedAgendaItemId]);
-  const selectedAgendaSignals = useMemo<OperatingSignalFE[]>(() => {
-    if (!selectedAgendaItem) return [];
-    const ids = new Set(selectedAgendaItem.signalIds);
-    return (operatingDay?.activeSignals || []).filter((signal) => ids.has(signal.id));
-  }, [operatingDay, selectedAgendaItem]);
-
   const handleCommandSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextCommand = commandDraft.trim();
@@ -1504,70 +1320,25 @@ export default function CeoOfficeCockpit({
                     title={(
                       <span className="flex items-center gap-2">
                         决策队列
-                        <span className="rounded-full bg-[#edf2fa] px-2 py-0.5 text-[12px] text-[#566176]">{decisionItems.length}</span>
+                        <span className="rounded-full bg-[#edf2fa] px-2 py-0.5 text-[12px] text-[#566176]">{decisionRows.length}</span>
                       </span>
                     )}
                   />
                 </div>
                 <div>
-                  {decisionItems.length ? decisionItems.map(item => (
-                    <DecisionRow key={item.id} item={item} />
+                  {decisionRows.length ? decisionRows.map(item => (
+                    <DecisionRow
+                      key={item.id}
+                      item={item}
+                      onOpen={onOpenDecisionTarget}
+                    />
                   )) : (
                     <div className="px-5 py-8 text-center text-sm text-[#7c8799]">当前没有排队中的高优决策。</div>
                   )}
                 </div>
-                {selectedAgendaItem ? (
-                  <div className="border-t border-[#edf1f7] bg-[#fbfcff] px-5 py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[13px] font-semibold text-[#111827]">议程详情</div>
-                        <div className="mt-1 line-clamp-2 text-[12px] leading-5 text-[#566176]">{selectedAgendaItem.reason}</div>
-                      </div>
-                      <button type="button" onClick={() => setSelectedAgendaItemId(null)} className="rounded-full px-2 py-1 text-[11px] text-[#7c8799] hover:bg-white">
-                        收起
-                      </button>
-                    </div>
-                    <div className="mt-3 grid gap-2 text-[11px] text-[#566176] sm:grid-cols-2">
-                      <div className="rounded-[10px] border border-[#e3e8f2] bg-white px-3 py-2">
-                        <div className="font-semibold text-[#1f2937]">Linked refs</div>
-                        <div className="mt-1 space-y-1">
-                          {selectedAgendaItem.dispatchedRunId ? <div>run: <span className="font-mono">{selectedAgendaItem.dispatchedRunId}</span></div> : null}
-                          {selectedAgendaItem.suggestedWorkflowRef ? <div>workflow: <span className="font-mono">{selectedAgendaItem.suggestedWorkflowRef}</span></div> : null}
-                          {selectedAgendaItem.budgetDecisionId ? <div>budget: <span className="font-mono">{selectedAgendaItem.budgetDecisionId}</span></div> : null}
-                          {!selectedAgendaItem.dispatchedRunId && !selectedAgendaItem.suggestedWorkflowRef && !selectedAgendaItem.budgetDecisionId ? <div>暂无执行关联</div> : null}
-                        </div>
-                      </div>
-                      <div className="rounded-[10px] border border-[#e3e8f2] bg-white px-3 py-2">
-                        <div className="font-semibold text-[#1f2937]">Evidence</div>
-                        <div className="mt-1 space-y-1">
-                          {selectedAgendaItem.evidenceRefs.slice(0, 3).map((ref) => (
-                            <div key={ref.id} className="truncate">{ref.type}: {ref.label}</div>
-                          ))}
-                          {selectedAgendaItem.evidenceRefs.length === 0 ? <div>暂无 evidence</div> : null}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-3 space-y-2">
-                      {selectedAgendaSignals.length ? selectedAgendaSignals.map((signal) => (
-                        <div key={signal.id} className="rounded-[10px] border border-[#e3e8f2] bg-white px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-[12px] font-semibold text-[#1f2937]">{signal.title}</span>
-                            <span className="shrink-0 rounded-full bg-[#eef4ff] px-2 py-0.5 text-[10px] text-[#1768d9]">{signal.source}/{signal.kind}</span>
-                          </div>
-                          <div className="mt-1 line-clamp-2 text-[11px] leading-5 text-[#566176]">{signal.summary}</div>
-                          <div className="mt-1 truncate font-mono text-[10px] text-[#98a2b3]">{signal.dedupeKey}</div>
-                        </div>
-                      )) : (
-                        <div className="rounded-[10px] border border-dashed border-[#dfe5ee] bg-white px-3 py-3 text-center text-[11px] text-[#7c8799]">
-                          当前 operating-day payload 未包含对应 signal 详情。
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : null}
                 <div className="border-t border-[#edf1f7] px-5 py-3 text-center">
-                  <button type="button" onClick={onOpenProjects} className="inline-flex items-center gap-1 text-[13px] font-medium text-[#1768d9]">
-                    查看全部决策
+                  <button type="button" onClick={() => setShowApprovalInbox(value => !value)} className="inline-flex items-center gap-1 text-[13px] font-medium text-[#1768d9]">
+                    审批收件箱
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
@@ -1659,7 +1430,7 @@ export default function CeoOfficeCockpit({
               </div>
               {showApprovalInbox ? (
                 <div className="border-t border-[#edf1f7] bg-[#fbfcff] p-3">
-                  <ApprovalPanel refreshInterval={15_000} />
+                  <ApprovalPanel refreshInterval={15_000} onOpenTarget={onOpenDecisionTarget} />
                 </div>
               ) : null}
             </WorkspaceSurface>
@@ -1795,7 +1566,9 @@ export default function CeoOfficeCockpit({
 	                  <div className="space-y-2">
 	                    <div className="flex items-center justify-between rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-800">
 	                      <span>系统改进</span>
-	                      <span className="font-semibold">{improvementProposals.filter(item => item.status === 'approval-required').length} approval / {improvementProposals.length} total</span>
+	                      <span className="font-semibold">
+                          {improvementProposals.filter(item => item.controlState?.stage === 'entry-review').length} 准入 / {improvementProposals.filter(item => item.controlState?.stage === 'exit-review').length} 准出
+                        </span>
 	                    </div>
 	                    <div className="space-y-2">
 	                      {improvementProposals.slice(0, 2).map((proposal) => (
@@ -1809,17 +1582,16 @@ export default function CeoOfficeCockpit({
 	                            <div className="min-w-0">
 	                              <div className="truncate text-[12px] font-semibold text-[#111827]">{proposal.title}</div>
 	                              <div className="mt-1 text-[12px] text-[#6b768a]">{formatImprovementExecutionSummary(proposal)}</div>
-	                              {proposal.exitEvidence?.mergeGate.reasons?.[0] ? (
-	                                <div className="mt-1 truncate text-[11px] text-[#8a94a6]">{proposal.exitEvidence.mergeGate.reasons[0]}</div>
-	                              ) : null}
 	                            </div>
 	                            <span className={cn(
 	                              'rounded-full px-2 py-0.5 text-[11px] font-semibold',
-	                              proposal.exitEvidence?.mergeGate.status === 'ready-to-merge'
+	                              getImprovementDecisionTone(proposal) === 'success'
 	                                ? 'bg-emerald-50 text-emerald-700'
-	                                : proposal.exitEvidence?.mergeGate.status === 'blocked'
-	                                  ? 'bg-red-50 text-red-600'
-	                                  : 'bg-amber-50 text-amber-700',
+	                                : getImprovementDecisionTone(proposal) === 'warning'
+	                                  ? 'bg-amber-50 text-amber-700'
+	                                  : getImprovementDecisionTone(proposal) === 'danger'
+	                                    ? 'bg-red-50 text-red-600'
+	                                    : 'bg-sky-50 text-sky-700',
 	                            )}>
 	                              {formatImprovementMergeGateLabel(proposal)}
 	                            </span>

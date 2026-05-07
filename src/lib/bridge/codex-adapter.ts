@@ -93,6 +93,12 @@ export interface CodexExecOptions {
   timeoutMs?: number;
 }
 
+export interface CodexExecHandle {
+  pid: number | null;
+  completion: Promise<string>;
+  cancel(reason?: string): void;
+}
+
 export interface CodexMCPSessionOptions {
   /** Working directory for the Codex session. */
   cwd?: string;
@@ -312,6 +318,13 @@ export async function codexExec(
   prompt: string,
   opts: CodexExecOptions = {},
 ): Promise<string> {
+  return startCodexExec(prompt, opts).completion;
+}
+
+export function startCodexExec(
+  prompt: string,
+  opts: CodexExecOptions = {},
+): CodexExecHandle {
   const {
     cwd,
     model,
@@ -327,38 +340,59 @@ export async function codexExec(
   }
   if (model) args.push('--model', model);
   if (json) args.push('--json');
-  args.push(prompt);
+  args.push('-');
 
-  return new Promise((resolve, reject) => {
-    const env = buildCodexProcessEnv();
+  const env = buildCodexProcessEnv();
+  const proc: ChildProcess = spawn(resolveCodexBinary(), args, {
+    cwd,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+  });
 
-    const proc = spawn(resolveCodexBinary(), args, {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-    });
+  let settled = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
+  const markSettled = (): boolean => {
+    if (settled) return false;
+    settled = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    return true;
+  };
+
+  const completion = new Promise<string>((resolve, reject) => {
     let stdout = '';
     let stderr = '';
 
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.stdin?.on('error', () => {
+      // Ignore EPIPE after Codex finishes consuming stdin.
+    });
+    proc.stdin?.end(prompt);
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         proc.kill();
-        reject(new Error(`codex exec timed out after ${timeoutMs}ms`));
+        if (markSettled()) {
+          reject(new Error(`codex exec timed out after ${timeoutMs}ms`));
+        }
       }, timeoutMs);
     }
 
     proc.on('error', (err) => {
-      if (timer) clearTimeout(timer);
-      reject(err);
+      if (markSettled()) {
+        reject(err);
+      }
     });
 
     proc.on('close', (code) => {
-      if (timer) clearTimeout(timer);
+      if (!markSettled()) {
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`codex exec exited with code ${code}. stderr: ${stderr.slice(0, 500)}`));
       } else {
@@ -366,6 +400,15 @@ export async function codexExec(
       }
     });
   });
+
+  return {
+    pid: proc.pid ?? null,
+    completion,
+    cancel() {
+      if (settled) return;
+      proc.kill('SIGTERM');
+    },
+  };
 }
 
 // ─── Availability check ──────────────────────────────────────────────────────

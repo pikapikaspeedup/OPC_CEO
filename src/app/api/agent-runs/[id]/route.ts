@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { getRun } from '@/lib/agents/run-registry';
 import { cancelRun } from '@/lib/agents/group-runtime';
 import { cancelPromptRun } from '@/lib/agents/prompt-executor';
+import {
+  cancelSystemImprovementCodexRun,
+  isSystemImprovementCodexTrackingRun,
+} from '@/lib/company-kernel/self-improvement-codex-execution';
 import { createLogger } from '@/lib/logger';
 import {
   proxyToControlPlane,
@@ -44,7 +48,9 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: `Run not found: ${id}` }, { status: 404 });
     }
 
-    if (run.executorKind === 'prompt') {
+    if (isSystemImprovementCodexTrackingRun(run)) {
+      await cancelSystemImprovementCodexRun(id);
+    } else if (run.executorKind === 'prompt') {
       await cancelPromptRun(id);
     } else {
       await cancelRun(id);
@@ -52,10 +58,11 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 
     log.info({ runId: id.slice(0, 8) }, 'Run cancelled');
     return NextResponse.json({ status: 'cancelled' });
-  } catch (err: any) {
-    if (err.message.includes('not found')) {
-      return NextResponse.json({ error: err.message }, { status: 404 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('not found')) {
+      return NextResponse.json({ error: message }, { status: 404 });
     }
-    return NextResponse.json({ error: err.message }, { status: 400 });
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }

@@ -34,6 +34,11 @@ async function main() {
 const { listProjects, getProject } = await import("../lib/agents/project-registry.js");
 const { getRun } = await import("../lib/agents/run-registry.js");
 const { interveneRun, cancelRun } = await import("../lib/agents/group-runtime.js");
+const { cancelPromptRun } = await import("../lib/agents/prompt-executor.js");
+const {
+  cancelSystemImprovementCodexRun,
+  isSystemImprovementCodexTrackingRun,
+} = await import("../lib/company-kernel/self-improvement-codex-execution.js");
 
 
 
@@ -175,8 +180,16 @@ server.registerTool(
   },
   async ({ runId, action, prompt, roleId }) => {
     try {
+      const run = getRun(runId);
       const result = action === "cancel"
-        ? (await cancelRun(runId), { status: "cancelled", action })
+        ? (
+          run && isSystemImprovementCodexTrackingRun(run)
+            ? await cancelSystemImprovementCodexRun(runId)
+            : run?.executorKind === 'prompt'
+              ? await cancelPromptRun(runId)
+              : await cancelRun(runId),
+          { status: "cancelled", action }
+        )
         : await interveneRun(runId, action as InterventionAction, prompt, roleId);
       return {
         content: [{ type: "text", text: `Intervention SUCCESS: \n${JSON.stringify(result, null, 2)}` }],

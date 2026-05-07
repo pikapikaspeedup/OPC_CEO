@@ -15,6 +15,8 @@ async function loadModules() {
     platform: await import('../platform-engineering'),
     projectRegistry: await import('../agents/project-registry'),
     signalStore: await import('./self-improvement-store'),
+    approval: await import('./self-improvement-approval'),
+    approvalStore: await import('../approval/request-store'),
   };
 }
 
@@ -72,7 +74,14 @@ describe('platform engineering observer', () => {
     expect(result.proposal?.linkedRunIds).toEqual(['run-platform-failure-1']);
     expect(result.proposal?.affectedFiles).toContain('src/lib/agents/scheduler.ts');
     expect(modules.signalStore.getSystemImprovementSignal(result.signal!.id)?.metadata?.projectId).toBe(project.projectId);
-  });
+
+    const withApproval = await modules.approval.ensureSystemImprovementApprovalRequest(result.proposal!.id);
+    expect(withApproval.approvalRequestId).toBeTruthy();
+    expect(modules.approvalStore.getApprovalRequest(withApproval.approvalRequestId!)?.target).toEqual({
+      kind: 'system-improvement-proposal',
+      proposalId: result.proposal!.id,
+    });
+  }, 20000);
 
   it('creates user story gap signals from unsupported stories', async () => {
     const modules = await loadModules();
@@ -100,5 +109,48 @@ describe('platform engineering observer', () => {
     expect(signals[0].source).toBe('user-story-gap');
     expect(signals[0].recurrence).toBe(2);
     expect(String(signals[0].metadata?.sourcePath)).toContain('User Story/Projects/项目工作台.md');
+  });
+
+  it('does not generate follow-up proposals for self-improvement tracking runs', async () => {
+    const modules = await loadModules();
+    const workspace = modules.platform.getPlatformEngineeringWorkspaceUri();
+    const project = modules.projectRegistry.createProject({
+      name: 'Self improvement project',
+      goal: 'Repair the current system improvement',
+      workspace,
+      governance: {
+        platformEngineering: {
+          observe: true,
+          allowProposal: true,
+          departmentId: modules.platform.PLATFORM_ENGINEERING_DEPARTMENT_ID,
+          source: 'proposal-created',
+          systemImprovementProposalId: 'system-improvement-proposal-1',
+          updatedAt: '2026-05-07T10:00:00.000Z',
+        },
+      },
+    });
+
+    const result = modules.observer.observeRunFailureForPlatformEngineering({
+      runId: 'run-self-improvement-failure-1',
+      projectId: project.projectId,
+      stageId: 'delivery',
+      workspace,
+      prompt: 'Fix the issue',
+      status: 'failed',
+      createdAt: '2026-05-07T10:00:00.000Z',
+      finishedAt: '2026-05-07T10:02:00.000Z',
+      triggerContext: {
+        source: 'api',
+        intentSummary: 'system-improvement-codex:system-improvement-proposal-1',
+      },
+      taskEnvelope: {
+        goal: 'Fix the issue',
+        constraints: ['systemImprovementCodexTracking=true'],
+      },
+      lastError: 'Codex run failed',
+    });
+
+    expect(result.signal).toBeUndefined();
+    expect(result.proposal).toBeUndefined();
   });
 });

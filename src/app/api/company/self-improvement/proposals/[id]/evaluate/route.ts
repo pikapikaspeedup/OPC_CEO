@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { ensureSystemImprovementApprovalRequest } from '@/lib/company-kernel/self-improvement-approval';
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import { evaluateSystemImprovementRisk } from '@/lib/company-kernel/self-improvement-risk';
 import {
   getSystemImprovementProposal,
@@ -51,5 +52,5 @@ export async function POST(
   const finalProposal = updated.status === 'approval-required'
     ? await ensureSystemImprovementApprovalRequest(updated.id)
     : updated;
-  return NextResponse.json({ proposal: finalProposal });
+  return NextResponse.json({ proposal: buildSystemImprovementProposalView(finalProposal) });
 }

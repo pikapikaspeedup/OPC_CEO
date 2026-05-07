@@ -6,6 +6,7 @@ import DepartmentSetupDialog from '@/components/department-setup-dialog';
 import LocalFolderImportDialog from '@/components/local-folder-import-dialog';
 import { useI18n } from '@/components/locale-provider';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
+import { getSystemImprovementStageLabel } from '@/lib/system-improvement-control-view';
 import { isTauriDesktop, selectLocalFolder } from '@/lib/desktop-folder-picker';
 import {
   getDepartmentBoundWorkspaceUris,
@@ -95,6 +96,7 @@ interface ProjectsPanelProps {
   onSelectProject?: (projectId: string) => void;
   onSelectRun?: (runId: string, projectId?: string) => void;
   selectedProjectId?: string | null;
+  selectedStageId?: string | null;
   selectedRunId?: string | null;
   /** Template definitions for resolving stage names */
   templates?: TemplateSummaryFE[];
@@ -118,12 +120,6 @@ interface ProjectsPanelProps {
   onRefresh?: () => void;
   /** Called when user saves a department config via the ⚙️ dialog in PixelOffice */
   onDepartmentSaved?: (uri: string, config: DepartmentConfig) => void;
-}
-
-function extractSystemImprovementProposalIdFromGoal(goal: string | undefined): string | null {
-  if (!goal) return null;
-  const match = goal.match(/(?:^|\n)Proposal ID:\s*([^\n]+)/i);
-  return match?.[1]?.trim() || null;
 }
 
 function extractSystemImprovementProposalIdFromRuns(runs: AgentRun[]): string | null {
@@ -155,14 +151,6 @@ function formatImprovementStatus(status: SystemImprovementProposalFE['status']):
   switch (status) {
     case 'approval-required':
       return '待审批';
-    case 'approved':
-      return '已批准';
-    case 'in-progress':
-      return '进行中';
-    case 'testing':
-      return '测试中';
-    case 'ready-to-merge':
-      return '待合并';
     case 'published':
       return '已发布';
     case 'observing':
@@ -171,11 +159,8 @@ function formatImprovementStatus(status: SystemImprovementProposalFE['status']):
       return '已拒绝';
     case 'rolled-back':
       return '已回滚';
-    case 'needs-evidence':
-      return '待补证据';
-    case 'draft':
     default:
-      return '草稿';
+      return '处理中';
   }
 }
 
@@ -507,6 +492,7 @@ export default function ProjectsPanel({
   onSelectProject,
   onSelectRun,
   selectedProjectId,
+  selectedStageId,
   selectedRunId,
   templates,
   models,
@@ -1158,7 +1144,7 @@ export default function ProjectsPanel({
 
   const linkedImprovementProposalId = useMemo(() => {
     if (!detailFocusProject) return null;
-    return extractSystemImprovementProposalIdFromGoal(detailFocusProject.goal)
+    return detailFocusProject.governance?.platformEngineering?.systemImprovementProposalId
       || extractSystemImprovementProposalIdFromRuns(detailFocusRuns);
   }, [detailFocusProject, detailFocusRuns]);
 
@@ -1516,7 +1502,7 @@ export default function ProjectsPanel({
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-full bg-[#eef4ff] px-2.5 py-1 text-[11px] font-semibold text-[#2563eb]">系统改进项目</span>
                         <span className="rounded-full bg-[#fff7ed] px-2.5 py-1 text-[11px] font-semibold text-[#d97706]">{formatImprovementRisk(linkedImprovementProposal.risk)}</span>
-                        <span className="rounded-full bg-[#f3f4f6] px-2.5 py-1 text-[11px] font-semibold text-[#64748b]">{formatImprovementStatus(linkedImprovementProposal.status)}</span>
+                        <span className="rounded-full bg-[#f3f4f6] px-2.5 py-1 text-[11px] font-semibold text-[#64748b]">{getSystemImprovementStageLabel(linkedImprovementProposal.controlState?.stage) || formatImprovementStatus(linkedImprovementProposal.status)}</span>
                       </div>
                       <div className="mt-3 text-[15px] leading-7 text-[var(--app-text-soft)]">
                         {linkedImprovementProposal.summary}
@@ -1701,13 +1687,17 @@ export default function ProjectsPanel({
                     || inferredStage?.runId
                     || viewProjectRuns.find((run) => run.executorKind === 'prompt')?.runId
                     || null;
-                  const inferredStageId = scopedSelectedRunId ? null : inferredStage?.stageId || null;
+                  const resolvedSelectedStageId = scopedSelectedRunId
+                    ? null
+                    : (selectedStageId && viewStages.some((stage) => stage.stageId === selectedStageId)
+                      ? selectedStageId
+                      : inferredStage?.stageId || null);
 
                   return (
                     <ProjectWorkbench
                       project={viewProject}
                       selectedRunId={inferredRunId}
-                      selectedStageId={inferredStageId}
+                      selectedStageId={resolvedSelectedStageId}
                       agentRuns={viewProjectRuns}
                       templateStages={templateStages}
                       models={models || []}

@@ -1,4 +1,5 @@
 import { getGatewayDb } from '../storage/gateway-db';
+import { deleteApprovalRequest, getApprovalRequest } from '../approval/request-store';
 import type {
   SystemImprovementProposal,
   SystemImprovementProposalStatus,
@@ -36,6 +37,42 @@ function hydrateSignal(row: PayloadRow): SystemImprovementSignal {
 
 function hydrateProposal(row: PayloadRow): SystemImprovementProposal {
   return JSON.parse(row.payload_json) as SystemImprovementProposal;
+}
+
+function isInvalidLegacyApprovalRequiredProposal(proposal: SystemImprovementProposal): boolean {
+  if (proposal.status !== 'approval-required') return false;
+  if (!proposal.approvalRequestId) return true;
+  return !getApprovalRequest(proposal.approvalRequestId);
+}
+
+export function deleteSystemImprovementProposal(id: string): void {
+  const proposal = getSystemImprovementProposal(id);
+  if (proposal?.approvalRequestId) {
+    deleteApprovalRequest(proposal.approvalRequestId);
+  }
+  const db = getGatewayDb();
+  db.prepare(`
+    DELETE FROM system_improvement_proposals
+    WHERE proposal_id = ?
+  `).run(id);
+}
+
+function cleanupLegacyBrokenSystemImprovementProposals(): void {
+  const db = getGatewayDb();
+  const rows = db.prepare(`
+    SELECT proposal_id, payload_json
+    FROM system_improvement_proposals
+  `).all() as Array<{ proposal_id: string; payload_json: string }>;
+
+  for (const row of rows) {
+    try {
+      const proposal = hydrateProposal(row);
+      if (!isInvalidLegacyApprovalRequiredProposal(proposal)) continue;
+      deleteSystemImprovementProposal(row.proposal_id);
+    } catch {
+      // Skip malformed legacy records; callers will ignore them on the next read path.
+    }
+  }
 }
 
 function buildSignalWhere(query: SystemImprovementSignalListQuery = {}): {
@@ -196,6 +233,7 @@ export function getSystemImprovementProposal(id: string): SystemImprovementPropo
 }
 
 export function countSystemImprovementProposals(query: SystemImprovementProposalListQuery = {}): number {
+  cleanupLegacyBrokenSystemImprovementProposals();
   const db = getGatewayDb();
   const { whereSql, params } = buildProposalWhere(query);
   const row = db.prepare(`
@@ -207,6 +245,7 @@ export function countSystemImprovementProposals(query: SystemImprovementProposal
 }
 
 export function listSystemImprovementProposals(query: SystemImprovementProposalListQuery = {}): SystemImprovementProposal[] {
+  cleanupLegacyBrokenSystemImprovementProposals();
   const db = getGatewayDb();
   const { whereSql, params } = buildProposalWhere(query);
   const paginationSql = query.limit ? ' LIMIT @limit OFFSET @offset' : '';

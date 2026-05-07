@@ -2,10 +2,12 @@ import type { AgentRunState, RunStatus } from '../agents/group-types';
 import { getProject } from '../agents/project-registry';
 import type { ProjectDefinition } from '../agents/project-types';
 import type {
+  SystemImprovementAutomationState,
   SystemImprovementCodexExecutionSnapshot,
   SystemImprovementExecutionProjectSnapshot,
   SystemImprovementExecutionRunSnapshot,
   SystemImprovementExitEvidenceBundle,
+  SystemImprovementHumanGate,
   SystemImprovementMergeGateSummary,
   SystemImprovementProposal,
   SystemImprovementProposalStatus,
@@ -81,7 +83,7 @@ function getCodexEvidence(proposal: SystemImprovementProposal): SystemImprovemen
 }
 
 function getReleaseGate(proposal: SystemImprovementProposal): SystemImprovementReleaseGateSnapshot | null {
-  const value = proposal.exitEvidence?.releaseGate || proposal.metadata?.releaseGate;
+  const value = proposal.exitEvidence?.releaseGate;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
@@ -102,10 +104,12 @@ function getReleaseGate(proposal: SystemImprovementProposal): SystemImprovementR
 function hasRuntimeExecutionContext(proposal: SystemImprovementProposal): boolean {
   return Boolean(
     getImprovementProjectId(proposal)
-    || getImprovementRunId(proposal)
-    || getLaunchStatus(proposal)
-    || getCodexEvidence(proposal),
+    || getImprovementRunId(proposal),
   );
+}
+
+function shouldSyncGovernanceWithoutRuntimeContext(proposal: SystemImprovementProposal): boolean {
+  return proposal.status === 'approval-required';
 }
 
 function summarizeProject(project: ProjectDefinition): SystemImprovementExecutionProjectSnapshot {
@@ -236,6 +240,8 @@ function deriveProposalStatus(input: {
   exitEvidence: SystemImprovementExitEvidenceBundle;
   latestRun: AgentRunState | null;
 }): SystemImprovementProposalStatus {
+  const releaseGateStatus = input.exitEvidence.releaseGate?.status;
+
   if (TERMINAL_PROPOSAL_STATUSES.has(input.proposal.status)) {
     return input.proposal.status;
   }
@@ -244,6 +250,16 @@ function deriveProposalStatus(input: {
   }
   if (requiresApproval(input.proposal) && !hasApprovedProposal(input.proposal)) {
     return 'approval-required';
+  }
+  if (releaseGateStatus === 'preflight-failed') {
+    return 'testing';
+  }
+  if (
+    releaseGateStatus === 'ready-for-approval'
+    || releaseGateStatus === 'approved'
+    || releaseGateStatus === 'merged'
+  ) {
+    return 'ready-to-merge';
   }
   if (input.exitEvidence.mergeGate.status === 'ready-to-merge') {
     return 'ready-to-merge';
@@ -259,6 +275,156 @@ function deriveProposalStatus(input: {
     return 'in-progress';
   }
   return input.proposal.status === 'approved' ? 'approved' : 'in-progress';
+}
+
+function deriveAutomationState(input: {
+  proposal: SystemImprovementProposal;
+  exitEvidence: SystemImprovementExitEvidenceBundle;
+  latestRun: AgentRunState | null;
+}): SystemImprovementAutomationState {
+  const releaseGateStatus = input.exitEvidence.releaseGate?.status;
+  const now = new Date().toISOString();
+
+  if (input.proposal.status === 'approval-required') {
+    return {
+      status: 'queued',
+      summary: '等待准入审批，AI 尚未进入实现阶段。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'ready-for-approval') {
+    return {
+      status: 'exit-ready',
+      summary: 'AI 已完成实现、验证和发布前检查，等待最终准出审批。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'approved') {
+    return {
+      status: 'exit-ready',
+      summary: '准出已批准，等待 Ops 完成合并与发布动作。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'merged') {
+    return {
+      status: 'exit-ready',
+      summary: '代码已合并，等待 Ops 完成重启与发布收口。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'restarted' || input.proposal.status === 'published') {
+    return {
+      status: 'exit-ready',
+      summary: input.exitEvidence.releaseGate?.healthCheckSummary || 'Ops 已完成重启与健康检查，等待进入观察阶段。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'observing' || input.proposal.status === 'observing') {
+    return {
+      status: 'exit-ready',
+      summary: input.exitEvidence.releaseGate?.observationSummary || '发布后观察中。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'rolled-back' || input.proposal.status === 'rolled-back') {
+    return {
+      status: 'blocked',
+      summary: input.exitEvidence.releaseGate?.rollbackReason || '该改进已回滚。',
+      updatedAt: now,
+    };
+  }
+
+  if (releaseGateStatus === 'preflight-failed') {
+    const remediationSummary = input.exitEvidence.releaseGate?.remediationSummary;
+    return {
+      status: 'blocked',
+      summary: remediationSummary || '发布前检查仍有失败项，继续留在 AI / Ops 内部处理，不进入 CEO 准出。',
+      updatedAt: now,
+    };
+  }
+
+  const latestRunStatus = input.latestRun?.status;
+  if ((latestRunStatus && ACTIVE_RUN_STATUSES.has(latestRunStatus)) || input.exitEvidence.project?.status === 'active') {
+    return {
+      status: 'executing',
+      summary: 'AI 正在平台工程项目中实现这条提升。',
+      updatedAt: now,
+    };
+  }
+
+  if (input.exitEvidence.mergeGate.status === 'blocked') {
+    return {
+      status: 'blocked',
+      summary: '实现或验证仍有阻塞项，继续留在 AI / Ops 内部处理。',
+      updatedAt: now,
+    };
+  }
+
+  if (input.exitEvidence.mergeGate.status === 'ready-to-merge') {
+    return {
+      status: 'validating',
+      summary: '实现与基础校验已完成，等待发布前检查收口。',
+      updatedAt: now,
+    };
+  }
+
+  if (
+    input.exitEvidence.mergeGate.deliveryReady
+    || input.exitEvidence.testing.evidenceCount > 0
+    || Boolean(input.exitEvidence.codex)
+  ) {
+    return {
+      status: 'validating',
+      summary: 'AI 正在收口验证结果与发布证据。',
+      updatedAt: now,
+    };
+  }
+
+  return {
+    status: 'queued',
+    summary: '已进入执行主线，等待 AI 启动实现。',
+    updatedAt: now,
+  };
+}
+
+function deriveHumanGate(input: {
+  proposal: SystemImprovementProposal;
+  automationState: SystemImprovementAutomationState;
+  exitEvidence: SystemImprovementExitEvidenceBundle;
+}): SystemImprovementHumanGate {
+  const now = new Date().toISOString();
+
+  if (input.proposal.status === 'approval-required') {
+    return {
+      state: 'entry-approval-required',
+      title: '是否批准这条系统能力提升进入实现？',
+      summary: '批准后，AI 会自动完成实现、验证、补证据和发布前检查准备。',
+      updatedAt: now,
+    };
+  }
+
+  if (input.exitEvidence.releaseGate?.status === 'ready-for-approval') {
+    return {
+      state: 'exit-approval-required',
+      title: 'AI 已完成实现并通过验证，是否批准合入主线？',
+      summary: '当前只剩最终准出确认，技术问题已清零，不需要人类处理代码细节。',
+      updatedAt: now,
+    };
+  }
+
+  return {
+    state: 'none',
+    title: '当前没有需要 CEO 审批的动作',
+    summary: input.automationState.summary,
+    updatedAt: now,
+  };
 }
 
 function deriveLaunchStatus(input: {
@@ -292,9 +458,12 @@ export async function syncSystemImprovementProposalRuntimeState(
     latestRun?: AgentRunState | null;
   } = {},
 ): Promise<SystemImprovementProposal | null> {
-  const proposal = input.proposal || getSystemImprovementProposal(proposalId);
+  const proposal = getSystemImprovementProposal(proposalId) || input.proposal;
   if (!proposal) return null;
-  if (!hasRuntimeExecutionContext(proposal)) {
+  if (
+    !hasRuntimeExecutionContext(proposal)
+    && !shouldSyncGovernanceWithoutRuntimeContext(proposal)
+  ) {
     return proposal;
   }
 
@@ -314,6 +483,16 @@ export async function syncSystemImprovementProposalRuntimeState(
     proposal,
     exitEvidence,
     latestRun,
+  });
+  const automationState = deriveAutomationState({
+    proposal,
+    exitEvidence,
+    latestRun,
+  });
+  const humanGate = deriveHumanGate({
+    proposal,
+    automationState,
+    exitEvidence,
   });
   const nextLaunchStatus = deriveLaunchStatus({
     proposal,
@@ -337,9 +516,15 @@ export async function syncSystemImprovementProposalRuntimeState(
   });
   const currentMetadataComparable = stableSerialize(proposal.metadata || {});
   const nextMetadataComparable = stableSerialize(nextMetadata || {});
+  const currentAutomationComparable = stableSerialize(proposal.automationState || null);
+  const nextAutomationComparable = stableSerialize(automationState);
+  const currentHumanGateComparable = stableSerialize(proposal.humanGate || null);
+  const nextHumanGateComparable = stableSerialize(humanGate);
 
   if (
     proposal.status === nextStatus
+    && currentAutomationComparable === nextAutomationComparable
+    && currentHumanGateComparable === nextHumanGateComparable
     && currentEvidenceComparable === nextEvidenceComparable
     && currentMetadataComparable === nextMetadataComparable
   ) {
@@ -348,6 +533,8 @@ export async function syncSystemImprovementProposalRuntimeState(
 
   const updated = patchSystemImprovementProposal(proposal.id, {
     status: nextStatus,
+    automationState,
+    humanGate,
     exitEvidence,
     ...(nextMetadata ? { metadata: nextMetadata } : {}),
   });
@@ -367,7 +554,11 @@ export async function syncSystemImprovementProposalsForRun(run: AgentRunState): 
     project,
     latestRun: run,
   })));
-  return synced.filter((proposal): proposal is SystemImprovementProposal => Boolean(proposal));
+  const proposals = synced.filter((proposal): proposal is SystemImprovementProposal => Boolean(proposal));
+  if (proposals.length === 0) return [];
+  const { maybeAutoRunSystemImprovementPreflight } = await import('./self-improvement-release-gate');
+  const withPreflight = await Promise.all(proposals.map((proposal) => maybeAutoRunSystemImprovementPreflight({ proposal })));
+  return withPreflight;
 }
 
 export async function syncAllActiveSystemImprovementProposals(): Promise<SystemImprovementProposal[]> {

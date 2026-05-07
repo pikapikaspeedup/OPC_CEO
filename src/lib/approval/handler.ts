@@ -43,6 +43,37 @@ function getDefaultApprovalChannels(): string[] {
   return process.env.APPROVAL_WEBHOOK_URL ? ['web', 'webhook'] : ['web'];
 }
 
+function createObservedApprovalRequest(input: CreateApprovalInput): ApprovalRequest {
+  const request = createApprovalRequest(input);
+  try {
+    observeApprovalRequestForAgenda(request);
+  } catch (err: unknown) {
+    log.debug({ requestId: request.id, err: err instanceof Error ? err.message : String(err) }, 'Failed to observe approval request for agenda');
+  }
+  return request;
+}
+
+function applyNotificationDeliveries(request: ApprovalRequest, deliveries: Awaited<ReturnType<typeof dispatchNotifications>>): void {
+  const updated = updateRequestNotifications(request.id, deliveries);
+  if (updated) {
+    request.notifications = updated.notifications;
+    request.updatedAt = updated.updatedAt;
+  } else {
+    request.notifications = deliveries;
+  }
+}
+
+function scheduleApprovalNotifications(request: ApprovalRequest): void {
+  ensureDefaultChannels(config.gatewayUrl);
+  void dispatchNotifications(request, config.channels)
+    .then((deliveries) => {
+      applyNotificationDeliveries(request, deliveries);
+    })
+    .catch((err: unknown) => {
+      log.warn({ requestId: request.id, err: err instanceof Error ? err.message : String(err) }, 'Approval notification dispatch failed');
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -108,24 +139,12 @@ export function verifyApprovalToken(requestId: string, action: string, token: st
  * @returns The created ApprovalRequest.
  */
 export async function submitApprovalRequest(input: CreateApprovalInput): Promise<ApprovalRequest> {
-  const request = createApprovalRequest(input);
-  try {
-    observeApprovalRequestForAgenda(request);
-  } catch (err: unknown) {
-    log.debug({ requestId: request.id, err: err instanceof Error ? err.message : String(err) }, 'Failed to observe approval request for agenda');
-  }
-
+  const request = createObservedApprovalRequest(input);
   ensureDefaultChannels(config.gatewayUrl);
 
   // Dispatch notifications (non-blocking)
   const deliveries = await dispatchNotifications(request, config.channels);
-  const updated = updateRequestNotifications(request.id, deliveries);
-  if (updated) {
-    request.notifications = updated.notifications;
-    request.updatedAt = updated.updatedAt;
-  } else {
-    request.notifications = deliveries;
-  }
+  applyNotificationDeliveries(request, deliveries);
 
   log.info({
     requestId: request.id,
@@ -133,6 +152,20 @@ export async function submitApprovalRequest(input: CreateApprovalInput): Promise
     urgency: request.urgency,
     delivered: deliveries.filter(d => d.success).length,
   }, 'Approval request submitted');
+
+  return request;
+}
+
+export function submitApprovalRequestSync(input: CreateApprovalInput): ApprovalRequest {
+  const request = createObservedApprovalRequest(input);
+  scheduleApprovalNotifications(request);
+
+  log.info({
+    requestId: request.id,
+    type: request.type,
+    urgency: request.urgency,
+    delivered: 0,
+  }, 'Approval request submitted synchronously');
 
   return request;
 }
@@ -182,8 +215,15 @@ export async function handleApprovalResponse(
     log.debug({ requestId: updated.id, err: err instanceof Error ? err.message : String(err) }, 'Failed to observe approval response for agenda');
   }
 
-  // Dispatch feedback to requesting department
-  await dispatchFeedbackNotification(updated);
+  try {
+    await dispatchFeedbackNotification(updated);
+  } catch (err: unknown) {
+    log.warn({
+      requestId,
+      action,
+      err: err instanceof Error ? err.message : String(err),
+    }, 'Approval callback failed after response was already persisted');
+  }
 
   log.info({
     requestId,

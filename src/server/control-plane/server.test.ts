@@ -130,5 +130,11 @@ describe('control-plane company routes', () => {
       items: [expect.objectContaining({ id: 'candidate-company' })],
       total: 1,
     }));
+
+    const decisionsRes = await callRoute(routes, '/api/company/ceo/decisions?limit=1');
+    expect(decisionsRes.status).toBe(200);
+    await expect(decisionsRes.json()).resolves.toEqual(expect.objectContaining({
+      items: expect.any(Array),
+    }));
   });
 });

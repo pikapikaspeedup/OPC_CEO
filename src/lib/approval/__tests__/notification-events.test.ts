@@ -60,6 +60,7 @@ describe('approval notifications', () => {
 
     const request = await handler.submitApprovalRequest({
       type: 'proposal_publish',
+      target: { kind: 'knowledge', knowledgeId: 'knowledge-1' },
       workspace: 'file:///tmp/research',
       title: '发布提案',
       description: '需要 CEO 审批',
@@ -81,6 +82,7 @@ describe('approval notifications', () => {
 
     const request = await handler.submitApprovalRequest({
       type: 'proposal_publish',
+      target: { kind: 'knowledge', knowledgeId: 'knowledge-1' },
       workspace: 'file:///tmp/research',
       title: '发布提案',
       description: '需要 CEO 审批',

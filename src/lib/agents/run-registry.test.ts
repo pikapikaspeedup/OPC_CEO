@@ -25,20 +25,29 @@ vi.mock('../logger', () => ({
   }),
 }));
 
+import { createProject, addRunToProject } from './project-registry';
+import { getPlatformEngineeringWorkspaceUri, ensurePlatformEngineeringWorkspaceSkeleton } from '../platform-engineering';
+import { getSystemImprovementProposal } from '../company-kernel/self-improvement-store';
 import { createRun, getRun, updateRun } from './run-registry';
 
 const registryGlobals = globalThis as unknown as {
   __AGENT_RUNS_REGISTRY_MAP?: Map<string, unknown>;
+  __PROJECT_REGISTRY_MAP?: Map<string, unknown>;
+  __AG_GATEWAY_DB__?: unknown;
 };
 
 describe('run-registry characterization', () => {
   beforeEach(() => {
     registryGlobals.__AGENT_RUNS_REGISTRY_MAP?.clear();
+    registryGlobals.__PROJECT_REGISTRY_MAP?.clear();
+    delete registryGlobals.__AG_GATEWAY_DB__;
     fs.rmSync(MOCK_GATEWAY_HOME, { recursive: true, force: true });
   });
 
   afterEach(() => {
     registryGlobals.__AGENT_RUNS_REGISTRY_MAP?.clear();
+    registryGlobals.__PROJECT_REGISTRY_MAP?.clear();
+    delete registryGlobals.__AG_GATEWAY_DB__;
     fs.rmSync(MOCK_GATEWAY_HOME, { recursive: true, force: true });
   });
 
@@ -82,5 +91,41 @@ describe('run-registry characterization', () => {
 
     const recovered = updateRun(run.runId, { status: 'running' });
     expect(recovered?.finishedAt).toBeUndefined();
+  });
+
+  it('creates platform engineering entry approvals synchronously for observed failures', () => {
+    ensurePlatformEngineeringWorkspaceSkeleton();
+    const workspace = getPlatformEngineeringWorkspaceUri();
+    const project = createProject({
+      name: 'Platform engineering repair',
+      goal: 'Repair a failed guarded task',
+      workspace,
+      templateId: 'development-template-1',
+    });
+    const run = createRun({
+      stageId: 'delivery',
+      workspace,
+      prompt: 'Repair the guarded task',
+      projectId: project.projectId,
+      templateId: 'development-template-1',
+      pipelineStageId: 'delivery',
+    });
+    addRunToProject(project.projectId, run.runId);
+
+    updateRun(run.runId, {
+      status: 'failed',
+      lastError: 'boom',
+      result: {
+        status: 'failed',
+        summary: 'guarded task failed',
+        changedFiles: ['src/lib/agents/scheduler.ts'],
+        blockers: ['scheduler failure'],
+        needsReview: [],
+      },
+    });
+
+    const proposal = getSystemImprovementProposal(`system-improvement-proposal:platform-run-failure:${run.runId}`);
+    expect(proposal?.status).toBe('approval-required');
+    expect(proposal?.approvalRequestId).toBeTruthy();
   });
 });

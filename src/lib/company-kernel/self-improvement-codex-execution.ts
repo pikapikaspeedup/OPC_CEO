@@ -1,6 +1,8 @@
 import { createProject, getProject, updateProject, addRunToProject } from '../agents/project-registry';
+import type { AgentRunState } from '../agents/group-types';
 import type { ProjectDefinition } from '../agents/project-types';
-import { createRun, updateRun } from '../agents/run-registry';
+import { createRun, getRun, updateRun } from '../agents/run-registry';
+import type { CodexExecHandle } from '../bridge/codex-adapter';
 import { createLogger } from '../logger';
 import {
   PLATFORM_ENGINEERING_DEPARTMENT_ID,
@@ -22,11 +24,25 @@ import {
   getSystemImprovementProposal,
   patchSystemImprovementProposal,
 } from './self-improvement-store';
+import { maybeAutoRunSystemImprovementPreflight } from './self-improvement-release-gate';
 import { syncSystemImprovementProposalRuntimeState } from './self-improvement-runtime-state';
 
 const log = createLogger('SelfImprovementCodexExecution');
 const DEFAULT_PLATFORM_ENGINEERING_TEMPLATE_ID = 'development-template-1';
 const CODEX_STAGE_ID = 'platform-engineering-codex-worktree';
+const ACTIVE_TRACKING_RUN_STATUSES = new Set(['queued', 'starting', 'running']);
+const SELF_IMPROVEMENT_CODEX_INTENT_PREFIX = 'system-improvement-codex:';
+
+const globalForActiveCodexHandles = globalThis as unknown as {
+  __SELF_IMPROVEMENT_CODEX_ACTIVE_HANDLES__?: Map<string, CodexExecHandle>;
+};
+
+const activeCodexHandles = globalForActiveCodexHandles.__SELF_IMPROVEMENT_CODEX_ACTIVE_HANDLES__
+  || new Map<string, CodexExecHandle>();
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForActiveCodexHandles.__SELF_IMPROVEMENT_CODEX_ACTIVE_HANDLES__ = activeCodexHandles;
+}
 
 export interface SystemImprovementCodexLaunchResult {
   status: 'already-running' | 'dispatched' | 'dispatch-failed';
@@ -40,6 +56,47 @@ export interface SystemImprovementCodexLaunchResult {
   templateId: string;
   workspaceUri: string;
   error?: string;
+}
+
+export interface RunApprovedSystemImprovementCodexTaskOptions {
+  force?: boolean;
+  skipAutoPreflight?: boolean;
+  remediationPrompt?: string;
+}
+
+interface PreparedCodexExecutionDispatch {
+  proposal: SystemImprovementProposal;
+  tracking: { project: ProjectDefinition; createdProject: boolean };
+  run: ReturnType<typeof createRun>;
+  workspaceUri: string;
+  templateId: string;
+  allowedPathPrefixes: string[];
+  validationCommands: string[];
+}
+
+interface ImmediateCodexExecutionDispatch {
+  proposal: SystemImprovementProposal;
+  launch: SystemImprovementCodexLaunchResult;
+}
+
+function registerActiveCodexHandle(runId: string, handle: CodexExecHandle): void {
+  activeCodexHandles.set(runId, handle);
+}
+
+function getActiveCodexHandle(runId: string): CodexExecHandle | null {
+  return activeCodexHandles.get(runId) || null;
+}
+
+function clearActiveCodexHandle(runId: string): void {
+  activeCodexHandles.delete(runId);
+}
+
+function isTerminalTrackingRunStatus(status: AgentRunState['status'] | undefined): boolean {
+  return status === 'completed'
+    || status === 'failed'
+    || status === 'blocked'
+    || status === 'timeout'
+    || status === 'cancelled';
 }
 
 function uniq(values: string[]): string[] {
@@ -103,8 +160,8 @@ function buildProjectName(proposal: SystemImprovementProposal): string {
   return base.length > 96 ? `${base.slice(0, 93)}...` : base;
 }
 
-function buildProjectGoal(proposal: SystemImprovementProposal): string {
-  return [
+function buildProjectGoal(proposal: SystemImprovementProposal, remediationPrompt?: string): string {
+  const sections = [
     `Proposal ID: ${proposal.id}`,
     `Title: ${proposal.title}`,
     `Risk: ${proposal.risk}`,
@@ -122,11 +179,19 @@ function buildProjectGoal(proposal: SystemImprovementProposal): string {
     '',
     'Rollback plan:',
     ...proposal.rollbackPlan.map((item) => `- ${item}`),
-  ].join('\n').trim();
+  ];
+  if (remediationPrompt?.trim()) {
+    sections.push(
+      '',
+      'Controller context:',
+      remediationPrompt.trim(),
+    );
+  }
+  return sections.join('\n').trim();
 }
 
-function buildCodexPrompt(proposal: SystemImprovementProposal): string {
-  return [
+function buildCodexPrompt(proposal: SystemImprovementProposal, remediationPrompt?: string): string {
+  const sections = [
     `Proposal ID: ${proposal.id}`,
     `Title: ${proposal.title}`,
     '',
@@ -143,10 +208,20 @@ function buildCodexPrompt(proposal: SystemImprovementProposal): string {
     ...proposal.rollbackPlan.map((item) => `- ${item}`),
     '',
     'Return with concise notes. The controller will collect git diff and validation evidence.',
-  ].join('\n').trim();
+  ];
+  if (remediationPrompt?.trim()) {
+    sections.push(
+      '',
+      'Controller context:',
+      remediationPrompt.trim(),
+      '',
+      'Reconcile the proposal against the current repository snapshot. Replace the outdated patch with a fresh clean diff.',
+    );
+  }
+  return sections.join('\n').trim();
 }
 
-function buildProposalCreatedGovernance(): ProjectDefinition['governance'] {
+function buildProposalCreatedGovernance(proposalId: string): ProjectDefinition['governance'] {
   const now = new Date().toISOString();
   return {
     ...defaultPlatformEngineeringProjectGovernance(),
@@ -155,6 +230,7 @@ function buildProposalCreatedGovernance(): ProjectDefinition['governance'] {
       allowProposal: true,
       departmentId: PLATFORM_ENGINEERING_DEPARTMENT_ID,
       source: 'proposal-created',
+      systemImprovementProposalId: proposalId,
       updatedAt: now,
     },
   };
@@ -173,6 +249,25 @@ function ensureTrackingProject(input: {
   const existingProjectId = getMetadataString(input.proposal, 'improvementProjectId');
   const existingProject = existingProjectId ? getProject(existingProjectId) : null;
   if (existingProject) {
+    const currentProposalId = existingProject.governance?.platformEngineering?.systemImprovementProposalId;
+    if (currentProposalId !== input.proposal.id) {
+      const now = new Date().toISOString();
+      const updatedProject = updateProject(existingProject.projectId, {
+        governance: {
+          ...(existingProject.governance || defaultPlatformEngineeringProjectGovernance()),
+          platformEngineering: {
+            ...(existingProject.governance?.platformEngineering || {}),
+            observe: existingProject.governance?.platformEngineering?.observe ?? true,
+            allowProposal: existingProject.governance?.platformEngineering?.allowProposal ?? true,
+            departmentId: existingProject.governance?.platformEngineering?.departmentId || PLATFORM_ENGINEERING_DEPARTMENT_ID,
+            source: existingProject.governance?.platformEngineering?.source || 'proposal-created',
+            systemImprovementProposalId: input.proposal.id,
+            updatedAt: now,
+          },
+        },
+      }) || existingProject;
+      return { project: updatedProject, createdProject: false, proposal: input.proposal };
+    }
     return { project: existingProject, createdProject: false, proposal: input.proposal };
   }
 
@@ -182,7 +277,7 @@ function ensureTrackingProject(input: {
     workspace: input.workspaceUri,
     templateId: input.templateId,
     projectType: 'strategic',
-    governance: buildProposalCreatedGovernance(),
+    governance: buildProposalCreatedGovernance(input.proposal.id),
   });
   const updated = patchSystemImprovementProposal(input.proposal.id, {
     metadata: {
@@ -221,6 +316,8 @@ function createTrackingRun(input: {
       goal: input.prompt,
       constraints: [
         `proposalId=${input.proposal.id}`,
+        `systemImprovementProposalId=${input.proposal.id}`,
+        'systemImprovementCodexTracking=true',
         `risk=${input.proposal.risk}`,
         `protectedAreas=${input.proposal.protectedAreas.join(',') || 'none'}`,
         `affectedFiles=${input.proposal.affectedFiles.join(',') || 'TBD'}`,
@@ -292,16 +389,32 @@ function summarizeCodexEvidence(evidence: PlatformEngineeringExitEvidence): stri
   return `Codex worktree runner blocked: ${reasons.join(', ') || 'quality gate failed'}.`;
 }
 
+function clearExecutionPointers(proposal: SystemImprovementProposal): SystemImprovementProposal {
+  return patchSystemImprovementProposal(proposal.id, {
+    exitEvidence: undefined,
+    metadata: {
+      ...(proposal.metadata || {}),
+      codexRunnerEvidence: undefined,
+      codexEvidencePath: undefined,
+      codexWorktreePath: undefined,
+      codexBranch: undefined,
+      codexRunId: undefined,
+    },
+  }) || proposal;
+}
+
 function buildCodexTaskInput(input: {
   proposal: SystemImprovementProposal;
   allowedPathPrefixes: string[];
   validationCommands: string[];
+  remediationPrompt?: string;
+  onCodexExecHandle?: (handle: CodexExecHandle) => void;
 }): RunPlatformEngineeringCodexTaskInput {
   const baseMode = input.proposal.metadata?.codexBaseMode === 'checkpoint' ? 'checkpoint' : 'snapshot';
   return {
     repoPath: process.cwd(),
     taskKey: input.proposal.id,
-    prompt: buildCodexPrompt(input.proposal),
+    prompt: buildCodexPrompt(input.proposal, input.remediationPrompt),
     baseMode,
     model: typeof input.proposal.metadata?.codexModel === 'string'
       ? input.proposal.metadata.codexModel
@@ -312,13 +425,31 @@ function buildCodexTaskInput(input: {
     expectEdits: true,
     allowedPathPrefixes: input.allowedPathPrefixes,
     validationCommands: input.validationCommands,
+    onCodexExecHandle: input.onCodexExecHandle,
   };
 }
 
-export async function runApprovedSystemImprovementCodexTask(
+function buildPreparedLaunchResult(input: PreparedCodexExecutionDispatch): SystemImprovementCodexLaunchResult {
+  return {
+    status: 'dispatched',
+    projectId: input.tracking.project.projectId,
+    runId: input.run.runId,
+    createdProject: input.tracking.createdProject,
+    templateId: input.templateId,
+    workspaceUri: input.workspaceUri,
+  };
+}
+
+function isImmediateDispatchResult(
+  value: PreparedCodexExecutionDispatch | ImmediateCodexExecutionDispatch,
+): value is ImmediateCodexExecutionDispatch {
+  return 'launch' in value;
+}
+
+async function prepareApprovedSystemImprovementCodexTask(
   proposalId: string,
-  options: { force?: boolean } = {},
-): Promise<{ proposal: SystemImprovementProposal; launch: SystemImprovementCodexLaunchResult }> {
+  options: RunApprovedSystemImprovementCodexTaskOptions = {},
+): Promise<PreparedCodexExecutionDispatch | ImmediateCodexExecutionDispatch> {
   let proposal = getSystemImprovementProposal(proposalId);
   if (!proposal) {
     throw new Error(`System improvement proposal not found: ${proposalId}`);
@@ -332,20 +463,20 @@ export async function runApprovedSystemImprovementCodexTask(
     throw new Error(`System improvement proposal ${proposalId} is not approved for Codex execution`);
   }
 
-  const existingEvidence = proposal.metadata?.codexRunnerEvidence;
-  if (existingEvidence && !options.force) {
-    const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, { proposal });
-    const evidence = existingEvidence as Partial<SystemImprovementCodexExecutionSnapshot>;
+  const existingRunId = getMetadataString(proposal, 'improvementRunId');
+  const existingRun = existingRunId ? getRun(existingRunId) : null;
+  if (existingRun && ACTIVE_TRACKING_RUN_STATUSES.has(existingRun.status) && !options.force) {
+    const synced = await syncSystemImprovementProposalRuntimeState(proposal.id, {
+      proposal,
+      project: existingRun.projectId ? getProject(existingRun.projectId) : null,
+      latestRun: existingRun,
+    });
     return {
       proposal: synced || proposal,
       launch: {
         status: 'already-running',
-        projectId: getMetadataString(proposal, 'improvementProjectId') || undefined,
-        runId: getMetadataString(proposal, 'improvementRunId') || undefined,
-        codexRunId: typeof evidence.runId === 'string' ? evidence.runId : undefined,
-        evidencePath: typeof evidence.evidencePath === 'string' ? evidence.evidencePath : undefined,
-        worktreePath: typeof evidence.worktreePath === 'string' ? evidence.worktreePath : undefined,
-        branch: typeof evidence.branch === 'string' ? evidence.branch : undefined,
+        projectId: existingRun.projectId,
+        runId: existingRun.runId,
         createdProject: false,
         templateId: determineTemplateId(proposal),
         workspaceUri: getPlatformEngineeringWorkspaceUri(),
@@ -361,9 +492,10 @@ export async function runApprovedSystemImprovementCodexTask(
     throw new Error(`System improvement proposal ${proposalId} requires an allowlist before protected Codex execution`);
   }
   const validationCommands = resolveValidationCommands(proposal);
-  const prompt = buildProjectGoal(proposal);
+  const prompt = buildProjectGoal(proposal, options.remediationPrompt);
   const tracking = ensureTrackingProject({ proposal, workspaceUri, templateId });
   proposal = tracking.proposal;
+  proposal = clearExecutionPointers(proposal);
   const run = createTrackingRun({ proposal, project: tracking.project, workspaceUri, templateId, prompt });
 
   proposal = patchSystemImprovementProposal(proposal.id, {
@@ -382,12 +514,107 @@ export async function runApprovedSystemImprovementCodexTask(
     },
   }) || proposal;
 
+  return {
+    proposal,
+    tracking,
+    run,
+    workspaceUri,
+    templateId,
+    allowedPathPrefixes,
+    validationCommands,
+  };
+}
+
+export function isSystemImprovementCodexTrackingRun(run: Pick<AgentRunState, 'provider' | 'triggerContext' | 'taskEnvelope'> | null | undefined): boolean {
+  if (!run) return false;
+  if (run.provider !== 'codex-cli') return false;
+  if (run.triggerContext?.intentSummary?.startsWith(SELF_IMPROVEMENT_CODEX_INTENT_PREFIX)) return true;
+  return Array.isArray(run.taskEnvelope?.constraints)
+    && run.taskEnvelope.constraints.includes('systemImprovementCodexTracking=true');
+}
+
+export async function cancelSystemImprovementCodexRun(runId: string): Promise<void> {
+  const run = getRun(runId);
+  if (!run || !isSystemImprovementCodexTrackingRun(run)) {
+    return;
+  }
+
+  const activeHandle = getActiveCodexHandle(runId);
+  activeHandle?.cancel('cancelled_by_user');
+  clearActiveCodexHandle(runId);
+
+  updateRun(runId, {
+    status: 'cancelled',
+    lastError: 'Codex execution cancelled by operator.',
+    result: {
+      status: 'blocked',
+      summary: 'Codex worktree runner cancelled by operator.',
+      changedFiles: [],
+      blockers: ['codex execution cancelled'],
+      needsReview: [],
+    },
+  });
+
+  if (run.projectId) {
+    updateProject(run.projectId, {
+      status: 'cancelled',
+    });
+  }
+
+  const proposalId = run.triggerContext?.intentSummary?.startsWith(SELF_IMPROVEMENT_CODEX_INTENT_PREFIX)
+    ? run.triggerContext.intentSummary.slice(SELF_IMPROVEMENT_CODEX_INTENT_PREFIX.length)
+    : run.taskEnvelope?.constraints
+      ?.find((entry) => entry.startsWith('systemImprovementProposalId='))
+      ?.slice('systemImprovementProposalId='.length)
+      || run.taskEnvelope?.constraints
+        ?.find((entry) => entry.startsWith('proposalId='))
+        ?.slice('proposalId='.length);
+
+  if (!proposalId) return;
+
+  await syncSystemImprovementProposalRuntimeState(proposalId, {
+    proposal: getSystemImprovementProposal(proposalId),
+    project: run.projectId ? getProject(run.projectId) : null,
+    latestRun: getRun(runId),
+  });
+}
+
+async function executePreparedApprovedSystemImprovementCodexTask(
+  prepared: PreparedCodexExecutionDispatch,
+  options: RunApprovedSystemImprovementCodexTaskOptions = {},
+): Promise<{ proposal: SystemImprovementProposal; launch: SystemImprovementCodexLaunchResult }> {
+  const { proposal, tracking, run, workspaceUri, templateId, allowedPathPrefixes, validationCommands } = prepared;
+
   try {
     const result = await runPlatformEngineeringCodexTask(buildCodexTaskInput({
       proposal,
       allowedPathPrefixes,
       validationCommands,
+      remediationPrompt: options.remediationPrompt,
+      onCodexExecHandle: (handle) => {
+        const latestTrackingRun = getRun(run.runId);
+        if (latestTrackingRun?.status === 'cancelled') {
+          handle.cancel('cancelled_by_user');
+          return;
+        }
+        registerActiveCodexHandle(run.runId, handle);
+      },
     }));
+    clearActiveCodexHandle(run.runId);
+    const latestTrackingRun = getRun(run.runId);
+    if (latestTrackingRun && isTerminalTrackingRunStatus(latestTrackingRun.status) && latestTrackingRun.status !== 'running') {
+      return {
+        proposal: getSystemImprovementProposal(proposal.id) || proposal,
+        launch: {
+          status: 'already-running',
+          projectId: tracking.project.projectId,
+          runId: run.runId,
+          createdProject: tracking.createdProject,
+          templateId,
+          workspaceUri,
+        },
+      };
+    }
     const evidenceSnapshot = buildCodexEvidenceSnapshot({ result, allowedPathPrefixes });
     const passed = evidenceSnapshot.decision === 'ready-to-merge';
 
@@ -434,9 +661,14 @@ export async function runApprovedSystemImprovementCodexTask(
       project: getProject(tracking.project.projectId),
       latestRun: updateRun(run.runId, {}) || run,
     });
+    const withPreflight = options.skipAutoPreflight
+      ? (synced || withTestEvidence)
+      : await maybeAutoRunSystemImprovementPreflight({
+        proposal: synced || withTestEvidence,
+      });
 
     return {
-      proposal: synced || withTestEvidence,
+      proposal: withPreflight,
       launch: {
         status: 'dispatched',
         projectId: tracking.project.projectId,
@@ -451,6 +683,26 @@ export async function runApprovedSystemImprovementCodexTask(
       },
     };
   } catch (err: unknown) {
+    clearActiveCodexHandle(run.runId);
+    const latestTrackingRun = getRun(run.runId);
+    if (latestTrackingRun?.status === 'cancelled') {
+      return {
+        proposal: await syncSystemImprovementProposalRuntimeState(proposal.id, {
+          proposal: getSystemImprovementProposal(proposal.id),
+          project: getProject(tracking.project.projectId),
+          latestRun: latestTrackingRun,
+        }) || getSystemImprovementProposal(proposal.id) || proposal,
+        launch: {
+          status: 'dispatch-failed',
+          projectId: tracking.project.projectId,
+          runId: run.runId,
+          createdProject: tracking.createdProject,
+          templateId,
+          workspaceUri,
+          error: 'cancelled',
+        },
+      };
+    }
     const message = err instanceof Error ? err.message : String(err);
     updateRun(run.runId, {
       status: 'failed',
@@ -510,4 +762,44 @@ export async function runApprovedSystemImprovementCodexTask(
       },
     };
   }
+}
+
+export async function dispatchApprovedSystemImprovementCodexTask(
+  proposalId: string,
+  options: RunApprovedSystemImprovementCodexTaskOptions = {},
+): Promise<{ proposal: SystemImprovementProposal; launch: SystemImprovementCodexLaunchResult }> {
+  const prepared = await prepareApprovedSystemImprovementCodexTask(proposalId, options);
+  if (isImmediateDispatchResult(prepared)) {
+    return prepared;
+  }
+
+  const synced = await syncSystemImprovementProposalRuntimeState(prepared.proposal.id, {
+    proposal: prepared.proposal,
+    project: prepared.tracking.project,
+    latestRun: prepared.run,
+  });
+
+  void executePreparedApprovedSystemImprovementCodexTask(prepared, options).catch((err: unknown) => {
+    log.error({
+      proposalId,
+      runId: prepared.run.runId,
+      err: err instanceof Error ? err.message : String(err),
+    }, 'Detached system improvement Codex execution crashed unexpectedly');
+  });
+
+  return {
+    proposal: synced || prepared.proposal,
+    launch: buildPreparedLaunchResult(prepared),
+  };
+}
+
+export async function runApprovedSystemImprovementCodexTask(
+  proposalId: string,
+  options: RunApprovedSystemImprovementCodexTaskOptions = {},
+): Promise<{ proposal: SystemImprovementProposal; launch: SystemImprovementCodexLaunchResult }> {
+  const prepared = await prepareApprovedSystemImprovementCodexTask(proposalId, options);
+  if (isImmediateDispatchResult(prepared)) {
+    return prepared;
+  }
+  return executePreparedApprovedSystemImprovementCodexTask(prepared, options);
 }

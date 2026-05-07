@@ -3,6 +3,16 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+const { mockApproveSystemImprovementProposal, mockRejectSystemImprovementProposal } = vi.hoisted(() => ({
+  mockApproveSystemImprovementProposal: vi.fn(),
+  mockRejectSystemImprovementProposal: vi.fn(),
+}));
+
+vi.mock('../../company-kernel/self-improvement-approval', () => ({
+  approveSystemImprovementProposal: (...args: unknown[]) => mockApproveSystemImprovementProposal(...args),
+  rejectSystemImprovementProposal: (...args: unknown[]) => mockRejectSystemImprovementProposal(...args),
+}));
+
 let tempHome: string;
 let previousHome: string | undefined;
 let previousGatewayHome: string | undefined;
@@ -24,6 +34,8 @@ describe('approval handler callbacks', () => {
     previousGatewayHome = process.env.AG_GATEWAY_HOME;
     process.env.HOME = tempHome;
     process.env.AG_GATEWAY_HOME = path.join(tempHome, 'gateway-home');
+    mockApproveSystemImprovementProposal.mockReset();
+    mockRejectSystemImprovementProposal.mockReset();
   });
 
   afterEach(() => {
@@ -64,6 +76,7 @@ describe('approval handler callbacks', () => {
 
     const request = await handler.submitApprovalRequest({
       type: 'proposal_publish',
+      target: { kind: 'knowledge', knowledgeId: 'proposal-approval-1' },
       workspace: 'file:///tmp/research',
       title: '发布提案：Ops Digest',
       description: 'approve publish',
@@ -79,5 +92,66 @@ describe('approval handler callbacks', () => {
     await handler.handleApprovalResponse(request.id, 'approved', 'ship it');
     expect(canonicalAssets.getCanonicalWorkflow('ops-digest')?.content).toContain('# Ops Digest');
     expect(store.getEvolutionProposal('proposal-approval-1')?.status).toBe('published');
-  });
+  }, 20000);
+
+  it('dispatches system improvement execution asynchronously after approval', async () => {
+    const { handler } = await loadModules();
+    mockApproveSystemImprovementProposal.mockResolvedValue({
+      proposal: { id: 'proposal-approval-2' },
+      launch: {
+        status: 'dispatched',
+        createdProject: false,
+        templateId: 'development-template-1',
+        workspaceUri: 'file:///tmp/platform-engineering',
+      },
+    });
+
+    const request = await handler.submitApprovalRequest({
+      type: 'other',
+      target: { kind: 'system-improvement-proposal', proposalId: 'proposal-approval-2' },
+      workspace: 'organization',
+      title: '系统改进审批',
+      description: 'approve execution',
+      onApproved: {
+        type: 'custom',
+        payload: {
+          action: 'approve-system-improvement-proposal',
+          proposalId: 'proposal-approval-2',
+        },
+      },
+    });
+
+    const updated = await handler.handleApprovalResponse(request.id, 'approved', 'ship it');
+    expect(updated?.status).toBe('approved');
+    expect(mockApproveSystemImprovementProposal).toHaveBeenCalledWith('proposal-approval-2', {
+      launchExecution: true,
+      waitForExecution: false,
+    });
+  }, 20_000);
+
+  it('persists rejected responses even if the system improvement callback target is already gone', async () => {
+    const { handler } = await loadModules();
+    mockRejectSystemImprovementProposal.mockImplementation(() => {
+      throw new Error('System improvement proposal not found: missing-proposal');
+    });
+
+    const request = await handler.submitApprovalRequest({
+      type: 'other',
+      target: { kind: 'system-improvement-proposal', proposalId: 'missing-proposal' },
+      workspace: 'organization',
+      title: '系统改进审批',
+      description: 'reject execution',
+      onRejected: {
+        type: 'custom',
+        payload: {
+          action: 'reject-system-improvement-proposal',
+          proposalId: 'missing-proposal',
+        },
+      },
+    });
+
+    const updated = await handler.handleApprovalResponse(request.id, 'rejected', 'cleanup');
+    expect(updated?.status).toBe('rejected');
+    expect(updated?.response?.message).toBe('cleanup');
+  }, 20_000);
 });

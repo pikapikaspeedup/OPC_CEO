@@ -1080,6 +1080,37 @@ Web 首页展示原则：
 |------|------|------|
 | `limit` | `number` | 否。默认 `20` |
 
+### `GET /api/company/ceo/decisions` — CEO Decisions
+
+**功能**: 返回统一 CEO 决策控制面。服务端只聚合系统改进、Growth proposal 和 Project stage gate 这三类正式业务决策，前端只消费返回的 `DecisionItemView[]`。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `limit` | `number` | 否。默认 `50` |
+
+**Response** `200 OK`:
+
+```json
+{
+  "items": [
+    {
+      "id": "system-improvement:proposal-id:entry-review",
+      "title": "系统改进标题",
+      "source": "软件自迭代",
+      "status": "等待 CEO 准入审批",
+      "priority": "高",
+      "currentOwner": "ceo",
+      "nextAction": "approve-entry",
+      "target": { "kind": "system-improvement-proposal", "proposalId": "proposal-id" },
+      "createdAt": "2026-05-06T00:00:00.000Z",
+      "updatedAt": "2026-05-06T00:00:00.000Z"
+    }
+  ]
+}
+```
+
 ### `GET /api/management/overview` — Management Overview
 
 **功能**: 返回经营概览与管理指标。
@@ -1187,6 +1218,7 @@ Web 首页展示原则：
       "id": "approval-123",
       "type": "proposal_publish",
       "workspace": "file:///tmp/research",
+      "target": { "kind": "growth-proposal", "proposalId": "growth-proposal-123" },
       "title": "发布提案",
       "description": "需要 CEO 审批",
       "urgency": "normal",
@@ -1222,6 +1254,7 @@ Web 首页展示原则：
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `type` | `string` | ✅ | `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `proposal_publish` / `other` |
+| `target` | `DecisionTarget` | ✅ | 审批所属业务对象；支持 `system-improvement-proposal` / `growth-proposal` / `project` / `project-stage-gate` / `run` / `knowledge` / `conversation` / `ops` / `settings` |
 | `workspace` | `string` | ✅ | 发起部门的 workspace URI |
 | `title` | `string` | ✅ | 审批标题 |
 | `description` | `string` | ✅ | 详细描述 |
@@ -1606,7 +1639,7 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `POST /api/company/growth/proposals/:id/evaluate|approve|reject|dry-run|publish`
 
-评估、批准、拒绝、dry-run 或发布增长提案。`evaluate` 会经过 budget gate；高风险提案会创建 approval request；`script` proposal 必须先通过 `dry-run` 静态 sandbox 检查；公开 `publish` 不接受 `force` 绕过审批或 dry-run，只有满足约束后才会写入 canonical workflow/skill/rule、workflow script 或 SOP knowledge asset。已发布的 workflow/skill proposal 会参与后续 Prompt Mode 执行解析。
+评估、批准、拒绝、dry-run 或发布增长提案。`evaluate` 会经过 budget gate；高风险提案会创建带 `target: { kind: "growth-proposal" }` 的 approval request；`script` proposal 必须先通过 `dry-run` 静态 sandbox 检查；公开 `publish` 不接受 `force` 绕过审批或 dry-run，只有满足约束后才会写入 canonical workflow/skill/rule、workflow script 或 SOP knowledge asset。已发布的 workflow/skill proposal 会参与后续 Prompt Mode 执行解析。
 
 ### `GET|POST /api/company/growth/observations`
 
@@ -1667,11 +1700,21 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `GET /api/company/self-improvement/proposals`
 
-分页读取系统改进 proposal。支持 `status`、`risk` 过滤。
+分页读取系统改进 proposal。支持 `status`、`risk` 过滤。列表项会返回原始 proposal 字段，以及服务端派生的：
+
+1. `controlState`
+   - `stage`: `entry-review | ai-executing | ai-preflight | exit-review | ops-merge | ops-restart | published | observing | rolled-back | blocked`
+   - `currentOwner`: `ceo | ai | ops | none`
+   - `nextAction`
+   - `pageMode`: `entry-review | exit-review | progress`
+   - `headline` / `subline`
+   - `milestones`
+2. `entryApprovalSummary`
+   - `requestId / status / actedBy / actedAt / message`
 
 ### `POST /api/company/self-improvement/proposals/generate`
 
-从 signal 生成 `SystemImprovementProposal`，包含 `affectedFiles`、`protectedAreas`、`risk`、`implementationPlan`、`testPlan`、`rollbackPlan`。涉及 protected core 的 high/critical proposal 会自动创建 approval request。该接口不创建 git branch、不提交、不推送、不合并。
+从 signal 生成 `SystemImprovementProposal`，包含 `affectedFiles`、`protectedAreas`、`risk`、`implementationPlan`、`testPlan`、`rollbackPlan`。涉及 protected core 的 high/critical proposal 会自动创建带 `target: { kind: "system-improvement-proposal" }` 的 approval request。该接口不创建 git branch、不提交、不推送、不合并。
 
 平台工程部对已纳入观察且允许提案的项目，会在失败 run 出现后直接生成 proposal，CEO Office 可直接读取，不需要手工再次描述问题。
 
@@ -1684,11 +1727,11 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `GET /api/company/self-improvement/proposals/:id`
 
-读取单个系统改进 proposal。
+读取单个系统改进 proposal。详情接口与列表接口保持同一控制面返回口径，也会直接聚合准入审批事实，不再要求前端自己再去查 approval request。
 
 ### `POST /api/company/self-improvement/proposals/:id/evaluate|approve|reject|attach-test-evidence|release-gate|observe`
 
-`evaluate` 会重新计算 protected core 风险并按需创建 approval request；`approve` 会写入持久 `metadata.approvalStatus/approvedAt`，并自动在平台工程部创建 Project、挂上 `development-template-1`、派发首个 run，返回 `proposal + launch`；`reject` 只更新拒绝状态；`attach-test-evidence` 记录测试命令和摘要。proposal 运行态会根据平台工程项目与最新 run 自动推进：`approved -> in-progress -> testing -> ready-to-merge`。low/medium proposal 在最新 passed evidence 后可进入 `ready-to-merge`；high/critical proposal 必须已有持久审批事实，不能用测试证据绕过审批；已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 `ready-to-merge`。`GET /api/company/self-improvement/proposals` 与 `GET /api/company/self-improvement/proposals/:id` 会返回 `exitEvidence`，其中包含 `project/latestRun/testing/mergeGate/releaseGate` 准出证据包。`release-gate` 接收 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`，其中 `preflight` 会从 Codex worktree 生成 patch 并对当前主仓执行 `git apply --check`；后续动作只记录 CEO/Ops 显式准出、合并、重启、观察、回滚状态和命令包，不会静默执行 auto merge / push / deploy。`observe` 将 proposal 标记为 `observing` 并记录观察摘要。
+`evaluate` 会重新计算 protected core 风险并按需创建带 `DecisionTarget` 的 approval request；`approve` 会写入持久 `metadata.approvalStatus/approvedAt`，并自动在平台工程部创建 Project、派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链：隔离 worktree、Codex 执行、evidence 回写、auto-preflight、release gate。这里的 `launch` 只表示后台执行已经派发，不会同步等待整条 Codex 实现链完成；CEO 准入接口会立即返回，后续执行状态通过 proposal 详情中的 `controlState / exitEvidence` 继续观察。`reject` 只更新拒绝状态；`attach-test-evidence` 记录测试命令和摘要。proposal 的控制面不再由前端直接解释 `proposal.status / humanGate / automationState / releaseGate`，而是统一读取服务端派生的 `controlState`。如果准入审批事实已经是 `rejected`，即使旧 proposal 状态仍停在 `approval-required`，控制面也会把它视为终态，不再重新进入 CEO 决策队列。low/medium proposal 在最新 passed evidence 后可形成 merge gate；high/critical proposal 必须已有持久审批事实，不能用测试证据绕过审批；已审批 proposal 可在 failed evidence 后通过最新 passed evidence 恢复到 merge-ready。Codex 受控执行成功后，如果 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 仍是 `not-run`，系统会自动触发一次 `preflight`；`syncSystemImprovementProposalsForRun()` 只做幂等兜底，不承担主触发责任。`release-gate` 接收 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`，其中 `preflight` 会从 Codex worktree 生成 patch 并对当前主仓执行 `git apply --check`；`releaseGate` 只写入 `exitEvidence.releaseGate`，不再写 `metadata.releaseGate`。对于确定性的 trailing whitespace 失败，会先自动修复并重跑一次 preflight；若 patch 生成阶段碰到瞬时 `index.lock`，系统会先重试同一批 git 命令；若 `主仓 apply check` 说明旧 patch 已不再适配当前主仓，系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 重新生成 patch 并继续 preflight。所有自动收口结果都会写入 `releaseGate.failureCategory / remediationStatus / remediationAttempts / remediationSummary`。旧 `codexRunnerEvidence` / `launchStatus` 只保留审计价值，不再单独构成 active runtime context。后续动作只记录 CEO/Ops 显式准出、合并、重启、观察、回滚状态和命令包，不会静默执行 auto merge / push / deploy。`observe` 将 proposal 标记为 `observing` 并记录观察摘要。
 
 ---
 

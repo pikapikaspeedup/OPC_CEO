@@ -28,6 +28,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { WorkspaceListItem, WorkspaceMiniMetric, WorkspaceSurface } from '@/components/ui/workspace-primitives';
 import { validateCron } from '@/lib/cron-utils';
+import { getSystemImprovementStageLabel } from '@/lib/system-improvement-control-view';
 import type {
   AgentRun,
   BudgetLedgerEntryFE,
@@ -545,7 +546,7 @@ export default function SchedulerPanel({ className, createRequestToken = 0 }: Sc
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-xs font-semibold text-[var(--app-text)]">{proposal.title}</div>
-                      <div className="mt-1 text-[11px] text-[var(--app-text-soft)]">{proposal.status} · {proposal.affectedFiles.length} files</div>
+                      <div className="mt-1 text-[11px] text-[var(--app-text-soft)]">{getSystemImprovementStageLabel(proposal.controlState?.stage)} · {proposal.affectedFiles.length} files</div>
                     </div>
                     <span className={cn(
                       'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold',
@@ -563,7 +564,7 @@ export default function SchedulerPanel({ className, createRequestToken = 0 }: Sc
                     <span className="rounded-full bg-[var(--app-raised-2)] px-2 py-0.5">tests {proposal.testEvidence.length}</span>
                     <span className="rounded-full bg-[var(--app-raised-2)] px-2 py-0.5">rollback {proposal.rollbackPlan.length}</span>
                     <span className="rounded-full bg-[var(--app-raised-2)] px-2 py-0.5">
-                      approval {proposal.approvalRequestId ? proposal.status : 'none'}
+                      approval {proposal.entryApprovalSummary?.status || 'none'}
                     </span>
                   </div>
                   <div className="mt-2 grid gap-1.5 text-[10px] leading-4 text-[var(--app-text-soft)]">

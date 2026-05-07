@@ -1,10 +1,16 @@
-import { submitApprovalRequest } from '../approval/handler';
+import { createLogger } from '../logger';
+import { submitApprovalRequestSync } from '../approval/handler';
 import {
   getSystemImprovementProposal,
   patchSystemImprovementProposal,
 } from './self-improvement-store';
-import { runApprovedSystemImprovementCodexTask } from './self-improvement-codex-execution';
+import {
+  dispatchApprovedSystemImprovementCodexTask,
+  runApprovedSystemImprovementCodexTask,
+} from './self-improvement-codex-execution';
 import { syncSystemImprovementProposalRuntimeState } from './self-improvement-runtime-state';
+
+const log = createLogger('SelfImprovementApproval');
 
 function buildApprovalMetadata(input: {
   existingMetadata?: Record<string, unknown>;
@@ -18,7 +24,7 @@ function buildApprovalMetadata(input: {
   };
 }
 
-export async function ensureSystemImprovementApprovalRequest(id: string) {
+export function ensureSystemImprovementApprovalRequest(id: string) {
   const proposal = getSystemImprovementProposal(id);
   if (!proposal) {
     throw new Error(`System improvement proposal not found: ${id}`);
@@ -36,8 +42,9 @@ export async function ensureSystemImprovementApprovalRequest(id: string) {
     }) || proposal;
   }
 
-  const request = await submitApprovalRequest({
+  const request = submitApprovalRequestSync({
     type: 'other',
+    target: { kind: 'system-improvement-proposal', proposalId: proposal.id },
     workspace: 'organization',
     title: `系统改进审批：${proposal.title}`,
     description: [
@@ -80,7 +87,7 @@ export async function ensureSystemImprovementApprovalRequest(id: string) {
 
 export async function approveSystemImprovementProposal(
   id: string,
-  options: { launchExecution?: boolean } = {},
+  options: { launchExecution?: boolean; waitForExecution?: boolean } = {},
 ) {
   const existing = getSystemImprovementProposal(id);
   const proposal = patchSystemImprovementProposal(id, {
@@ -99,6 +106,19 @@ export async function approveSystemImprovementProposal(
       launch: null,
     };
   }
+
+  if (options.waitForExecution === false) {
+    try {
+      return await dispatchApprovedSystemImprovementCodexTask(proposal.id);
+    } catch (err) {
+      log.error({
+        proposalId: proposal.id,
+        err: err instanceof Error ? err.message : String(err),
+      }, 'Failed to dispatch approved system improvement proposal');
+      throw err;
+    }
+  }
+
   const launched = await runApprovedSystemImprovementCodexTask(proposal.id);
   return {
     ...launched,

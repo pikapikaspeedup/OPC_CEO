@@ -12,6 +12,7 @@ async function loadModules() {
   delete (globalThis as Record<string, unknown>).__AG_GATEWAY_DB__;
   return {
     approval: await import('./self-improvement-approval'),
+    approvalStore: await import('../approval/request-store'),
     planner: await import('./self-improvement-planner'),
     risk: await import('./self-improvement-risk'),
     signal: await import('./self-improvement-signal'),
@@ -195,5 +196,95 @@ describe('guarded self-improvement kernel', () => {
 
     expect(passed?.status).toBe('ready-to-merge');
     expect(passed?.testEvidence.map((item) => item.status)).toEqual(['failed', 'passed']);
+  });
+
+  it('deletes legacy approval-required proposals that have no approval request', async () => {
+    const modules = await loadModules();
+
+    modules.store.upsertSystemImprovementProposal({
+      id: 'legacy-invalid-proposal',
+      status: 'approval-required',
+      title: '旧坏态提案',
+      summary: 'This demo record should be removed.',
+      sourceSignalIds: ['signal-legacy'],
+      evidenceRefs: [],
+      affectedFiles: ['src/app/page.tsx'],
+      protectedAreas: ['approval'],
+      risk: 'high',
+      implementationPlan: ['Implement'],
+      testPlan: ['npx tsc --noEmit --pretty false'],
+      rollbackPlan: ['revert patch'],
+      linkedRunIds: [],
+      testEvidence: [],
+      createdAt: '2026-05-06T10:00:00.000Z',
+      updatedAt: '2026-05-06T10:00:00.000Z',
+    });
+
+    expect(modules.store.listSystemImprovementProposals().some((proposal) => proposal.id === 'legacy-invalid-proposal')).toBe(false);
+    expect(modules.store.getSystemImprovementProposal('legacy-invalid-proposal')).toBeNull();
+  });
+
+  it('deletes approval-required proposals whose approval request record is missing', async () => {
+    const modules = await loadModules();
+
+    modules.store.upsertSystemImprovementProposal({
+      id: 'legacy-missing-request-record',
+      status: 'approval-required',
+      approvalRequestId: 'missing-request-record',
+      title: '旧坏态提案',
+      summary: 'This demo record should be removed.',
+      sourceSignalIds: ['signal-legacy'],
+      evidenceRefs: [],
+      affectedFiles: ['src/app/page.tsx'],
+      protectedAreas: ['approval'],
+      risk: 'high',
+      implementationPlan: ['Implement'],
+      testPlan: ['npx tsc --noEmit --pretty false'],
+      rollbackPlan: ['revert patch'],
+      linkedRunIds: [],
+      testEvidence: [],
+      createdAt: '2026-05-06T10:00:00.000Z',
+      updatedAt: '2026-05-06T10:00:00.000Z',
+    });
+
+    expect(modules.store.listSystemImprovementProposals().some((proposal) => proposal.id === 'legacy-missing-request-record')).toBe(false);
+    expect(modules.store.getSystemImprovementProposal('legacy-missing-request-record')).toBeNull();
+  });
+
+  it('deletes linked approval requests when a system improvement proposal is removed', async () => {
+    const modules = await loadModules();
+    const request = modules.approvalStore.createApprovalRequest({
+      type: 'other',
+      target: { kind: 'system-improvement-proposal', proposalId: 'proposal-with-linked-approval' },
+      workspace: 'organization',
+      title: '系统改进审批',
+      description: 'cleanup linked request',
+      urgency: 'high',
+    });
+
+    modules.store.upsertSystemImprovementProposal({
+      id: 'proposal-with-linked-approval',
+      status: 'approval-required',
+      approvalRequestId: request.id,
+      title: '待清理提案',
+      summary: 'This proposal and its approval should be deleted together.',
+      sourceSignalIds: ['signal-cleanup'],
+      evidenceRefs: [],
+      affectedFiles: ['src/lib/approval/dispatcher.ts'],
+      protectedAreas: ['approval'],
+      risk: 'high',
+      implementationPlan: ['Implement'],
+      testPlan: ['npx tsc --noEmit --pretty false'],
+      rollbackPlan: ['revert patch'],
+      linkedRunIds: [],
+      testEvidence: [],
+      createdAt: '2026-05-06T10:00:00.000Z',
+      updatedAt: '2026-05-06T10:00:00.000Z',
+    });
+
+    modules.store.deleteSystemImprovementProposal('proposal-with-linked-approval');
+
+    expect(modules.store.getSystemImprovementProposal('proposal-with-linked-approval')).toBeNull();
+    expect(modules.approvalStore.getApprovalRequest(request.id)).toBeUndefined();
   });
 });

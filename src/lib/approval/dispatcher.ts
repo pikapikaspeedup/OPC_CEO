@@ -69,7 +69,10 @@ async function executeCustomCallback(request: ApprovalRequest): Promise<void> {
 
   if (action === 'approve-system-improvement-proposal' && typeof callback.payload.proposalId === 'string') {
     const { approveSystemImprovementProposal } = await import('../company-kernel/self-improvement-approval');
-    await Promise.resolve(approveSystemImprovementProposal(callback.payload.proposalId, { launchExecution: true }));
+    await Promise.resolve(approveSystemImprovementProposal(callback.payload.proposalId, {
+      launchExecution: true,
+      waitForExecution: false,
+    }));
     return;
   }
 

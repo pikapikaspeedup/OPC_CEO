@@ -377,6 +377,7 @@ describe('company operating kernel phase 3-5', () => {
     const modules = await loadModules();
     const approval = await modules.approvalHandler.submitApprovalRequest({
       type: 'proposal_publish',
+      target: { kind: 'knowledge', knowledgeId: 'workflow-proposal' },
       title: 'Publish workflow',
       description: 'Publish a high-risk workflow proposal',
       workspace: 'file:///tmp/workspace',

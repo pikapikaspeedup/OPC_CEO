@@ -312,6 +312,7 @@ The API runs on port 3000 by default.
     "status": "cancelled"
   }
   ```
+- **Note:** 若该 run 是 self-improvement Codex tracking run，`DELETE` 会优先终止真实 `codex exec` child process，再把 tracking run / project / proposal 收口到取消终态。
 
 ### 2.1 Company Kernel
 
@@ -394,7 +395,7 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `POST /api/company/growth/proposals/:id/dry-run`
 - **URL:** `POST /api/company/growth/proposals/:id/publish`
 - **URL:** `GET|POST /api/company/growth/observations`
-- **Note:** proposal `kind` can be `sop`, `workflow`, `skill`, `script`, or `rule`. Generate/evaluate is budgeted. Public publish no longer accepts force mode; high-risk proposals require approval, and `script` proposals additionally require a passed dry-run. Published workflow/skill proposals can be injected into later Prompt Mode execution resolution. Three or more repeated successful RunCapsules can generate a `workflow` proposal; repeated automation/script signals can generate `script`, and repeated operating constraints can generate `rule`.
+- **Note:** proposal `kind` can be `sop`, `workflow`, `skill`, `script`, or `rule`. Generate/evaluate is budgeted. Public publish no longer accepts force mode; high-risk proposals require approval requests with `target: { kind: "growth-proposal" }`, and `script` proposals additionally require a passed dry-run. Published workflow/skill proposals can be injected into later Prompt Mode execution resolution. Three or more repeated successful RunCapsules can generate a `workflow` proposal; repeated automation/script signals can generate `script`, and repeated operating constraints can generate `rule`.
 
 #### Company Loops
 
@@ -422,8 +423,9 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `POST /api/company/self-improvement/proposals/:id/release-gate`
 - **URL:** `POST /api/company/self-improvement/proposals/:id/observe`
 - **Automatic Sources:** observed project run failures (`failed` / `blocked` / `timeout`) and `[不支持]` User Story gaps can be synchronized into this signal pool by the built-in platform engineering department.
-- **Note:** high/critical proposal 不能通过 passed test evidence 绕过 approval；`approve` 会写入持久 approval metadata，并自动创建平台工程 Project、派发 `development-template-1` 首跑，返回 `proposal + launch`；proposal 随平台工程项目状态和测试证据自动推进到 `in-progress/testing/ready-to-merge`；`GET` proposal 接口会返回 `exitEvidence.project/latestRun/testing/mergeGate/releaseGate`。
-- **Note:** `release-gate` action 支持 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`。`preflight` 真实生成 patch 并执行 `git apply --check`；merge/restart/rollback 是 CEO/Ops 显式准出后的状态和命令包记录，不会静默自动 push/deploy。
+- **Note:** high/critical proposal 不能通过 passed test evidence 绕过 approval；相关 approval request 必须带 `target: { kind: "system-improvement-proposal" }`。`approve` 会写入持久 approval metadata，并自动创建平台工程 Project、派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链；这里的 `launch` 只表示后台执行已经派发，不同步等待 Codex 完成。`GET` proposal 接口会返回原始 proposal 字段，以及服务端派生的 `controlState` 和 `entryApprovalSummary`。`controlState` 统一给出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`，CLI 或前端不再需要自己解释 `proposal.status / humanGate / automationState / releaseGate`；若准入审批事实已经是 `rejected`，即使旧 proposal 状态还停在 `approval-required`，控制面也会把它视为终态，不再重新进入 CEO 队列。
+- **Note:** Codex 受控执行成功后，如果 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 仍未执行，系统会自动触发一次 `preflight`；run 同步只做幂等兜底。`release-gate` action 仍然支持 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`，`releaseGate` 只写入 `exitEvidence.releaseGate`，并继续把自动修复结果写入 `failureCategory / remediationStatus / remediationAttempts / remediationSummary`。
+- **Note:** `release-gate` action 支持 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`。`preflight` 真实生成 patch 并执行 `git apply --check`；对于确定性的 trailing whitespace 失败，会自动修复并重跑一次 preflight；如果 patch 生成阶段碰到瞬时 `index.lock`，系统会先重试同一批 git 命令；如果 `主仓 apply check` 表明旧 patch 已不再适配当前主仓，系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 继续 preflight。旧 `codexRunnerEvidence` / `launchStatus` 只保留审计价值，不再单独构成 active runtime context。merge/restart/rollback 是 CEO/Ops 显式准出后的状态和命令包记录，不会静默自动 push/deploy。
 
 ### 3. Templates & Pipelines
 
@@ -472,6 +474,7 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
   - `cancel`
   - `evaluate`
   其它 intervention 仍会被拒绝。
+- **Self-improvement note:** 若命中 self-improvement Codex tracking run，`cancel` 会走专门的 direct Codex 取消路径，真实终止当前 child process，而不是只改 tracking run 状态。
 - **Example:**
   ```bash
   # Nudge a critic that forgot DECISION: marker
@@ -602,6 +605,11 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `GET /api/ceo/events?limit=20`
 - **Response:** `200 OK` `{ events: CEOEventRecord[] }`
 
+#### Get CEO Decisions
+- **URL:** `GET /api/company/ceo/decisions?limit=50`
+- **Response:** `200 OK` `{ items: DecisionItemView[] }`
+- **Note:** 每个 `DecisionItemView` 都包含 `target: DecisionTarget`。该接口只返回系统改进、Growth 和 Project stage gate 这三类正式业务决策；CEO 决策入口必须按 target 打开具体业务对象详情，不再把 Projects 当全局兜底页。
+
 #### Get Management Overview
 - **URL:** `GET /api/management/overview`
 - **Response:** `200 OK` organization-level overview with:
@@ -638,6 +646,7 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `POST /api/approval`
 - **Request Body (JSON):**
   - `type` (String, required): `token_increase` / `tool_access` / `provider_change` / `scope_extension` / `pipeline_approval` / `proposal_publish` / `other`
+  - `target` (DecisionTarget, required): 审批所属业务对象，支持 `system-improvement-proposal` / `growth-proposal` / `project` / `project-stage-gate` / `run` / `knowledge` / `conversation` / `ops` / `settings`
   - `workspace` (String, required): 发起部门的 workspace URI
   - `title` (String, required): 审批标题
   - `description` (String, required): 详细描述
@@ -653,6 +662,7 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **Request Body (JSON):**
   - `action` (String, required): `approved` / `rejected` / `feedback`
   - `message` (String, optional): CEO 回复消息
+- **Note:** 审批响应会先落库，再 best-effort 执行 callback。若目标业务对象已经不存在或 callback 失败，接口仍返回 `200 OK` 和已持久化的审批事实，不再把已经成功的 CEO 操作回滚成表面上的失败。
 
 #### Submit Approval Feedback
 - **URL:** `GET|POST /api/approval/:id/feedback`

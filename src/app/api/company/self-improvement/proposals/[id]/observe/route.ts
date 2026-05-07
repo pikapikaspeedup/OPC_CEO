@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { buildSystemImprovementProposalView } from '@/lib/company-kernel/self-improvement-control-state';
 import { observeSystemImprovementProposal } from '@/lib/company-kernel/self-improvement-observer';
 import {
   proxyToControlPlane,
@@ -24,12 +25,12 @@ export async function POST(
   };
   try {
     return NextResponse.json({
-      proposal: observeSystemImprovementProposal({
+      proposal: buildSystemImprovementProposalView(observeSystemImprovementProposal({
         proposalId: id,
         summary: body.summary || 'Observation started.',
         linkedRunIds: body.linkedRunIds,
         metadata: body.metadata,
-      }),
+      })),
     });
   } catch (err) {
     return NextResponse.json({

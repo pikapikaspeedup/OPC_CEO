@@ -93,13 +93,6 @@ export async function startSchedulerWorker(): Promise<void> {
       }
 
       try {
-        const { initApprovalTriggers } = await import('@/lib/agents/approval-triggers');
-        initApprovalTriggers();
-      } catch (error: unknown) {
-        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'Approval triggers initialization skipped');
-      }
-
-      try {
         const { loadPersistedRequests } = await import('@/lib/approval/request-store');
         loadPersistedRequests();
       } catch (error: unknown) {

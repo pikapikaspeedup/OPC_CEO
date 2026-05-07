@@ -25,6 +25,8 @@ import { appendRunHistoryEntry } from './run-history';
 import { listRunRecords, syncRunArtifactsToDeliverables, upsertRunRecord } from '../storage/gateway-db';
 import { observeRunCapsuleForAgenda } from '../company-kernel/operating-integration';
 import { observeRunFailureForPlatformEngineering } from '../company-kernel/platform-engineering-observer';
+import { ensureSystemImprovementApprovalRequest } from '../company-kernel/self-improvement-approval';
+import { deleteSystemImprovementProposal } from '../company-kernel/self-improvement-store';
 import { syncSystemImprovementProposalsForRun } from '../company-kernel/self-improvement-runtime-state';
 import { finalizeBudgetForTerminalRun } from '../company-kernel/budget-gate';
 import { recordRunTerminalForCircuitBreakers } from '../company-kernel/circuit-breaker';
@@ -411,7 +413,15 @@ export function updateRun(
       log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to update run circuit breakers');
     }
     try {
-      observeRunFailureForPlatformEngineering(run);
+      const observation = observeRunFailureForPlatformEngineering(run);
+      if (observation.proposal?.status === 'approval-required') {
+        try {
+          ensureSystemImprovementApprovalRequest(observation.proposal.id);
+        } catch (err: unknown) {
+          deleteSystemImprovementProposal(observation.proposal.id);
+          throw err;
+        }
+      }
     } catch (err: unknown) {
       log.debug({ runId: runId.slice(0, 8), err: getErrorMessage(err) }, 'Failed to observe platform engineering signal from terminal run');
     }

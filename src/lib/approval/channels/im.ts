@@ -100,7 +100,7 @@ export class IMChannel implements NotificationChannel {
           [
             { label: '✅ 批准', url: approveUrl },
             { label: '❌ 拒绝', url: rejectUrl },
-            { label: '💬 查看详情', url: this.getApprovalUrl(request.id) },
+            { label: '💬 查看详情', url: this.getApprovalUrl(request.id, request.target) },
           ],
         );
         return { success: true, channel: this.id, messageId: result.messageId };
@@ -117,7 +117,7 @@ export class IMChannel implements NotificationChannel {
       '',
       `批准: ${approveUrl}`,
       `拒绝: ${rejectUrl}`,
-      `详情: ${this.getApprovalUrl(request.id)}`,
+      `详情: ${this.getApprovalUrl(request.id, request.target)}`,
     ].join('\n');
 
     try {
@@ -134,7 +134,7 @@ export class IMChannel implements NotificationChannel {
    * Generate approval URL.
    * CEO can click from IM to approve/reject in browser.
    */
-  getApprovalUrl(requestId: string): string {
-    return getApprovalInboxUrl(this.gatewayUrl, requestId);
+  getApprovalUrl(requestId: string, target: ApprovalRequest['target']): string {
+    return getApprovalInboxUrl(this.gatewayUrl, requestId, target);
   }
 }
