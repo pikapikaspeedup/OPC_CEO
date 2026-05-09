@@ -193,18 +193,22 @@ export async function GET(req: Request) {
   const stageIdFilter = searchParams.get('stageId');
   const reviewOutcomeFilter = searchParams.get('reviewOutcome');
   const projectIdFilter = searchParams.get('projectId');
+  const workspaceFilter = searchParams.get('workspace');
   const executorKindFilter = searchParams.get('executorKind');
   const schedulerJobIdFilter = searchParams.get('schedulerJobId');
+  const projectlessFilter = searchParams.get('projectless');
 
-  const filter: { status?: RunStatus; stageId?: string; reviewOutcome?: string; projectId?: string; executorKind?: string; schedulerJobId?: string } = {};
+  const filter: RunRecordFilter = {};
   if (statusFilter) filter.status = statusFilter;
   if (stageIdFilter) filter.stageId = stageIdFilter;
   if (reviewOutcomeFilter) filter.reviewOutcome = reviewOutcomeFilter;
   if (projectIdFilter) filter.projectId = projectIdFilter;
+  if (workspaceFilter) filter.workspace = workspaceFilter;
   if (executorKindFilter) filter.executorKind = executorKindFilter;
   if (schedulerJobIdFilter) filter.schedulerJobId = schedulerJobIdFilter;
+  if (projectlessFilter === 'true') filter.projectless = true;
 
-  const normalizedFilter = Object.keys(filter).length > 0 ? filter as RunRecordFilter : undefined;
+  const normalizedFilter = Object.keys(filter).length > 0 ? filter : undefined;
   const total = countRunRecordsByFilter(normalizedFilter);
   const runs = listRunRecordsByFilter(normalizedFilter, {
     limit: pagination.limit,

@@ -10,6 +10,8 @@ import {
 } from './canonical-assets';
 import type { TaskResult } from './group-types';
 import { createLogger } from '../logger';
+import { STORY_TOP_CANDIDATE_ARTIFACT } from '../story-top-candidates';
+import { ingestStoryTopCandidatesFromArtifact } from '../company-kernel/story-top-candidate-signals';
 
 const log = createLogger('WorkflowRuntimeHooks');
 const execFile = promisify(execFileCallback);
@@ -84,6 +86,10 @@ type BigEventVerification = {
 
 export interface WorkflowRuntimePreparation {
   promptAppendix: string;
+}
+
+export interface WorkflowRuntimeFinalizeOptions {
+  workflowOutputText?: string;
 }
 
 type AiDigestPreparedContext = {
@@ -347,6 +353,38 @@ async function prepareAiDigestContext(
   }
 
   return sections.join('\n');
+}
+
+async function prepareStoryTopCandidatesContext(
+  workspacePath: string,
+  artifactAbsDir: string,
+): Promise<string> {
+  const userStoryRoot = path.join(workspacePath, 'User Story');
+  return [
+    '## Story Candidate Extraction Contract',
+    `- Read real files under: ${userStoryRoot}`,
+    '- Inspect every `User Story/**/*.md` file directly in the workspace.',
+    '- Find unsupported stories from lines that start with `- [不支持]`.',
+    '- Select exactly the global Top 3 most worthwhile candidates to propose next.',
+    `- Write a strict JSON array to: ${path.join(artifactAbsDir, STORY_TOP_CANDIDATE_ARTIFACT)}`,
+    '- Do not modify repository files outside the artifact directory.',
+    '- Do not summarize by file; each JSON item must represent one story-level candidate.',
+    '',
+    '### Required JSON schema',
+    '[{',
+    '  "storyKey": "stable key if you can derive one",',
+    '  "sourcePath": "User Story/.../file.md",',
+    '  "storyText": "原始故事文本",',
+    '  "title": "面向 CEO 的改进标题",',
+    '  "summary": "候选摘要",',
+    '  "expectedOutcome": "落地后的业务结果",',
+    '  "severity": "low|medium|high|critical",',
+    '  "rationale": "为什么进入 Top 3",',
+    '  "affectedAreas": ["frontend" | "api" | "runtime" | "scheduler" | "provider" | "knowledge" | "approval" | "database" | "docs"]',
+    '}]',
+    '',
+    '- Return the same JSON in your final answer as a fenced ```json block after writing the file.',
+  ].join('\n');
 }
 
 function renderEventList(
@@ -649,6 +687,59 @@ async function finalizeAiDigestRun(
   };
 }
 
+async function finalizeStoryTopCandidatesRun(
+  workspacePath: string,
+  artifactAbsDir: string,
+  result: TaskResult,
+  options?: WorkflowRuntimeFinalizeOptions,
+): Promise<TaskResult> {
+  if (result.status !== 'completed') {
+    return result;
+  }
+
+  const artifactPath = path.join(artifactAbsDir, STORY_TOP_CANDIDATE_ARTIFACT);
+  if (!fs.existsSync(artifactPath) && options?.workflowOutputText?.trim()) {
+    const fencedJson = options.workflowOutputText.match(/```json\s*([\s\S]*?)```/i)?.[1]
+      || options.workflowOutputText.match(/\[[\s\S]*\]/)?.[0];
+    if (fencedJson) {
+      try {
+        JSON.parse(fencedJson);
+        fs.writeFileSync(artifactPath, `${fencedJson.trim()}\n`, 'utf-8');
+      } catch {
+        // Leave missing-file handling to ingestion path below.
+      }
+    }
+  }
+
+  let ingested: { count: number } | null = null;
+  try {
+    ingested = ingestStoryTopCandidatesFromArtifact({
+      workspacePath,
+      workspaceUri: `file://${workspacePath}`,
+      artifactAbsDir,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'unknown';
+    return {
+      ...result,
+      status: 'failed',
+      blockers: [...result.blockers, `Top 3 候选写回失败：${message}`],
+      summary: `Top 3 候选写回失败：${message}`,
+    };
+  }
+
+  return {
+    ...result,
+    status: 'completed',
+    summary: `平台工程候选改进 Top 3 已刷新，共 ${ingested.count} 条。`,
+    blockers: [],
+    changedFiles: uniqStrings([
+      ...result.changedFiles,
+      toRelativePath(workspacePath, path.join(artifactAbsDir, STORY_TOP_CANDIDATE_ARTIFACT)),
+    ]),
+  };
+}
+
 async function finalizeAiBigEventRun(
   manifest: WorkflowRuntimeManifest,
   workspacePath: string,
@@ -818,17 +909,18 @@ export async function prepareWorkflowRuntimeContext(
   artifactAbsDir: string,
 ): Promise<WorkflowRuntimePreparation> {
   const manifest = resolveWorkflowRuntimeManifest(resolvedWorkflowRef);
-  const hasRuntimeHelpers = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir);
 
   switch (manifest.runtimeProfile) {
     case 'daily-digest':
-      return hasRuntimeHelpers
+      return Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
         ? { promptAppendix: await prepareAiDigestContext(manifest, workspacePath, artifactAbsDir) }
         : { promptAppendix: '' };
     case 'daily-events':
-      return hasRuntimeHelpers
+      return Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
         ? { promptAppendix: await prepareAiBigEventContext(manifest, workspacePath, artifactAbsDir) }
         : { promptAppendix: '' };
+    case 'story-top-candidates':
+      return { promptAppendix: await prepareStoryTopCandidatesContext(workspacePath, artifactAbsDir) };
     default:
       return { promptAppendix: '' };
   }
@@ -839,19 +931,21 @@ export async function finalizeWorkflowRun(
   workspacePath: string,
   artifactAbsDir: string,
   result: TaskResult,
+  options?: WorkflowRuntimeFinalizeOptions,
 ): Promise<TaskResult> {
   const manifest = resolveWorkflowRuntimeManifest(resolvedWorkflowRef);
-  const hasRuntimeHelpers = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir);
 
   switch (manifest.runtimeProfile) {
     case 'daily-digest':
-      return hasRuntimeHelpers
+      return Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
         ? finalizeAiDigestRun(manifest, workspacePath, artifactAbsDir, result)
         : result;
     case 'daily-events':
-      return hasRuntimeHelpers
+      return Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
         ? finalizeAiBigEventRun(manifest, workspacePath, artifactAbsDir, result)
         : result;
+    case 'story-top-candidates':
+      return finalizeStoryTopCandidatesRun(workspacePath, artifactAbsDir, result, options);
     default:
       return result;
   }

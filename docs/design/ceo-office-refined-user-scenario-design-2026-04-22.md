@@ -51,7 +51,7 @@
      - scheduler 摘要
      - audit
      - digest
-     - `CEOSchedulerCommandCard`
+     - legacy CEO scheduler command card
 5. `src/components/ceo-scheduler-command-card.tsx`
    - 又提供了一条独立的“CEO 指令中心”
 
@@ -60,7 +60,7 @@
 1. `HomeOverview` 是一个轻首页
 2. `CEO Office` 又是一个半聊天半后台
 3. `CEODashboard` 再是一个子驾驶舱
-4. `CEOSchedulerCommandCard` 还是一条平行下令入口
+4. legacy CEO scheduler command card 还是一条平行下令入口
 
 这就是认知混乱的直接来源。
 
@@ -187,7 +187,7 @@
 应该统一：
 
 1. 当前聊天输入
-2. `CEOSchedulerCommandCard`
+2. legacy CEO scheduler command card
 3. 项目创建捷径
 4. 调度创建捷径
 
@@ -310,14 +310,14 @@
 用户不需要分别理解：
 
 1. CEO chat 是一条链
-2. `CEOSchedulerCommandCard` 是另一条链
+2. legacy CEO scheduler command card 是另一条链
 
 当前必须合并成一个命令中心。
 
 ### 当前断点
 
 1. CEO 聊天是一条入口
-2. `CEOSchedulerCommandCard` 又是一条入口
+2. legacy CEO scheduler command card 又是一条入口
 3. 指令成功后回流路径并不统一
 
 ---
@@ -358,7 +358,7 @@
 ### 当前断点
 
 1. `CEODashboard` 里有 scheduler 摘要
-2. `CEOSchedulerCommandCard` 也能建 scheduler
+2. legacy CEO scheduler command card 也能建 scheduler
 3. `Ops > Scheduler` 又是完整管理面
 4. 三处都能做类似动作，边界不清
 
@@ -579,7 +579,7 @@ CEO 可以在一个地方完成“看结果 -> 决定是否继续投入”。
    - recent delivery
    - routine summary
 
-### `CEOSchedulerCommandCard`
+### legacy CEO scheduler command card
 
 目标状态：
 
@@ -638,7 +638,7 @@ CEO 可以在一个地方完成“看结果 -> 决定是否继续投入”。
 
 ### Phase 2：合并 CEO 双指令入口
 
-1. 合并 CEO chat 与 `CEOSchedulerCommandCard`
+1. 合并 CEO chat 与 legacy CEO scheduler command card
 2. 建立统一 `Executive Command Center`
 
 ### Phase 3：拆掉 `CeoOfficeSettings` tab 化后台

@@ -257,6 +257,8 @@ The API runs on port 3000 by default.
   - `status`: Filter by status (`queued`, `completed`, etc.)
   - `stageId`: Filter by stage (`product-spec`, `planning`, etc.)
   - `projectId`: Filter by project association
+  - `workspace`: Filter by workspace `file://` URI
+  - `projectless=true`: Only return runs whose `project_id` is empty
   - `reviewOutcome`: Filter by outcome (`approved`, `rejected`, etc.)
   - `schedulerJobId`: Filter by scheduler source
   - `executorKind`: Filter by `prompt` / `template`
@@ -285,6 +287,7 @@ The API runs on port 3000 by default.
   ```
 - **Notes:**
   - 列表接口现在只返回 list view 所需字段。
+  - `projectless=true` 固定只返回未挂到 `Project` 的 run，便于 `Projects` 视图按工作区展示 run-only 执行结果。
   - `taskEnvelope`、顶层 `promptResolution`、完整 `sessionProvenance` 等重字段不再出现在列表里。
   - 如需完整 envelope / artifact / review 细节，请读取 `GET /api/agent-runs/:id`。
 
@@ -422,8 +425,8 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `POST /api/company/self-improvement/proposals/:id/attach-test-evidence`
 - **URL:** `POST /api/company/self-improvement/proposals/:id/release-gate`
 - **URL:** `POST /api/company/self-improvement/proposals/:id/observe`
-- **Automatic Sources:** observed project run failures (`failed` / `blocked` / `timeout`) and `[不支持]` User Story gaps can be synchronized into this signal pool by the built-in platform engineering department.
-- **Note:** high/critical proposal 不能通过 passed test evidence 绕过 approval；相关 approval request 必须带 `target: { kind: "system-improvement-proposal" }`。`approve` 会写入持久 approval metadata，并自动创建平台工程 Project、派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链；这里的 `launch` 只表示后台执行已经派发，不同步等待 Codex 完成。`GET` proposal 接口会返回原始 proposal 字段，以及服务端派生的 `controlState` 和 `entryApprovalSummary`。`controlState` 统一给出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`，CLI 或前端不再需要自己解释 `proposal.status / humanGate / automationState / releaseGate`；若准入审批事实已经是 `rejected`，即使旧 proposal 状态还停在 `approval-required`，控制面也会把它视为终态，不再重新进入 CEO 队列。
+- **Automatic Sources:** observed project run failures (`failed` / `blocked` / `timeout`)、文件级 `[不支持]` User Story gaps，以及平台工程部每日 Top 3 story-level candidates 都会同步到这个 signal 池。Top 3 候选 signal 会带 `metadata.candidateKind = "story-top"` 与 `candidateActive = true`。
+- **Note:** high/critical proposal 不能通过 passed test evidence 绕过 approval；相关 approval request 必须带 `target: { kind: "system-improvement-proposal" }`。`metadata.candidateKind = "story-top"` 的 signal 在 `POST /api/company/self-improvement/proposals/generate` 时会直接生成 `approval-required` proposal，并自动进入 CEO 准入队列；但开发仍要等 CEO 准入批准后才会启动。`approve` 会写入持久 approval metadata，并自动创建平台工程 Project、派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链；这里的 `launch` 只表示后台执行已经派发，不同步等待 Codex 完成。`GET` proposal 接口会返回原始 proposal 字段，以及服务端派生的 `controlState` 和 `entryApprovalSummary`。`controlState` 统一给出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`，CLI 或前端不再需要自己解释 `proposal.status / humanGate / automationState / releaseGate`；若准入审批事实已经是 `rejected`，即使旧 proposal 状态还停在 `approval-required`，控制面也会把它视为终态，不再重新进入 CEO 队列。
 - **Note:** Codex 受控执行成功后，如果 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 仍未执行，系统会自动触发一次 `preflight`；run 同步只做幂等兜底。`release-gate` action 仍然支持 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`，`releaseGate` 只写入 `exitEvidence.releaseGate`，并继续把自动修复结果写入 `failureCategory / remediationStatus / remediationAttempts / remediationSummary`。
 - **Note:** `release-gate` action 支持 `preflight / approve / mark-merged / mark-restarted / start-observation / mark-rolled-back`。`preflight` 真实生成 patch 并执行 `git apply --check`；对于确定性的 trailing whitespace 失败，会自动修复并重跑一次 preflight；如果 patch 生成阶段碰到瞬时 `index.lock`，系统会先重试同一批 git 命令；如果 `主仓 apply check` 表明旧 patch 已不再适配当前主仓，系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 继续 preflight。旧 `codexRunnerEvidence` / `launchStatus` 只保留审计价值，不再单独构成 active runtime context。merge/restart/rollback 是 CEO/Ops 显式准出后的状态和命令包记录，不会静默自动 push/deploy。
 
@@ -523,34 +526,39 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
   }
   ```
 
-### 5. CEO Command
+### 5. CEO Workflow APIs
 
-#### Send CEO Command
-- **URL:** `POST /api/ceo/command`
-- **Description:** CEO 自然语言命令入口。当前兼容层支持状态查询、自然语言定时任务创建，以及“先创建 `Ad-hoc Project` 再执行”的即时部门任务。
-- **Notes:** 解析阶段会动态读取 CEO workspace 里的 `ceo-playbook.md` 和 `ceo-scheduler-playbook.md` 作为决策规则。
+#### CEO Conversation
+- **URL:** `POST /api/conversations`
+- **Description:** 创建 CEO workspace conversation。CEO Office 自然语言主输入走该对话链路。
 - **Request Body (JSON):**
-  - `command` (String, required): CEO 的自然语言命令
-  - `model` (String, optional): 可选模型 ID
-- **Response:** `200 OK`
-  ```json
-  {
-    "success": true,
-    "action": "create_scheduler_job",
-    "message": "已创建定时任务“后端团队 定时任务 · 工作日 09:00”。触发时会自动创建一个 Ad-hoc 项目，并派发模板「Universal Batch Research (Fan-out)」。下一次执行时间：2026-04-09T01:00:00.000Z。当前系统共有 3 个定时任务。",
-    "jobId": "abc123",
-    "nextRunAt": "2026-04-09T01:00:00.000Z"
-  }
-  ```
+  - `workspace` (String, required): CEO workspace URI
 
-- **即时部门任务响应示例：**
+#### Send CEO Conversation Message
+- **URL:** `POST /api/conversations/{id}/send`
+- **Description:** 继续 CEO conversation。对话内的业务动作应落到 scheduler、projects、agent-runs 或 MCP 工具。
+- **Request Body (JSON):**
+  - `text` (String, required): 用户消息
+  - `model` (String, optional): 可选模型 ID
+
+#### CEO Scheduler Job
+- **URL:** `POST /api/scheduler/jobs`
+- **Description:** CEO workflow 的 REST fallback 定时任务入口；创建时应写入 `createdBy: "ceo-workflow"` 和 `intentSummary`。
+- **Request Body (JSON):**
   ```json
   {
-    "success": true,
-    "action": "create_project",
-    "projectId": "proj-1234",
-    "runId": "run-5678",
-    "message": "已创建 Ad-hoc Project，并发起即时执行。"
+    "name": "市场部日报任务 · 工作日 09:00",
+    "type": "cron",
+    "cronExpression": "0 9 * * 1-5",
+    "createdBy": "ceo-workflow",
+    "intentSummary": "每天工作日上午 9 点让市场部创建日报任务项目",
+    "action": { "kind": "create-project" },
+    "departmentWorkspaceUri": "file:///Users/you/marketing",
+    "opcAction": {
+      "type": "create_project",
+      "projectType": "adhoc",
+      "goal": "汇总当前进行中的项目与风险"
+    }
   }
   ```
 
@@ -682,9 +690,15 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 
 ### 7. Departments
 
+#### List Departments
+- **URL:** `GET /api/departments`
+- **Description:** 列出所有已存在 `.department/config.json` 的部门目录。该列表与当前 IDE/runtime 在线状态无关，以 OPC workspace catalog 为准。
+- **Split mode owner:** `control-plane`
+- **Response:** `200 OK` `DepartmentDirectoryEntry[]`.
+
 #### Get Department Config
 - **URL:** `GET /api/departments?workspace=<file_uri>`
-- **Description:** 获取部门配置。workspace 参数为 `file://` URI，并以 OPC workspace catalog 为准。
+- **Description:** 获取单个部门配置。workspace 参数为 `file://` URI，并以 OPC workspace catalog 为准；若 config 文件不存在，返回默认 build 配置。
 - **Split mode owner:** `control-plane`
 - **Response:** `200 OK` `DepartmentConfig` object.
 - **Error:** `403` if workspace is not known to OPC workspace catalog.
@@ -797,6 +811,7 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **Response:** `200 OK` Paginated envelope of `ScheduledJob` objects.
 - `cron` job 现在支持可选 `timeZone`（IANA 时区，例如 `Asia/Shanghai`）。
 - `GET /api/scheduler/jobs` / `GET /api/scheduler/jobs/:id` 会按 SQLite 主存储刷新，不再依赖单进程内存态；已过触发点但尚未执行的任务会把 `nextRunAt` 标为当前时间。
+- 平台工程部会自动确保一个内置 cron job：`builtin-platform-engineering-story-top-candidates`。它默认每天 `09:00`（服务端本地时区）执行 `dispatch-prompt`，直接读取真实 `User Story/**/*.md` 并刷新当前 Top 3 story-level candidates。
 
 #### Scheduler Action Kinds
 - `dispatch-pipeline`

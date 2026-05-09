@@ -160,6 +160,12 @@ export interface DepartmentConfig {
   executionPolicy?: DepartmentExecutionPolicy;
 }
 
+export interface DepartmentDirectoryEntry {
+  primaryWorkspaceUri: string;
+  workspaceName: string;
+  config: DepartmentConfig;
+}
+
 /** V6: Token quota for a department */
 export interface TokenQuota {
   daily: number;

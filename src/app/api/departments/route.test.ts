@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/workspace-catalog', () => ({
   getKnownWorkspace: vi.fn(),
+  listKnownWorkspaces: vi.fn(),
 }));
 
-import { getKnownWorkspace } from '@/lib/workspace-catalog';
+import { getKnownWorkspace, listKnownWorkspaces } from '@/lib/workspace-catalog';
 import { GET, PUT } from './route';
 
 const tempRoot = path.join('/tmp', `ag-departments-route-${process.pid}-${Date.now()}`);
@@ -46,6 +47,28 @@ describe('/api/departments', () => {
       }
       return null;
     });
+    vi.mocked(listKnownWorkspaces).mockReturnValue([
+      {
+        uri: `file://${tempWorkspace}`,
+        path: tempWorkspace,
+        name: 'workspace',
+        kind: 'folder',
+        sourceKind: 'manual-import',
+        status: 'active',
+        createdAt: '2026-04-20T10:00:00.000Z',
+        updatedAt: '2026-04-20T10:00:00.000Z',
+      },
+      {
+        uri: `file://${tempWorkspaceTwo}`,
+        path: tempWorkspaceTwo,
+        name: 'shared-docs',
+        kind: 'folder',
+        sourceKind: 'manual-import',
+        status: 'active',
+        createdAt: '2026-04-20T10:00:00.000Z',
+        updatedAt: '2026-04-20T10:00:00.000Z',
+      },
+    ]);
   });
 
   afterEach(() => {
@@ -159,5 +182,47 @@ describe('/api/departments', () => {
 
     expect(JSON.parse(fs.readFileSync(path.join(tempWorkspace, '.department', 'config.json'), 'utf-8'))).toEqual(expectedConfig);
     expect(JSON.parse(fs.readFileSync(path.join(tempWorkspaceTwo, '.department', 'config.json'), 'utf-8'))).toEqual(expectedConfig);
+  });
+
+  it('lists configured departments independently from runtime workspace state', async () => {
+    const config = {
+      departmentId: `department:file://${tempWorkspace}`,
+      name: 'AI 情报工作室',
+      type: 'research',
+      skills: [],
+      okr: null,
+      workspaceBindings: [
+        {
+          workspaceUri: `file://${tempWorkspace}`,
+          role: 'primary',
+          writeAccess: true,
+        },
+        {
+          workspaceUri: `file://${tempWorkspaceTwo}`,
+          role: 'context',
+          writeAccess: false,
+        },
+      ],
+      executionPolicy: {
+        defaultWorkspaceUri: `file://${tempWorkspace}`,
+        contextDocumentPaths: [],
+      },
+    };
+
+    fs.mkdirSync(path.join(tempWorkspace, '.department'), { recursive: true });
+    fs.mkdirSync(path.join(tempWorkspaceTwo, '.department'), { recursive: true });
+    fs.writeFileSync(path.join(tempWorkspace, '.department', 'config.json'), JSON.stringify(config, null, 2));
+    fs.writeFileSync(path.join(tempWorkspaceTwo, '.department', 'config.json'), JSON.stringify(config, null, 2));
+
+    const res = await GET(new Request('http://localhost/api/departments'));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([
+      {
+        primaryWorkspaceUri: `file://${tempWorkspace}`,
+        workspaceName: 'workspace',
+        config,
+      },
+    ]);
   });
 });

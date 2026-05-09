@@ -43,3 +43,24 @@ export function pickDefaultAgentRun(
   const nextRun = runs.find(run => isAgentRunActive(run.status)) || runs[0];
   return nextRun?.runId || null;
 }
+
+export function resolveSelectedAgentRunId(
+  runs: AgentRun[],
+  options: {
+    currentRunId: string | null;
+    preferredRunId?: string | null;
+    allowAutoSelect: boolean;
+  },
+): string | null {
+  const { currentRunId, preferredRunId = null, allowAutoSelect } = options;
+
+  if (preferredRunId && runs.some((run) => run.runId === preferredRunId)) {
+    return preferredRunId;
+  }
+
+  if (currentRunId && runs.some((run) => run.runId === currentRunId)) {
+    return currentRunId;
+  }
+
+  return allowAutoSelect ? pickDefaultAgentRun(runs, null) : null;
+}

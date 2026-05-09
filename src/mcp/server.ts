@@ -466,6 +466,7 @@ server.registerTool(
       createProjectTemplateId: z.string().optional().describe("Optional template ID to auto-dispatch after create-project jobs fire"),
       promptAssetRefs: z.array(z.string()).optional().describe("Playbook/prompt asset refs for dispatch-prompt jobs"),
       skillHints: z.array(z.string()).optional().describe("Skill hints for dispatch-prompt jobs"),
+      createdBy: z.enum(["ceo-workflow", "mcp", "web", "api"]).optional().describe("Scheduler job provenance"),
       intentSummary: z.string().optional().describe("Original natural-language intent"),
     }),
     annotations: {

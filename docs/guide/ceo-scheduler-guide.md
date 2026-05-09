@@ -2,12 +2,11 @@
 
 ## 概述
 
-CEO 现在有四条触发任务执行的路径：
+CEO 现在有三条触发任务执行的路径：
 
-1. **即时 Prompt Mode**：CEO 直接说"让 XX 部门执行/分析/整理..."，无需定时，立即发起 Prompt Mode 执行
-2. CEO Office 仪表盘中的"用一句话创建定时任务"
-3. CEO Workspace Workflow：`ceo-playbook.md` + `ceo-scheduler-playbook.md`
-4. MCP / REST 直接调用现有 Scheduler 接口
+1. CEO Office Conversation：用户自然语言进入 CEO workspace，再由 playbook 调用标准 API 或 MCP 工具。
+2. CEO Workspace Workflow：`ceo-playbook.md` + `ceo-scheduler-playbook.md`。
+3. MCP / REST 直接调用现有 Scheduler 接口。
 
 目标不是让用户手填底层 cron / workspace / prompt，而是把业务意图翻译成标准 Scheduler Job 或即时执行。
 
@@ -15,7 +14,7 @@ CEO 现在有四条触发任务执行的路径：
 
 ## 一、Web UI 路径
 
-入口位于 CEO Dashboard。
+入口位于 CEO Office。自然语言先进入 CEO Conversation，再由 CEO workspace playbook 创建标准 Scheduler Job 或即时 Ad-hoc Project + run。
 
 推荐输入：
 
@@ -24,23 +23,19 @@ CEO 现在有四条触发任务执行的路径：
 3. `让 AI 情报工作室分析最近 AI 行业重大信号`（即时 Prompt Mode，不需要定时关键词）
 4. `每天上午 9 点让 AI 资讯部执行一次信号梳理`（定时 dispatch-prompt，无法唯一匹配模板时自动走 Prompt Mode）
 
-Dashboard 会把这句自然语言发送到：
-
-- `POST /api/ceo/command`
-
-后端会自动识别：
+CEO playbook 会识别：
 
 1. **即时 vs 定时**：有无定时关键词（"每天""每周""cron""明天"等）
-2. **即时路径**：有执行意图 + 匹配到部门 → 直接发起 Prompt Mode 执行（返回 `runId`）
+2. **即时路径**：有执行意图 + 匹配到部门 → 先创建 Ad-hoc Project，再派发 run
 3. **定时路径**：调度类型 `cron / interval / once`，动作模板 `create-project / health-check / dispatch-pipeline / dispatch-prompt`
 4. 部门 / 项目 / 模板
 5. 对于定时 `create-project`，若能唯一确定模板，会在创建 job 时写入 auto-dispatch template
 6. 对于定时场景，若无法唯一确定模板但有执行意图，自动创建 `dispatch-prompt` 类型定时任务
 
-返回结果里会包含：
+执行结果里会包含：
 
 - 定时任务：`jobId`, `message`, `nextRunAt`
-- 即时执行：`runId`, `message`（`action: "dispatch_prompt"`）
+- 即时执行：`projectId`, `runId`, `message`
 
 其中 `create-project` 类型的 job 在触发时会先创建一个 Ad-hoc Project；如果需要继续自动执行实际任务，应由后续派发链路或部门流程接手。
 如果创建时已经写入 `templateId` / `createProjectTemplateId`，那么这条“后续派发链路”会在同一次触发里自动执行。
@@ -69,6 +64,7 @@ Dashboard 会把这句自然语言发送到：
   "goal": "创建一个日报任务项目，目标是汇总当前进行中的项目与风险",
   "skillHint": "reporting",
   "createProjectTemplateId": "universal-batch-template",
+  "createdBy": "ceo-workflow",
   "intentSummary": "每天工作日上午 9 点让市场部创建一个日报任务项目，目标是汇总当前进行中的项目与风险"
 }
 ```
@@ -82,6 +78,7 @@ Dashboard 会把这句自然语言发送到：
   "cronExpression": "0 10 * * 1",
   "actionKind": "health-check",
   "projectId": "<projectId>",
+  "createdBy": "ceo-workflow",
   "intentSummary": "每周一上午 10 点巡检项目 Alpha 的健康度"
 }
 ```
@@ -97,7 +94,9 @@ Dashboard 会把这句自然语言发送到：
   "workspace": "file:///Users/.../design",
   "prompt": "执行每周 UX 巡检并生成评审结论",
   "templateId": "ux-driven-dev-template",
-  "stageId": "ux-review"
+  "stageId": "ux-review",
+  "createdBy": "ceo-workflow",
+  "intentSummary": "每周一 10 点让设计部执行 UX 周检"
 }
 ```
 
@@ -115,6 +114,7 @@ Dashboard 会把这句自然语言发送到：
   "prompt": "整理今天 AI 行业的关键信号，输出重点摘要",
   "promptAssetRefs": ["daily-digest-playbook"],
   "skillHints": ["research"],
+  "createdBy": "ceo-workflow",
   "intentSummary": "每天工作日上午 9 点让 AI 资讯部执行信号梳理"
 }
 ```

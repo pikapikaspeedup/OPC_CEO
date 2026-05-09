@@ -10,6 +10,7 @@ import {
   upsertSystemImprovementProposal,
 } from './self-improvement-store';
 import { evaluateSystemImprovementRisk } from './self-improvement-risk';
+import { isStoryTopCandidateMetadata } from '../story-top-candidates';
 
 export interface GenerateSystemImprovementProposalInput {
   signalIds: string[];
@@ -71,8 +72,10 @@ function buildTestPlan(signals: SystemImprovementSignal[], affectedFiles: string
 function proposalStatus(input: {
   evidenceCount: number;
   risk: string;
+  forceApproval: boolean;
 }): SystemImprovementProposal['status'] {
   if (input.evidenceCount === 0) return 'needs-evidence';
+  if (input.forceApproval) return 'approval-required';
   if (input.risk === 'high' || input.risk === 'critical') return 'approval-required';
   return 'draft';
 }
@@ -91,18 +94,26 @@ export function generateSystemImprovementProposal(input: GenerateSystemImproveme
     ...signals.flatMap((signal) => signal.affectedAreas),
   ]);
   const affectedFiles = uniq(input.affectedFiles?.length ? input.affectedFiles : defaultAffectedFiles(signals));
-  const risk = evaluateSystemImprovementRisk({
+  const evaluatedRisk = evaluateSystemImprovementRisk({
     affectedFiles,
     affectedAreas,
     sourceSignals: signals,
   });
+  const forceApproval = signals.some((signal) => isStoryTopCandidateMetadata(signal.metadata || undefined));
+  const risk = forceApproval && evaluatedRisk.risk !== 'critical'
+    ? {
+        ...evaluatedRisk,
+        risk: 'high' as const,
+        reasons: uniq([...evaluatedRisk.reasons, 'story-top candidate requires CEO admission before implementation']),
+      }
+    : evaluatedRisk;
   const evidenceRefs = uniq(signals.flatMap((signal) => signal.evidenceRefs));
   const title = input.title?.trim() || signals[0].title;
   const summary = input.summary?.trim() || signals.map((signal) => signal.summary).join('\n');
 
   const proposal: SystemImprovementProposal = {
     id: input.proposalId || `system-improvement-proposal-${randomUUID()}`,
-    status: proposalStatus({ evidenceCount: evidenceRefs.length, risk: risk.risk }),
+    status: proposalStatus({ evidenceCount: evidenceRefs.length, risk: risk.risk, forceApproval }),
     title,
     summary,
     sourceSignalIds: signals.map((signal) => signal.id),

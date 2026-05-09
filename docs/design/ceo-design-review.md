@@ -24,7 +24,7 @@
 
 ### 通过项
 
-- `docs/design/ceo-native-conversation-design.md` 对当前 CEO 命令主链路的描述基本准确：`/api/ceo/command` 加载部门后进入 `processCEOCommand()`，先走状态/干预快路径，再走 LLM 决策路径，这和 `src/app/api/ceo/command/route.ts`、`src/lib/agents/ceo-agent.ts` 一致。
+- `docs/design/ceo-native-conversation-design.md` 对当时 CEO 命令主链路的描述基本准确：legacy CEO command API 加载部门后进入 legacy CEO command processor，先走状态/干预快路径，再走 LLM 决策路径，这和当时的 legacy route / processor 实现一致。
 - 文档对 `llm-oneshot.ts` 的定位准确：它本质上是“发 prompt，取最终文本”，当前没有统一的多轮会话状态抽象，也没有对外暴露的流式事件接口；这与 `src/lib/agents/llm-oneshot.ts` 的同步返回字符串形态一致。
 - 文档对 `ceo-agent.ts` 的定位准确：项目创建、派发、负载检查、`ceoDecision` 持久化都在 Node.js 后处理层完成，LLM 只负责返回结构化 JSON；这与 `processDispatchDecision()`、`processMultiDispatchDecision()` 等实现一致。
 - 文档对原生会话链路“强依赖 IDE gRPC”的判断准确：当前 `/api/conversations` 与 `/api/conversations/[id]/send` 都是围绕 Language Server owner map 和 `grpc.sendMessage()` 建立的。
@@ -54,7 +54,7 @@
 ### 通过项
 
 - Phase 1 可行性高：`syncRulesToAllIDEs()`、`initDepartmentMemory()`、现有 CEO workspace 路径能力已经具备，补一个统一初始化入口即可落地。
-- Phase 2 可行性中高：`ceo-agent.ts` 内部后处理逻辑已经相对集中，`processDispatchDecision()`、`processMultiDispatchDecision()` 可被抽成共享 service，而不是只能被 `/api/ceo/command` 间接调用。
+- Phase 2 可行性中高：当时的 CEO processor 内部后处理逻辑已经相对集中，`processDispatchDecision()`、`processMultiDispatchDecision()` 可被抽成共享 service，而不是只能被 legacy CEO command API 间接调用。
 - 用“薄中间件”代替“重造一套 Language Server”是正确方向。当前已有 Provider 解析能力（`resolveProvider()`）、会话入口、规则/记忆文件系统，因此构建统一门面是顺势而为，而不是逆势重写。
 - 前端复用 Chat 风格体验也是可行方向，只要后端先给出统一的 `ChatStep` 协议和 session API，UI 层并不需要知道底层是 gRPC 还是其他 provider。
 
@@ -117,7 +117,7 @@
 
 - “冷层规则 / 温层记忆 / 热层实时状态”三层分离是这份设计里最好的部分，能有效避免当前 `ceo-prompts.ts` 的全量 push 注入膨胀。
 - “薄中间件”思路正确，能保留现有 UI 投资，同时给无 IDE 路径留出可演进空间。
-- 保留 `/api/ceo/command` 作为兼容入口也是合理的迁移策略，能控制切换风险。
+- 保留 legacy CEO command API 作为兼容入口也是当时合理的迁移策略，能控制切换风险。
 
 ### 风险项
 

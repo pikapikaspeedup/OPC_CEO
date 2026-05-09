@@ -1,5 +1,6 @@
 import {
   handleDepartmentsGet,
+  handleDepartmentsListGet,
   handleDepartmentsPut,
 } from '@/server/control-plane/routes/departments';
 import {
@@ -13,6 +14,10 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   if (shouldProxyControlPlaneRequest()) {
     return proxyToControlPlane(req);
+  }
+  const url = new URL(req.url);
+  if (!url.searchParams.get('workspace')) {
+    return handleDepartmentsListGet();
   }
   return handleDepartmentsGet(req);
 }

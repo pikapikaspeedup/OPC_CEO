@@ -63,7 +63,7 @@ export interface ProjectPipelineState {
 
 /** CEO AI decision record — persisted with the project so UI can display it */
 export interface CEODecisionRecord {
-  /** The original CEO command */
+  /** The original CEO instruction */
   command: string;
   /** LLM decision action taken */
   action: string;

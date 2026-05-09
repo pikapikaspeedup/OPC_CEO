@@ -566,7 +566,7 @@ CREATE INDEX IF NOT EXISTS idx_circuit_breakers_status ON circuit_breakers(statu
 文件：
 
 1. `src/lib/agents/ceo-agent.ts`
-2. `src/app/api/ceo/command/route.ts`
+2. legacy CEO command route
 3. `src/app/api/agent-runs/route.ts`
 
 规则：

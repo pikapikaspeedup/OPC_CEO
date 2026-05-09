@@ -314,7 +314,7 @@ function writePromptFinalization(
   syncStandaloneProjectStatus(run, resultWithResolution);
 }
 
-async function finalizePromptRun(runId: string, result: TaskResult): Promise<void> {
+async function finalizePromptRun(runId: string, result: TaskResult, workflowOutputText?: string): Promise<void> {
   const run = getRun(runId);
   if (!run || TERMINAL_STATUSES.has(run.status)) {
     return;
@@ -340,6 +340,7 @@ async function finalizePromptRun(runId: string, result: TaskResult): Promise<voi
     run.workspace.replace(/^file:\/\//, ''),
     artifactAbsDir,
     result,
+    { workflowOutputText },
   );
   appendRunHistoryEntry({
     runId,
@@ -559,7 +560,7 @@ export async function executePrompt(
       backendConfig,
       bindConversationHandleForProviders: ['antigravity'],
       onCompleted: async (event) => {
-        await finalizePromptRun(run.runId, event.result);
+        await finalizePromptRun(run.runId, event.result, event.finalText);
       },
     }));
 

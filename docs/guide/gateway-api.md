@@ -488,6 +488,55 @@ Gateway 本地 conversation 返回示例：
 
 ## Agent Run 调度
 
+### `GET /api/agent-runs` — 列出 Run
+
+**功能**: 分页返回 Agent run 列表。该接口只返回列表视图所需字段，适合 Projects / CEO / Ops 面板做轻量轮询。
+
+**Query Parameters**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `status` | `string` | 否 | 按 run 状态过滤 |
+| `stageId` | `string` | 否 | 按 stage 过滤 |
+| `projectId` | `string` | 否 | 只返回指定 Project 的 run |
+| `workspace` | `string` | 否 | 按 workspace `file://` URI 过滤 |
+| `projectless` | `string` | 否 | 传 `true` 时只返回 `project_id` 为空的 run |
+| `reviewOutcome` | `string` | 否 | 按 review 结论过滤 |
+| `schedulerJobId` | `string` | 否 | 按 scheduler job 过滤 |
+| `executorKind` | `string` | 否 | `prompt` / `template` |
+| `page` | `number` | 否 | 页码，默认 `1` |
+| `pageSize` | `number` | 否 | 每页大小，默认 `50` |
+
+**Response** `200 OK`:
+
+```json
+{
+  "items": [
+    {
+      "runId": "run-456",
+      "stageId": "prompt-mode",
+      "status": "completed",
+      "workspace": "file:///Users/you/project",
+      "prompt": "生成今天的日报",
+      "result": {
+        "status": "completed",
+        "summary": "日报已生成",
+        "changedFiles": []
+      }
+    }
+  ],
+  "page": 1,
+  "pageSize": 50,
+  "total": 16,
+  "hasMore": false
+}
+```
+
+**Notes**:
+
+- `projectless=true` 固定只返回未挂到 `Project` 的 run，便于 `Projects` 按工作区展示 run-only 执行结果。
+- 列表接口不会返回完整 envelope / artifact / review 细节；如需详情，请改读 `GET /api/agent-runs/:id`。
+
 ### `POST /api/agent-runs` — 派发 Department Run
 
 **功能**: 创建一个新的 prompt run 或 template run，并允许调用方显式下发 Department runtime 合同。手动派发会写入 Company Kernel token/runtime budget ledger，但不消耗 autonomous dispatch quota；scheduler 触发已由 scheduler 自己的 budget gate 负责。
@@ -965,47 +1014,15 @@ done
 
 ---
 
-## CEO 命令接口
+## CEO Workflow 接口
 
-### `POST /api/ceo/command` — CEO 自然语言命令
+CEO 自然语言入口现在统一走 CEO Office Conversation。对话中的实际动作必须落到标准 API 或 MCP 工具：
 
-**功能**: 接收 CEO 的自然语言命令。支持状态查询、即时部门任务调度和自然语言定时任务创建。
-
-**Request Body**:
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `command` | `string` | ✅ | CEO 的自然语言命令 |
-| `model` | `string` | ❌ | 可选模型 ID |
-
-```json
-{ "command": "每天工作日上午 9 点让后端团队创建一个日报任务项目，目标是汇总当前进行中的项目与风险" }
-```
-
-**Response** `200 OK`:
-```json
-{
-  "success": true,
-  "action": "create_scheduler_job",
-  "message": "已创建定时任务“后端团队 定时任务 · 工作日 09:00”。触发时会自动创建一个 Ad-hoc 项目，并派发模板「Universal Batch Research (Fan-out)」。下一次执行时间：2026-04-09T01:00:00.000Z。当前系统共有 3 个定时任务。",
-  "jobId": "abc123",
-  "nextRunAt": "2026-04-09T01:00:00.000Z"
-}
-```
-
-说明：
-
-1. 定时场景：当 `/api/ceo/command` 解析到 `create-project` 且能唯一确定模板时，会把模板写入 scheduler job，后续触发时自动执行 `createProject + executeDispatch`；若不能唯一确定模板，则只创建项目，不直接启动 run。
-2. 即时部门业务任务：现在会**先创建一个 `Ad-hoc Project`**。如果有明确模板，则在该项目下派发 template run；否则在该项目下派发 prompt run。不会再创建裸 prompt run。
-3. CEO 命令解析现在会动态加载 CEO workspace 中的 `ceo-playbook.md` 与 `ceo-scheduler-playbook.md`，由 playbook 驱动 LLM 决策，再由后端执行。
-
-| Action 值 | 说明 |
-|:----------|:-----|
-| `create_scheduler_job` | 创建了一个定时任务 |
-| `create_project` | 即时创建了一个 `Ad-hoc Project`，并可选附带 `runId` |
-| `info` | 查询了特定信息 |
-| `needs_decision` | 需要 CEO 在多个方案间选择（返回 `suggestions` 数组） |
-| `report_to_human` | 当前兼容层无法直接处理，请转到 CEO Office 会话或手动派发 |
+1. 对话创建 / 续写：`/api/conversations`、`/api/conversations/:id/send`
+2. 定时任务：`/api/scheduler/jobs`，并写入 `createdBy: "ceo-workflow"` 与 `intentSummary`
+3. 即时任务：先 `POST /api/projects` 创建 `projectType: "adhoc"` 的项目，再 `POST /api/agent-runs` 派发 run
+4. 运行干预：`POST /api/agent-runs/:id/intervene`
+5. 状态查询：`/api/management/overview`、`/api/company/ceo/decisions`、`/api/projects`、`/api/agent-runs`
 
 ### `GET /api/ceo/profile` — CEOProfile
 
@@ -1315,11 +1332,14 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 
 ## 部门接口
 
-### `GET /api/departments` — 获取部门配置
+### `GET /api/departments` — 获取部门目录或单部门配置
 
 **Split mode owner**: `control-plane`
 
-**功能**: 获取指定 workspace 的部门配置。如果 `.department/config.json` 不存在，返回默认配置。
+**功能**:
+
+- 不带 `workspace` 参数时：列出所有已存在 `.department/config.json` 的部门目录
+- 带 `workspace` 参数时：获取指定 workspace 的归一化部门配置；如果 `.department/config.json` 不存在，返回默认配置
 
 > 自 2026-04-20 起，部门接口不再直接以 Antigravity 最近打开列表作为唯一准入边界，而是以 OPC 自己的 workspace catalog 为准。Antigravity recent 只作为 catalog 的导入源之一。
 
@@ -1327,9 +1347,26 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `workspace` | `string` | 必填。workspace `file://` URI |
+| `workspace` | `string` | 可选。workspace `file://` URI |
 
-**Response** `200 OK`:
+**Response** `200 OK`（目录列表）:
+```json
+[
+  {
+    "primaryWorkspaceUri": "file:///Users/me/repo",
+    "workspaceName": "repo",
+    "config": {
+      "departmentId": "department:file:///Users/me/repo",
+      "name": "后端研发",
+      "type": "build",
+      "skills": [],
+      "okr": null
+    }
+  }
+]
+```
+
+**Response** `200 OK`（单部门配置）:
 ```json
 {
   "name": "后端研发",
@@ -1346,9 +1383,13 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 
 | 状态码 | 条件 |
 |--------|------|
-| `400` | 缺少 `workspace` 参数 |
 | `403` | workspace 不在 OPC workspace catalog 中 |
 | `422` | `.department/config.json` 格式错误 |
+
+**说明**:
+
+1. 目录列表只返回“真实存在 config 文件”的部门，不把默认 build 占位视为已存在部门
+2. 单部门返回值已经过 `normalizeDepartmentConfig()` 处理，包含 `workspaceBindings` 与 `executionPolicy`
 
 ### `PUT /api/departments` — 更新部门配置
 
@@ -1683,10 +1724,11 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 读取或创建 `SystemImprovementSignal`。第一版信号来源包括 `performance`、`ux-breakpoint`、`test-failure`、`runtime-error`、`manual-feedback`、`duplicate-work`、`architecture-risk`。
 
-系统当前还会自动补充两类来源：
+系统当前还会自动补充三类来源：
 
 1. 被平台工程部观察的项目出现 `failed / blocked / timeout` run。
-2. `User Story` 文档中的 `[不支持]` 用户场景被同步为长期改进信号。
+2. `User Story` 文档中的 `[不支持]` 用户场景被同步为文件级长期改进信号。
+3. 平台工程部内置每日 `09:00` 的 Top 3 prompt 任务会直接读取真实 `User Story/**/*.md`，并把全局 Top 3 story-level candidates 写回为 `metadata.candidateKind = story-top` 的 signal。
 
 ```json
 {
@@ -1714,7 +1756,7 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `POST /api/company/self-improvement/proposals/generate`
 
-从 signal 生成 `SystemImprovementProposal`，包含 `affectedFiles`、`protectedAreas`、`risk`、`implementationPlan`、`testPlan`、`rollbackPlan`。涉及 protected core 的 high/critical proposal 会自动创建带 `target: { kind: "system-improvement-proposal" }` 的 approval request。该接口不创建 git branch、不提交、不推送、不合并。
+从 signal 生成 `SystemImprovementProposal`，包含 `affectedFiles`、`protectedAreas`、`risk`、`implementationPlan`、`testPlan`、`rollbackPlan`。涉及 protected core 的 high/critical proposal 会自动创建带 `target: { kind: "system-improvement-proposal" }` 的 approval request。`metadata.candidateKind = story-top` 的 signal 在这一层会直接生成 `approval-required` proposal，并自动进入 CEO 准入队列；开发仍要等 CEO 准入批准后才会启动。该接口不创建 git branch、不提交、不推送、不合并。
 
 平台工程部对已纳入观察且允许提案的项目，会在失败 run 出现后直接生成 proposal，CEO Office 可直接读取，不需要手工再次描述问题。
 
@@ -1780,6 +1822,7 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 - `cron` job 支持可选 `timeZone` 字段；例如 `0 20 * * * + Asia/Shanghai` 表示每天北京时间 20:00。
 - 列表和详情读取会按 SQLite `scheduled_jobs` 主存储刷新，不再只看某个进程里的旧内存态；任务已过触发点但尚未执行时，`nextRunAt` 返回当前时间，表示应立即补跑。
 - 默认同设备部署中由 `opc-api` 承载 cron scheduler；`web` 不执行定时任务。`AG_ENABLE_SCHEDULER=0` 可显式关闭 cron，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会启动 fan-out / approval / CEO event consumer 等 companion 后台。
+- 内置平台工程部会自动确保一个 `builtin-platform-engineering-story-top-candidates` cron job，默认每天 `09:00`（服务端本地时区）执行 `dispatch-prompt`，从真实 `User Story/**/*.md` 中提炼全局 Top 3 候选并写回 story-level self-improvement signals。
 
 ### `POST /api/scheduler/jobs` — 创建定时任务
 

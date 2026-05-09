@@ -11,12 +11,13 @@ import {
 import { syncRulesToAllIDEs, syncRulesToIDE, type IDETarget } from '@/lib/agents/department-sync';
 import {
   getDepartmentBoundWorkspaceUris,
+  getDepartmentGroupKey,
   normalizeDepartmentConfig,
 } from '@/lib/department-config';
 import { getJournalEntriesForDate, getProjectsByWorkspace, templateSummary } from '@/lib/agents/digest-helpers';
 import { getQuotaSummary } from '@/lib/approval/token-quota';
-import { getKnownWorkspace } from '@/lib/workspace-catalog';
-import type { DepartmentConfig } from '@/lib/types';
+import { getKnownWorkspace, listKnownWorkspaces } from '@/lib/workspace-catalog';
+import type { DepartmentConfig, DepartmentDirectoryEntry } from '@/lib/types';
 
 function json(body: unknown, init?: ResponseInit): Response {
   return Response.json(body, init);
@@ -56,6 +57,43 @@ function getDateRange(baseDate: string, period: string): string[] {
 const VALID_MEMORY_CATEGORIES: MemoryCategory[] = ['knowledge', 'decisions', 'patterns'];
 const VALID_SYNC_TARGETS: IDETarget[] = ['antigravity', 'codex', 'claude-code', 'cursor'];
 
+function loadConfiguredDepartmentForWorkspace(workspace: KnownWorkspace): DepartmentConfig | null {
+  const configPath = path.join(workspace.path, '.department', 'config.json');
+  if (!fs.existsSync(configPath)) {
+    return null;
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as DepartmentConfig;
+  return normalizeDepartmentConfig(parsed, workspace.uri, workspace.name);
+}
+
+export async function handleDepartmentsListGet(): Promise<Response> {
+  const entries = new Map<string, DepartmentDirectoryEntry>();
+
+  for (const workspace of listKnownWorkspaces()) {
+    try {
+      const config = loadConfiguredDepartmentForWorkspace(workspace);
+      if (!config) continue;
+
+      const primaryWorkspaceUri = getDepartmentGroupKey(config, workspace.uri, workspace.name);
+      const entryKey = config.departmentId?.trim() || primaryWorkspaceUri;
+      if (entries.has(entryKey)) continue;
+
+      entries.set(entryKey, {
+        primaryWorkspaceUri,
+        workspaceName: workspace.name,
+        config,
+      });
+    } catch {
+      // Skip malformed configs in the aggregated listing; point lookup still returns 422.
+    }
+  }
+
+  return json(
+    [...entries.values()].sort((left, right) => left.config.name.localeCompare(right.config.name)),
+  );
+}
+
 export async function handleDepartmentsGet(req: Request): Promise<Response> {
   const workspace = resolveKnownWorkspace(req);
   if (workspace instanceof Response) {
@@ -73,11 +111,7 @@ export async function handleDepartmentsGet(req: Request): Promise<Response> {
   }
 
   try {
-    return json(normalizeDepartmentConfig(
-      JSON.parse(fs.readFileSync(configPath, 'utf-8')) as unknown as DepartmentConfig,
-      workspace.uri,
-      workspace.name,
-    ));
+    return json(loadConfiguredDepartmentForWorkspace(workspace));
   } catch {
     return json({ error: 'Invalid .department/config.json format' }, { status: 422 });
   }

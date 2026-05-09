@@ -39,15 +39,17 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
+  countExistingDepartments,
   countConfiguredDepartments,
   getAgentStateRefreshMs,
+  shouldIncludeConversationInUrl,
   shouldShowShellSidebar,
   type AppShellUtilityPanel,
 } from '@/lib/home-shell';
 import { dedupeAuditEvents } from '@/lib/ceo-office-home';
 import { mergeDepartmentConfigIntoWorkspaceMap } from '@/lib/department-config';
 import { buildWorkspaceOptions } from '@/lib/workspace-options';
-import { isAgentRunActive, pickDefaultAgentRun } from '@/lib/agent-run-utils';
+import { isAgentRunActive, resolveSelectedAgentRunId } from '@/lib/agent-run-utils';
 import { AppShell, StatusChip } from '@/components/ui/app-shell';
 import { cn } from '@/lib/utils';
 
@@ -212,6 +214,7 @@ export default function Home() {
   const [urlStateReady, setUrlStateReady] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const lastStepCountRef = useRef(0);
+  const selectedAgentRunIdRef = useRef<string | null>(null);
   const apiLoadedRef = useRef(false);
   const agentStateLoadedRef = useRef(false);
   const nextUrlNavigationModeRef = useRef<UrlNavigationMode>('replace');
@@ -361,32 +364,48 @@ export default function Home() {
   }, []);
 
   const loadAgentState = useCallback(async (preferredRunId?: string | null) => {
-    try {
-      const [fetchedProjects, runs, servers, workspaces, hidden] = await Promise.all([
-        api.projects().catch(() => [] as Project[]),
-        api.agentRuns(),
-        api.servers(),
-        api.workspaces(),
-        fetch('/api/workspaces/close').then(res => res.json()).catch(() => [] as string[]),
-      ]);
+    const [projectsResult, runsResult, serversResult, workspacesResult, hiddenResult] = await Promise.allSettled([
+      api.projects(),
+      api.agentRuns(),
+      api.servers(),
+      api.workspaces(),
+      fetch('/api/workspaces/close').then(res => res.json() as Promise<string[]>),
+    ]);
 
-      setProjects(fetchedProjects);
-      setAgentRuns(runs);
-      setSelectedAgentRunId(prev => preferredRunId
-        ? (runs.some(run => run.runId === preferredRunId) ? preferredRunId : pickDefaultAgentRun(runs, prev))
-        : pickDefaultAgentRun(runs, prev));
-      setAgentServers(servers);
-      setAgentWorkspacesRaw(workspaces.workspaces || []);
-      setHiddenWorkspaces(hidden || []);
-    } catch {
-      setAgentRuns([]);
-      setSelectedAgentRunId(null);
-      setAgentServers([]);
-      setAgentWorkspacesRaw([]);
-      setHiddenWorkspaces([]);
+    if (projectsResult.status === 'fulfilled') {
+      setProjects(projectsResult.value);
     }
+
+    if (runsResult.status === 'fulfilled') {
+      const runs = runsResult.value;
+      setAgentRuns(runs);
+      setSelectedAgentRunId((prev) => resolveSelectedAgentRunId(runs, {
+        currentRunId: prev,
+        preferredRunId,
+        allowAutoSelect: sidebarSection !== 'projects',
+      }));
+    }
+
+    if (serversResult.status === 'fulfilled') {
+      setAgentServers(serversResult.value);
+    } else {
+      setAgentServers([]);
+    }
+
+    if (workspacesResult.status === 'fulfilled') {
+      setAgentWorkspacesRaw(workspacesResult.value.workspaces || []);
+    }
+
+    if (hiddenResult.status === 'fulfilled') {
+      setHiddenWorkspaces(hiddenResult.value || []);
+    }
+
     agentStateLoadedRef.current = true;
-  }, []);
+  }, [sidebarSection]);
+
+  useEffect(() => {
+    selectedAgentRunIdRef.current = selectedAgentRunId;
+  }, [selectedAgentRunId]);
 
   const agentStatePollMs = useMemo(
     () => getAgentStateRefreshMs(sidebarSection, utilityPanel),
@@ -395,16 +414,16 @@ export default function Home() {
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => {
-      void loadAgentState(selectedAgentRunId);
+      void loadAgentState(selectedAgentRunIdRef.current);
     }, 0);
     const timer = setInterval(() => {
-      void loadAgentState(selectedAgentRunId);
+      void loadAgentState(selectedAgentRunIdRef.current);
     }, agentStatePollMs);
     return () => {
       window.clearTimeout(initialTimer);
       clearInterval(timer);
     };
-  }, [agentStatePollMs, loadAgentState, selectedAgentRunId]);
+  }, [agentStatePollMs, loadAgentState]);
 
   const loadSteps = useCallback(async (id: string) => {
     setLoading(true);
@@ -949,21 +968,20 @@ export default function Home() {
     };
   }, [activeId, activeTitle]);
 
+  const shouldSyncConversationStateToUrl = shouldIncludeConversationInUrl(
+    sidebarSection,
+    activeConversationScope,
+  );
+
   const currentUrlState = useMemo(() => ({
     section: sidebarSection,
     utilityPanel,
     conversationId:
-      !activeDecisionTarget && (
-        (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
-        || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
-      )
+      !activeDecisionTarget && shouldSyncConversationStateToUrl
         ? activeId
         : null,
     conversationTitle:
-      !activeDecisionTarget && (
-        (sidebarSection === 'ceo' && activeConversationScope === 'ceo')
-        || (sidebarSection === 'conversations' && activeConversationScope === 'conversations')
-      )
+      !activeDecisionTarget && shouldSyncConversationStateToUrl
         ? activeTitle
         : null,
     projectId: !activeDecisionTarget && sidebarSection === 'projects' ? selectedProjectId : null,
@@ -973,12 +991,12 @@ export default function Home() {
     settingsFocus: settingsPanelRequest.focusTarget,
     decisionTarget: activeDecisionTarget,
   }), [
-    activeConversationScope,
     activeId,
     activeDecisionTarget,
     activeTitle,
     selectedKnowledgeId,
     selectedProjectId,
+    shouldSyncConversationStateToUrl,
     opsProposalRequest.proposalId,
     settingsPanelRequest.focusTarget,
     settingsPanelRequest.tab,
@@ -1026,30 +1044,48 @@ export default function Home() {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const wsKey = useMemo(() => departmentWorkspaces.map(w => w.uri).join(','), [departmentWorkspaces]);
   useEffect(() => {
-    if (!departmentWorkspaces.length) return;
-    Promise.all(
-      departmentWorkspaces.map(ws =>
-        api.getDepartment(ws.uri)
-          .then(config => [ws.uri, config] as const)
-          .catch(() => [ws.uri, null] as const),
-      ),
-    ).then(results => {
-      const map = new Map<string, DepartmentConfig>();
-      for (const [uri, config] of results) {
-        if (config) map.set(uri, config);
-      }
-      setDepartmentsMap(map);
-    });
-  }, [wsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    let cancelled = false;
 
+    api.departments()
+      .then((entries) => {
+        if (cancelled) return;
+        let next = new Map<string, DepartmentConfig>();
+        for (const entry of entries) {
+          next = mergeDepartmentConfigIntoWorkspaceMap(next, entry.primaryWorkspaceUri, entry.config);
+        }
+        setDepartmentsMap(next);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDepartmentsMap(new Map());
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [wsKey]);
+
+  const existingDepartmentCount = useMemo(
+    () => countExistingDepartments(departmentWorkspaces, departmentsMap),
+    [departmentWorkspaces, departmentsMap],
+  );
   const configuredDepartmentCount = useMemo(
     () => countConfiguredDepartments(departmentWorkspaces, departmentsMap),
     [departmentWorkspaces, departmentsMap],
   );
+  const missingDepartmentCount = useMemo(
+    () => Math.max(departmentWorkspaces.length - existingDepartmentCount, 0),
+    [departmentWorkspaces.length, existingDepartmentCount],
+  );
+  const incompleteDepartmentProfileCount = useMemo(
+    () => Math.max(existingDepartmentCount - configuredDepartmentCount, 0),
+    [configuredDepartmentCount, existingDepartmentCount],
+  );
   const isOpcUnconfigured = useMemo(() => {
     if (!departmentWorkspaces.length) return false;
-    return configuredDepartmentCount < departmentWorkspaces.length;
-  }, [configuredDepartmentCount, departmentWorkspaces.length]);
+    return missingDepartmentCount > 0 || incompleteDepartmentProfileCount > 0;
+  }, [departmentWorkspaces.length, incompleteDepartmentProfileCount, missingDepartmentCount]);
 
   const openOnboardingJourney = useCallback(() => {
     activateSection('projects');
@@ -1145,7 +1181,7 @@ export default function Home() {
     [projects],
   );
   const departmentSetupValue = departmentWorkspaces.length
-    ? `${configuredDepartmentCount}/${departmentWorkspaces.length}`
+    ? `${existingDepartmentCount}/${departmentWorkspaces.length}`
     : '0';
   const selectedProject = projects.find(project => project.projectId === selectedProjectId) || null;
   const showShellSidebar = useMemo(
@@ -1478,7 +1514,13 @@ export default function Home() {
                         <p className="min-w-0 truncate text-xs leading-5 text-[#6b5a24]">
                           <span className="font-semibold text-[#1f2937]">部门画像仍未完整</span>
                           <span className="mx-2 text-amber-500">/</span>
-                          检测到 {Math.max(departmentWorkspaces.length - configuredDepartmentCount, 0)} 个工作区尚未配置部门信息。左侧可以新建部门，这里用于补齐已有工作区的部门画像。
+                          {missingDepartmentCount > 0
+                            ? `检测到 ${missingDepartmentCount} 个工作区尚未创建部门`
+                            : `已识别 ${existingDepartmentCount} 个部门`}
+                          {incompleteDepartmentProfileCount > 0
+                            ? `，另有 ${incompleteDepartmentProfileCount} 个部门画像仍未完整。`
+                            : '。'}
+                          左侧可以新建部门，这里用于补齐已有工作区的部门画像。
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
@@ -1498,7 +1540,9 @@ export default function Home() {
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-[var(--app-text)]">部门初始化仍未完成</div>
                         <div className="mt-0.5 truncate text-xs leading-5 text-[var(--app-text-soft)]">
-                          当前已配置 {configuredDepartmentCount} / {departmentWorkspaces.length} 个部门。左侧可新建部门，这里继续补齐已有工作区。
+                          当前已识别 {existingDepartmentCount} / {departmentWorkspaces.length} 个部门
+                          {incompleteDepartmentProfileCount > 0 ? `，其中 ${incompleteDepartmentProfileCount} 个画像仍待补齐` : ''}
+                          。左侧可新建部门，这里继续补齐已有工作区。
                         </div>
                       </div>
                       <Button variant="outline" onClick={openOnboardingJourney} className="h-8 rounded-[8px] border-[var(--app-border-soft)] bg-[var(--app-surface)] px-3 text-[var(--app-text)] hover:bg-[var(--app-raised-2)]">

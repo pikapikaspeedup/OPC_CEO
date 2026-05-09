@@ -1,3 +1,78 @@
+# 任务：删除 legacy CEO command API，收口 CEO 自然语言入口到 Conversation
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-09
+
+### 本轮实施
+
+已完成：
+
+1. 删除旧 CEO command 运行时代码：
+   - 移除 Next route、control-plane route 挂载、旧 command processor、旧 processor 测试、孤立的 scheduler command card。
+   - `src/lib/api.ts` 删除 legacy command client 与专用 result 类型，保留仍被 Projects / GlobalCommandBar 复用的 `CEOSuggestion`。
+2. CEO workflow 统一走标准链路：
+   - CEO Office 主输入继续走 Conversation。
+   - 定时任务走 MCP / `/api/scheduler/jobs`，并保留 `createdBy` / `intentSummary` 事实。
+   - 即时任务 playbook 改为先创建 `projectType: "adhoc"` 项目，再派发带 `triggerContext.source = "ceo-workflow"` 的 run。
+3. 补齐验证覆盖：
+   - 新增 scheduler route 测试，确认 CEO workflow 创建 scheduler job 时保留 provenance。
+4. 文档同步：
+   - 更新 `ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/guide/ceo-scheduler-guide.md`。
+   - CEO workspace seed playbook 同步到 Conversation + 标准 API / MCP 路径。
+   - `docs/design` 中历史快照不再保留旧入口的精确可 grep 符号，避免误判为当前可用入口。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run 'src/app/api/conversations/[id]/send/route.test.ts' src/app/api/scheduler/jobs/route.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts 'src/app/api/agent-runs/[id]/intervene/route.test.ts' src/app/api/company/ceo/decisions/route.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts
+```
+
+结果：9 个测试文件、46 个测试全部通过。
+
+```bash
+npx vitest run src/server/control-plane/server.test.ts
+```
+
+结果：1 个测试文件、1 个测试通过。
+
+```bash
+npm run lint -- src/server/control-plane/routes/ceo.ts src/server/control-plane/server.ts src/lib/api.ts src/lib/agents/ceo-environment.ts src/components/projects-panel.tsx src/lib/agents/project-types.ts
+```
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/mcp/server.ts src/lib/agents/dispatch-service.ts
+```
+
+```bash
+rg -n "/api/ceo/command|processCEOCommand|ceoCommand|CEOSchedulerCommandCard|CEOCommandResult" src ARCHITECTURE.md docs/guide docs/design
+```
+
+结果：无命中。
+
+# 任务：Projects 左侧项目树改为通讯录式部门展开
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-09
+
+### 本轮实施
+
+已完成：
+
+1. `src/components/projects-panel.tsx`
+   - Projects 左侧树改为全量部门列表，不再只展示少数部门后再通过“查看其余部门”展开。
+   - 部门行点击后直接展开并聚焦该部门；项目作为优先子节点展示，run-only 最近运行结果直接显示在项目下面。
+   - 当前选中的部门也支持通过展开箭头手动收起，再点击部门行会重新展开并聚焦。
+   - 无项目部门的“暂无项目”保留为部门子节点，不再通过“查看最近运行结果”二跳进入 run-only 结果。
+   - 部门行移除 run 结果数、待配置部门、0 项目等统计文案；部门设置入口改为悬浮或当前选中时显示的小图标。
+2. `src/components/projects-panel.test.ts`
+   - 增加断言，防止 run-only 结果重新退回“查看最近运行结果”二跳入口。
+
 # 任务：修复 2026-05-04 direct Codex 自迭代链的取消、递归提案与 stale evidence 问题
 
 **状态**: ✅ 已完成
@@ -54,64 +129,6 @@
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/bridge/codex-adapter.ts src/lib/bridge/codex-adapter.test.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/platform-engineering-observer.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/platform-engineering-codex-runner.ts src/app/api/agent-runs/[id]/intervene/route.ts src/app/api/agent-runs/[id]/intervene/route.test.ts src/app/api/agent-runs/[id]/route.ts src/app/api/agent-runs/[id]/route.test.ts src/app/api/projects/[id]/resume/route.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/bridge/codex-adapter.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/app/api/agent-runs/[id]/intervene/route.test.ts src/app/api/agent-runs/[id]/route.test.ts
-```
-
-结果：7 个测试文件、24 个测试全部通过。
-
-```bash
-git diff --check
-```
-
-真实链路回放通过：
-
-1. 阻塞链
-   - approval request：`823d177b-1eca-4073-af11-6298e0515ee3`
-   - proposal：`system-improvement-proposal:platform-run-failure:b829ef4a-a25f-4d8d-bc5e-2ccd3619a948`
-   - tracking run：`7004c611-989a-4506-931e-c18594595692`
-   - 准入批准后进入 `ai-executing`
-   - 再通过标准 cancel 入口回收 direct Codex child
-   - 最终确认：
-     - `latestRun.status = cancelled`
-     - `controlState.stage = blocked`
-     - `followup_count_for_run = 0`
-2. 成功链
-   - 最终成功 proposal：`system-improvement-proposal-ca9b331c-c50f-46ba-baca-1b9b582f5af5`
-   - approval request：`10ef357e-97a5-46d3-9e25-6d09d5578334`
-   - tracking run：`7120f9c3-9697-4c8e-856e-ac7564a9d4b5`
-   - live `ps` 可见真实 `codex exec --cd ...` 以及后续 `tsc --noEmit --pretty false` 校验子进程
-   - 修复 `.git/index.lock` 重试后，链路稳定进入：
-     - `stage = exit-review`
-     - `mergeGate.status = ready-to-merge`
-   - 再完成：
-     - `approve`
-     - `mark-merged`
-     - `mark-restarted`
-     - `start-observation`
-   - 最终确认：
-     - `status = observing`
-     - `controlState.stage = observing`
-     - `latestRun.status = completed`
-     - `project.status = completed`
-     - `releaseGate.status = observing`
-3. 结束态回看
-   - `GET /api/approval?status=pending&summary=true` => `0`
-   - `GET /api/company/ceo/decisions?limit=20` => `0`
-   - `ps -ax -o pid,command | rg 'codex exec'` => 无残留 direct Codex child process
-
 # 任务：系统改进准入审批改为异步派发，并收口 rejected/orphan 审批坏态
 
 **状态**: ✅ 已完成
@@ -149,56 +166,6 @@ git diff --check
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
    - `docs/design/decision-control-plane-audit-2026-05-06.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/approval/__tests__/handler.test.ts
-```
-
-结果：6 个测试文件、27 个测试全部通过。
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-control-state.ts src/lib/company-kernel/self-improvement-store.ts src/lib/approval/request-store.ts src/lib/approval/handler.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/approval/dispatcher.ts src/app/api/company/self-improvement/proposals/[id]/approve/route.ts src/app/api/company/self-improvement/proposals/[id]/run-codex/route.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实链路回放通过：
-
-1. fresh 系统改进 proposal `system-improvement-proposal-a79fac75-c40d-4b9a-a6b0-41141de9dd5f`
-   - `PATCH /api/approval/784c791d-1e48-4f74-9bbd-b4e2b85b5928`
-   - 返回 `HTTP 200`
-   - 总耗时 `0.074790s`
-   - proposal 立即进入：
-     - `status = in-progress`
-     - `controlState.stage = ai-executing`
-     - `currentOwner = ai`
-2. reject 路径 live 回放：
-   - 历史 run-failure pending approval `aed3a956-a261-4e8d-9be0-c4d4ca73d1a1`
-   - `PATCH /api/approval/:id` 返回 `HTTP 200`
-   - 不再出现 callback 抛错导致的 `500`
-3. orphan target live 回放：
-   - 人工创建缺失 target 的系统改进审批 `4c70881f-d969-48a1-906d-3295c9472b14`
-   - `PATCH /api/approval/:id` 返回 `HTTP 200`
-   - request 正确落为 `status = rejected`
-4. 队列与收件箱回看：
-   - `GET /api/company/ceo/decisions?limit=20` 返回 `items = []`
-   - `GET /api/approval?status=pending&summary=true` 返回 `requests = []`
-5. 终态摘要回看：
-   - `system-improvement-proposal-c28a4e7f-4380-491d-920d-7f7ce162c7e1`
-   - `status = observing`
-   - `controlState.stage = observing`
-   - `automationState.summary = "live summary sync check"`
-   - `humanGate.summary = "live summary sync check"`
 
 # 任务：CEO 决策与审批链路硬切换收口
 
@@ -253,47 +220,6 @@ git diff --check
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/decision-control.ts src/lib/company-kernel/ceo-decision-control.ts src/lib/approval/request-store.ts src/lib/approval/handler.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement-store.ts src/lib/agents/run-registry.ts src/components/ceo-office-cockpit.tsx src/app/page.tsx src/components/projects-panel.tsx src/lib/approval/__tests__/request-store.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/lib/agents/run-registry.test.ts src/server/workers/scheduler-worker.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/decision-control.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/lib/agents/run-registry.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
-```
-
-结果：8 个测试文件、23 个测试全部通过。
-
-```bash
-git diff --check
-```
-
-真实环境回看通过：
-
-1. `GET /api/company/ceo/decisions?limit=20`
-   - 当前只返回 1 条正式系统改进决策
-   - 不再出现 `agenda-item / run / project / raw approval request`
-2. `GET /api/approval?status=pending&summary=true`
-   - 返回 `requests=[]`
-   - 旧的无 `target` pending approvals 已被硬清理
-3. `GET /api/company/self-improvement/proposals?pageSize=20`
-   - 旧的 `approval-required` 且缺 `approvalRequestId` proposal 已不在结果中
-4. 使用 `bb-browser` 打开：
-   - `http://localhost:3000/?section=ceo`
-   - `http://localhost:3000/?decision=%7B%22kind%22%3A%22system-improvement-proposal%22%2C%22proposalId%22%3A%22system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6%22%7D`
-5. 页面验证结果：
-   - CEO 决策队列只显示 1 条正式决策
-   - 队列行已显示状态、责任方、下一动作、优先级
-   - 系统改进 decision deep link 可直接打开详情抽屉
-   - `bb-browser errors` 返回 `没有 JS 错误`
-
 # 任务：CEO 决策控制面收敛为 DecisionTarget 主线
 
 **状态**: ✅ 已完成
@@ -334,32 +260,6 @@ git diff --check
    - `docs/guide/agent-user-guide.md`
    - `docs/design/decision-control-plane-audit-2026-05-06.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/decision-control.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/notification-events.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/server/control-plane/server.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/app/api/company/loops-self-improvement.route.test.ts
-```
-
-结果：13 个测试文件、29 个测试全部通过。
-
-```bash
-npx eslint src/lib/decision-control.ts src/lib/decision-control.test.ts src/lib/company-kernel/ceo-decision-control.ts src/app/api/company/ceo/decisions/route.ts src/server/control-plane/company-routes.ts src/server/control-plane/server.test.ts src/lib/approval/types.ts src/lib/approval/request-store.ts src/lib/approval/approval-urls.ts src/lib/approval/channels/web.ts src/lib/approval/channels/im.ts src/lib/approval/channels/webhook.ts src/server/control-plane/routes/approval.ts src/components/ceo-office-cockpit.tsx src/components/approval-panel.tsx src/components/growth-proposal-detail-drawer.tsx src/components/system-improvement-detail-drawer.tsx src/components/projects-panel.tsx src/app/page.tsx src/lib/app-url-state.ts src/lib/api.ts src/lib/types.ts src/lib/agents/approval-triggers.ts src/lib/agents/project-types.ts src/lib/agents/run-registry.ts src/lib/company-kernel/growth-approval.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement-execution.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/approval/__tests__/request-store.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/notification-events.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/ceo/decisions/route.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/app/api/company/loops-self-improvement.route.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-页面验证：
-
-1. `curl http://localhost:3000/api/company/ceo/decisions?limit=3` 返回 `items[]`，每项包含明确 `target`
-2. 使用 `bb-browser` 打开 `?decision={"kind":"system-improvement-proposal","proposalId":"system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950"}`
-3. 系统改进详情能直接打开，URL 不再被 CEO conversation 自动覆盖
-4. URL 保持单次编码，不再出现 `%257B`
-5. `bb-browser errors` 未发现 JS 错误
-
 # 任务：系统改进 blocked 状态增加 patch 漂移自愈闭环
 
 **状态**: ✅ 已完成
@@ -398,45 +298,6 @@ npx tsc --noEmit --pretty false
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts
-```
-
-```bash
-npx vitest run src/app/api/company/loops-self-improvement.route.test.ts
-```
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-control-state.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实链路验证：
-
-1. 对真实 proposal `system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6` 重新触发：
-
-```bash
-POST /api/company/self-improvement/proposals/:id/release-gate { "action": "preflight" }
-```
-
-2. 实际观察到系统起了一条新的 `codex exec`：
-   - worktree 为新的 `system-improvement-proposal-4e55...-<runId>`
-   - prompt 内明确带上了：
-     - `Previous preflight failed because the generated patch no longer applies cleanly to the current repository snapshot`
-     - apply-check 摘要
-3. 为避免长时间占用本地资源，这条 live remediation run 在确认触发成功后已手动回收；后台不再残留由本次验证产生的 Codex 进程。
 
 # 任务：系统改进链路收敛为统一控制面，CEO/Ops 页面改为只消费 controlState
 
@@ -515,56 +376,6 @@ POST /api/company/self-improvement/proposals/:id/release-gate { "action": "prefl
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/system-improvement-control-view.ts src/lib/company-kernel/self-improvement-control-state.ts src/components/system-improvement-detail-drawer.tsx src/components/ops-dashboard.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-cockpit.tsx src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-codex-execution.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/app/api/company/self-improvement/proposals/route.ts src/app/api/company/self-improvement/proposals/[id]/route.ts src/app/api/company/self-improvement/proposals/[id]/approve/route.ts src/app/api/company/self-improvement/proposals/[id]/release-gate/route.ts src/lib/types.ts src/lib/company-kernel/contracts.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实链路验证通过：
-
-1. API 回看：
-   - `GET /api/company/self-improvement/proposals?pageSize=3`
-   - 返回 proposal 已统一带上 `controlState`
-   - `system-improvement-proposal-8012b3c4-...` 当前为：
-     - `stage = ops-merge`
-     - `currentOwner = ops`
-     - `nextAction = mark-merged`
-   - `system-improvement-proposal-4e55adf5-...` 在补跑一次历史 preflight 后当前为：
-     - `stage = blocked`
-     - `currentOwner = ai`
-     - `nextAction = resolve-blocker`
-     - `entryApprovalSummary.status = approved`
-     - 阻塞原因：主仓 `git apply --check` 失败，旧 patch 已不再适配当前主仓文件
-2. 页面回看：
-   - 打开 `Ops`
-   - 点击 `查看完整详情`
-   - 验证结果：
-     - 详情页会按当前控制面状态显示统一阶段文案，例如 `已阻塞` / `待 Ops 合并`
-     - 详情页显示 `当前责任方`
-     - 详情页保留 `查看 Ops 详情`
-     - 共享详情页不再出现 `重跑 preflight / 标记已合并 / 标记已重启 / 开始观察`
-     - 浏览器控制台不再出现最近活动列表的重复 key 告警
-   - 再打开 `Self-evolution Codex runner smoke test`
-   - 页面可直接看到：
-     - `待 Ops 合并`
-     - `当前责任方 Ops`
-     - `下一动作 标记已合并`
-
 # 任务：系统改进详情页显式展示 Ops 发布进度
 
 **状态**: ✅ 已完成
@@ -590,32 +401,6 @@ git diff --check
 3. `src/components/ceo-office-cockpit.tsx`
    - CEO Office 决策/摘要列表同步显示 `待 Ops 合并 / 待 Ops 重启 / 已发布 / 观察中`，与详情页保持一致。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/system-improvement-detail-drawer.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-cockpit.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实页面验证通过：
-
-1. 打开 `CEO Office`
-2. 点击 `Self-evolution Codex runner smoke test`
-3. 验证结果：
-   - 页面中出现 `待 Ops 合并`
-   - 页面中出现 `Ops 合并`
-   - 页面中出现 `Ops 重启与健康检查`
-   - 页面中不再出现旧的 `待准出`
-
 # 任务：系统改进准入提案在无 runtime context 时也进入 CEO 准入队列
 
 **状态**: ✅ 已完成
@@ -638,43 +423,6 @@ git diff --check
      - 高风险 proposal 在尚未创建平台工程 project/run 时
      - 依然能同步出 `entry-approval-required`
      - 不再出现审批请求已创建、但 CEO 自迭代准入队列看不到的断点
-
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-runtime-state.test.ts
-```
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实链路验证通过：
-
-1. 选中自动信号：
-   - `system-improvement-signal:user-story-gap:13b61ad02a59`
-   - 来源：`User Story/CEO Office/CEO 办公室.md`
-2. 生成真实提案：
-   - `system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6`
-   - 标题：`系统改进：系统改进详情支持 URL 深链恢复`
-3. API 回看确认：
-   - `status = approval-required`
-   - `humanGate.state = entry-approval-required`
-   - `automationState.status = queued`
-   - `approvalRequestId = cb8fa569-215c-4138-97e6-6422024b9cdf`
-4. 页面回看确认：
-   - `CEO Office` 页面中已能看到该提案
-   - 页面中已能看到 `待准入`
 
 # 任务：release gate 增加自动修复层，whitespace 失败不再卡在人类审批前
 
@@ -716,47 +464,6 @@ git diff --check
    - `docs/guide/agent-user-guide.md`
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/contracts.ts src/lib/types.ts src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/components/ops-dashboard.tsx
-```
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实链路验证通过：
-
-1. 对现有 proposal `system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950` 重新执行：
-
-```bash
-POST /api/company/self-improvement/proposals/:id/release-gate { "action": "preflight" }
-```
-
-2. 返回结果确认：
-   - `releaseGate.status = ready-for-approval`
-   - `releaseGate.preflightStatus = passed`
-   - `releaseGate.remediationStatus = fixed`
-   - `releaseGate.remediationAttempts = 1`
-   - `releaseGate.remediationSummary = 已自动移除 1 个文件中的 2 处行尾空格，并重跑发布前检查。`
-   - `proposal.humanGate.state = exit-approval-required`
-   - `proposal.automationState.status = exit-ready`
-3. 浏览器实走：
-   - `CEO Office / 决策队列` 中，`Self-evolution Codex runner smoke test` 重新出现为 `待准出`
-   - 打开后出现 `批准合入`
-   - 审批页文案明确表示：技术问题已清零，只剩最终准出
 
 # 任务：软件自迭代改为准入 / 准出双门，CEO 不再承接 AI 中间失败态
 
@@ -803,36 +510,6 @@ POST /api/company/self-improvement/proposals/:id/release-gate { "action": "prefl
      - 明确提示这条改进仍留在 AI / Ops 内部处理，不进入 CEO 待决策
    - 技术证据继续下沉到折叠层
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/contracts.ts src/lib/types.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-release-gate.ts src/components/ceo-office-cockpit.tsx src/components/ceo-dashboard.tsx src/components/system-improvement-detail-drawer.tsx src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-浏览器实走通过：
-
-1. 打开 `CEO Office`
-2. `决策队列` 片段中不再出现 `Self-evolution Codex runner smoke test`
-3. 在 CEO 页其他软件自迭代卡片中手动打开该 proposal：
-   - 不再出现 `批准并启动 / 批准合入`
-   - 明确显示：
-     - `当前没有需要 CEO 审批的动作`
-     - `这条改进当前留在 AI / Ops 内部处理，不会进入 CEO 的待决策队列`
-
 # 任务：系统改进待决策页重构为决策工作台
 
 **状态**: ✅ 已完成
@@ -862,34 +539,6 @@ git diff --check
    - 受影响文件、保护范围、实施/测试/回滚计划、项目/run/worktree/证据路径、来源证据统一下沉到 `查看技术证据`
    - 默认界面从“详情阅读”切换为“当前决策 + 决策依据 + 当前动作”
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/system-improvement-detail-drawer.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-浏览器实走通过：
-
-1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
-2. 抽屉顶部直接显示当前决策问题，而不是泛化详情摘要
-3. 默认可见区只保留：
-   - 当前决策问题
-   - 当前操作
-   - 决策依据
-   - 查看技术证据（折叠）
-4. `前因后果 / 执行证据 / 顶部项目-run-校验指标卡` 已不再默认出现
-5. 发布失败项直接在主视图内可见，不需要先进入技术证据层
-
 # 任务：系统改进详情抽屉收口为决策层与折叠证据层
 
 **状态**: ✅ 已完成
@@ -910,37 +559,6 @@ git diff --check
    - `发布检查` 只显示检查概况与失败项，不再重复项目/run/Codex 摘要
    - 平台工程项目、最近执行、worktree、证据路径、来源证据统一下沉到 `查看技术证据` 折叠层
    - 默认界面从“摘要层 + 叙事层 + 证据层并列平铺”收口为“决策层 + 业务层 + 折叠证据层”
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/system-improvement-detail-drawer.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-浏览器实走通过：
-
-1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
-2. 默认可见区不再出现：
-   - `前因后果`
-   - `执行证据`
-   - `平台工程项目 / 最近执行 / 改动与校验` 顶部指标卡
-3. 默认可见区只保留：
-   - 顶部结论摘要
-   - `本次改动`
-   - `发布检查`
-   - `当前操作`
-4. `查看技术证据` 已下沉为折叠层，避免证据与决策信息同层重复展开
-5. 抽屉宽度保持 `1440px`
 
 # 任务：系统改进详情抽屉去重收口
 
@@ -967,30 +585,6 @@ git diff --check
      - 发布检查
    - `改什么` 区块只保留目标、范围和计划，不再重复展示执行状态
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/system-improvement-detail-drawer.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-浏览器实走通过：
-
-1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
-2. 抽屉顶部只保留一张 `管理摘要`，不再存在头部独立状态带
-3. 右侧只保留 `当前操作`，不再存在 `执行概览 / 快捷动作 / 跳转入口` 三段重复结构
-4. `前因后果` 里已不再拆成 `平台工程项目 / 最近一次执行 / Codex worktree 证据` 三段重复时间线
-5. 抽屉宽度保持 `1440px`
-
 # 任务：优化系统改进详情抽屉的宽度与信息布局
 
 **状态**: ✅ 已完成
@@ -1009,28 +603,6 @@ git diff --check
    - 删除底部横向按钮带，避免按钮挤压、横向滚动和阅读断裂
    - `受影响文件 / 保护范围 / 实施计划 / 测试计划 / 回滚计划` 改为更适合长文本的块状布局
    - `Codex worktree` 与 `发布检查` 区改为更宽的信息卡，减少窄卡片内换行
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/system-improvement-detail-drawer.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-浏览器实走通过：
-
-1. 打开 `CEO Office -> Self-evolution Codex runner smoke test`
-2. 系统改进详情抽屉实际宽度为 `1440px`
-3. 页面已出现：
-   - `执行概览`
-   - `快捷动作`
-   - `跳转入口`
-4. 底部不再出现横向挤压的按钮条
 
 # 任务：系统改进决策链路产品化收口
 
@@ -1074,32 +646,6 @@ npx tsc --noEmit --pretty false
    - `User Story/Ops/运维中心.md`
    - `User Story/Projects/项目工作台.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/system-improvement-detail-drawer.tsx src/components/ceo-office-cockpit.tsx src/components/ops-dashboard.tsx src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/agent-run-detail.tsx src/components/ceo-dashboard.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-浏览器实走通过：
-
-1. `CEO Office -> 决策队列 -> Self-evolution Codex runner smoke test`
-   - 直接打开系统改进详情抽屉
-2. `系统改进详情 -> 打开 Ops 发布检查`
-   - 到达 `Ops / 系统改进发布检查`
-   - 已不存在 `准出证据` 旧标题
-3. `Ops -> 查看项目执行`
-   - 到达关联平台工程项目详情
-   - 已显示结构化系统改进摘要
-   - 不再显示无效 `查看 AI 对话`
-4. `Ops / Projects -> 查看完整详情 / 查看系统改进详情`
-   - 都可重新打开同一条系统改进详情抽屉
-
 # 任务：固化平台工程部 Codex CLI worktree 自开发执行基线
 
 **状态**: ✅ 已完成
@@ -1128,40 +674,6 @@ npx tsc --noEmit --pretty false
    - `ARCHITECTURE.md`
    - `docs/guide/agent-user-guide.md`
    - `docs/design/self-evolution/platform-engineering-codex-worktree-execution-assessment-2026-05-01.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/platform-engineering-codex-runner.test.ts
-```
-
-结果：`1 file passed, 5 tests passed`
-
-```bash
-npx eslint src/lib/platform-engineering-codex-runner.ts src/lib/platform-engineering-codex-runner.test.ts src/lib/platform-engineering.ts src/lib/bridge/codex-adapter.ts
-```
-
-```bash
-npx tsc --noEmit
-```
-
-真实 Codex CLI adapter 探针通过：
-
-```bash
-npx tsx -e "<通过 codexExec 在临时 git repo 内追加 hello.txt 第二行>"
-```
-
-结果：`hello.txt` 被真实改为 `hello\nworld`，`git status --short` 返回 `M hello.txt`。
-
-真实 runner 端到端探针通过：
-
-```bash
-AG_GATEWAY_HOME=<tmp> npx tsx -e "<通过 runPlatformEngineeringCodexTask 在临时 git repo 内执行真实 Codex CLI>"
-```
-
-结果：`changedFiles = ["hello.txt"]`、`disallowedFiles = []`、`scopeCheckPassed = true`、`diffCheckPassed = true`、`git diff --check` 与 `tail -n 1 hello.txt | grep -qx world` 均通过，且 evidence 文件已写入临时平台工程部 workspace。
 
 # 任务：收口 Provider / ExecutionTool 边界并试跑平台工程部
 
@@ -1218,36 +730,6 @@ AG_GATEWAY_HOME=<tmp> npx tsx -e "<通过 runPlatformEngineeringCodexTask 在临
    - `runtime read access`
    - `deterministic context injection`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/agents/department-capability-registry.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/providers/providers.test.ts src/lib/platform-engineering.test.ts src/lib/company-kernel/self-improvement-execution.test.ts
-```
-
-结果：`5 files passed, 26 tests passed`
-
-```bash
-npx vitest run src/lib/bridge/native-codex-auth.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/platform-engineering.test.ts
-```
-
-结果：`4 files passed, 15 tests passed`
-
-```bash
-npx eslint src/lib/providers/types.ts src/lib/providers/index.ts src/lib/provider-usage-analytics.ts src/lib/agents/department-execution-resolver.ts src/lib/agents/department-capability-registry.ts src/lib/agents/llm-oneshot.ts src/lib/agents/group-types.ts src/lib/agents/prompt-executor.ts src/lib/backends/types.ts src/lib/backends/registry.ts src/lib/backends/run-session-hooks.ts src/lib/backends/memory-hooks.ts src/lib/backends/claude-engine-backend.ts src/lib/claude-engine/tools/execution-tool.ts src/lib/claude-engine/tools/toolsets.ts
-```
-
-```bash
-npx tsc --noEmit
-```
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
 # 任务：删除 Claude Engine API 子系统未使用的直连 provider shim
 
 **状态**: ✅ 已完成
@@ -1295,36 +777,6 @@ git diff --check
    - `ARCHITECTURE.md`
    - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/claude-engine/api/__tests__/errors-and-caching.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/bridge/native-codex-auth.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/providers/ai-config.test.ts src/lib/claude-engine/engine/__tests__/compactor.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/provider-model-catalog.test.ts
-```
-
-结果：`9 files passed, 125 tests passed`
-
-```bash
-npx eslint src/lib/claude-engine/api/api-client-error.ts src/lib/claude-engine/api/errors.ts src/lib/claude-engine/api/pi-transport.ts src/lib/claude-engine/api/retry.ts src/lib/claude-engine/api/provider-fallback.ts src/lib/claude-engine/api/index.ts src/lib/claude-engine/api/__tests__/errors-and-caching.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/claude-engine/engine/compactor.ts src/lib/bridge/native-codex-auth.ts src/lib/bridge/native-codex-auth.test.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/backends/claude-engine-backend.ts
-```
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
 # 任务：Claude Engine Provider Adapter 收口为 pi-ai only
 
 **状态**: ✅ 已完成
@@ -1367,42 +819,6 @@ git diff --check
    - `docs/guide/agent-user-guide.md`
    - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/bridge/native-codex-auth.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/providers/ai-config.test.ts src/lib/claude-engine/api/__tests__/api.test.ts
-```
-
-结果：`6 files passed, 82 tests passed`
-
-```bash
-npx vitest run src/lib/claude-engine/engine/__tests__/compactor.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/provider-model-catalog.test.ts
-```
-
-结果：`3 files passed, 17 tests passed`
-
-```bash
-npx eslint src/lib/bridge/native-codex-auth.ts src/lib/bridge/native-codex-auth.test.ts src/lib/claude-engine/api/pi-transport.ts src/lib/claude-engine/api/retry.ts src/lib/claude-engine/api/provider-fallback.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/claude-engine/api/__tests__/api.test.ts src/lib/claude-engine/engine/compactor.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/backends/claude-engine-backend.ts
-```
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
 # 任务：codex / claude-code backend 降级为 legacy manual path
 
 **状态**: ✅ 已完成
@@ -1428,38 +844,6 @@ git diff --check
 4. 文档同步：
    - `ARCHITECTURE.md`
    - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/backends/builtin-backends.test.ts src/lib/backends/intervention-contract.test.ts src/lib/claude-engine/tools/__tests__/execution-tool.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
-```
-
-结果：`4 files passed, 43 tests passed`
-
-```bash
-npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/lib/backends/builtin-backends.ts src/lib/backends/index.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/intervention-contract.test.ts
-```
-
-说明：`builtin-backends*` 文件本身带有既有 `no-explicit-any` lint 债；本轮用规则豁免验证语法、导入与新增命名改动未引入新的 lint 问题。
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
 
 # 任务：Claude Engine 统一 ExecutionTool 抽象接入 codex / claude-code
 
@@ -1495,36 +879,6 @@ git diff --check
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
    - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/claude-engine/tools/execution-tool.ts src/lib/claude-engine/tools/index.ts src/lib/claude-engine/tools/registry.ts src/lib/claude-engine/tools/toolsets.ts src/lib/claude-engine/tools/__tests__/execution-tool.test.ts src/lib/claude-engine/tools/__tests__/tools.test.ts src/lib/backends/claude-engine-backend.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
-```
-
-```bash
-npx vitest run src/lib/claude-engine/tools/__tests__/execution-tool.test.ts src/lib/claude-engine/tools/__tests__/tools.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
-```
-
-结果：`3 files passed, 53 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
 
 # 任务：AI Provider 配置面收口，CLI coder 退出 Provider 平面
 
@@ -1577,32 +931,6 @@ git diff --check
     - `docs/guide/cli-api-reference.md`
     - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx vitest run src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/app/api/ai-config/route.test.ts src/lib/provider-model-catalog.test.ts src/lib/provider-image-generation.test.ts
-```
-
-结果：`5 files passed, 32 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
 # 任务：native-codex 直连路径清理与本地会话统一到 Claude Engine
 
 **状态**: ✅ 已完成
@@ -1650,36 +978,6 @@ git diff --check
    - `docs/guide/cli-api-reference.md`
    - `docs/design/self-evolution/provider-adapter-and-execution-tool-remediation-design-2026-04-30.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/api-provider-conversations.ts src/lib/run-conversation-transcript.ts src/lib/providers/index.ts src/lib/providers/providers.test.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.ts' 'src/app/api/conversations/[id]/steps/route.test.ts'
-```
-
-```bash
-npx vitest run src/lib/bridge/native-codex-adapter.test.ts src/lib/providers/providers.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts
-```
-
-结果：`7 files passed, 38 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
 # 任务：native-codex Claude Engine 主线路由收口到 pi-ai
 
 **状态**: ✅ 已完成
@@ -1721,42 +1019,6 @@ git diff --check
 2. `/api/conversations` 本地会话产品链路
 3. `native-codex` 图像生成路径
 4. `workflow-runtime-hooks.ts` 的 worker 拆分
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/claude-engine/api/retry.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/providers/index.ts
-```
-
-```bash
-npx vitest run src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/providers/providers.test.ts src/lib/backends/builtin-backends.test.ts src/lib/agents/department-capability-registry.test.ts
-```
-
-结果：`5 files passed, 47 tests passed`
-
-```bash
-npx vitest run src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts
-```
-
-结果：`3 files passed, 11 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
 
 # 任务：系统改进 Proposal 运行态同步与 CEO/Ops 准出证据包可见
 
@@ -1812,36 +1074,6 @@ git diff --check
    - `docs/guide/cli-api-reference.md`
    - `ARCHITECTURE.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/agents/run-registry.ts 'src/app/api/company/self-improvement/proposals/route.ts' 'src/app/api/company/self-improvement/proposals/[id]/route.ts' 'src/app/api/company/self-improvement/proposals/[id]/attach-test-evidence/route.ts' src/components/ops-dashboard.tsx src/components/ceo-office-cockpit.tsx src/lib/api.ts src/lib/types.ts src/lib/company-kernel/contracts.ts src/lib/company-kernel/self-improvement.test.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts
-```
-
-结果：`5 files passed, 14 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
 # 任务：系统改进 Proposal 批准后自动立项并进入平台工程 AI Loop
 
 **状态**: ✅ 已完成
@@ -1878,36 +1110,6 @@ git diff --check
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
    - `ARCHITECTURE.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-execution.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-approval.ts 'src/app/api/company/self-improvement/proposals/[id]/approve/route.ts' src/lib/approval/dispatcher.ts src/lib/company-kernel/self-improvement.test.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/platform-engineering.test.ts src/lib/workspace-catalog.test.ts
-```
-
-结果：`5 files passed, 12 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
 
 # 任务：内置平台工程部与自开发观察链路落地
 
@@ -1948,36 +1150,6 @@ git diff --check
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
    - `ARCHITECTURE.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/platform-engineering.ts src/lib/company-kernel/platform-engineering-observer.ts src/lib/workspace-catalog.ts src/lib/agents/project-registry.ts src/lib/agents/run-registry.ts src/app/api/projects/route.ts src/lib/api.ts src/lib/types.ts src/lib/agents/project-types.ts
-```
-
-```bash
-npx vitest run src/lib/platform-engineering.test.ts src/lib/company-kernel/platform-engineering-observer.test.ts src/lib/workspace-catalog.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/departments/route.test.ts src/lib/agents/department-capability-registry.test.ts
-```
-
-结果：`6 files passed, 19 tests passed`
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
 
 # 任务：Settings Provider 管理旅程补齐（已接入真相源 / 删除恢复 / 多兼容接入 / 真实第三方验收）
 
@@ -2032,54 +1204,6 @@ git diff --check
    - `docs/guide/cli-api-reference.md`
    - `ARCHITECTURE.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/lib/providers/ai-config.ts src/lib/providers/provider-availability.ts src/server/control-plane/routes/settings.ts src/lib/provider-model-catalog.ts src/lib/provider-image-generation.ts src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/lib/providers/openai-compatible.ts src/lib/providers/openai-compatible.test.ts src/lib/backends/claude-engine-backend.ts
-```
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/lib/providers/openai-compatible.test.ts src/lib/provider-model-catalog.test.ts src/lib/provider-image-generation.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts
-```
-
-结果：`6 files passed, 35 tests passed`
-
-```bash
-npm run build
-```
-
-结果：构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-真实第三方验收（使用用户提供的 OpenAI-compatible 端点）：
-
-1. `POST /api/api-keys/test`
-   - `provider=custom`
-   - `baseUrl=https://new.baogaoai.com/v1`
-   - 结果：`status=ok`
-2. `POST /api/provider-model-catalog`
-   - `provider=custom`
-   - 结果：`source=remote-discovery`，返回 `56` 个模型
-3. 浏览器验收（优先使用 `bb-browser`，本轮可用，无需回退 Playwright）：
-   - 将未完成兼容接入编辑为可用接入 `BaogaoAI GLM`
-   - 实测 `测试连接 -> 保存修改` 成功
-   - 实测新增一个临时兼容接入后可再删除
-   - 实测 `Codex (MCP)` 可 `移除 -> 恢复`
-   - 实测已保存兼容接入可直接 `复测`
-4. 验收截图：
-   - `/tmp/opc-settings-provider-journey-fixed.png`
-
 # 任务：Settings Provider 最终旅程收口（AI 接入在上 / 默认配置与高级设置合并）
 
 **状态**: ✅ 已完成
@@ -2103,45 +1227,6 @@ git diff --check
    - 页底主保存动作改名为 `保存默认配置`，和上方 `保存接入` 分离语义
 2. `docs/guide/agent-user-guide.md`
    - 同步更新 Settings Provider 的最终用户旅程说明
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-rm -rf .next/dev/types && npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试 `bb-browser`，当前环境仍是 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - 存在 `AI 接入`
-   - 存在 `默认配置`
-   - `AI 接入` 出现在 `默认配置` 之前
-   - 页面上不再出现 `兼容端点`
-   - 页面上不再出现 `执行设置`
-   - 页面上不再出现 `Provider Transport / pi-ai transport / native fallback`
-   - 页面上不再出现 `Current profile`
-3. 截图：
-   - `/tmp/opc-settings-provider-final-journey.png`
-   - `/tmp/opc-settings-provider-final-journey-expanded.png`
 
 # 任务：Settings 会话平台接通本地 cc-connect 启停链路
 
@@ -2179,54 +1264,6 @@ git diff --check
    - `ARCHITECTURE.md`
    - `cc-connect.config.toml`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/cc-connect-tab.tsx src/components/platform-manager.tsx src/components/settings-panel.tsx src/app/api/cc-connect/local-state/route.ts src/app/api/cc-connect/manage/route.ts src/lib/cc-connect-local.ts src/lib/cc-connect-local.test.ts
-```
-
-```bash
-npx vitest run src/lib/cc-connect-local.test.ts
-```
-
-结果：`2 tests passed`。
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-接口验收：
-
-1. `POST /api/cc-connect/manage { "action": "stop" }` 返回 `200`，`running=false`
-2. `POST /api/cc-connect/manage { "action": "start" }` 返回 `200`，`running=true`
-3. `GET /api/cc-connect/local-state` 返回本机 `installed/configPrepared/tokenConfigured/managementEnabled/running` 全量状态
-
-页面验收：
-
-1. 先尝试 `bb-browser open 'http://127.0.0.1:3999/?panel=settings&tab=messaging'`
-2. 初次仍遇到 daemon / CDP 不稳定，执行 `bb-browser daemon shutdown` 后恢复可打开；但 snapshot/screenshot 仍不足以做稳定 DOM 验收，因此按规则回退到一次性 Playwright
-3. Playwright 验证通过：
-   - 停机态首屏可见 `启动 cc-connect`
-   - 点击后进入 `cc-connect 已运行`
-   - 页面可见 `运行状态 / 会话平台 / 会话 / 心跳监控`
-4. 截图：
-   - `/tmp/opc-cc-connect-stopped-ui.png`
-   - `/tmp/opc-cc-connect-started-ui.png`
-
 # 任务：Settings 右侧固定摘要栏移除（释放主工作面宽度）
 
 **状态**: ✅ 已完成
@@ -2255,42 +1292,6 @@ git diff --check
    - 不再用固定右栏占据横向空间
    - 摘要信息回归各自 tab 主工作面，不再在 Settings 首页重复平铺
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试 `bb-browser open 'http://127.0.0.1:3000/?panel=settings&tab=profile'`，但当前环境仍返回 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - Settings 首屏可正常打开
-   - 右侧不再出现 `当前配置`
-   - 右侧不再出现 `活跃 Provider`
-   - 右侧不再出现 `兼容 Provider`
-   - 页面无 404 / 无 console error
-3. 截图：
-   - `/tmp/opc-settings-no-right-rail.png`
-
 # 任务：Settings Provider 用户旅程三次收口（高级项后置 / 首屏只保留首次接入必需内容）
 
 **状态**: ✅ 已完成
@@ -2311,46 +1312,6 @@ git diff --check
    - 旅程命名继续收口：`默认执行` 改为 `默认配置`，`兼容端点` 改为 `AI 接入`，主动作改为 `添加接入 / 编辑接入 / 保存接入`
 2. `docs/guide/agent-user-guide.md`
    - 同步补充：图像生成与按层覆盖已后置到 `高级设置`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试 `bb-browser`，但当前环境仍是 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - 首屏存在 `高级设置`
-   - 首屏默认不出现 `图像 Provider` 与 layer override 详细控件
-   - 顶部主 tab 不再出现 `凭证中心`
-   - 切到 `OpenAI API` 后，同卡直接出现 `OpenAI API Key / 测试连接 / 保存凭证`
-   - `AI 接入` 未接入时只显示轻提示
-   - 展开 `高级设置` 后，图像生成与按层覆盖控件仍完整可用
-   - 首屏可见 `默认配置 / AI 接入 / 高级设置`
-3. 截图：
-   - `/tmp/opc-settings-provider-journey-tuned.png`
-   - `/tmp/opc-settings-provider-advanced-expanded.png`
-   - `/tmp/opc-settings-provider-credential-center-tertiary.png`
 
 # 任务：Settings Provider 用户旅程复审与二次收口（去主 tab 凭证中心 / 凭证并回默认执行）
 
@@ -2373,44 +1334,6 @@ git diff --check
 2. `docs/guide/agent-user-guide.md`
    - 同步更新 Settings Provider 配置的实际旅程说明
    - 明确 `凭证中心` 已变成二级维护入口，不再是主导航 tab
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试 `bb-browser`，但当前环境仍是 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - 顶部主 tab 已不再出现 `凭证中心`
-   - Provider 首屏已不再出现独立 `当前 Provider 接入` 卡片
-   - 切到 `OpenAI API` 后，同卡直接出现 `OpenAI API Key / 测试连接 / 保存凭证`
-   - 首屏 `刷新模型` 出现次数为 `0`
-   - `兼容端点` 在未接入时只显示轻提示
-   - `集中维护凭证` 仍可作为二级入口进入 `凭证中心`
-3. 截图：
-   - `/tmp/opc-settings-provider-journey-review.png`
-   - `/tmp/opc-settings-provider-credential-center-secondary.png`
 
 # 任务：Settings 通知投递关系收口（会话平台与公司循环摘要投递解耦）
 
@@ -2448,75 +1371,6 @@ git diff --check
    - `docs/guide/cli-api-reference.md`
    - `ARCHITECTURE.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/components/cc-connect-tab.tsx 'src/app/api/company/loops/policies/[id]/route.ts' src/app/api/company/loops/notification-targets/route.ts 'src/app/api/company/budget/policies/[id]/route.ts' src/server/control-plane/company-routes.ts src/lib/company-kernel/company-loop-notification-targets.ts src/lib/company-kernel/company-loop-notification-targets.test.ts src/lib/company-kernel/company-loop-notifier.ts src/lib/company-kernel/company-loop.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/company-kernel/company-loop-notification-targets.test.ts src/lib/company-kernel/company-loop.test.ts
-```
-
-结果：`2 files passed`，`6 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-node - <<'NODE'
-(async () => {
-  const first = await fetch('http://127.0.0.1:3000/api/company/budget/policies/budget%3Adepartment%3Adefault%3Aday');
-  const second = await fetch('http://127.0.0.1:3000/api/company/loops/notification-targets');
-  console.log(JSON.stringify({
-    budgetStatus: first.status,
-    budgetId: (await first.json()).id,
-    notificationStatus: second.status,
-    notificationCount: ((await second.json()).items || []).length,
-  }, null, 2));
-})();
-NODE
-```
-
-结果：
-
-```json
-{
-  "budgetStatus": 200,
-  "budgetId": "budget:department:default:day",
-  "notificationStatus": 200,
-  "notificationCount": 3
-}
-```
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试 `bb-browser open 'http://127.0.0.1:3000/?panel=settings&tab=autonomy'` 与 `bb-browser screenshot ...`，但当前环境继续返回 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - 存在 `摘要投递`
-   - 存在 `Web 收件箱`
-   - `邮件投递 / Webhook` 在未接入时显示 `未接入`
-   - Settings tab 已切成 `会话平台`
-   - 页面上不再出现 `消息平台`
-   - 页面无 404 / 无 console error
-3. 截图：
-   - `/tmp/opc-settings-notification-targets.png`
-
 # 任务：Settings 自治预算页交互收口（去内部 policy 元信息 / 去裸露细配）
 
 **状态**: ✅ 已完成
@@ -2534,42 +1388,6 @@ git diff --check
    - 公司循环策略改成只露出主节奏配置，动作白名单与通知渠道降为高级展开
    - 预算字段改成中文主语义：`Token 上限 / 分钟上限 / 派发上限 / 并发上限 / 预警阈值 / 审批阈值`
    - 清理 Provider 页遗留的 inline credential 死代码，避免旧交互残留继续污染构建
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. `bb-browser` 当前环境仍然返回 `Chrome not connected (CDP 503)`，无法用于本地 Settings 验收，因此回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - 存在 `组织自运营预算 / 部门默认预算 / 公司循环策略`
-   - 页面上不再出现 `Policy:`、`Scope:`、`Mode:`
-   - 页面上不再出现单独的 `Operation cooldown` 和 `风险与熔断` 卡片
-   - `展开高级规则` 默认可见，冷却规则和动作白名单默认不平铺
-   - 预算主字段已切成中文语义字段
-3. 截图：
-   - `/tmp/opc-settings-autonomy-redesign.png`
 
 # 任务：Settings Provider 配置旅程收口（Provider 与凭证同页闭环）
 
@@ -2594,42 +1412,6 @@ git diff --check
    - 同步更新 Settings 配置旅程说明
    - 明确 `Provider 配置` 为首次接入主路径，`凭证中心` 为二级维护入口
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试继续使用 `bb-browser`，但当前环境仍是 `Chrome not connected (CDP 503)`，因此回退到一次性 Playwright。
-2. Playwright 验证通过：
-   - 默认 `native-codex` 时，存在 `当前 Provider 接入`
-   - 切换默认 Provider 到 `OpenAI API` 后，同页直接出现 `OpenAI API Key / 测试连接 / 保存凭证`
-   - tab 标签已从 `API Keys` 改为 `凭证中心`
-   - 页面上不再出现 `Provider Transport / pi-ai transport / native fallback`
-3. 截图：
-   - `/tmp/opc-settings-provider-inline-credentials-final.png`
-   - `/tmp/opc-settings-credential-center-final.png`
-
 # 任务：Settings Provider 页交互收口（去 transport / 去平铺 / 去重复模型信息）
 
 **状态**: ✅ 已完成
@@ -2650,43 +1432,6 @@ git diff --check
    - 右侧侧栏改成 `当前配置 + 兼容 Provider` 两张摘要卡，不再泄漏 transport 细节
 2. `src/app/page.tsx`
    - Settings shell header 改成 `compact`，副标题收敛成 `配置工作区`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/app/page.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验收：
-
-1. 先尝试 `bb-browser open 'http://127.0.0.1:3000/?panel=settings&tab=provider'`，但当前环境返回 `Chrome not connected (CDP 503)`，因此按规则回退到一次性 Playwright。
-2. Playwright 断言通过：
-   - 存在 `默认执行 / 兼容 Provider / 图像生成 / 按层覆盖`
-   - 页面上不再出现 `Provider Transport`、`Current profile`、`Provider 诊断`、`Settings Workspace`
-   - `刷新模型` 在首屏出现次数为 `0`
-   - `配置连接` 可展开兼容 Provider 表单
-   - `展开测试` 可按需展开图像测试区
-3. 截图：
-   - `/tmp/opc-settings-provider-redesign.png`
-   - `/tmp/opc-settings-provider-redesign-expanded.png`
 
 # 任务：native-codex 图像 provider 收口（capability 驱动 + 真链路验收）
 
@@ -2728,85 +1473,6 @@ git diff --check
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
    - `ARCHITECTURE.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/provider-image-generation.ts src/lib/provider-image-generation.test.ts src/lib/provider-model-catalog.ts src/lib/provider-model-catalog.test.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/providers/types.ts src/components/settings-panel.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/bridge/native-codex-adapter.test.ts src/lib/provider-image-generation.test.ts src/lib/provider-model-catalog.test.ts src/lib/providers/ai-config.test.ts src/app/api/provider-image-generation/route.test.ts
-```
-
-结果：`5 files passed`，`29 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-curl -s 'http://127.0.0.1:3101/api/provider-model-catalog?provider=native-codex&refresh=1' | jq '.entry.models[] | select(.id=="gpt-5.5")'
-```
-
-结果：返回 `supportsImageGeneration: true`。
-
-```bash
-node - <<'NODE'
-(async() => {
-  const res = await fetch('http://127.0.0.1:3000/api/provider-image-generation', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      provider: 'native-codex',
-      prompt: 'A minimal blue square app icon on a white background',
-      size: '512x512',
-      allowFallback: false,
-    }),
-  });
-  const data = await res.json();
-  console.log(JSON.stringify({
-    status: res.status,
-    provider: data.provider,
-    model: data.model,
-    size: data.size,
-    hasDataUrl: typeof data.dataUrl === 'string' && data.dataUrl.startsWith('data:image/'),
-  }, null, 2));
-})();
-NODE
-```
-
-结果：
-
-```json
-{
-  "status": 200,
-  "provider": "native-codex",
-  "model": "gpt-5.5",
-  "size": "1024x1024",
-  "hasDataUrl": true
-}
-```
-
-浏览器验收：
-
-1. 先用 `bb-browser` 打开 `http://127.0.0.1:3000/?section=settings`，但当前长期 profile 被历史外部标签污染，只返回 `Checking the proxy and the firewall` 错误页，无法作为本地 SPA 验收依据。
-2. 回退到一次性 Playwright 后确认：
-   - `Settings -> Provider 配置` 存在 `图像生成`
-   - 图像 Provider 当前可选 `native-codex`
-   - 图像 Model 输入框出现 `gpt-5.5`
-   - `enabled` 状态可见
-3. 截图：
-   - `/tmp/opc-settings-native-codex-image-playwright.png`
-   - `/tmp/opc-settings-native-codex-image-section.png`
 
 # 任务：pi-ai transport Phase 3-4 收口
 
@@ -2862,50 +1528,6 @@ NODE
    - `docs/guide/agent-user-guide.md`
    - `ARCHITECTURE.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/providers/ai-config.ts src/lib/providers/types.ts src/lib/claude-engine/api/types.ts src/lib/claude-engine/api/pi-transport.ts src/lib/claude-engine/api/retry.ts src/lib/backends/claude-engine-backend.ts src/lib/agents/llm-oneshot.ts src/lib/provider-image-generation.ts src/lib/provider-image-generation.test.ts src/server/control-plane/routes/settings.ts src/server/control-plane/server.ts src/app/api/provider-image-generation/route.ts src/app/api/provider-image-generation/route.test.ts src/app/api/knowledge/[id]/summary/route.ts src/app/api/knowledge/[id]/summary/route.test.ts src/lib/api.ts src/components/knowledge-browser-workspace.tsx src/components/knowledge-panel.tsx src/components/settings-panel.tsx src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/provider-image-generation.test.ts src/app/api/provider-image-generation/route.test.ts src/app/api/knowledge/[id]/summary/route.test.ts src/lib/provider-model-catalog.test.ts src/app/api/provider-model-catalog/route.test.ts src/lib/providers/ai-config.test.ts src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`10 files passed`，`43 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-接口与页面验收：
-
-1. `curl -X POST /api/knowledge/:id/summary` 返回 `ok: true`，并返回 `provider = native-codex`、`scene = knowledge-summary`。
-2. `curl -X POST /api/provider-image-generation` 在当前环境未配置 OpenAI 图像凭证时，返回预期配置错误：`Provider openai-api is not configured for image generation`。
-3. 先用 `bb-browser` 尝试抓取 `Settings` 与 `Knowledge` 页面，但被当前长期浏览器 profile 的历史外部标签污染，无法作为最终验收依据，因此回退到一次性 Playwright。
-4. Playwright 最终确认：
-   - `Settings` 页存在 `Provider Transport`、`图像生成`、`测试图像生成`
-   - 点击 `测试图像生成` 会返回预期配置错误
-   - `Knowledge` 页存在 `AI 摘要`
-   - 点击后出现 `AI 摘要已更新`
-5. 截图：
-   - `/tmp/opc-settings-phase34.png`
-   - `/tmp/opc-knowledge-phase34.png`
-
 # 任务：pi-ai transport、模型目录与 Settings 配置接入
 
 **状态**: ✅ 已完成
@@ -2954,52 +1576,6 @@ git diff --check
    - `docs/guide/agent-user-guide.md`
    - `ARCHITECTURE.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/bridge/native-codex-adapter.ts src/lib/provider-model-catalog.ts src/lib/provider-model-catalog.test.ts src/app/api/provider-model-catalog/route.ts src/app/api/provider-model-catalog/route.test.ts src/server/control-plane/routes/settings.ts src/server/control-plane/server.ts src/server/runtime/routes/user.ts src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/providers/types.ts src/components/settings-panel.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/provider-model-catalog.test.ts src/app/api/provider-model-catalog/route.test.ts src/app/api/models/route.test.ts src/lib/providers/ai-config.test.ts src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`6 files passed`，`34 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器与接口验证：
-
-1. 当前用户 `:3000` 会话是 web-only 壳层，`Settings` 在该态下无法完整验证 provider model catalog，因此临时启动隔离 `:3199 api` + `:3999 web-only` 做一次性验收；显式禁用了 `scheduler / companions / bridge worker`。
-2. `curl` 验证：
-   - `GET /api/provider-model-catalog?provider=native-codex` 返回 `source = pi-registry`，模型数 `10`
-   - `POST /api/provider-model-catalog` 对 `custom` provider 返回 `manual` 回退或远端发现结果
-   - `GET /api/models` 返回合并后的 provider-aware 模型列表
-3. Browser Use / in-app browser 验证 `http://127.0.0.1:3999/?section=projects&panel=settings&tab=provider`，确认存在：
-   - `Codex Transport`
-   - `pi-ai transport`
-   - `刷新模型`
-   - provider-aware model helper text
-4. 截图：
-   - `/tmp/opc-settings-pi-ai-provider.png`
-5. 临时 `:3199`、`:3999` 服务已停止；`lsof -nP -iTCP:3199 -iTCP:3999 -sTCP:LISTEN` 确认无端口残留。
-
 # 任务：Projects 页面真实性与浏览链路收口
 
 **状态**: ✅ 已完成
@@ -3029,51 +1605,6 @@ git diff --check
    - `docs/design/projects-page-todos-2026-04-26.md`
    - `docs/design/ux-shell-convergence-2026-04-23.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad-pattern warnings。
-
-```bash
-git diff --check
-```
-
-结果：通过。
-
-浏览器验证：
-
-1. 复用用户已打开的 in-app browser，本轮直接在现有 `http://127.0.0.1:3000/?section=projects` 上做回归，不额外拉起新的本地服务。
-2. 通过 Browser Use / in-app browser 断言确认：
-   - `执行概览`
-   - `执行工作区`
-   - `项目树`
-   - `执行工作台`
-3. 同时确认以下旧内容已移除：
-   - `项目健康度`
-   - `负责人`
-   - `fallback refs`
-4. 截图：
-   - `/tmp/opc-projects-production-truthful.png`
-
 # 任务：Knowledge 首页视觉收口
 
 **状态**: ✅ 已完成
@@ -3101,42 +1632,6 @@ git diff --check
 5. 默认 browse 首页移除 `关联增长` 区块，避免再次把首屏重心拉回治理视角。
 6. 文档同步更新：`docs/design/knowledge-page-gap-analysis-and-plan-2026-04-27.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 使用 `bb-browser` 打开并复用 `http://127.0.0.1:3000/?section=knowledge&knowledge=d711d04b-2d86-4d2f-b5fe-7191230c50fd-pattern-512ee5fbe0`。
-2. browse 工作台 DOM 断言确认存在：
-   - `搜索知识`
-   - `新建知识`
-   - `浏览工作台 / 治理工作台`
-   - `搜索目录或标签`
-   - `知识列表 (120) / 最近更新`
-   - `收藏知识 / 更多操作 / 编辑 / 删除`
-3. governance 工作台 DOM 断言确认原治理能力仍在：
-   - `Promote / Reject / Generate proposal`
-   - `Generate / Eval / Reject`
-   - `知识 / 决策 / 模式`
-4. `bb-browser errors --tab ...` 返回 `jsErrors: []`，无前端运行时错误。
-5. 截图：
-   - `/tmp/knowledge-refine-final.png`
-
 # 任务：Settings 页面结构收口
 
 **状态**: ✅ 已完成
@@ -3158,41 +1653,6 @@ npm run build
    - `src/components/knowledge-panel.tsx`、`src/components/knowledge-browser-workspace.tsx`、`src/app/page.tsx` 补齐 Knowledge 工作面的类型/依赖闭环，避免 Settings 任务被无关 `tsc` 错误阻断
 6. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/ceo-profile-settings-tab.tsx src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/app/api/knowledge/route.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 先按规范尝试 `bb-browser`，但当前环境 daemon 返回 `Chrome not connected (CDP 503)`，无法作为本地 Settings 验收工具。
-2. 回退到一次性 Playwright，复用既有 `http://127.0.0.1:3000/?section=projects&panel=settings&tab=profile`，未额外启动新服务。
-3. Playwright 断言确认：
-   - 7 个 settings tabs 同行显示，没有换行
-   - `个人信息 / 沟通偏好 / 反馈信号 / 当前配置 / 活跃 Provider / 连接状态` 同屏可见
-   - Profile 下拉值显示中文标签：`中等 / 平衡 / 中`
-4. 截图：
-   - `/tmp/opc-settings-profile-final-clean.png`
-
 # 任务：Ops 第二轮设计收口
 
 **状态**: ✅ 已完成
@@ -3211,52 +1671,6 @@ npm run build
 7. 文档同步更新：
    - `docs/design/ops-page-redesign-2026-04-27.md`
    - `docs/design/ux-shell-convergence-2026-04-23.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/ops-dashboard.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/app/api/management/overview/route.test.ts
-```
-
-结果：`3 files passed`，`15 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 复用既有 `:3101` API，临时启动隔离 web-only `:3999`，显式禁用 `scheduler / companions / bridge worker`。
-2. `bb-browser` 已优先用于本地打开 `http://127.0.0.1:3999/?section=operations`，但当前环境中 `snapshot / eval` 仍只返回空白 `body`，不足以作为最终验收依据。
-3. 在相同 `:3999` 页面上回退到一次性 Playwright 断言，确认：
-   - 首层存在 `调度任务 / 系统状态 / MCP / 服务连接 / 额度与配额 / Tunnel / 网络 / 资产管理 / 最近活动 / 深层工作台`
-   - 顶栏存在 `本页` 范围标记
-   - `新建任务` 能打开既有 `New Scheduled Job` 弹窗
-   - `资产工作台` 能展开全量资产面板，并显示 `可执行资产 / 当前可被任务调用`
-   - 默认首层不再出现旧 `高级调度治理`
-   - 无 bad HTTP responses / 无 console errors / 无 page errors
-4. 截图：
-   - `/tmp/opc-ops-round2-top.png`
-   - `/tmp/opc-ops-round2-assets.png`
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务将在本轮汇报前停止并释放端口。
-2. 本轮未启动 scheduler / worker / companions 长期进程。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 均已退出。
-4. `bb-browser daemon` 将在本轮汇报前停止。
 
 # 任务：Ops 首层驾驶舱重构
 
@@ -3277,54 +1691,6 @@ npm run build
 5. 文档同步更新：
    - `docs/design/ops-page-redesign-2026-04-27.md`
    - `docs/design/ux-shell-convergence-2026-04-23.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/ops-dashboard.tsx src/components/scheduler-panel.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/app/api/management/overview/route.test.ts
-```
-
-结果：`3 files passed`，`15 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 复用既有 `:3101` API，临时启动隔离 web-only `:3999`，显式禁用 `scheduler / companions / bridge worker`。
-2. `bb-browser` 已优先用于本地打开 `http://127.0.0.1:3999/?section=operations`，但当前环境中 `snapshot / eval / screenshot` 仍只返回空白 `body` 或卡住，不足以作为最终验收依据。
-3. 在相同 `:3999` 页面上补一次性 Playwright 断言，确认首层存在：
-   - `启用中调度任务 / 待处理治理项 / 额度使用率 / 连接服务`
-   - `调度任务 / 系统状态 / MCP / 服务连接 / 额度与配额 / Tunnel / 网络 / 资产管理 / 最近活动`
-   - `高级调度治理 / 资产 Studio / 扩展工具`
-4. Playwright 继续确认：
-   - 首层 `新建任务` 能打开既有 `New Scheduled Job` 弹窗
-   - `管理全部` 能展开全量资产 studio，并显示 `可执行资产`
-   - `Analytics` 不再出现在默认首层
-   - 无 bad HTTP responses / 无 console errors / 无 page errors
-5. 截图：
-   - `/tmp/opc-ops-redesign-top.png`
-   - `/tmp/opc-ops-redesign-playwright.png`
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务将在本轮汇报前停止并释放端口。
-2. 本轮未启动 scheduler / worker / companions 长期进程。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 均已退出。
-4. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
 
 # 任务：Knowledge 首页按新设计稿重构
 
@@ -3347,43 +1713,6 @@ npm run build
 6. `src/lib/knowledge/store.ts` 与 `src/lib/knowledge/index.ts` 同步补齐 knowledge mirror metadata 和 access export，避免结构化语义继续丢失在 filesystem mirror 层。
 7. 文档同步更新：`docs/guide/knowledge-api.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`ARCHITECTURE.md`、`docs/design/knowledge-page-gap-analysis-and-plan-2026-04-27.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/knowledge-panel.tsx src/components/knowledge-browser-workspace.tsx src/lib/api.ts src/lib/types.ts src/lib/knowledge/index.ts src/lib/knowledge/store.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts'
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts'
-```
-
-结果：`2 files passed`，`6 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 复用既有 `http://127.0.0.1:3000/?section=knowledge&knowledge=d711d04b-2d86-4d2f-b5fe-7191230c50fd-pattern-512ee5fbe0`，未启动新服务。
-2. 先在 in-app browser 中 reload，发现一次真实运行时错误：`useMemo is not defined`；已修复后重新验收。
-3. 最终使用 in-app browser DOM 快照确认：
-   - `Knowledge 知识库` 标题存在
-   - 搜索框与 `新建知识` 可见
-   - 四张指标卡 `最近沉淀 / 活跃资产 / 待复核 / 低活跃度` 可见
-   - `浏览工作台 / 治理工作台` 切换存在
-   - `知识目录 / 知识列表 / 来源引用 / 关联项目 / 部门记忆 / 版本时间线` 同屏可见
-   - 选中文档正文已加载，治理态下 `候选记忆 / 增长提案 / 部门记忆` 也能显示
-4. 当前 in-app browser 的 screenshot capture 在该 tab 上仍会 timeout，因此本轮以 DOM 断言作为最终页面验收证据。
-
 # 任务：Projects 详情减重与 Fan-Out 工作面聚焦
 
 **状态**: ✅ 已完成
@@ -3400,43 +1729,6 @@ npm run build
 5. `src/components/stage-detail-panel.tsx` 为 fan-out stage 增加 `分支工作面`，展示关联项目数、完成分支、执行中分支、异常分支，以及每个 branch 的时长、run id 和 `打开子项目` 动作。
 6. `src/components/pipeline-stage-card.tsx` 和 `src/components/project-workbench.tsx` 将 Projects 主工作面的 tabs、阶段状态、分支标签、按钮文案统一为中文。
 7. 文档同步更新：`docs/design/projects-page-todos-2026-04-26.md`、`docs/design/ux-shell-convergence-2026-04-23.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/pipeline-stage-card.tsx src/components/stage-detail-panel.tsx src/app/page.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. `bb-browser` 先用于本地打开 `:3999`，但当前环境下 snapshot 仍只返回不完整 `body` 骨架，因此不适合作为这轮布局优化的最终验收依据。
-3. 最终使用一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 做断言：
-   - `Research Fan-Out stage` 默认选中
-   - 第一层 detail 已包含 compact `结果摘要 / 交付产物 / 关注项`
-   - `关联项目` strip 已压缩并包含 `主项目`
-   - 右侧 detail 已包含 `分支工作面` 和 `打开子项目`
-   - workbench tabs 与模式切换显示为 `执行流 / 运行 / 交付` 和 `列表 / 拓扑`
-   - 无 bad HTTP responses / 无 console 和 page errors
-4. 截图：`/tmp/opc-projects-round9-optimized.png`
 
 # 任务：Projects 详情降层与 Fan-Out 一层融合
 
@@ -3455,46 +1747,6 @@ npm run build
 6. `stickySelection` 保持 stage / role / prompt-run 细节面板稳定，不会因为重复点击把 detail panel 折叠回空白。
 7. 文档同步更新：`docs/design/projects-page-todos-2026-04-26.md`、`docs/design/ux-shell-convergence-2026-04-23.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/app/page.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. `bb-browser` 先用于本地打开和 DOM 快照检查，确认第一层 detail 同时出现：
-   - `Fan-Out 项目直接放在第一层`
-   - `Research Fan-Out stage`
-   - `Stage Details`
-   - `Open sub-project`
-3. 因这轮验收需要精确确认“默认是否选中了 fan-out stage”，最终补了一次性 Playwright 断言；这不是替代 `bb-browser`，只是补默认选中态验证。
-4. Playwright 对 `http://127.0.0.1:3999/?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 断言通过：
-   - `Research Fan-Out stage` 默认选中
-   - `Stage Details` 第一层同屏可见
-   - 子项目 branch 列表和 `Open sub-project` 动作仍在
-   - 无 bad HTTP responses / 无 console 和 page errors
-5. 截图：`/tmp/opc-projects-round8-final.png`
-
 # 任务：Projects 详情页 run 证据恢复
 
 **状态**: ✅ 已完成
@@ -3509,53 +1761,6 @@ npm run build
 3. 修复 detail mode：详情页顶部摘要卡和 `ProjectWorkbench` 不再丢失历史项目的 run 证据。
 4. 根因确认：Projects 页虽然已经单独拉取了 project-scoped runs，但之前没有把这批数据传给 browse/detail 的实际渲染链路；老项目 run 不在全局 `/api/agent-runs?pageSize=100` 首屏时，页面只剩 pipeline 摘要，`最近运行` 和 detail 顶部摘要会表现成缺失。
 5. 文档同步更新：`docs/design/projects-page-todos-2026-04-26.md`、`docs/design/ux-shell-convergence-2026-04-23.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/projects-panel.tsx src/app/page.tsx src/components/project-workbench.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-数据验证：
-
-1. `量化AI基建与前沿Agent深度研究` 的 root run `857995d5-a1bf-4067-84bf-deae5f91707d` 不在全局 `/api/agent-runs?pageSize=100` 首屏中。
-2. 同一个 project 的 scoped 查询 `/api/agent-runs?projectId=19885e25-248b-4e17-ae37-2653b4018598&pageSize=200` 能拿到该 run。
-3. 这证明缺失不是后端没有数据，而是前端把错误的数据源喂给了 Projects browse/detail。
-
-浏览器验证：
-
-1. 先尝试 `bb-browser` 打开现有 `:3000` 页面，但当前环境中的长期 `bb-browser` session 仍绑定到外部 `eastmoney` 页面，无法作为本地 Projects 验收依据。
-2. 因 `bb-browser` 当前 session 态不可靠，回退到一次性 Playwright，只连接既有 `http://127.0.0.1:3000`，不启动新服务。
-3. Playwright 直接打开 `?section=projects&project=19885e25-248b-4e17-ae37-2653b4018598` 后确认：
-   - 顶部摘要恢复 `最近执行 / 结果概览 / output evidence / 关注项`
-   - Pipeline detail 恢复 `Batch Planner / Research Fan-Out / Branches / Research Join`
-4. 截图：
-   - `/tmp/opc-projects-root-detail-evidence.png`
-   - `/tmp/opc-projects-detail-run-evidence.png`
-
-进程确认：
-
-1. 本轮未启动任何 dev/start/watch/scheduler/worker 服务。
-2. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
-3. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
 
 # 任务：Projects 业务回归修复
 
@@ -3573,50 +1778,6 @@ npm run build
 5. `src/app/page.tsx` 修复 browse-mode run 点击逻辑：不再只写入 `selectedAgentRunId`，而是导航到目标 project detail。
 6. `src/components/project-workbench.tsx` 新增外部 `selectedRunId` 对齐，进入 detail 后会自动聚焦到匹配的 stage 或 prompt run。
 7. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. `bb-browser` 先用于本地打开和检查，但其 daemon 仍把新 `:3999` 页面绑定到历史标签集合，状态不适合作最终回归验收。
-3. 最终使用一次性 Playwright 对 `http://127.0.0.1:3999/?section=projects` 做回归断言：
-   - filter menu 含 `全部项目 / 进行中 / 关注项 / 历史项目`
-   - `历史项目` 能渲染 `Completed / Archived / Cancelled`
-   - 树存在 `查看其余 N 个部门`，并可切换为 `收起其他部门`
-   - 搜索 `baogaoai` 后点击 browse-mode run 会进入 `?section=projects&project=...` 并显示选中 run 的 detail 内容
-   - 无 bad HTTP responses / 无 console 和 page errors
-4. 截图：`/tmp/opc-projects-review-fixes-final.png`、`/tmp/opc-projects-run-drilldown-fix.png`。
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务已停止，端口已释放。
-2. 本轮未启动 scheduler / worker / watch 服务。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
-4. 当前环境里仍有独立 `bb-browser` / Chrome 会话在运行；其父命令为 `bb-browser site eastmoney/discuss ...`，不属于本轮 Projects 验证链路，因此未强制回收，避免误伤其他任务。
-5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
 
 # 任务：Projects 默认工作面收敛
 
@@ -3637,50 +1798,6 @@ npm run build
 8. workbench 右上角 `...` 改成真实下拉动作菜单，并保留编辑项目、新建运行、归档/恢复、删除。
 9. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. `bb-browser` 先用于本地验证，但其长期 daemon profile 混入多个历史 `:3999` 标签，抓到的页面状态不能作为最终验收。
-3. 最终使用一次性 Playwright 对重新 build 的 `http://127.0.0.1:3999/?section=projects` 做干净断言：
-   - 顶部仍有搜索和 `新建项目`
-   - 默认树区块显示 `WorkSatation / AI情报工作室 / 线索跟踪部门 / Openmind`
-   - 默认 focus 不再落到 hidden `test` / `Auto-Trigger` 项目
-   - `项目健康度 / 快捷操作 / 已完成项目 / 打开详情` 均可用
-   - 无 bad HTTP responses / 无 console 和 page errors
-4. 最终截图：`/tmp/opc-projects-round5-playwright-final.png`。
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务已停止，端口已释放。
-2. 本轮未启动 scheduler / worker / watch 服务。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
-4. `bb-browser daemon` 已停止。
-5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
-
 # 任务：Projects 主页面视觉精修
 
 **状态**: ✅ 已完成
@@ -3698,54 +1815,6 @@ npm run build
 6. 稀疏 stage 项目现在也渲染五步视觉轨道，并把真实 stage 状态合并到轨道中。
 7. 快捷操作补齐：新建运行、创建项目、编辑项目、AI 生成、部门设置、删除项目。
 8. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. `bb-browser` 优先用于打开、DOM 检查、截图和错误检查：
-   - header 在 KPI 前不再出现 `部门设置`
-   - 右侧快捷操作仍包含 `部门设置`
-   - slim setup notice、health legend、top `新建项目` 均可见
-   - `bb-browser screenshot /tmp/opc-projects-round4-final.png` 完成截图
-   - `bb-browser errors` / `console` 无 JS 错误
-3. 由于长期 `bb-browser` profile 混有旧 `:3999` 标签，最终交互断言使用一次性 Playwright：
-   - 顶部 `新建项目` 打开既有创建项目 Dialog
-   - 稀疏项目 stage 显示五步轨道：`目标确认 / Coding Worker / 结果验证 / 交付归档 / 复盘优化`
-   - 点击 `打开详情` 后进入 `?section=projects&project=...` 并显示 detail 内容
-   - 没有 bad HTTP responses 和 console/page errors；关闭浏览器时仅出现预期的 SSE `/api/approval/events` abort
-4. 最终截图：`/tmp/opc-projects-round4-final-playwright.png`。
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务已停止，端口已释放。
-2. 本轮未启动 scheduler / worker / watch 服务。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
-4. `bb-browser daemon` 已停止。
-5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
 
 # 任务：Projects 主页面设计稿第三轮密度收口
 
@@ -3767,51 +1836,6 @@ npm run build
 7. Detail mode 的部门上下文优先复用页面已加载的 departments Map；组件独立使用且没有传入 Map 时才回退请求，避免当前页面详情切换时对受限 workspace 额外产生 403。
 8. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 为避免重启用户既有 `:3000/:3101`，临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. 优先使用 `bb-browser`；`open` 和早期 DOM 验证成功，后续 daemon 在刷新/截图标签页时超时，因此最终截图和完整交互断言回退到项目已有 Playwright 依赖。
-3. Final browser run 验证：
-   - compact header 显示 `Projects` + `项目总览`
-   - 旧 `项目、部门与执行链路的公司工作面。` 和旧 `打开 Ops` 页面动作均不存在
-   - 顶部搜索与项目树搜索同步，输入 `baogaoai` 后为 `1 visible / 67 total`
-   - 顶部 `新建项目` 打开既有创建项目 Dialog
-   - 点击 `打开详情` 后进入 `?section=projects&project=...`，`结果概览` / `OUTPUT EVIDENCE` 可见
-   - 没有 bad HTTP responses 和 console/page errors；关闭浏览器时仅出现预期的 SSE `/api/approval/events` abort
-4. 最终截图：`/tmp/opc-projects-round3-final.png`。
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务已停止，端口已释放。
-2. 本轮未启动 scheduler / worker / watch 服务。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
-4. `bb-browser daemon` 已停止。
-5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
-
 # 任务：Projects 主页面设计稿二次收口
 
 **状态**: ✅ 已完成
@@ -3829,48 +1853,6 @@ npm run build
 6. 执行工作台补齐阶段进度、最近运行、阻塞项、下一步；右侧栏补齐项目健康度、负责人、关联运行、快捷操作。
 7. 保留主页面功能入口：创建项目、AI Generate、派发/新建运行、编辑、归档/恢复、删除、打开详情、run selection、detail tabs。
 8. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 现有 `:3000` 服务仍在服务旧 bundle；为避免重启用户既有 `:3000/:3101`，临时启动 web-only `:3999`，显式禁用 scheduler / companions / bridge worker，并代理到既有 `:3101` API。
-2. `bb-browser` 打开 `http://127.0.0.1:3999/?section=projects` 成功。
-3. `bb-browser eval` 验证 Projects 主页面包含 `进行中项目 / 阻塞项目 / 本周完成 / 待评审 / 项目树 / 执行工作台 / 阶段进度 / 最近运行 / 阻塞项 / 下一步 / 项目健康度 / 负责人 / 关联运行 / 快捷操作`。
-4. `bb-browser eval` 验证四张 KPI 在验证视口同排，旧 `项目执行总览` 二级 hero 和旧外置 `风险与最近推进` 队列均不存在。
-5. `bb-browser eval` 点击项目行后 URL 仍停留在 `?section=projects`；点击 `打开详情` 后进入 `?section=projects&project=...`，`Pipeline / Operations / Deliverables` 可见。
-6. `bb-browser screenshot /tmp/opc-projects-round2-final.png` 完成最终截图。
-7. `bb-browser errors` 返回无 JS 错误。
-
-进程确认：
-
-1. 临时 `:3999` web-only 服务已停止，端口已释放。
-2. 本轮未启动 scheduler / worker / watch 服务。
-3. `eslint`、`tsc`、`vitest`、`next build`、`bb-browser` 命令均已退出。
-4. `bb-browser daemon` 已停止。
-5. 既有 `:3000` / `:3101` 服务保持运行，未被本轮重启或回收。
 
 # 任务：Projects 主页面 deep pass
 
@@ -3891,44 +1873,6 @@ npm run build
 5. `lg` 断点启用两列、`xl` 断点启用三列，修复 1512px 桌面宽度下项目树独占整行的问题。
 6. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；仅保留既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. `bb-browser open http://localhost:3000/?section=projects` 成功。
-2. `bb-browser eval` 验证 Project browse surface 已渲染项目树、项目健康、快捷操作，并且旧 `风险与最近推进` 队列不再出现。
-3. `bb-browser screenshot /tmp/opc-projects-page-bb-2.png` 验证 1512px 桌面宽度下三列布局成立。
-4. `bb-browser` 点击 `打开详情` 后进入 `?section=projects&project=...`，`Pipeline / Operations / Deliverables` 可见。
-5. `bb-browser errors` 返回无 JS 错误，详情截图输出到 `/tmp/opc-projects-detail-bb.png`。
-
-进程确认：
-
-1. 本轮未启动新的 dev/start/watch/worker 服务。
-2. 仅复用既有 `:3000` / `:3101` 服务做页面验证。
-3. `eslint`、`tsc`、`vitest`、`next build`、`bb-browser` 命令均已退出。
-
 # 任务：Apple-style 主页面壳层统一
 
 **状态**: ✅ 已完成
@@ -3945,47 +1889,6 @@ npm run build
 5. 修复 URL 初始化竞态：直达 `?section=projects` / `?section=knowledge` / `?section=operations` / `?panel=settings` 不再被 CEO 自动打开最近线程覆盖。
 6. 文档同步更新：`docs/design/ux-shell-convergence-2026-04-23.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/workspace-concept-shell.tsx
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`13 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功；构建仅出现既有 Turbopack broad file pattern warnings。
-
-浏览器验证：
-
-1. 优先尝试 `bb-browser open http://127.0.0.1:3000/?section=projects` 成功。
-2. `bb-browser snapshot/eval/screenshot` daemon 请求超时，因此退回一次性 Playwright 脚本，只连接既有 `:3000` 服务，未新启本地服务。
-3. Playwright 断言：
-   - `?section=projects`：`h1=Projects`，`hasOldTopNav=false`，`hasConceptRail=true`
-   - `?section=knowledge`：`h1=Knowledge`，`hasOldTopNav=false`，`hasConceptRail=true`
-   - `?section=operations`：`h1=Ops`，`hasOldTopNav=false`，`hasConceptRail=true`
-   - `?panel=settings&tab=provider`：`h1=Settings`，`hasOldTopNav=false`，`hasConceptRail=true`
-4. 验证截图输出到 `/tmp/opc-projects-concept-shell.png`、`/tmp/opc-knowledge-concept-shell.png`、`/tmp/opc-operations-concept-shell.png`、`/tmp/opc-settings-concept-shell.png`。
-
-进程确认：
-
-1. 本轮未启动新的 dev/start/watch/worker 服务。
-2. 仅复用既有 `:3000` / `:3101` 服务做页面验证。
-3. `eslint`、`tsc`、`vitest`、`next build`、一次性 Playwright 脚本均已退出。
-
 # 任务：Company Kernel P7 自改审批恢复状态机修复
 
 **状态**: ✅ 已完成
@@ -4000,44 +1903,6 @@ npm run build
 3. high/critical proposal 未审批时，passed evidence 仍不能绕过 approval 进入 `ready-to-merge`。
 4. 已审批 high/critical proposal 支持真实开发路径：先 failed evidence 进入 `testing`，修复后追加最新 passed evidence 可恢复到 `ready-to-merge`。
 5. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-store.ts src/lib/company-kernel/self-improvement-approval.ts src/lib/company-kernel/self-improvement.test.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel/self-improvement.test.ts
-```
-
-结果：`1 file passed`，`5 tests passed`。
-
-```bash
-npx vitest run src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/server/control-plane/server.test.ts
-```
-
-结果：`5 files passed`，`16 tests passed`；`src/server/control-plane/server.test.ts` 约 `806ms`。
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-结果：类型检查通过。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/self-improvement/*` route table 保持完整。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
-3. `:3999` 未监听；现有 `:3000` PID 93261 为本轮前既有服务，未被本轮启动或回收。
 
 # 任务：Company Kernel Phase 6-7 Review Findings 收口
 
@@ -4056,43 +1921,6 @@ npm run build
 6. Settings `Autonomy 预算` 增加 loop notification channels 配置，允许保存空通知通道。
 7. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/agents/scheduler.ts src/lib/company-kernel/self-improvement-store.ts src/lib/company-kernel/company-loop-executor.ts src/lib/company-kernel/company-loop-notifier.ts src/components/settings-panel.tsx src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx 'src/app/api/company/loops/policies/[id]/route.ts' src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts
-```
-
-```bash
-npx vitest run src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts src/app/api/company/loops-self-improvement.route.test.ts src/server/control-plane/server.test.ts
-```
-
-结果：`5 files passed`，`15 tests passed`。
-
-```bash
-npx vitest run src/lib/agents/scheduler-company-loop.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/self-improvement.test.ts
-```
-
-结果：`3 files passed`，`11 tests passed`。
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-结果：类型检查通过。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/loops/*` 与 `/api/company/self-improvement/*` route table 保持完整。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
-
 # 任务：Company Kernel Phase 6-7 自主公司循环与受控自我改进收尾
 
 **状态**: ✅ 已完成
@@ -4109,47 +1937,6 @@ npm run build
 5. 保持安全边界：第一版没有 auto branch、auto commit、auto push、auto merge、auto deploy API；protected core 仍必须经审批和普通开发流程。
 6. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-6-7-development-plan-2026-04-26.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel src/app/api/company src/lib/agents/scheduler.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler-company-loop.test.ts src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx src/components/settings-panel.tsx src/lib/api.ts src/lib/types.ts src/server/control-plane/company-routes.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/scheduler-company-loop.test.ts src/lib/agents/scheduler.test.ts src/server/control-plane/server.test.ts
-```
-
-结果：`13 files passed`，`71 tests passed`；`src/server/control-plane/server.test.ts` 约 `466ms`。
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-结果：类型检查通过。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/loops/*` 与 `/api/company/self-improvement/*` 均进入 Next route table。
-
-真实 API / 页面 smoke：
-
-1. 现有 `localhost:3000` 是本轮前已存在的旧服务，`/api/company/loops/runs?pageSize=1` 返回 `200`，约 `0.100s`；`/api/company/self-improvement/proposals?pageSize=1` 仍返回 `404`，判断为旧 route manifest 未重启。
-2. 为验证当前代码，临时启动隔离 `localhost:3999` smoke 服务，并显式禁用 `AG_ENABLE_SCHEDULER`、`AG_ENABLE_SCHEDULER_COMPANIONS`、`AG_DISABLE_BRIDGE_WORKER`。
-3. `GET http://127.0.0.1:3999/api/company/loops/runs?pageSize=1` 返回 `200`，约 `0.402s`。
-4. `GET http://127.0.0.1:3999/api/company/self-improvement/proposals?pageSize=1` 返回 `200`，约 `0.410s`。
-5. `GET http://127.0.0.1:3999/` 返回 `200`，约 `0.414s`。
-6. `bb-browser` 打开 `http://127.0.0.1:3999/` 后检查 JS errors，未发现新增 JS error。
-
-进程确认：
-
-1. 临时 `:3999` smoke 服务已停止，端口已释放。
-2. 本轮未留下新的 dev/start/watch/worker 进程。
-3. 现有 `:3000` 监听进程 PID 93261 为本轮前已存在服务，未被本轮重启或回收；要让新 route 在 3000 生效，需要重启该既有服务。
-
 # 任务：Company Kernel Phase 3-5 最终缺口二次收口
 
 **状态**: ✅ 已完成
@@ -4163,37 +1950,6 @@ npm run build
 2. Settings `Autonomy 预算`补齐 Department budget defaults；未配置专属策略的新部门会从 `budget:department:default:day` 继承默认预算。
 3. Crystallizer 补齐 promoted `pattern/lesson` KnowledgeAsset 到 SOP GrowthProposal 的生成路径，保留 promotion sourceCandidate、sourceCapsule 和 evidence refs。
 4. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/lib/company-kernel/circuit-breaker.ts src/lib/company-kernel/budget-policy.ts src/lib/company-kernel/crystallizer.ts src/lib/company-kernel/operating-kernel.test.ts src/lib/company-kernel/contracts.ts src/lib/types.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts src/lib/providers/provider-availability.test.ts src/lib/app-url-state.test.ts
-```
-
-结果：`13 files passed`，`92 tests passed`；`src/server/control-plane/server.test.ts` 本轮约 `488ms`。
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-结果：类型检查通过。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/*` route table 保持完整，构建输出未出现真实 HOME AI config 读取日志。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
 
 # 任务：Company Kernel Phase 3-5 最终 Review 缺口收尾
 
@@ -4209,43 +1965,6 @@ npm run build
 3. Knowledge 深层增长旅程补齐：MemoryCandidate 详情可生成 linked GrowthProposal，KnowledgeAsset 详情展示关联 GrowthProposal，`pattern` candidate 可生成 SOP proposal。
 4. control-plane company routes 从主 server 拆出为 `company-routes` 并按请求懒加载 Next App Route handler，降低控制面导入和默认并发测试成本。
 5. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx src/components/knowledge-panel.tsx src/lib/company-kernel/autonomy-policy.ts src/lib/company-kernel/growth-evaluator.ts src/lib/company-kernel/crystallizer.ts src/lib/company-kernel/index.ts src/lib/company-kernel/operating-kernel.test.ts src/server/control-plane/company-routes.ts src/server/control-plane/server.ts src/server/control-plane/server.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts src/lib/providers/provider-availability.test.ts src/lib/app-url-state.test.ts
-```
-
-结果：`13 files passed`，`89 tests passed`；`src/server/control-plane/server.test.ts` 降至约 `1.319s`。
-
-最终收尾后追加回归：
-
-```bash
-npx vitest run src/server/control-plane/server.test.ts src/lib/company-kernel/operating-kernel.test.ts
-```
-
-结果：`2 files passed`，`12 tests passed`；`src/server/control-plane/server.test.ts` 当前约 `204ms`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/*` route table 保持完整，构建输出未出现真实 HOME AI config 读取日志。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. `eslint`、`tsc`、`vitest`、`next build` 均已退出。
 
 # 任务：Company Kernel Phase 3-5 Review Findings 修复
 
@@ -4263,37 +1982,6 @@ npm run build
 5. Crystallizer 补齐 `script` / `rule` proposal 生成路径：从 repeated run cluster 的脚本化、自动化、规则化信号生成对应 proposal。
 6. 稳定 P0-P5 默认测试：提高 import-heavy control-plane/company route 测试余量，并降低 Vitest 并发监听器误报噪音。
 7. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/budget-gate.ts src/server/runtime/agent-runs-dispatch.ts src/lib/agents/ceo-agent.ts src/lib/company-kernel/crystallizer.ts src/lib/company-kernel/growth-publisher.ts src/lib/company-kernel/growth-script-dry-run.ts 'src/app/api/company/growth/proposals/[id]/publish/route.ts' 'src/app/api/company/growth/proposals/[id]/dry-run/route.ts' src/server/control-plane/server.ts src/lib/api.ts src/components/knowledge-panel.tsx src/lib/company-kernel/operating-kernel.test.ts src/app/api/agent-runs/route.test.ts src/app/api/company/operating-kernel.route.test.ts src/server/control-plane/server.test.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts src/lib/providers/provider-availability.test.ts
-```
-
-结果：`12 files passed`，`82 tests passed`。
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-结果：类型检查通过。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/growth/proposals/[id]/dry-run` 已进入 Next route table，构建输出未再出现真实 HOME AI config 读取日志。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. `eslint`、`vitest`、`tsc`、`next build` 均已退出。
 
 # 任务：Company Kernel Phase 3-5 二次复核缺口补齐
 
@@ -4314,40 +2002,6 @@ npm run build
 8. Ops Scheduler 面板新增 Operating Signals 可筛选列表，支持 source / kind / status 过滤并显示 dedupeKey。
 9. 文档同步更新：`ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`。
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel src/app/api/company src/lib/agents/run-registry.ts src/lib/agents/department-execution-resolver.ts src/lib/agents/department-execution-resolver.test.ts src/lib/approval/dispatcher.ts src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx src/lib/types.ts src/lib/api.ts src/lib/agents/canonical-assets.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/department-execution-resolver.test.ts src/lib/agents/scheduler.test.ts
-```
-
-结果：`9 files passed`，`62 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/*` routes 仍全部进入 Next route table。
-
-真实 API / 页面验证：
-
-1. 复用既有 `localhost:3000`，未新开 dev/start/watch/worker 服务。
-2. `GET /api/company/operating-day?limit=3` 返回 `200`，约 `0.622s`。
-3. `GET /api/company/growth/proposals?pageSize=3` 返回 `200`，约 `0.057s`。
-4. `GET /api/company/signals?source=scheduler&pageSize=3` 返回 `200`，约 `1.060s`。
-5. `bb-browser` 打开 `http://127.0.0.1:3000/` 后检查 `bb-browser errors`，未发现 JS error。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. 现有 `:3000` 监听进程 PID 8302 为既有服务，非本轮启动，未回收。
-3. `eslint`、`vitest`、`next build` 均已退出。
-
 # 任务：Company Kernel Phase 3-5 复核缺口收尾
 
 **状态**: ✅ 已完成
@@ -4364,39 +2018,6 @@ npm run build
 5. CEO Office 增加增长提案摘要和高风险决策入口；Knowledge 增长提案区支持 evaluate / approve / publish / observe / reject。
 6. Ops Scheduler 面板显示关联 operating signal 摘要，便于解释调度任务为什么运行或跳过。
 7. `control-plane` company route 组合测试的默认并发超时风险已收口。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts src/lib/agents/run-registry.ts src/lib/approval/handler.ts 'src/app/api/company/agenda/[id]/dispatch/route.ts' src/components/knowledge-panel.tsx src/components/ceo-office-cockpit.tsx src/components/scheduler-panel.tsx src/server/control-plane/server.test.ts src/lib/types.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/agents/scheduler.test.ts src/server/control-plane/server.test.ts
-```
-
-结果：`9 files passed`，`48 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-真实 API / 页面验证：
-
-1. 复用既有 `localhost:3000`，未新开 dev/start/watch/worker 服务。
-2. `GET /api/company/operating-day?limit=3` 返回 `200`，约 `0.176s`。
-3. `GET /api/company/growth/proposals?pageSize=3` 返回 `200`，约 `0.078s`。
-4. `bb-browser` 打开 `http://127.0.0.1:3000/`，随后 `bb-browser errors --clear` 未发现新增 JS error。
-
-进程确认：
-
-1. 本轮未启动新的长期 Node / scheduler / worker 后台。
-2. 现有 `:3000` 监听进程 PID 8302 为既有 `server.ts`，非本轮启动，未回收。
-3. `eslint`、`vitest`、`next build` 均已退出。
 
 # 任务：Company Kernel Phase 3-5 自增长内核落地
 
@@ -4438,40 +2059,6 @@ npm run build
    - `docs/guide/agent-user-guide.md`
    - `docs/design/ai-company-self-growth-kernel-phase-3-5-development-plan-2026-04-26.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel src/app/api/company src/lib/api.ts src/lib/types.ts src/components/ceo-office-cockpit.tsx src/components/knowledge-panel.tsx src/components/scheduler-panel.tsx src/lib/agents/run-registry.ts src/lib/agents/scheduler.ts src/lib/knowledge/index.ts src/server/control-plane/server.ts
-```
-
-```bash
-npx vitest run src/lib/providers/provider-availability.test.ts src/lib/company-kernel src/app/api/company src/server/control-plane/server.test.ts
-```
-
-结果：`9 files passed`，`31 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，新增 `/api/company/*` routes 全部进入 Next route table，且构建阶段不再打印真实 HOME AI config 读取日志。
-
-真实 API / 页面验证：
-
-1. 复用既有 `localhost:3000`，未新开 dev/start/watch 服务
-2. `GET /api/company/operating-day?limit=3` 返回 `200 0.215191`
-3. `GET /api/company/growth/proposals?pageSize=1` 返回 `200 0.221538`
-4. `bb-browser` 打开 `http://127.0.0.1:3000/`，页面标题为 `Antigravity Agent Manager`
-5. `bb-browser errors --clear` 未发现新增 JS error
-
-进程确认：
-
-1. 本轮未启动新的长期 Node / scheduler / worker 后台
-2. 现有 `:3000` 监听进程 PID 8302 为既有 `server.ts`，非本轮启动，未回收
-3. `eslint`、`vitest`、`next build` 均已退出
-
 ## 任务：Knowledge 候选记忆详情态收尾
 
 **状态**: ✅ 已完成
@@ -4485,27 +2072,6 @@ npm run build
 2. 详情态展示候选内容、总分、分项评分、evidence refs、signals、conflicts、source run/capsule、promoted/rejected 元数据。
 3. Promote / Reject 按钮迁移到详情态，仍只对 `candidate` / `pending-review` 开放。
 4. 保持手动 Refresh，不新增轮询、不新增 scheduler/job/worker、不修改后端 API。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/knowledge-panel.tsx
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/*` routes 仍在 Next route table。
-
-真实页面验证：
-
-1. 复用既有 `localhost:3000`，未新开 dev/start/watch 服务。
-2. `curl http://127.0.0.1:3000/api/company/memory-candidates?pageSize=1` 返回 `200`，当前真实库候选数为 0。
-3. `bb-browser` 打开 Knowledge 页面，DOM 确认出现 `候选记忆 / No memory candidates`。
-4. `bb-browser errors --clear` 未发现新增 JS error。
 
 ## 任务：Company Kernel Phase 0-2 缺口补齐
 
@@ -4538,39 +2104,6 @@ npm run build
    - `docs/guide/agent-user-guide.md`
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel/index.ts src/lib/company-kernel/memory-promotion.ts src/lib/company-kernel/run-capsule.test.ts src/lib/company-kernel/memory-promotion.test.ts src/lib/api.ts src/lib/types.ts src/components/knowledge-panel.tsx
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/server/control-plane/server.test.ts src/lib/evolution/__tests__/generator.test.ts
-```
-
-结果：`7 files passed`，`22 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/*` routes 仍出现在 Next route table。
-
-真实页面/API 验证：
-
-1. 复用既有 `localhost:3000`，未新开 dev/start/watch 服务
-2. `bb-browser` 进入 Knowledge 页面，DOM 确认出现 `候选记忆 / Refresh / No memory candidates`
-3. `bb-browser errors --clear` 未发现新增 JS error
-4. `curl http://127.0.0.1:3000/api/company/memory-candidates?pageSize=1` 返回 `200`
-
-进程确认：
-
-1. 本轮未启动新的长期 Node / scheduler / worker 后台
-2. 现有 `:3000` 监听进程不是本轮启动，未回收
-3. `eslint`、`vitest`、`next build` 均已退出
 
 ## 任务：Company Kernel Phase 0-2 复核收尾
 
@@ -4606,45 +2139,6 @@ npm run build
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/api/company src/lib/company-kernel src/lib/knowledge/index.ts src/server/control-plane/server.ts src/server/control-plane/server.test.ts
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/server/control-plane/server.test.ts src/lib/knowledge/__tests__/extractor.test.ts src/lib/agents/department-memory.test.ts src/lib/storage/gateway-db.test.ts
-```
-
-结果：`9 files passed`，`32 tests passed`。
-
-```bash
-npx vitest run src/lib/agents/run-registry.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/app/api/agent-runs/route.test.ts src/server/control-plane/server.test.ts
-```
-
-结果：`5 files passed`，`32 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，`/api/company/*` routes 出现在 Next route table。
-
-真实临时 API 验证：
-
-1. 临时 `api:3201` 使用 `AG_ROLE=api AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1`
-2. `GET /health` 返回 `200`，`role=api`
-3. `GET /api/company/run-capsules?pageSize=1` 返回 `200`
-4. `GET /api/company/memory-candidates?pageSize=1` 返回 `200`
-
-进程确认：
-
-1. 临时 `3201` API 进程已停止
-2. 端口 `3201` 已释放
-3. 本轮未启动 dev/start/watch/scheduler 长期后台
 
 ## 任务：Company Kernel Phase 0-2 落地
 
@@ -4686,38 +2180,6 @@ OPC 已有 run、knowledge、memory hook、evolution proposal，但 run 完成�
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/company-kernel src/lib/knowledge/index.ts src/lib/knowledge/contracts.ts src/lib/agents/finalization.ts src/lib/agents/run-registry.ts src/lib/storage/gateway-db.ts src/app/api/company
-```
-
-```bash
-npx vitest run src/lib/company-kernel src/app/api/company src/lib/knowledge/__tests__/extractor.test.ts src/lib/agents/department-memory.test.ts src/lib/storage/gateway-db.test.ts
-```
-
-结果：`8 files passed`，`26 tests passed`。
-
-```bash
-npx vitest run src/lib/agents/run-registry.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/app/api/agent-runs/route.test.ts
-```
-
-结果：`4 files passed`，`31 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功，新增 `/api/company/*` routes 已进入 Next route table。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch 服务。
-2. `eslint`、`vitest`、`next build` 均已退出。
-3. 检测到既有 `tsx watch` 进程仍在运行，非本轮启动，未做回收。
-
 ## 任务：Tauri 桌面壳与原生新建部门入口
 
 **状态**: ✅ 已完成
@@ -4758,38 +2220,6 @@ npm run build
    - `docs/guide/agent-user-guide.md`
    - `docs/guide/gateway-api.md`
    - `docs/guide/cli-api-reference.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/desktop-folder-picker.ts src/lib/desktop-folder-picker.test.ts src/components/ceo-dashboard.tsx
-```
-
-```bash
-npx vitest run src/lib/desktop-folder-picker.test.ts
-```
-
-结果：`1 file passed`，`3 tests passed`。
-
-```bash
-npm run desktop:check
-```
-
-结果：`Finished dev profile`，Tauri/Rust 编译检查通过。
-
-```bash
-npm run build
-```
-
-结果：Next 生产构建成功。
-
-进程确认：
-
-1. 本轮未运行 `npm run dev` / `npm run start` / `npm run desktop:dev`。
-2. 未启动新的长期 Node / scheduler / worker 后台。
-3. Rust `target/` 构建产物已清理，并加入 `.gitignore`。
 
 ## 任务：首页刷新与展示语义收口
 
@@ -4835,49 +2265,6 @@ CEO Office 首页仍存在几类使用体验问题：
    - `ARCHITECTURE.md`
    - `docs/guide/agent-user-guide.md`
    - `docs/guide/gateway-api.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/home-shell.ts src/lib/home-shell.test.ts src/lib/ceo-office-home.ts src/lib/ceo-office-home.test.ts src/app/page.tsx src/components/ceo-office-cockpit.tsx
-```
-
-```bash
-npx vitest run src/lib/home-shell.test.ts src/lib/ceo-office-home.test.ts
-```
-
-结果：`2 files passed`，`10 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-真实接口验证：
-
-1. `GET /api/agent-runs?pageSize=100`：`200`，约 `0.10s`
-2. `GET /api/projects?pageSize=200`：`200`，约 `0.02s`
-3. `GET /api/workspaces`：`200`，约 `0.08s`
-4. `GET /api/management/overview`：`200`
-5. `GET /api/ceo/routine`：`200`
-
-浏览器验证（`bb-browser`）：
-
-1. 首页显示 `打开知识库`，不再显示假 `⌘K` 搜索。
-2. 首页显示 `对话线程`，不再显示未实现的“语音指令”。
-3. 指标卡不再显示“较昨日 +N”。
-4. 右侧显示 `今日关注` 与 `2 项需处理`。
-5. 系统状态显示 `API 服务 / 实时通道 / 定时任务调度`。
-6. `bb-browser errors` 无 JS 错误，最终 console 无错误消息。
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务。
-2. `npm run build` 的构建 worker 已退出。
-3. 仅使用既有 `3000/3101` 服务与 `bb-browser` 做验证。
 
 ## 任务：首页任务断点闭环修复
 
@@ -4926,54 +2313,6 @@ CEO Office 首页存在多个“看起来是任务，但没有真实闭环”的
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/agent-user-guide.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts src/lib/organization/contracts.ts src/lib/organization/index.ts src/lib/organization/ceo-routine.ts src/lib/organization/ceo-routine.test.ts src/lib/management/contracts.ts src/lib/management/metrics.ts src/lib/types.ts src/components/ceo-office-cockpit.tsx src/app/page.tsx
-```
-
-```bash
-npx vitest run src/lib/agents/scheduler.test.ts src/lib/organization/ceo-routine.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/management/overview/route.test.ts
-```
-
-结果：`4 files passed`，`21 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-真实接口验证：
-
-1. `GET /api/management/overview`
-   - `activeSchedulers=1`
-   - `schedulerRuntime.status=disabled`
-   - `loopActive=false`
-   - `configuredToStart=false`
-2. `GET /api/ceo/routine`
-   - 返回 5 个结构化 action
-   - scheduler action 为 `status=attention`
-   - target 指向真实 job `2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f`
-
-浏览器验证（`bb-browser`）：
-
-1. CEO Office 首屏显示 `定时任务 1 / 调度未启动`
-2. 今日例行任务显示 `恢复定时任务调度`
-3. 点击 scheduler action 成功跳转 `?section=operations`
-4. 点击审批 action 展开审批列表
-5. 点击部门脉搏打开部门详情弹窗
-6. 刷新后 `bb-browser errors` 无 JS 错误
-7. 弹窗打开后控制台无 `DialogDescription` 警告
-
-进程确认：
-
-1. 本轮未启动新的长期 dev/start/watch/worker 服务
-2. 仅使用既有 `3000/3101` 服务和 `bb-browser` 做验证
-3. `npm run build` 的构建 worker 已退出
-
 ## 任务：AI 日报循环任务未运行修复
 
 **状态**: ✅ 已完成
@@ -5007,50 +2346,6 @@ npm run build
    - `docs/guide/cli-api-reference.md`
    - `docs/guide/gateway-api.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/server/workers/scheduler-worker.ts src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts
-```
-
-```bash
-npx vitest run src/lib/gateway-role.test.ts src/lib/agents/scheduler.test.ts
-```
-
-结果：`2 files passed`，`23 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-真实链路验证：
-
-1. `AG_ROLE=api` 判定结果：`apiScheduler=true`、`apiCompanions=false`、`webScheduler=false`
-2. 真实 AI 日报 job 在补跑前 `dueNow=true`
-3. `GET /api/scheduler/jobs` 对该 overdue job 的 `nextRunAt` 已返回当前时间，而不是明天
-4. 手动补跑 `POST /api/scheduler/jobs/2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/trigger` 成功创建 run：
-   - `2297bb78-6488-4588-aa44-ea0ad9710fc1`
-5. run 终态：`completed`
-6. 上报验证文件 `daily-digest-verification.json`：
-   - `status=ok`
-   - `verifyApiUrl=https://api.aitrend.us/digest?date=2026-04-25`
-   - `verifyPageStatus=200`
-   - 后端 digest run id `38`
-7. scheduler job 已更新：
-   - `lastRunAt=2026-04-25T12:59:27.748Z`
-   - `lastRunResult=success`
-   - `nextRunAt=2026-04-26T12:00:00.000Z`
-
-进程确认：
-
-1. 本轮没有启动新的长期 dev/start/watch 服务
-2. 当前既有 `3101` 进程仍是用户先前启动的旧环境，进程环境含 `AG_ENABLE_SCHEDULER=0`
-3. 新默认脚本已修复，下一次通过 `npm run dev` / `npm run start` 启动时 `opc-api` 会运行 cron scheduler
-
 ## 任务：测试环境真实库污染修复
 
 **状态**: ✅ 已完成
@@ -5081,37 +2376,6 @@ npm run build
    - `d1e696c4-99df-4829-bc16-291665a369de`
    - `aa5a092e-cdac-434a-aa38-d92add95418c`
 
-### 本轮验证
-
-通过：
-
-```bash
-npm test
-```
-
-结果：根目录 `125 test files passed`，`1570 tests passed`。
-
-```bash
-npm test
-```
-
-执行目录：`plugins/obsidian-antigravity`
-
-结果：插件侧 `7 test files passed`，`84 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-真实库验证：
-
-1. 测试前后没有新增 scheduler job
-2. 已删除两个测试污染 5s job
-3. `/api/scheduler/jobs` 查询确认当前启用中的 `<60s` interval job 为 `[]`
-4. `/tmp` 下本轮 Vitest 临时目录已清理
-
 ## 任务：CEO Native Codex 对话链路修复
 
 **状态**: ✅ 已完成
@@ -5139,41 +2403,6 @@ npm run build
    - 更新 send route / Native Codex adapter 测试
    - 同步 `ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/server/shared/http-server.ts src/server/shared/http-server.test.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/send/route.test.ts' src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts
-```
-
-```bash
-npx vitest run src/server/shared/http-server.test.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' src/lib/bridge/native-codex-adapter.test.ts
-```
-
-结果：`4 files passed`，`16 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-真实链路验证：
-
-1. 当前 `~/.gemini/antigravity/ai-config.json`：`defaultProvider` 与四个 layer 均为 `native-codex`
-2. `/api/models` 返回 `Native Codex · GPT-5.4` / `Native Codex · GPT-5.4 Mini`
-3. `POST http://127.0.0.1:3000/api/conversations` 创建 CEO local native-codex conversation：`200`，耗时约 `0.109s`
-4. `POST /api/conversations/:id/send` 发送最小 CEO 对话：`200`，耗时约 `1.498s`
-5. `GET /api/conversations/:id/steps` 返回 2 条 step：用户输入与 `FINAL_OK`
-
-进程确认：
-
-1. 本轮没有额外启动长期 dev/start/watch 服务
-2. 现有 `3000` / `3101` 为既有 `run-local-services.mjs dev` 进程树，`tsx watch` 已加载本轮代码
-3. `npm run build` worker 已退出
-4. 本轮使用的 `bb-browser daemon` 已停止
-
 ## 任务：CEO Office 概念稿规格化收口
 
 **状态**: ✅ 已完成
@@ -5195,35 +2424,6 @@ npm run build
    - 默认首屏不再直接展开完整聊天流和 `CEODashboard`
    - 保留线程查看、指令发送、模型/Skill/Workflow composer、Projects / Knowledge / Ops / Settings 下钻、CEO 深层 Dashboard
    - `最新交付` 使用今日完成口径，不再把累计完成数伪装成今日新增
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/chat-input.tsx
-```
-
-```bash
-npm run build
-```
-
-浏览器态验证：
-
-1. `bb-browser` 指向既有 `http://localhost:3000`，未启动新的 dev/start 服务
-2. 页面可见 `CEO 指令中心` / `决策队列` / `部门 / 项目脉搏` / `今日例行任务` / `最新日报` / `系统状态`
-3. 旧标题 `CEO 驾驶舱` / `CEO OFFICE 2.0` 已不可见
-4. 通用 Header nav 不再叠加到 CEO 页面，CEO 左侧轻导航宽度为 216px
-5. 点击 `查看线程` 后完整线程入口和 Chat composer 正常挂载
-6. JS error 记录为空
-7. 截图留存：`tmp/ui-audit/ceo-office-concept-shell-verified-2026-04-25.png`
-
-进程确认：
-
-1. 本轮没有启动新的长期 dev/start/watch 服务
-2. `npm run build` 的构建 worker 已退出
-3. 本轮使用的 `bb-browser daemon` 已停止
-4. 既有 `3000` / `3101` 监听进程非本轮启动，未做回收
 
 ## 任务：CEO Office 2.0 驾驶舱交互落地
 
@@ -5248,37 +2448,6 @@ CEO Office 虽然已移除部分重复入口，但页面仍然是 `WorkspaceHero
 3. `src/components/chat-input.tsx`
    - Chat composer 从旧暗色输入框调整为 Apple-style 浅色玻璃输入区
    - 自动补全菜单同步改为浅色体系，避免 CEO Office 2.0 里出现旧视觉断层
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/chat-input.tsx
-```
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-浏览器态验证：
-
-1. `bb-browser` 打开既有 `http://localhost:3000`
-2. CEO Office 可见 `CEO OFFICE 2.0` / `统一指令入口` / `管理与复盘工作面`
-3. 旧 hero 文案 `公司驾驶舱、决策队列与统一指令` 已不可见
-4. 页面内 API 数据正常加载：`OPC 5/26 departments · 163 projects`
-5. 手动点击“展开”后，管理与复盘工作面成功挂载，未产生浏览器 JS error
-6. 截图留存：`tmp/ui-audit/ceo-office-2-final.png`
-
-进程确认：
-
-1. 本轮没有启动新的长期 dev/start/watch 服务
-2. `npm run build` 的 Next build worker 已退出
-3. `3001` / `3002` 未监听
-4. 本轮用于验收的 `bb-browser daemon` 已停止
-5. 检测到既有 `3000` / `3101` 监听进程，非本轮命令启动，未做回收
 
 ## 任务：主页面 UI 信息架构去重
 
@@ -5318,32 +2487,6 @@ npm run build
 8. `src/components/ceo-profile-settings-tab.tsx`
    - 删除 Journey / 设计解释类长文案，只保留字段和操作反馈
 
-### 本轮验证
-
-通过：
-
-```bash
-npm run lint -- src/components/ceo-dashboard.tsx src/app/page.tsx src/components/sidebar.tsx src/lib/home-shell.ts src/lib/home-shell.test.ts src/components/projects-panel.tsx src/components/settings-panel.tsx src/lib/providers/provider-availability.ts src/lib/providers/provider-availability.test.ts src/components/ceo-office-settings.tsx src/components/assets-manager.tsx src/components/ceo-profile-settings-tab.tsx
-```
-
-```bash
-npm test -- src/lib/providers/provider-availability.test.ts src/lib/home-shell.test.ts
-```
-
-结果：`2 files passed`，`11 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-进程确认：
-
-1. 本轮没有启动长期 dev/start/watch 服务
-2. 构建 worker 已随 `npm run build` 退出
-3. 检测到已有 `localhost:3000` / `3101` 监听来自既有 `run-local-services/dev watch` 进程树，未由本轮命令直接启动，未做回收
-
 ## 任务：Settings Provider 运行配置去重
 
 **状态**: ✅ 已完成
@@ -5364,26 +2507,6 @@ Settings Provider 页存在重复配置入口：`应用到运行配置` 与下�
    - `层级配置`：Executive / Management / Execution / Utility 覆盖
 4. OpenAI-compatible 区块只负责第三方 profile 的连接、测试和保存，不再承担运行配置选择
 5. `层级配置` 改为默认折叠的 `层级覆盖`，避免 4 个 layer 在继承同一默认 Provider 时制造视觉重复
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/components/settings-panel.tsx
-```
-
-```bash
-npm run build
-```
-
-浏览器态验证：
-
-1. Settings Provider 页不再包含 `应用到运行配置`
-2. 页面仍包含 `默认配置` / `层级配置`
-3. 页面可见 `native-codex`
-4. Provider 支持矩阵可见 `Codex (MCP)`
-5. `层级覆盖` 默认折叠，未展开时不显示 4 个 layer 表单
 
 ## 任务：同设备前后端两服务部署收敛
 
@@ -5423,46 +2546,6 @@ npm run build
    - `ARCHITECTURE.md`
    - `docs/design/ux-shell-convergence-2026-04-23.md`
 
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint server.ts src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/server/control-plane/server.ts src/server/runtime/server.ts src/server/api/server.ts scripts/run-local-services.mjs
-```
-
-```bash
-npx vitest run src/lib/gateway-role.test.ts src/lib/home-shell.test.ts src/lib/app-url-state.test.ts
-```
-
-结果：`3 files passed`，`20 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-接口验证：
-
-1. 临时 `api:3101`
-   - `/health` 返回 `200`
-   - `/api/projects?page=1&pageSize=1` 返回 `200`
-   - `/api/agent-runs?page=1&pageSize=1` 返回 `200`
-   - `/api/workspaces?page=1&pageSize=1` 返回 `200`
-   - `/api/models` 返回 `200`
-2. 临时 `web:3002 -> api:3101`
-   - `/api/projects?page=1&pageSize=1` 经 web 代理返回 `200`
-   - `/api/agent-runs?page=1&pageSize=1` 经 web 代理返回 `200`
-   - `/api/models` 经 web 代理返回 `200`
-   - `/api/ai-config` 经 web 代理返回 `200`
-
-进程回收：
-
-1. 临时 `3101` API 服务已停止
-2. 临时 `3002` Web 服务已停止
-3. 端口 `3101` / `3002` 已释放
-
 ## 任务：默认本地启动 API 恢复
 
 **状态**: ✅ 已完成
@@ -5486,47 +2569,6 @@ npm run build
    - `ARCHITECTURE.md`
    - `docs/design/ux-shell-convergence-2026-04-23.md`
 3. 顺手清理 `src/components/platform-manager.tsx` 本轮视觉中间态产生的未使用 import / state，保证构建不过半成品。
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/gateway-role.ts src/proxy.ts src/app/page.tsx src/components/ui/workspace-primitives.tsx src/components/analytics-dashboard.tsx src/components/token-quota-widget.tsx src/components/platform-manager.tsx
-```
-
-```bash
-npx vitest run src/lib/gateway-role.test.ts src/lib/home-shell.test.ts src/lib/app-url-state.test.ts
-```
-
-结果：`3 files passed`，`20 tests passed`。
-
-```bash
-npm run build
-```
-
-结果：生产构建成功。
-
-接口验证：
-
-1. 临时 `3001` 本地一体化服务：
-   - `/api/projects?page=1&pageSize=5` 返回 `200`，`total=163`
-   - `/api/agent-runs?page=1&pageSize=5` 返回 `200`，`total=4762`
-   - `/api/workspaces?page=1&pageSize=5` 返回 `200`，`workspaces=26`
-   - `/api/ai-config` 返回 `200`
-2. 现有 `localhost:3000`：
-   - `/api/projects?page=1&pageSize=1` 返回 `200`
-   - `/api/agent-runs?page=1&pageSize=1` 返回 `200`
-   - `/api/workspaces?page=1&pageSize=1` 返回 `200`
-3. `bb-browser` 页面态验证：
-   - 页面内 fetch `/api/projects`、`/api/agent-runs`、`/api/workspaces` 均返回 `200`
-   - 页面没有出现 `AG_ROLE=web` / `503` API 错误文案
-
-进程回收：
-
-1. 临时 `3001` 服务已停止，端口已释放
-2. `bb-browser daemon` 已停止
-3. 现有 `3000` 服务保持运行
 
 ## 任务：Apple-style 新 UI 深层视觉收尾
 
@@ -5590,70 +2632,6 @@ npm run build
    - Settings Profile / Provider / API Keys / Scenes / MCP / Messaging
    - Template clone/delete/add node/add edge dialog
 
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/components/ui/workspace-primitives.tsx src/components/mcp-status-widget.tsx src/components/codex-widget.tsx src/components/tunnel-status-widget.tsx src/components/assets-manager.tsx src/components/project-ops-panel.tsx src/components/chat.tsx src/components/ceo-profile-settings-tab.tsx src/components/department-comparison-widget.tsx src/components/department-memory-panel.tsx src/components/ceo-dashboard.tsx src/components/ceo-scheduler-command-card.tsx src/components/notification-indicators.tsx src/components/department-detail-drawer.tsx src/components/template-browser.tsx
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `20 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-结果：
-
-1. 生产构建成功
-2. Route table 正常生成
-
-#### 浏览器验证
-
-使用现有 `localhost:3000` 服务验证，没有启动第二套 dev/start/watch 服务。
-
-通过：
-
-1. CEO 首页可打开，`darkClassCount=6`
-2. Ops 可打开，`darkClassCount=5`
-3. Settings web-only 降级页可打开，`darkClassCount=1`
-4. OPC 可打开，`darkClassCount=1`
-5. `bb-browser errors` 返回无 JS 错误
-
-截图：
-
-1. `/tmp/opc-ui-finish-ceo-2026-04-24.png`
-2. `/tmp/opc-ui-finish-ops-2026-04-24.png`
-3. `/tmp/opc-ui-finish-settings-2026-04-24.png`
-4. `/tmp/opc-ui-finish-projects-2026-04-24.png`
-
-#### 进程回收
-
-通过：
-
-1. 本轮没有启动第二套本地服务
-2. `bb-browser daemon` 已停止
-3. 端口 `3321` 无监听
-4. 端口 `3000` 仍为任务开始前已存在的服务进程
-
 ## 任务：Settings web-only 降级与 Approval 推送链路独立化
 
 **状态**: ✅ 已完成
@@ -5710,61 +2688,6 @@ npm run build
 4. CEO 批准/拒绝/反馈后会发布 `approval_response`
 5. Webhook / IM 的一键操作 URL 统一通过 HMAC token 验证
 6. 前端页面不直接承担通知业务逻辑，只订阅事件并刷新列表
-
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/types.ts src/lib/api.ts src/lib/api-response.ts src/components/settings-panel.tsx src/lib/approval/tokens.ts src/lib/approval/approval-urls.ts src/lib/approval/notification-events.ts src/lib/approval/channels/web.ts src/lib/approval/channels/im.ts src/lib/approval/channels/webhook.ts src/lib/approval/channels/index.ts src/lib/approval/dispatcher.ts src/lib/approval/handler.ts src/lib/approval/request-store.ts src/lib/approval/index.ts src/lib/approval/__tests__/notification-events.test.ts src/app/page.tsx src/app/api/approval/events/route.ts src/server/control-plane/routes/approval-events.ts src/server/control-plane/server.ts
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/approval/__tests__/notification-events.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/gateway-role.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `5 files passed`
-2. `19 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-结果：
-
-1. 生产构建成功
-2. `/api/approval/events` 已进入 Next route table
-
-#### 运行态验证
-
-通过：
-
-1. web-only Settings：
-   - 单服务启动：`PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts`
-   - `/api/ai-config` 返回 `503`
-   - `bb-browser` 页面验证显示“Settings 需要连接 Control Plane / Runtime”
-   - `bb-browser errors --clear` 无 JS 错误
-2. Approval SSE：
-   - 使用临时 HOME / AG_GATEWAY_HOME 启动单个 all-in-one 验证服务
-   - `POST /api/approval` 创建审批后，SSE 回放 `approval_request`
-   - `PATCH /api/approval/:id` 批准后，SSE 回放 `approval_response`
-   - `GET /api/approval?summary=true` 可看到 notification delivery 为 `web success=true`
-3. 验证结束后：
-   - 预览服务已停止
-   - `bb-browser daemon` 已停止
-   - 端口 `3321` 已释放
 
 ## 任务：UX Shell Phase 8 完成深层视觉收口并清掉 run-registry 构建 warning
 
@@ -5833,75 +2756,6 @@ npm run build
    - Ops / Scheduler / Assets
    - Settings / Provider / API Keys / Scenes / MCP
 
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/projects-panel.tsx src/components/sidebar.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-settings.tsx src/components/ui/app-shell.tsx src/components/ui/workspace-primitives.tsx src/lib/agents/run-registry.ts src/lib/agents/run-registry.test.ts src/lib/agents/project-registry.ts src/lib/agents/project-events.ts
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/scheduler.test.ts src/lib/storage/gateway-db.test.ts
-```
-
-结果：
-
-1. `6 files passed`
-2. `42 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-结果：
-
-1. 生产构建成功
-2. 没有再出现 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-
-#### 浏览器与 web-only 验证
-
-通过：
-
-1. 使用单个 web-only 预览服务：
-
-```bash
-PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
-```
-
-2. HTTP 验证：
-   - `/` 返回 `200`
-   - `/api/projects` 返回 `503`
-   - `/api/scheduler/jobs` 返回 `503`
-3. `bb-browser` 页面验证：
-   - `CEO Office`
-   - `OPC`
-   - `Knowledge`
-   - `Ops`
-   - `Settings`
-4. 截图保存到：
-   - `/tmp/opc-ceo-main-phase8-ceo-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase8-opc-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase8-knowledge-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase8-ops-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase8-settings-provider-2026-04-23.png`
-5. `bb-browser errors` 返回：
-   - `没有 JS 错误`
-6. 预览完成后：
-   - `bb-browser daemon` 已停止
-   - 端口 `3321` 已释放
-   - `demolong/projects` 无污染
-
 ## 任务：UX Shell Phase 7 收口深层暗色断点并完成页面级验证
 
 **状态**: ✅ 已完成
@@ -5954,85 +2808,6 @@ PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDG
    - SettingsPanel 全部 tab
 4. `AG_ROLE=web` 无后端 URL 的 API 隔离仍然有效
 5. 预览没有留下 `demolong/projects` 数据污染
-
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/projects-panel.tsx src/components/knowledge-panel.tsx src/components/scheduler-panel.tsx src/components/settings-panel.tsx src/components/ui/workspace-primitives.tsx src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/proxy.ts server.ts
-```
-
-备注：
-
-1. `src/app/globals.css` 被当前 ESLint 配置忽略，只返回 ignored warning
-2. TS/TSX 检查通过，无 error
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `20 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell Phase 7 引入的新问题
-
-#### 浏览器与 web-only 验证
-
-通过：
-
-1. 使用 `bb-browser` 点击验证：
-   - `OPC`
-   - `Knowledge`
-   - `Ops`
-   - `Settings`
-2. 关键结构检查结果：
-   - `OPC`: `hasOpcHero=true`, `hasQueue=true`, `hasShortcuts=true`
-   - `Knowledge`: `hasMemory=true`, `hasDepartmentMemory=true`
-   - `Ops`: `hasOpsHero=true`, `hasRuntimeStack=true`, `hasScheduler=true`
-   - `Settings`: `hasSettingsHero=true`, `hasConfigIndex=true`, `hasSettingsPanel=true`
-3. 截图保存到：
-   - `/tmp/opc-ceo-main-phase7-ceo-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase7-opc-click-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase7-knowledge-click-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase7-ops-click-2026-04-23.png`
-   - `/tmp/opc-ceo-main-phase7-settings-2026-04-23.png`
-4. `bb-browser errors` 返回：
-   - `没有 JS 错误`
-5. web-only 隔离验证：
-
-```bash
-PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
-curl -sS -i http://127.0.0.1:3321/api/projects
-curl -sS -i http://127.0.0.1:3321/api/scheduler/jobs
-```
-
-结果：
-
-1. `/api/projects` 返回 `503`
-2. `/api/scheduler/jobs` 返回 `503`
-3. web-only 日志没有再出现 scheduler/project registry 刷新
-4. 预览完成后已关闭端口 `3321`
-5. `bb-browser daemon` 已停止
 
 ## 任务：UX Shell Phase 6 完成主页面结构收口并封住 web-only API 副作用
 
@@ -6089,77 +2864,6 @@ curl -sS -i http://127.0.0.1:3321/api/scheduler/jobs
    - SettingsPanel 全部 tab
 4. `AG_ROLE=web` 无后端 URL 时，API 不再误穿透到本地 route handler
 5. 验证过程中产生的 `demolong/projects/*/project.json updatedAt` 预览污染已恢复，当前 `demolong/projects` 无差异
-
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/settings-panel.tsx src/components/scheduler-panel.tsx src/components/projects-panel.tsx src/components/knowledge-panel.tsx src/lib/gateway-role.ts src/lib/gateway-role.test.ts src/proxy.ts server.ts
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts src/lib/gateway-role.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `20 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell Phase 6 引入的新问题
-
-#### 浏览器与 web-only 验证
-
-通过：
-
-1. 使用 `bb-browser` 验证五个主页面关键 DOM：
-   - `CEO Office`
-   - `OPC`
-   - `Knowledge`
-   - `Ops`
-   - `Settings`
-2. 截图保存到：
-   - `/tmp/opc-ceo-main-pages-phase6-ceo-2026-04-23.png`
-   - `/tmp/opc-ceo-main-pages-phase6-opc-2026-04-23.png`
-   - `/tmp/opc-ceo-main-pages-phase6-knowledge-2026-04-23.png`
-   - `/tmp/opc-ceo-main-pages-phase6-ops-2026-04-23.png`
-   - `/tmp/opc-ceo-main-pages-phase6-settings-2026-04-23.png`
-3. `bb-browser errors` 返回：
-   - `没有 JS 错误`
-4. web-only 隔离验证：
-
-```bash
-PORT=3321 NODE_ENV=production AG_ROLE=web AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
-curl -sS -o /tmp/opc-web-root.out -w '%{http_code}\n' http://127.0.0.1:3321
-curl -sS -i http://127.0.0.1:3321/api/projects
-curl -sS -i http://127.0.0.1:3321/api/scheduler/jobs
-```
-
-结果：
-
-1. 根页面返回 `200`
-2. `/api/projects` 返回 `503`
-3. `/api/scheduler/jobs` 返回 `503`
-4. web-only 日志没有再出现 scheduler/project registry 刷新
-5. 预览完成后已关闭端口 `3321`
 
 ## 任务：UX Shell Phase 5 将 CEO Office 从 chat-first 重构为 dashboard-first
 
@@ -6223,58 +2927,6 @@ curl -sS -i http://127.0.0.1:3321/api/scheduler/jobs
    - 项目摘要
    - Persona / Playbook Prompt 编辑
 
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/sidebar.tsx src/components/ceo-office-settings.tsx src/lib/home-shell.ts
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `2 files passed`
-2. `13 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell Phase 5 引入的新问题
-
-#### 隔离预览
-
-通过：
-
-1. 使用 `PORT=3321 NODE_ENV=production AG_ROLE=web ./node_modules/.bin/tsx server.ts` 启动隔离预览
-2. 使用 `bb-browser` 打开 `http://127.0.0.1:3321`
-3. DOM 快照确认页面已包含：
-   - `Command Center`
-   - `Company cockpit`
-   - `Recent threads`
-   - `项目摘要 / 模板 / Prompt 资产`
-4. 截图保存到：
-   - `/tmp/opc-ceo-office-structure-2026-04-23.png`
-   - `/tmp/opc-ceo-office-structure-2026-04-23-fold2.png`
-5. 预览完成后已关闭占用端口 `3321` 的进程
-
 ## 任务：UX Shell Phase 4 纠偏参考图方向，壳层从深色 Antigravity 主题切回浅色 Apple-style
 
 **状态**: ✅ 已完成
@@ -6324,52 +2976,6 @@ npm run build
    - `CEO Office` 仍然是 chat-first，不是参考图的 dashboard-first
    - 左侧仍然保留大量线程历史，不是纯一级导航侧栏
    - 其他主页面内部排布还没有做到参考图级别的 1:1 对齐
-
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/layout.tsx src/app/page.tsx src/components/ui/app-shell.tsx src/components/ui/workspace-primitives.tsx src/components/sidebar.tsx
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `2 files passed`
-2. `13 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-#### 隔离预览
-
-通过：
-
-1. 使用 `PORT=3321 AG_ROLE=web ./node_modules/.bin/tsx server.ts` 启动隔离 web 预览
-2. 使用 `bb-browser` 打开 `http://127.0.0.1:3321`
-3. 预览截图保存到：
-   - `/tmp/opc-ceo-office-2026-04-23.png`
-4. 预览完成后已关闭占用端口 `3321` 的进程
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell Phase 4 引入的新问题
 
 ## 任务：UX Shell Phase 3 抽公共 workspace primitives 并开始深层视觉精修
 
@@ -6445,42 +3051,6 @@ npm run build
    - 没有迁移业务状态
    - 没有改变 Scheduler / Runtime / Language Server 启动逻辑
 
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/components/ui/workspace-primitives.tsx src/components/ceo-office-settings.tsx src/components/ceo-dashboard.tsx src/components/knowledge-panel.tsx src/components/scheduler-panel.tsx src/components/settings-panel.tsx src/components/projects-panel.tsx
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `2 files passed`
-2. `13 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell Phase 3 引入的新问题
-
 ## 任务：UX Shell Phase 2 统一五个主页面承载，保留全部业务功能
 
 **状态**: ✅ 已完成
@@ -6529,42 +3099,6 @@ npm run build
 3. `OPC / Knowledge / Ops / Settings` 都保留原功能组件，只在上层增加清晰入口和状态摘要
 4. 第三方 Provider / API Keys 入口仍在 `Ops`，同时跳转到 `Settings`
 5. `Chats / conversations` 仍保留线程工作态，没有被移除
-
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/ui/app-shell.tsx src/components/ceo-office-settings.tsx
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `2 files passed`
-2. `13 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell Phase 2 引入的新问题
 
 ## 任务：UX Shell Phase 1 收口为 CEO Office 默认首页，移除 Home 过渡态
 
@@ -6629,42 +3163,6 @@ npm run build
    - `Settings`
 4. `Chats / conversations` 继续保留，但定位收紧为线程工作态
 5. 壳层侧栏现在会在 `CEO Office` 默认显示，更符合最终态左侧主导航体验
-
-### 本轮验证
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `2 files passed`
-2. `13 tests passed`
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/sidebar.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/lib/home-shell.ts src/lib/home-shell.test.ts
-```
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 UX shell 收口引入的新问题
 
 ## 任务：把 AI 日报改成每天北京时间 20:00 的真实可用定时任务
 
@@ -6735,97 +3233,6 @@ npm run build
    - 标题：
      - `谷歌突击队、600万颗假Star与104B高能效模型：AI开始比拼真实产能`
 
-### 本轮验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/storage/gateway-db.ts src/lib/storage/gateway-db.test.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler.ts src/lib/agents/scheduler.test.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/workflow-runtime-hooks.test.ts src/lib/api.ts src/components/scheduler-panel.tsx
-```
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/storage/gateway-db.test.ts src/lib/agents/workflow-runtime-hooks.test.ts
-npx vitest run src/lib/agents/scheduler.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `21 tests passed`
-
-#### Scheduler 列表回读
-
-通过：
-
-```bash
-curl -sS 'http://127.0.0.1:3000/api/scheduler/jobs?page=1&pageSize=100'
-```
-
-结果：
-
-1. `count = 3`
-2. 日报任务返回：
-   - `jobId = 2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f`
-   - `cronExpression = 0 20 * * *`
-   - `timeZone = Asia/Shanghai`
-   - `nextRunAt = 2026-04-23T12:00:00.000Z`
-
-#### 真实触发
-
-通过：
-
-```bash
-curl -X POST 'http://127.0.0.1:3000/api/scheduler/jobs/2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/trigger'
-```
-
-结果：
-
-1. `status = success`
-2. `runId = 6f3c370c-f23c-4c7b-89a6-3d20ae27c745`
-
-#### Run 完成态
-
-通过：
-
-```bash
-curl -sS 'http://127.0.0.1:3000/api/agent-runs/6f3c370c-f23c-4c7b-89a6-3d20ae27c745'
-```
-
-结果：
-
-1. `status = completed`
-2. `resolvedWorkflowRef = /ai_digest`
-3. `reportedEventDate = 2026-04-22`
-4. `reportedEventCount = 12`
-5. `verificationPassed = true`
-6. 新增产物：
-   - `demolong/runs/6f3c370c-f23c-4c7b-89a6-3d20ae27c745/daily-digest-report-payload.json`
-   - `demolong/runs/6f3c370c-f23c-4c7b-89a6-3d20ae27c745/daily-digest-verification.json`
-
-#### 外部回读
-
-通过：
-
-```bash
-curl -sS 'https://api.aitrend.us/digest?date=2026-04-22'
-curl -sS -o /dev/null -w '%{http_code}\n' 'https://www.aitrend.us/digest/2026-04-22'
-```
-
-结果：
-
-1. API：
-   - `exists = true`
-   - `run.id = 37`
-   - `digestDate = 2026-04-22`
-2. 页面：
-   - `HTTP 200`
-
 ## 任务：补跑并上报 2026-04-21 AI 日报
 
 **状态**: ✅ 已完成
@@ -6860,54 +3267,6 @@ curl -sS -o /dev/null -w '%{http_code}\n' 'https://www.aitrend.us/digest/2026-04
 3. 上报后回读：
    - API `exists = true`
    - 页面 `https://www.aitrend.us/digest/2026-04-21` 返回 `200`
-
-### 本轮验证
-
-#### 上下文校验
-
-通过：
-
-```bash
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py --date 2026-04-21 --limit 50 --max-pages 2 --window-start-hour 20 --window-end-hour 20 --out /tmp/ai-digest-2026-04-21-context.json --insecure
-```
-
-结果：
-
-1. `status = ok`
-2. `articleCount = 38`
-3. 窗口为 `2026-04-20 20:00:00+08:00 -> 2026-04-21 20:00:00+08:00`
-4. 最早 / 最晚文章时间都落在 `2026-04-21`
-
-#### payload dry-run
-
-通过：
-
-```bash
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py --input /tmp/ai-digest-2026-04-21-output.json --context /tmp/ai-digest-2026-04-21-context.json --digest-date 2026-04-21 --ai-model codex-manual-rerun --dry-run --insecure
-```
-
-结果：
-
-1. `digestDate = 2026-04-21`
-2. `articleCount = 25`
-3. payload 校验通过
-
-#### 真实上报
-
-通过：
-
-```bash
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py --input /tmp/ai-digest-2026-04-21-output.json --context /tmp/ai-digest-2026-04-21-context.json --digest-date 2026-04-21 --ai-model codex-manual-rerun --insecure
-```
-
-结果：
-
-1. `status = ok`
-2. `reportUrl = https://api.aitrend.us/admin/digest/report`
-3. `verifyApiUrl = https://api.aitrend.us/digest?date=2026-04-21`
-4. `verifyPageUrl = https://www.aitrend.us/digest/2026-04-21`
-5. `verifyPageStatus = 200`
-6. 服务端返回 `run.id = 36`
 
 ## 任务：AI 日报 canonical 资产收口到 workflow-scripts，全局 skill 改成可选能力入口
 
@@ -6967,79 +3326,6 @@ python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_d
 3. `ai_digest` 不再因为 skill 丢失或路径漂移而失去运行时脚本
 4. `ai_bigevent` 等仍走 `runtimeSkill` 的链路不受影响
 5. 当前机器上旧的 digest skill `scripts/` 残留与 legacy skill 镜像也已清理，目录状态和当前架构保持一致
-
-### 本轮验证
-
-#### Python 脚本编译
-
-通过：
-
-```bash
-python3 -m py_compile .agents/workflow-scripts/ai_digest/fetch_context.py .agents/workflow-scripts/ai_digest/report_digest.py
-```
-
-#### lint
-
-通过（仅剩既有 warning）：
-
-```bash
-npx eslint src/lib/agents/gateway-home.ts src/lib/agents/canonical-assets.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/gateway-home.test.ts src/lib/agents/workflow-runtime-hooks.test.ts
-```
-
-结果：
-
-1. 无 error
-2. 仅剩既有 `gateway-home.ts` unused `initialized` warning
-
-#### 单元测试
-
-通过：
-
-```bash
-npx vitest run src/lib/agents/gateway-home.test.ts src/lib/agents/workflow-runtime-hooks.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/agents/department-execution-resolver.test.ts
-```
-
-结果：
-
-1. `4 files passed`
-2. `16 tests passed`
-
-#### 真实 canonical sync 与 smoke
-
-通过：
-
-```bash
-./node_modules/.bin/tsx -e "import { syncAssetsToGlobal } from './src/lib/agents/gateway-home'; syncAssetsToGlobal(); console.log('synced')"
-```
-
-已确认：
-
-1. `~/.gemini/antigravity/gateway/assets/workflows/ai_digest.md` 已切到 `runtimeScriptsDir: ai_digest`
-2. `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py` 存在
-3. `~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py` 存在
-4. `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/SKILL.md` 存在，且描述为可选能力入口
-5. 已清理：
-   - `~/.gemini/antigravity/gateway/assets/skills/baogaoai-ai-digest-generator/scripts`
-   - `~/.gemini/antigravity/skills/baogaoai-ai-digest-generator`
-
-#### 全局脚本真路径 smoke
-
-通过：
-
-```bash
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py --date 2026-04-21 --limit 5 --max-pages 1 --out /tmp/ai-digest-context-smoke.json --insecure
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py --input /tmp/ai-digest-output-smoke.json --context /tmp/ai-digest-context-smoke-min.json --dry-run --insecure
-```
-
-结果：
-
-1. `fetch_context.py` 返回：
-   - `status = ok`
-   - `targetDate = 2026-04-21`
-   - `articleCount = 5`
-2. `report_digest.py --dry-run` 成功构建 payload：
-   - `digestDate = 2026-04-21`
-   - `articleCount = 2`
 
 ## 任务：完成前后端 split 的最后收尾，清掉前端主链残留直连 route 逻辑
 
@@ -7102,80 +3388,6 @@ python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_d
 2. `control-plane` 负责控制面配置与组织接口；`runtime` 负责 runtime 感知接口与 workspace launch/kill
 3. 残留在前端主链 route handler 里的厚业务逻辑已被清掉，`web` 角色只剩页面 ingress、WS ingress 与代理职责
 
-### 本轮验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/departments/route.test.ts src/app/api/workspaces/import/route.test.ts src/app/api/ai-config/route.test.ts src/app/api/me/route.test.ts src/app/api/models/route.test.ts src/lib/gateway-role.test.ts
-```
-
-结果：
-
-1. `9 files passed`
-2. `18 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 仍有既有 `src/lib/agents/run-registry.ts` Turbopack broad pattern warning
-2. 该 warning 不是本轮 split 收尾引入的新问题
-
-#### Split Smoke
-
-已完成三进程分离验证：
-
-1. `control-plane`
-
-```bash
-NODE_ENV=production PORT=3310 AG_ROLE=control-plane AG_ENABLE_SCHEDULER=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
-```
-
-2. `runtime`
-
-```bash
-NODE_ENV=production PORT=3311 AG_ROLE=runtime AG_ENABLE_IMPORTERS=0 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
-```
-
-3. `web`
-
-```bash
-NODE_ENV=production PORT=3312 AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3310 AG_RUNTIME_URL=http://127.0.0.1:3311 AG_DISABLE_BRIDGE_WORKER=1 ./node_modules/.bin/tsx server.ts
-```
-
-实测通过：
-
-1. `GET /api/ceo/profile`
-2. `GET /api/ai-config`
-3. `POST /api/workspaces/import`
-4. `GET /api/departments?workspace=...`
-5. `GET /api/me`
-6. `GET /api/models`
-7. `GET /api/approval?summary=true`
-
-另外做了两条无副作用 runtime 接线校验：
-
-1. `POST /api/workspaces/launch` 空 body 返回 `{"error":"Missing workspace path"}`
-2. `POST /api/workspaces/kill` 空 body 返回 `{"error":"Missing workspace"}`
-
-这说明 runtime 路由已经接通，但没有在验收期误启动或误杀真实 Antigravity 进程。
-
-#### 进程回收
-
-已确认：
-
-1. 本轮启动的 `3310 / 3311 / 3312` 监听端口已全部释放
-2. 无残留 `server.ts` split smoke 进程
-
 ## 任务：首页壳层优化 Phase 1：引入真实 Home、按 section 惰性加载、去掉 CEO 自动建会话
 
 **状态**: ✅ 已完成
@@ -7233,84 +3445,6 @@ NODE_ENV=production PORT=3312 AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:
 
 1. `docs/design/homepage-overview-shell-optimization-2026-04-21.md`
 
-### 本轮验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-结果：
-
-1. `2 files passed`
-2. `13 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-备注：
-
-1. 构建期间仍会看到 `src/lib/agents/run-registry.ts` 的 Turbopack broad pattern warning
-2. 该 warning 为既有问题，不是本轮首页优化引入的回归
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/components/sidebar.tsx src/components/home-overview.tsx src/lib/home-shell.ts src/lib/app-url-state.ts src/lib/app-url-state.test.ts src/lib/home-shell.test.ts
-```
-
-#### 页面级验收
-
-已完成本地启动与页面验证：
-
-1. 启动：
-
-```bash
-PORT=3200 AG_DISABLE_BRIDGE_WORKER=1 npm run start
-```
-
-2. 健康检查：
-
-```bash
-curl -I -s http://127.0.0.1:3200/
-```
-
-结果：
-
-1. 返回 `HTTP/1.1 200 OK`
-
-3. 页面级行为检查：
-
-由于当前机器上的 `bb-browser` 没有可用 page target，按约束回退到 Playwright 进行本地页面验收。
-
-已确认：
-
-1. `/` 默认显示 `Company Home`
-2. 首页出现 `首页先做入口分流，不再直接充当超级工作台。`
-3. 首页存在显式 `Settings` 入口卡片
-4. 打开 `/?section=ceo` 后：
-   - `CEO 管理中心` 可正常出现
-   - 没有触发新的 `POST /api/conversations`
-
-### 验收备注
-
-本轮额外观察到一个已有噪音点：
-
-1. `npm run start` 即使禁用了 `bridge worker`，仍会初始化 `scheduler / registry`
-2. 启动日志量很大，且会带来后台恢复开销
-
-这说明首页壳层收口已经开始见效，但 `server.ts` 的后台初始化隔离仍需后续阶段继续处理
-
 ## 任务：收紧 Agent 验收期后台进程纪律，并删除残留 5s interval job
 
 **状态**: ✅ 已完成
@@ -7328,17 +3462,6 @@ curl -I -s http://127.0.0.1:3200/
    - 删除残留启用中的 `5s interval job`
    - `job_id = e850b2e8-c619-442c-b1da-35e49b27732c`
    - 名称：`市场部 Prompt 任务 · 每隔5秒`
-
-### 本轮验证
-
-已确认：
-
-1. `select count(*) from scheduled_jobs where job_id='e850b2e8-c619-442c-b1da-35e49b27732c';`
-   - 结果：`0`
-2. `select count(*) from scheduled_jobs where enabled=1;`
-   - 结果：`21`
-   - 比删除前少 `1`
-3. 当前无我本轮残留的仓库本地 `tsx/server.ts` 进程
 
 ## 任务：补齐前端 CEO Profile 用户旅程
 
@@ -7424,57 +3547,6 @@ curl -I -s http://127.0.0.1:3200/
 2. 旅程断点
 3. 补齐原则
 4. 补齐后的目标旅程
-
-### 本轮验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/app-url-state.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `9 tests passed`
-
-#### 构建
-
-通过：
-
-```bash
-npm run build
-```
-
-#### 页面级验收
-
-已完成浏览器实测：
-
-1. 使用 `bb-browser` 打开：
-   - `http://localhost:3200/?section=projects&panel=settings&tab=profile`
-2. 确认页面出现：
-   - `Profile 偏好`
-   - `CEO Profile Journey`
-   - `Structured Preferences`
-   - `Feedback Signals`
-3. 使用 `bb-browser` 打开：
-   - `http://localhost:3200/?section=ceo`
-4. 确认 `Prompt 资产` 页出现提示：
-   - `这里是 Prompt 资产，不是结构化 CEO Profile`
-5. 确认 `打开 Profile 偏好` 按钮会把 URL 切到：
-   - `panel=settings&tab=profile`
-   并能继续加载新的 profile 配置页
-
-#### 验收备注
-
-本轮在 `npm run dev` 环境里观察到一个已有问题：
-
-1. Next dev 请求期会报：
-   - `Can't resolve 'tailwindcss' in '/Users/darrel/Documents'`
-
-该问题导致 dev 页面请求卡住，但它不是本轮 `CEO Profile` 旅程补齐引入的回归。
 
 ## 任务：完成 localhost:3000 control-plane convergence 全阶段开发与验收
 
@@ -7598,31 +3670,6 @@ npm run build
 1. **没有写入 `state.vscdb`**
 2. **没有写入或删除 IDE 自己的 `.pb` / `brain` 文件**
 3. `startCascade / send / cancel / updateConversationAnnotations` 原路径语义保持不变
-
-### 本轮测试与验收
-
-已执行：
-
-1. `npm test -- src/app/api/conversations/route.test.ts src/lib/storage/gateway-db.test.ts src/lib/agents/run-registry.test.ts 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/send/route.test.ts'`
-   - `16` 项全部通过
-2. `npm test -- src/lib/agents/scheduler.test.ts`
-   - `13` 项全部通过
-3. `npm test -- src/lib/agents/project-reconciler.test.ts`
-   - `13` 项全部通过
-4. `npm run build`
-   - 通过
-5. `npm test`
-   - 已执行
-   - 全仓当前仍有 `7` 个失败文件、`23` 个失败用例
-   - 本轮观察到的失败集中在：
-     - `src/lib/agents/risk-assessor.test.ts`
-     - `src/lib/agents/generation-context.test.ts`
-     - `src/lib/agents/subgraph.test.ts`
-     - `src/lib/agents/pipeline/graph-pipeline-converter.test.ts`
-     - `src/lib/claude-engine/engine/__tests__/transcript-store.test.ts`
-     - `src/lib/agents/department-sync.test.ts`
-     - `src/lib/backends/intervention-contract.test.ts`
-   - 这些失败点都不在本轮变更文件集合内，属于仓库当前已有红测，不是本轮 conversations/control-plane convergence 改动新引入的回归
 
 ### 本轮结果
 
@@ -7792,20 +3839,6 @@ npm run build
 4. 只剩 `1` 条 interval job：
    - `AI情报工作室 Native Codex 周期巡检 · 每60秒`
    - 但它是 `enabled = 0`
-
-### 本轮验收
-
-重新起干净 `3000` 后，真实日志确认：
-
-1. `Scheduled jobs loaded`
-   - `count = 12`
-2. `Scheduler initialized` 之后继续观察约 `6.5s`
-3. **没有再出现**那批旧 `5s interval job` 的执行日志
-
-因此本轮可以确认：
-
-1. 真实库里的 `11` 个 `5s interval job` 已经清理完成
-2. 它们不会再在新起的开发实例里被加载执行
 
 ### 本轮文档
 
@@ -8205,62 +4238,6 @@ npm run build
 13. `server.ts`
     - 启动后的 scheduler / fan-out / approval / CEO consumer / tunnel 初始化改为后台触发
 
-### 已验证结果
-
-#### 1. 单测
-
-执行：
-
-1. `pnpm -s vitest run 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/agent-runs/route.test.ts' 'src/app/api/agent-runs/[id]/conversation/route.test.ts' 'src/lib/project-utils.test.ts'`
-
-结果：
-
-1. `5` 个 test files 全通过
-2. `44` 个 tests 全通过
-
-#### 2. 类型检查
-
-执行：
-
-1. `npx tsc --noEmit --pretty false`
-
-结果：
-
-1. 通过
-
-#### 3. build
-
-执行：
-
-1. `npm run build`
-
-结果：
-
-1. 通过
-2. 保留一个旧的 `run-registry.ts:107` broad-pattern warning
-
-#### 4. 真实请求计时
-
-修复前已知基线：
-
-1. 旧 `3101` 生产态：
-   - `GET /api/conversations/native-codex-1441.../steps`
-   - 首次约 `12.44s`
-2. 旧 `3000` 开发态：
-   - `curl -m 5`
-   - 直接超时
-
-修复后：
-
-1. 隔离生产态 `3104`
-   - `/api/agent-runs` → `200 0.383198`
-   - `/api/projects` → `200 0.362183`
-   - `/api/conversations/native-codex-1441.../steps` → `200 0.352452`
-   - 第二轮热请求约 `0.29s - 0.33s`
-2. 现存开发态 `3000`
-   - 三个接口均不再超时，已能稳定返回 `200`
-   - 但仍在约 `4.3s`，并有 `6s-8s` 波动
-
 ### 本轮结论
 
 本轮真正修掉的是：
@@ -8276,14 +4253,6 @@ npm run build
    - `next dev`
    - `.next/dev/lock`
    - 长时间增量编译 / HMR 状态
-
-### 验收备注
-
-本轮真实起 server 做验收时还确认：
-
-1. server 启动会自动初始化 scheduler / approval / fan-out / CEO consumer / tunnel
-2. 因此会触发真实后台任务与持久化刷新
-3. 这解释了为什么运行态验证期间会出现额外 run / project 数据变动
 
 ### 本轮文档
 
@@ -8485,18 +4454,6 @@ npm run build
 1. 旧 URL 能打开
 2. 但地址栏不自动改写
 
-### 已验证事实
-
-在隔离生产态实例 `http://localhost:3101` 上：
-
-1. `GET /api/conversations/native-codex-1441.../steps`
-   - 返回 `2` 个 steps
-2. `GET /api/agent-runs/5b55b23f-18c0-4930-9805-4d34aa5dfc0c/conversation`
-   - 返回：
-     - `kind = transcript`
-     - `viewerConversationId = conversation-079a70b2-7fc8-44ed-a128-be0a4ac84413`
-     - `messageCount = 2`
-
 ### 下一步建议
 
 如果要让 URL 语义完全收敛，下一步应该补：
@@ -8637,15 +4594,6 @@ npm run build
 5. 新增本地验收文档：
    - `docs/research/claude-engine-department-runtime-subtask-b-acceptance-2026-04-20.md`
 
-### 验收结果
-
-结论：
-
-1. `native-codex` Department 主链确实命中了 `ClaudeEngineAgentBackend`
-2. 真实 run：
-   - `29ca8124-3eea-4bb6-8ce5-789abe74c0e1`
-3. 但这条 `review-flow` 在第 1 轮 author 就失败，**Phase E 该验收点未通过**
-
 ### 关键发现
 
 #### 1. backend / provider 命中情况已确认
@@ -8740,21 +4688,6 @@ npm run build
 4. 新增本地验收文档：
    - `docs/research/claude-engine-department-runtime-subtask-a-acceptance-2026-04-20.md`
 
-### 验收结果
-
-执行：
-
-```bash
-npx vitest run src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/agents/department-execution-resolver.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts
-```
-
-结果：
-
-1. `6 files passed`
-2. `52 tests passed`
-3. 本轮没有失败用例
-4. 本轮不需要修改测试文件或实现文件
-
 ### 独立抽查结论
 
 本轮额外确认：
@@ -8838,26 +4771,6 @@ npx vitest run src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/
 
 - `docs/research/native-codex-claude-engine-provider-chain-subtask-c-audit-2026-04-20.md`
 
-### 本轮验证
-
-执行：
-
-```bash
-npm test -- src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/agents/department-execution-resolver.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts
-```
-
-结果：
-
-- `4 files passed`
-- `29 tests passed`
-
-备注：
-
-现有测试能证明 provider 主链和当前 flatten 行为都被锁住，但**还没有覆盖**：
-
-1. native-codex 的结构化 tool-result replay readiness
-2. `requiredArtifacts` 与平台 finalization 的时序冲突
-
 ## 任务：修复 Claude Engine Department Runtime 剩余断点，并循环验收直到通过
 
 **状态**: ✅ 已完成
@@ -8934,17 +4847,6 @@ npm test -- src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/age
 
 的断言口径。
 
-### 子 Agent 验收
-
-本轮实际使用了子 Agent 做并行验收：
-
-1. 子任务 A：
-   - 关键单测/集成测试独立验收通过
-2. 子任务 B：
-   - 第一轮真实 `review-flow + native-codex` 验收失败，成功定位到真实 blocker
-3. 子任务 C：
-   - 独立复核 provider 主链与剩余断点，确认旧的 `provider=openai` 断点是实际 blocker
-
 ### 主线程真实复验
 
 在主线程修复后，重新真实派发：
@@ -8980,61 +4882,6 @@ npm test -- src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/age
 这说明：
 
 1. `review-loop + native-codex` 真实模板链已经跑通
-
-### 本轮验证
-
-#### 1. 单测 / 集成测试
-
-通过：
-
-```bash
-npx vitest run src/lib/claude-engine/tools/__tests__/tools.test.ts src/lib/bridge/native-codex-adapter.test.ts src/lib/claude-engine/api/__tests__/native-codex.test.ts src/lib/agents/department-capability-registry.test.ts src/lib/agents/department-execution-resolver.test.ts src/lib/backends/__tests__/claude-engine-runtime-config.test.ts src/lib/backends/__tests__/claude-engine-backend.test.ts src/lib/backends/builtin-backends.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts src/lib/backends/__tests__/memory-hooks-runtime-contract.test.ts
-```
-
-结果：
-
-1. `12 files passed`
-2. `116 tests passed`
-
-#### 2. TypeScript
-
-通过：
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-#### 3. Build
-
-通过：
-
-```bash
-npm run build
-```
-
-保留非阻断 warning：
-
-1. `src/lib/agents/run-registry.ts` 的 Turbopack broad-pattern warning
-
-### 本轮文档
-
-新增：
-
-1. `docs/research/claude-engine-department-runtime-phase-e-pass-2026-04-20.md`
-
-### 当前最终结论
-
-截至本轮：
-
-1. `Phase A-D`
-   - 已完成
-2. `Phase E` 的关键验收点：
-   - `review-flow + native-codex` 至少一条模板链路跑通
-   - 已通过
-
-因此当前对外最准确定义已经变为：
-
-- `Claude Engine Department Runtime 统一设计（2026-04-19）已开发完成，并已通过当前关键验收。`
 
 ## 任务：审计 Claude Engine Department Runtime 统一设计（2026-04-19）的实际完成度
 
@@ -9266,62 +5113,6 @@ CEO Office 里的部门卡片和详情抽屉现在不再把多目录部门拆成
 3. 桌面端新建部门与补充绑定目录的用户旅程
 4. Web 模式改为产品内路径输入对话框，不再走浏览器原生 `prompt`
 
-### 验证
-
-#### TypeScript
-
-通过：
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-#### 定向测试
-
-通过：
-
-```bash
-npx vitest run src/lib/department-config.test.ts src/app/api/departments/route.test.ts src/lib/agents/department-capability-registry.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `12 tests passed`
-
-覆盖：
-
-1. Department 配置归一化
-2. 多目录部门路由写回
-3. Department runtime contract 对多目录与 context docs 的注入
-
-#### Lint
-
-执行：
-
-```bash
-npx eslint src/components/department-setup-dialog.tsx src/components/projects-panel.tsx src/components/department-detail-drawer.tsx src/components/ceo-dashboard.tsx src/components/ceo-office-cockpit.tsx src/lib/department-config.ts src/lib/agents/department-capability-registry.ts src/server/control-plane/routes/departments.ts src/app/page.tsx src/app/api/departments/route.test.ts src/lib/agents/department-capability-registry.test.ts
-```
-
-结果：
-
-1. 无 error
-2. `src/components/department-setup-dialog.tsx` 保留 2 条既有 `@next/next/no-img-element` warning，来源于已有 sprite 选择器实现
-
-#### Production Build
-
-通过：
-
-```bash
-npm run build
-```
-
-结果：
-
-1. Next build 成功
-2. 页面与 API route 生产构建通过
-3. 保留 2 条与本次 Department 改动无关的 Turbopack broad-pattern warning
-
 ### 本轮目标
 
 在上一轮只完成 `Phase A` 合同层之后，用户进一步明确：
@@ -9429,24 +5220,6 @@ npm run build
    - 写路径
 
 这样 Department 目录边界已经不再只是 prompt 文案。
-
-### 验收结果
-
-本轮主线程完成了实际验证：
-
-1. `npx vitest run`（12 个关键测试文件）✅
-   - 12 files
-   - 116 tests passed
-2. `npx tsc --noEmit --pretty false` ✅
-3. `npm run build` ✅
-
-本轮关键覆盖包括：
-
-1. Claude Engine Department runtime policy enforcement
-2. `native-codex` Claude Engine provider adapter
-3. Department capability registry / execution resolver
-4. prompt runtime contract acceptance
-5. prompt / template runtime 的 capability-aware routing
 
 ### 关键文件
 
@@ -9565,20 +5338,6 @@ npm run build
 2. `taskEnvelope` runtime carrier 未完整透传
 3. `requiredArtifacts` 结构从字符串数组升级后，后端和测试的类型错位
 4. acceptance test 中全局网关目录污染导致的不稳定
-
-### 验收结果
-
-主线程已完成实际验证：
-
-1. `npx tsc --noEmit --pretty false` ✅
-2. 11 个目标测试文件，89 个测试全部通过 ✅
-3. `npm run build` ✅
-
-其中 acceptance 覆盖了：
-
-1. prompt mode runtime contract 传递
-2. Claude Engine runtime config 归一化
-3. memory hooks 对 runtime contract 的兼容
 
 ### 备注
 
@@ -9901,134 +5660,6 @@ subagent 进一步确认：
 
 - `docs/research/ai-company-full-feature-test-results-2026-04-19.md`
 
-### 测试环境
-
-1. gateway 使用独立：
-   - `AG_GATEWAY_HOME=/tmp/ai-company-e2e-gateway`
-2. 测试 workspace：
-   - `/tmp/ai-company-e2e`
-3. Department provider：
-   - `native-codex`
-4. Native Codex 登录态：
-   - `~/.codex/auth.json` 存在
-   - `loggedIn = true`
-
-### 本轮真实验证结果
-
-#### 1. `workflow-run` 已真实跑通
-
-关键 run：
-
-- `fb05de40-f4f8-4cf1-a046-c2b7a1412a23`
-
-结果：
-
-1. `provider = native-codex`
-2. `resolvedWorkflowRef = /dev-worker`
-3. `status = completed`
-
-#### 2. `review-flow` 在 `native-codex` 下真实失败
-
-关键 run：
-
-- `bf2b7b02-46db-4834-a91d-ea0930ca30d3`
-
-结果：
-
-1. dispatch 成功
-2. role 启动成功
-3. 但 author role 未产出模板要求的 `specs/` 文件
-4. 最终 run `status = failed`
-
-这证明：
-
-- `review-flow` 派发链路已成立
-- 但在 `Codex Native` 下仍不能宣称“可用”
-
-#### 3. `dag-orchestration` 已真实跑通
-
-关键 run：
-
-- `3cd8088f-230c-4ecf-9cb9-5b1c76ad34d0`
-
-结果：
-
-1. `provider = native-codex`
-2. `executionProfileSummary = DAG Orchestration`
-3. `status = completed`
-
-#### 4. scheduler 的 `dispatch-execution-profile` 已真实跑通
-
-关键 jobs：
-
-1. `710691b2-92af-4985-a582-3a3d41525673`
-   - workflow-run
-   - triggered run: `a2e5a8b8-48da-4fdc-98a8-224c095c4282`
-2. `6437445b-5884-4540-a450-9ba2a9332162`
-   - dag-orchestration
-   - triggered run: `3cd5b4a3-767f-4925-af2e-27033530610c`
-
-两条都：
-
-- `lastRunResult = success`
-
-#### 5. Knowledge Loop 已真实闭环
-
-第一次 run 后新增知识：
-
-1. `fb05de40-f4f8-4cf1-a046-c2b7a1412a23-decision-e29565e0fa`
-2. `fb05de40-f4f8-4cf1-a046-c2b7a1412a23-pattern-f6a25d38d2`
-
-第二次相似 run 后：
-
-1. 旧知识 `usageCount` 增长
-2. `lastAccessedAt` 更新
-
-说明：
-
-- extraction -> retrieval -> reuse 主链真实成立
-
-#### 6. approval -> CEO pending issue -> resolve 已真实成立
-
-关键审批：
-
-- `9dd3d582-0f12-4ee4-971a-8b2b18a62ac0`
-
-结果：
-
-1. 创建后进入 `CEOProfile.pendingIssues`
-2. 批准后从 `pendingIssues` 清除
-
-#### 7. Evolution Pipeline 全链路已真实跑通
-
-关键 repeated runs：
-
-1. `312ed014-deb1-4b7e-ac8d-4ee028725450`
-2. `6c20e2ae-815b-449d-ba61-1e83e9a83421`
-3. `d03712c1-5176-4e41-a6c0-615abb5a35fb`
-
-关键 proposal：
-
-- `proposal-b993beb5-f09b-40fd-837d-71e7fabeaa57`
-
-关键审批：
-
-- `9c0e5e28-19c7-4d49-9481-d49977c9dc56`
-
-发布产物：
-
-- `/tmp/ai-company-e2e-gateway/assets/workflows/ai-company-e2e-new-workflow.md`
-
-observe 命中 run：
-
-- `c627c8c4-a92f-4e8e-89ad-3e8545a5adda`
-
-最终 observe：
-
-1. `hitCount = 1`
-2. `successRate = 1`
-3. `lastUsedAt` 已更新
-
 ### 新发现问题
 
 #### 1. `review-flow + native-codex` 仍不可用
@@ -10151,63 +5782,6 @@ observe 命中 run：
 4. stage completed / project completed 会清理对应 project pending issues
 5. routine summary 会在构建前 reconcile 过期 approval/project issues
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/agent-runs/route.test.ts src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' src/lib/organization/__tests__/ceo-profile-store.test.ts src/lib/approval/__tests__/request-store.test.ts src/lib/approval/__tests__/handler.test.ts
-```
-
-结果：
-
-- `8 files passed`
-- `26 tests passed`
-
-新增/加强覆盖：
-
-1. `review-flow executionProfile` 直接请求
-2. stale filtering after hydration
-3. retrieval 跳过 stale 资产
-4. Knowledge API 返回 usage/access 字段
-5. approval request 持久化恢复
-6. pending issue 清理与 reconcile
-
-#### lint
-
-通过：
-
-```bash
-npx eslint server.ts src/lib/execution/contracts.ts src/lib/types.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler.ts src/components/scheduler-panel.tsx src/lib/knowledge/store.ts src/lib/knowledge/retrieval.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' src/lib/organization/ceo-profile-store.ts src/lib/organization/index.ts src/lib/organization/ceo-event-consumer.ts src/lib/organization/ceo-routine.ts src/lib/approval/request-store.ts src/app/api/agent-runs/route.test.ts src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' src/lib/organization/__tests__/ceo-profile-store.test.ts src/lib/approval/__tests__/request-store.test.ts
-```
-
-#### build
-
-本轮额外尝试了：
-
-```bash
-npm run build
-```
-
-结果：
-
-1. 本轮修复涉及的几处现成 TS 错误已顺手补掉：
-   - `src/app/api/conversations/[id]/send/route.ts` 的 provider 类型链
-   - `src/app/api/conversations/route.ts` 的 `workspaces/stepCount` 类型错误
-   - `src/components/ceo-dashboard.tsx` 的变量声明顺序错误
-   - `src/lib/types.ts` 缺失 `sessionProvenance` 前端字段
-2. 但完整 build 仍被仓库中的**独立存量问题**阻断：
-   - `src/lib/agents/canonical-assets.ts`
-3. 另外还存在一个 Turbopack 性能 warning：
-   - `src/lib/agents/run-registry.ts`
-
-因此当前可以确认：
-
-- **本轮修复代码通过定向测试 + lint**
-- **完整仓库 build 仍未全绿，但剩余阻断不属于本轮 5 个审计修复项**
-
 ## 任务：继续清理 build 阻断错误，完成完整 `npm run build`
 
 **状态**: ✅ 已完成
@@ -10271,59 +5845,6 @@ npm run build
 10. `native-codex-executor` 的 `ChatMessage.content` 联合类型
 11. `conversations/route.ts` 与 `ceo-dashboard.tsx` 中暴露出来的现成 TS 错误
 12. `gateway-db.ts` 中 local conversation provider 类型过窄
-
-### 验证
-
-#### TypeScript
-
-通过：
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-#### build
-
-通过：
-
-```bash
-npm run build
-```
-
-结果：
-
-- build 完整成功
-- 仍有一个非阻断 Turbopack warning：
-  - `src/lib/agents/run-registry.ts`
-  - 属于性能/匹配范围提示，不影响 build 成功
-
-#### 说明
-
-本轮没有继续清理：
-
-- `src/lib/agents/group-runtime.ts` 中大批历史 `eslint` `any` 债
-
-原因：
-
-1. 用户当前要求是处理 build 错误
-2. build 已经打通
-3. 该文件的 lint 债是长期遗留问题，不构成当前构建阻断
-
-#### Patch 校验
-
-通过：
-
-```bash
-git diff --check -- tsconfig.json server.ts src/app/api/conversations/route.ts src/components/ceo-dashboard.tsx src/lib/storage/gateway-db.ts src/lib/agents/canonical-assets.ts src/lib/agents/department-capability-registry.ts src/lib/agents/department-execution-resolver.ts src/lib/agents/department-sync.ts src/lib/agents/group-runtime.ts src/lib/agents/prompt-executor.ts src/lib/agents/scheduler.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/api.ts src/lib/backends/claude-engine-backend.ts src/lib/local-provider-conversations.ts src/lib/providers/native-codex-executor.ts docs/PROJECT_PROGRESS.md
-```
-
-#### Patch 校验
-
-通过：
-
-```bash
-git diff --check -- server.ts src/lib/execution/contracts.ts src/lib/types.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler.ts src/components/scheduler-panel.tsx src/lib/knowledge/store.ts src/lib/knowledge/retrieval.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' src/lib/organization/ceo-profile-store.ts src/lib/organization/index.ts src/lib/organization/ceo-event-consumer.ts src/lib/organization/ceo-routine.ts src/lib/approval/request-store.ts src/app/api/agent-runs/route.test.ts src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' src/lib/organization/__tests__/ceo-profile-store.test.ts src/lib/approval/__tests__/request-store.test.ts docs/guide/gateway-api.md docs/guide/cli-api-reference.md docs/guide/agent-user-guide.md docs/PROJECT_PROGRESS.md
-```
 
 ## 任务：审计 AI Company 开发计划与实际代码落地情况，检查是否存在偏差或错误
 
@@ -10503,19 +6024,6 @@ git diff --check -- server.ts src/lib/execution/contracts.ts src/lib/types.ts sr
 - `CEO Dashboard` 的 evolution 卡片
 - `Knowledge Console` 的 `Proposal Signals`
 
-验证通过：
-
-```bash
-npm test -- src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/proposals/generate/route.test.ts 'src/app/api/evolution/proposals/[id]/publish/route.test.ts' src/lib/evolution/__tests__/generator.test.ts src/lib/evolution/__tests__/evaluator.test.ts src/lib/evolution/__tests__/publisher.test.ts src/lib/approval/__tests__/handler.test.ts
-```
-
-结果：
-
-- `7 files passed`
-- `7 tests passed`
-
-详细记录见本文后部对应 `Phase 5：Evolution Pipeline v1` 条目。
-
 ## 任务：继续往下开发，进入 Phase 4：Execution Profiles
 
 **状态**: ✅ 已完成
@@ -10644,17 +6152,6 @@ npm test -- src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/
 3. **没有写入或篡改 Antigravity 自己的 `state.vscdb` / `.pb` / `brain`**
 4. 选 `provider = antigravity` 时，执行阶段仍走原有 Antigravity runtime
 5. 其它 IDE / API provider 继续走各自既有 backend 路径
-
-### 本轮测试与验收
-
-已执行：
-
-1. `npm test -- src/lib/storage/gateway-db.test.ts src/lib/workspace-catalog.test.ts src/app/api/departments/route.test.ts src/app/api/workspaces/import/route.test.ts`
-   - `4 files passed`
-   - `9 tests passed`
-2. `npm run build`
-   - 通过
-   - 仅出现既有 Turbopack broad pattern warning，不是本轮回归
 
 ### 文档同步
 
@@ -10822,48 +6319,6 @@ npm test -- src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/
 
 1. dev server 下 bridge worker 已能正常起起来
 2. 真实 3000 开发态压测不再被 worker 启动失败污染
-
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/agent-runs/route.test.ts src/app/api/conversations/route.test.ts src/lib/storage/gateway-db.test.ts
-```
-
-结果：
-
-1. `3 files passed`
-2. `19 tests passed`
-
-覆盖：
-
-1. `/api/agent-runs` 过滤 + 分页 + list field slimming
-2. `/api/conversations` projection-first + 分页 envelope
-3. SQLite run filter count / pagination
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/types.ts src/lib/pagination.ts src/lib/storage/gateway-db.ts src/lib/storage/gateway-db.test.ts src/app/api/agent-runs/route.ts src/app/api/agent-runs/route.test.ts src/app/api/conversations/route.ts src/app/api/conversations/route.test.ts src/app/api/projects/route.ts 'src/app/api/projects/[id]/journal/route.ts' 'src/app/api/projects/[id]/checkpoints/route.ts' 'src/app/api/projects/[id]/deliverables/route.ts' src/app/api/operations/audit/route.ts src/app/api/scheduler/jobs/route.ts src/lib/api.ts src/components/projects-panel.tsx src/components/project-workbench.tsx server.ts
-```
-
-#### build
-
-通过：
-
-```bash
-npm run build
-```
-
-说明：
-
-1. build 通过
-2. 仍观察到一个已有 Turbopack warning，来自 `run-registry.ts` 的动态路径扫描，不是本轮分页改造新引入的问题
 
 ### 本轮真实开发态实测
 
@@ -11124,47 +6579,6 @@ npm run build
 
 本轮已满足。
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/agent-runs/route.test.ts
-```
-
-结果：
-
-- `1 file passed`
-- `8 tests passed`
-
-新增覆盖：
-
-1. `workflow-run executionProfile` 请求分流到 `PromptExecutor`
-2. `dag-orchestration executionProfile` 请求分流到 `DispatchService`
-
-补充说明：
-
-- `scheduler.test.ts` 仍可能被当前环境里的 assets/skills 文件系统状态打断
-- 因此本轮没有把它作为阻塞验证项
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/execution/contracts.ts src/lib/execution/index.ts src/app/api/agent-runs/route.ts src/app/api/agent-runs/route.test.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler.ts src/components/scheduler-panel.tsx src/lib/types.ts src/lib/api.ts src/components/agent-runs-panel.tsx src/components/agent-run-detail.tsx
-```
-
-#### Patch 校验
-
-通过：
-
-```bash
-git diff --check -- src/lib/execution/contracts.ts src/lib/execution/index.ts src/app/api/agent-runs/route.ts src/app/api/agent-runs/route.test.ts src/lib/agents/scheduler-types.ts src/lib/agents/scheduler.ts src/components/scheduler-panel.tsx src/lib/types.ts src/lib/api.ts src/components/agent-runs-panel.tsx src/components/agent-run-detail.tsx ARCHITECTURE.md docs/guide/gateway-api.md docs/guide/cli-api-reference.md docs/guide/agent-user-guide.md
-```
-
 ## 任务：严格按文档补齐 P2 / P3 v1，完成 pending issues、OKR/risk 与 Knowledge Console 增强
 
 **状态**: ✅ 已完成
@@ -11394,37 +6808,6 @@ git diff --check -- src/lib/execution/contracts.ts src/lib/execution/index.ts sr
 因此本轮之后，不再只是“按最小闭环判断完成”，而是：
 
 - **按文档定义，P2 / P3 v1 已完成**
-
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/organization/__tests__/ceo-profile-store.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/management/overview/route.test.ts src/lib/agents/ceo-agent.test.ts src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.test.ts' src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/lib/agents/__tests__/department-memory-bridge.test.ts
-```
-
-结果：
-
-- `12 files passed`
-- `43 tests passed`
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/organization/contracts.ts src/lib/organization/ceo-profile-store.ts src/lib/organization/ceo-routine.ts src/lib/organization/ceo-event-store.ts src/lib/organization/ceo-event-consumer.ts src/lib/organization/index.ts src/lib/management/contracts.ts src/lib/management/metrics.ts src/lib/management/index.ts src/lib/agents/ceo-agent.ts src/lib/approval/request-store.ts src/lib/agents/scheduler.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/ceo/profile/route.ts src/app/api/ceo/profile/feedback/route.ts src/app/api/ceo/routine/route.ts src/app/api/ceo/events/route.ts src/app/api/management/overview/route.ts src/components/department-memory-panel.tsx src/components/ceo-dashboard.tsx src/components/department-detail-drawer.tsx src/components/knowledge-panel.tsx src/lib/types.ts src/lib/api.ts
-```
-
-#### Patch 校验
-
-通过：
-
-```bash
-git diff --check -- src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/storage/gateway-db.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/organization/contracts.ts src/lib/organization/ceo-profile-store.ts src/lib/organization/ceo-routine.ts src/lib/organization/ceo-event-store.ts src/lib/organization/ceo-event-consumer.ts src/lib/organization/index.ts src/lib/management/contracts.ts src/lib/management/metrics.ts src/lib/management/index.ts src/lib/agents/ceo-agent.ts src/lib/approval/request-store.ts src/lib/agents/scheduler.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.test.ts' src/app/api/ceo/profile/route.ts src/app/api/ceo/profile/feedback/route.ts src/app/api/ceo/routine/route.ts src/app/api/ceo/events/route.ts src/app/api/management/overview/route.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/management/overview/route.test.ts src/lib/organization/__tests__/ceo-profile-store.test.ts src/lib/agents/ceo-agent.test.ts src/components/department-memory-panel.tsx src/components/ceo-dashboard.tsx src/components/department-detail-drawer.tsx src/components/knowledge-panel.tsx src/lib/types.ts src/lib/api.ts docs/guide/knowledge-api.md docs/guide/gateway-api.md docs/guide/cli-api-reference.md docs/guide/agent-user-guide.md ARCHITECTURE.md docs/PROJECT_PROGRESS.md
-```
 
 ## 任务：完成 P2 与 P3 的第一批真实闭环，实现 CEO 状态层、事件层与经营概览
 
@@ -11688,43 +7071,6 @@ git diff --check -- src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts sr
 - `src/lib/management/*`
 - Management Overview 与 CEO Routine 的 UI 呈现
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/extractor.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/department-memory-bridge.test.ts src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.test.ts' src/lib/organization/__tests__/ceo-profile-store.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/management/overview/route.test.ts src/lib/agents/ceo-agent.test.ts
-```
-
-结果：
-
-- `15 files passed`
-- `60 tests passed`
-
-补充说明：
-
-- `scheduler.test.ts` 在当前环境下会被全局 assets/skills 文件系统状态打断
-- 当前判断为环境性问题，不是本轮业务断言失败
-- 因此不作为本轮阻塞项
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/organization/contracts.ts src/lib/organization/ceo-profile-store.ts src/lib/organization/ceo-routine.ts src/lib/organization/ceo-event-store.ts src/lib/organization/ceo-event-consumer.ts src/lib/organization/index.ts src/lib/management/contracts.ts src/lib/management/metrics.ts src/lib/management/index.ts src/lib/agents/ceo-agent.ts src/lib/approval/request-store.ts src/lib/agents/scheduler.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/ceo/profile/route.ts src/app/api/ceo/profile/feedback/route.ts src/app/api/ceo/routine/route.ts src/app/api/ceo/events/route.ts src/app/api/management/overview/route.ts src/components/department-memory-panel.tsx src/components/ceo-dashboard.tsx src/components/department-detail-drawer.tsx
-```
-
-#### Patch 校验
-
-通过：
-
-```bash
-git diff --check -- src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/storage/gateway-db.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/organization/contracts.ts src/lib/organization/ceo-profile-store.ts src/lib/organization/ceo-routine.ts src/lib/organization/ceo-event-store.ts src/lib/organization/ceo-event-consumer.ts src/lib/organization/index.ts src/lib/management/contracts.ts src/lib/management/metrics.ts src/lib/management/index.ts src/lib/agents/ceo-agent.ts src/lib/approval/request-store.ts src/lib/agents/scheduler.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.test.ts' src/app/api/ceo/profile/route.ts src/app/api/ceo/profile/feedback/route.ts src/app/api/ceo/routine/route.ts src/app/api/ceo/events/route.ts src/app/api/management/overview/route.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/app/api/management/overview/route.test.ts src/lib/organization/__tests__/ceo-profile-store.test.ts src/lib/agents/ceo-agent.test.ts src/components/department-memory-panel.tsx src/components/ceo-dashboard.tsx src/components/department-detail-drawer.tsx docs/guide/knowledge-api.md docs/guide/gateway-api.md docs/guide/cli-api-reference.md docs/guide/agent-user-guide.md ARCHITECTURE.md docs/PROJECT_PROGRESS.md
-```
-
 ## 任务：完成 P1 剩余收尾并直接进入 P2 第一批实现
 
 **状态**: ✅ 已完成
@@ -11938,42 +7284,6 @@ section。
 4. CEO 与外部真实世界（日历/邮件/IM）还没有同步
 5. `DepartmentContract` 仍未真正代码化接入 runtime
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/extractor.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/department-memory-bridge.test.ts src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.test.ts' src/lib/organization/__tests__/ceo-profile-store.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/lib/agents/ceo-agent.test.ts
-```
-
-结果：
-
-- `14 files passed`
-- `58 tests passed`
-
-补充说明：
-
-- 测试输出中仍有 `MaxListenersExceededWarning`
-- 当前判断为测试环境的 process listener 噪音，不影响业务断言
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/organization/contracts.ts src/lib/organization/ceo-profile-store.ts src/lib/organization/ceo-routine.ts src/lib/organization/index.ts src/lib/agents/ceo-agent.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/ceo/profile/route.ts src/app/api/ceo/profile/feedback/route.ts src/app/api/ceo/routine/route.ts src/components/department-memory-panel.tsx
-```
-
-#### Patch 校验
-
-通过：
-
-```bash
-git diff --check -- src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/storage/gateway-db.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/organization/contracts.ts src/lib/organization/ceo-profile-store.ts src/lib/organization/ceo-routine.ts src/lib/organization/index.ts src/lib/agents/ceo-agent.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/knowledge/route.test.ts 'src/app/api/knowledge/[id]/route.test.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.test.ts' src/app/api/ceo/profile/route.ts src/app/api/ceo/profile/feedback/route.ts src/app/api/ceo/routine/route.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/lib/organization/__tests__/ceo-profile-store.test.ts src/lib/agents/ceo-agent.test.ts src/components/department-memory-panel.tsx docs/guide/knowledge-api.md docs/guide/gateway-api.md docs/guide/cli-api-reference.md docs/guide/agent-user-guide.md ARCHITECTURE.md docs/PROJECT_PROGRESS.md
-```
-
 ## 任务：继续完成 P1 后半段，实现结构化知识回流、桥接与路由测试
 
 **状态**: ✅ 已完成
@@ -12101,39 +7411,6 @@ P1 虽然已经基本收口，但还有这些边界仍未做：
 3. bridge 注入的是最近结构化知识摘要，不是任务相关的深度检索
 4. 真正的 prompt/workflow-run HTTP 级真实 smoke 仍未单独固化成自动化脚本
 5. workflow proposal 还没有进入 evaluate / publish 闭环
-
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/extractor.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/lib/agents/finalization.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/department-memory-bridge.test.ts src/app/api/knowledge/route.test.ts
-```
-
-结果：
-
-- `7 files passed`
-- `42 tests passed`
-
-补充说明：
-
-- 测试输出中出现 `MaxListenersExceededWarning`
-- 当前判断属于 Vitest / process listener 级测试环境噪音，不影响业务断言通过
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/app/api/knowledge/route.test.ts src/components/department-memory-panel.tsx
-```
-
-说明：
-
-- 本轮关键实现文件 lint 已通过
-- `prompt-executor.test.ts` 等老测试文件仍保留仓库历史 `any` 风格，不纳入本轮 lint 阻塞范围
 
 ## 任务：开始 Phase 1 的第一批真实实现，打通 Knowledge Loop 的结构化骨架
 
@@ -12320,41 +7597,6 @@ npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/kno
 4. `/api/knowledge` 仍主要依赖文件镜像作为兼容视图，不是纯结构化读取
 5. workflow / skill proposal 还没有 evaluation / publish 闭环
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/knowledge/__tests__/store.test.ts src/lib/knowledge/__tests__/extractor.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/lib/agents/finalization.test.ts
-```
-
-结果：
-
-- `4 files passed`
-- `17 tests passed`
-
-覆盖：
-
-- `KnowledgeAsset` 存储
-- extractor
-- retrieval
-- finalization 与知识沉淀接线
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/knowledge/extractor.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/index.ts src/lib/agents/finalization.ts src/lib/agents/prompt-executor.ts src/app/api/knowledge/route.ts 'src/app/api/knowledge/[id]/route.ts' 'src/app/api/knowledge/[id]/artifacts/[...path]/route.ts' src/components/department-memory-panel.tsx
-```
-
-说明：
-
-- 本轮新增与直接修改的关键文件已通过 lint
-- `src/lib/api.ts` 等历史文件仍存在仓库原有的 `no-explicit-any` 遗留，不作为本轮阻塞项
-
 ## 任务：进入 Phase 1，产出 Knowledge Loop v1 文件级开发计划
 
 **状态**: ✅ 已完成
@@ -12459,20 +7701,6 @@ npx eslint src/lib/knowledge/contracts.ts src/lib/knowledge/store.ts src/lib/kno
 - 先做 UI
 - 先做 retrieval 魔法
 - 先做 workflow 进化
-
-### 验证
-
-本次为文件级开发计划收口，没有代码逻辑变更。
-
-已执行：
-
-```bash
-git diff --check -- docs/design/ai-company-phase-1-knowledge-loop-v1-file-plan-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认 P1 文件级计划文档与进度文档更新没有 patch 格式问题
 
 ## 任务：产出 AI 公司系统 Phase 0 正式稿，冻结合同与最小主链路
 
@@ -12602,20 +7830,6 @@ git diff --check -- docs/design/ai-company-phase-1-knowledge-loop-v1-file-plan-2
 - source contract
 - gate
 
-### 验证
-
-本次为设计文档收口，没有代码逻辑变更。
-
-已执行：
-
-```bash
-git diff --check -- docs/design/ai-company-phase-0-contracts-and-mainline-freeze-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认 Phase 0 文档与进度文档更新没有 patch 格式问题
-
 ## 任务：编写 AI 公司系统开发计划文档，固定后续研发节奏
 
 **状态**: ✅ 已完成
@@ -12697,20 +7911,6 @@ git diff --check -- docs/design/ai-company-phase-0-contracts-and-mainline-freeze
 2. 在主链路未闭环前继续扩功能
 3. 先做大 UI 再补底层合同
 4. 在治理没成立前做无审批自治
-
-### 验证
-
-本次为文档收口，没有代码逻辑变更。
-
-已执行：
-
-```bash
-git diff --check -- docs/design/ai-company-development-plan-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认开发计划文档与进度文档更新没有 patch 格式问题
 
 ## 任务：启动 AI 公司系统的用户需求梳理与技术架构设计
 
@@ -12803,20 +8003,6 @@ git diff --check -- docs/design/ai-company-development-plan-2026-04-19.md docs/P
 4. `Management Console v1`
 5. `Execution Profiles` 分层
 6. `Evolution Pipeline v1`
-
-### 验证
-
-本次为设计文档收口，没有代码逻辑变更。
-
-已执行：
-
-```bash
-git diff --check -- docs/design/ai-company-requirements-and-architecture-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认新增设计文档与进度文档更新没有 patch 格式问题
 
 ## 任务：收口当前真正短板是否是知识沉淀 / CEO 同步进化 / 管理可视化
 
@@ -12960,20 +8146,6 @@ git diff --check -- docs/design/ai-company-requirements-and-architecture-2026-04
    - memory loop
    - evolution loop
    - management loop
-
-### 验证
-
-本次为研究判断与文档收口，没有代码逻辑改动。
-
-已执行：
-
-```bash
-git diff --check -- docs/research/knowledge-memory-evolution-management-gaps-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认新增研究文档与进度文档更新没有 patch 格式问题
 
 ## 任务：评估当前 DAG 体系能否承载「AI 公司 + 数字孪生 CEO」终局
 
@@ -13167,20 +8339,6 @@ git diff --check -- docs/research/knowledge-memory-evolution-management-gaps-202
    - `Learning Plane`
    - `Communication Plane`
 
-### 验证
-
-本次为研究分析与文档收口，没有代码逻辑变更。
-
-已执行：
-
-```bash
-git diff --check -- docs/research/ai-company-digital-twin-feasibility-assessment-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认新增研究文档与进度文档更新没有 patch 格式问题
-
 ## 任务：评估 Antigravity 是否出现「DAG 优先」而非「Workflow 优先」
 
 **状态**: ✅ 已完成
@@ -13289,20 +8447,6 @@ git diff --check -- docs/research/ai-company-digital-twin-feasibility-assessment
 - 真正多阶段、多角色、并发依赖任务
   - 再上 `DAG orchestration`
 
-### 验证
-
-本次为文档研究与架构判断收口，没有代码逻辑变更。
-
-已执行：
-
-```bash
-git diff --check -- docs/research/dag-first-vs-workflow-first-assessment-2026-04-19.md docs/PROJECT_PROGRESS.md
-```
-
-目的：
-
-- 确认新增与更新文档没有 patch 格式问题
-
 ## 任务：让 CEO / OPC / Conversations 主视图拥有显式 URL
 
 **状态**: ✅ 已完成
@@ -13380,47 +8524,6 @@ git diff --check -- docs/research/dag-first-vs-workflow-first-assessment-2026-04
 - `popstate` 回放
 
 所以浏览器 `back/forward` 现在能回到最近访问的工作台状态。
-
-### 验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/page.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts
-```
-
-说明：
-
-- 无 ESLint error
-- 存在 `page.tsx` 历史遗留 unused warning，本次未顺手改动无关逻辑
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/lib/app-url-state.test.ts
-```
-
-结果：
-
-- `1 file passed`
-- `4 tests passed`
-
-#### 真实页面验证
-
-使用 `bb-browser` 验证本地运行中的页面，确认：
-
-1. 首页会规范化到 `/?section=projects`
-2. 点击 `CEO Office` 后 URL 会进入 `section=ceo&conversation=...`
-3. 点击 `OPC` 后 URL 回到 `section=projects`
-4. 选择具体项目后 URL 会带 `project=...`
-5. 打开 `Settings` 后 URL 会带 `panel=settings&tab=provider`
-6. 点击 `Conversations` 后 URL 进入 `section=conversations`
-7. 选择具体对话后 URL 会带 `conversation=...&conversationTitle=...`
-8. `history.back()` 能逐步退回上一个视图状态
 
 ## 任务：Multi-Agent 系统全景对比分析（9 系统 × 7 维度）
 
@@ -13548,60 +8651,6 @@ npm test -- src/lib/app-url-state.test.ts
 
 - `Provider Usage (Gateway Runs)` 列表
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/analytics/route.test.ts src/app/api/me/route.test.ts src/app/api/models/route.test.ts
-```
-
-结果：
-
-- `3 files passed`
-- `3 tests passed`
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/api/analytics/route.ts src/app/api/analytics/route.test.ts src/app/api/me/route.ts src/app/api/me/route.test.ts src/lib/provider-usage-analytics.ts src/components/analytics-dashboard.tsx src/lib/types.ts
-```
-
-#### 真实接口回读
-
-`/api/analytics` 真实返回已包含：
-
-- `providerUsage`
-- `providerUsageSummary`
-
-样本：
-
-- `native-codex`
-  - `runCount = 1436`
-  - `completedCount = 706`
-  - `activeCount = 4`
-  - `failedCount = 29`
-  - `blockedCount = 697`
-
-`/api/me` 真实返回已包含：
-
-- `providerCredits`
-- `providerUsageSummary`
-
-provider 样本包括：
-
-- `antigravity`
-- `native-codex`
-- `claude-api`
-- `openai-api`
-- `gemini-api`
-- `grok-api`
-- `custom`
-
 ### 最终判断
 
 这轮之后，系统在 usage / credits / analytics 这块已经从：
@@ -13726,30 +8775,6 @@ provider 样本包括：
 - prompt-mode `evaluate`
 
 统一写清。
-
-### 验证
-
-#### lint
-
-通过：
-
-```bash
-npx eslint 'src/app/api/conversations/[id]/cancel/route.ts' 'src/app/api/conversations/[id]/proceed/route.ts' 'src/app/api/conversations/[id]/revert/route.ts' 'src/app/api/conversations/[id]/revert-preview/route.ts' 'src/app/api/conversations/[id]/files/route.ts' src/lib/local-provider-conversations.ts src/lib/api-provider-conversations.ts src/lib/providers/native-codex-executor.ts
-```
-
-#### API smoke
-
-真实验证：
-
-- `POST /api/conversations` -> `200`
-- `POST /api/conversations/<id>/send` -> `200`
-- `GET /api/conversations/<id>/revert-preview?stepIndex=0` -> `200`
-- `POST /api/conversations/<id>/revert` -> `200`
-- `GET /api/conversations/<id>/steps` -> `200`
-  - 截断后 `stepCount = 1`
-- `GET /api/conversations/<id>/files?q=PROJECT_PROGRESS` -> `200`
-- `POST /api/conversations/<id>/cancel` -> `200`
-  - 返回 `status = not_running`
 
 ### 最终判断
 
@@ -14247,69 +9272,6 @@ npx eslint 'src/app/api/conversations/[id]/cancel/route.ts' 'src/app/api/convers
   - “第三方 Provider”主入口改成：
     - `OpenAI-compatible Provider Profiles`
   - 明确官方 `Claude / OpenAI / Gemini / Grok API` 不走这条 profile 流
-
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/models/route.test.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' src/lib/backends/__tests__/claude-engine-backend.test.ts
-```
-
-结果：
-
-- `5 files passed`
-- `13 tests passed`
-
-说明：
-
-- conversations / models / ClaudeEngine backend 主链已锁住
-
-补充说明：
-
-- `src/lib/agents/group-runtime.test.ts`
-  - 功能断言在前序回归中通过
-  - 但在当前环境里会被 `gateway-home` 资产同步的文件系统问题打断
-  - 属于环境性假阳性，不是本轮功能断言失败
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/app/api/models/route.ts src/app/api/models/route.test.ts src/app/api/conversations/route.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/steps/route.ts' 'src/app/api/agent-runs/[id]/intervene/route.ts' src/app/api/me/route.ts src/components/agent-runs-panel.tsx src/components/agent-run-detail.tsx src/components/stage-detail-panel.tsx src/components/analytics-dashboard.tsx src/components/settings-panel.tsx src/lib/local-provider-conversations.ts src/lib/api-provider-conversations.ts src/lib/backends/claude-engine-backend.ts src/lib/backends/__tests__/claude-engine-backend.test.ts src/lib/agents/prompt-executor.ts
-```
-
-结果：
-
-- 通过
-
-#### API smoke
-
-- `POST /api/conversations`
-  - `200`
-  - 返回 `local-native-codex-*`
-- `POST /api/conversations/<id>/send`
-  - `200`
-- `GET /api/conversations/<id>/steps`
-  - `200`
-  - `lastStepType = CORTEX_STEP_TYPE_PLANNER_RESPONSE`
-- `GET /api/models`
-  - 已出现：
-    - `Native Codex · GPT-5.4`
-    - `Native Codex · GPT-5.4 Mini`
-- `POST /api/agent-runs/:id/intervene` for prompt-mode `evaluate`
-  - `202`
-
-#### bb-browser
-
-确认：
-
-- Settings 中可见：
-  - `OpenAI-compatible Provider Profiles`
-- 页面无 JS 错误
 
 ### 最终判断
 
@@ -14863,55 +9825,6 @@ npx eslint src/app/api/models/route.ts src/app/api/models/route.test.ts src/app/
 - 保留 `单次执行`
 - 并提示主系统统一使用 Native Codex 的 `CEO Office / Conversations` 对话壳
 
-### 验证
-
-#### 自动化测试
-
-```bash
-npm test -- src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts'
-```
-
-结果：
-
-- `3 passed`
-- `5 passed`
-
-#### lint
-
-```bash
-npx eslint src/app/api/conversations/route.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/steps/route.ts' src/components/sidebar.tsx src/lib/local-provider-conversations.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts'
-```
-
-结果：
-
-- 通过
-
-#### API smoke
-
-- `POST /api/conversations` with CEO workspace
-  - `200`
-  - 返回 `local-native-codex-*`
-- `POST /api/conversations/<local-id>/send`
-  - `200`
-- `GET /api/conversations/<local-id>/steps`
-  - `stepCount = 2`
-  - 第 1 条是 `CORTEX_STEP_TYPE_USER_INPUT`
-  - 第 2 条是 `CORTEX_STEP_TYPE_PLANNER_RESPONSE`
-- `POST /api/conversations` with `playground`
-  - `200`
-  - 仍返回真实 Antigravity `cascadeId`
-
-#### 浏览器验证（bb-browser）
-
-- `CEO Office` 左栏 `+` 已显示为：
-  - `button "新建 CEO 对话"`
-- 点击后真实抓到：
-  - `POST /api/conversations -> 200`
-  - `GET /api/conversations/local-native-codex-.../steps -> 200`
-- 在新 CEO 本地会话中发送消息后抓到：
-  - `POST /api/conversations/local-native-codex-.../send -> 200`
-  - `GET /api/conversations/local-native-codex-.../steps -> 200`
-
 ### 最终判断
 
 现在系统状态变成：
@@ -15044,20 +9957,6 @@ npx eslint src/app/api/conversations/route.ts 'src/app/api/conversations/[id]/se
 4. 进入 CEO section 时自动建会话也没有失败反馈
 5. send/steps route 只识别 `codex-*`，不识别 `native-codex`
 6. conversations list route 仍偏向 `.pb` 文件真相源，未来即使补本地会话，也可能出现“创建成功但列表不显示”
-
-### 测试缺口
-
-当前已覆盖：
-
-- `src/lib/agents/ceo-agent.test.ts`
-
-当前缺失：
-
-- `src/app/api/conversations/route.ts` 的 `native-codex` create route 测试
-- `src/app/api/conversations/[id]/send/route.ts` 的 `native-codex` send route 测试
-- `src/app/api/conversations/[id]/steps/route.ts` 的 `native-codex` steps route 测试
-- `src/components/sidebar.tsx` CEO `+` 失败反馈测试
-- `src/app/page.tsx` CEO section 自动建会话失败测试
 
 ### 最终判断
 
@@ -15291,31 +10190,6 @@ npx eslint src/app/api/conversations/route.ts 'src/app/api/conversations/[id]/se
 
 - 减少 dev / HMR 下 module reload 导致的会话内存丢失
 
-### 验证
-
-单测：
-
-```bash
-npm test -- src/app/api/agent-runs/[id]/conversation/route.test.ts
-```
-
-结果：
-
-- `1 passed`
-
-真实接口：
-
-- `GET /api/agent-runs/80eebd77-dd3f-4587-9bad-3e63a2871076/conversation`
-- `GET /api/agent-runs/9680c9f7-399f-44aa-b615-91d2c6576ee1/conversation`
-
-结果：
-
-- 都返回 `kind = transcript`
-- `provider = native-codex`
-- 都能看到：
-  - user
-  - assistant
-
 ### 最终判断
 
 现在保留的 Native Codex 周期任务链条已经补齐：
@@ -15502,34 +10376,6 @@ scheduler 触发时现在会把：
 
 - 会明确提示这类任务不会创建 run
 
-### 验证
-
-单测：
-
-```bash
-npm test -- src/lib/agents/scheduler.test.ts src/app/api/agent-runs/route.test.ts
-```
-
-结果：
-
-- `17 passed`
-
-前端 lint：
-
-```bash
-npx eslint src/components/projects-panel.tsx src/components/scheduler-panel.tsx
-```
-
-结果：
-
-- 通过
-
-页面验证：
-
-- OPC 页确认不再有顶部大块循环区
-- Ops 页确认可展开 `Runs`
-- 展开后可看到 job 对应 run 的 workflow 与摘要
-
 ### 清理
 
 - 本轮创建的测试 scheduler job 已删除
@@ -15626,35 +10472,6 @@ npx eslint src/components/projects-panel.tsx src/components/scheduler-panel.tsx
 - `Skill Hints`
 
 这样标准 schedule 入口在 Web UI 中也终于是满血的。
-
-### 页面验证
-
-本轮用 `bb-browser` 真实检查页面。
-
-#### OPC 页
-
-页面文本已能检出：
-
-- `循环任务`
-- `打开 Scheduler`
-- `OPC 可视化检查 · 循环健康巡检`
-- `每 5 秒`
-
-说明：
-
-- interval / loop job 现在已经能在 `OPC / Projects` 主工作台直接看到
-
-#### Operations 页
-
-页面文本已能检出：
-
-- `打开 Scheduler`
-- `OPC 可视化检查 · 循环健康巡检`
-- `每 5 秒`
-
-说明：
-
-- `SchedulerPanel` 已能把 interval job 读成“循环任务”，而不是一串生硬参数
 
 ### 清理
 
@@ -15834,7 +10651,7 @@ npx eslint src/components/projects-panel.tsx src/components/scheduler-panel.tsx
 
 #### 4. 顺手修复 scheduler 删除持久化缺口
 
-在本轮验证中发现：
+排查过程中发现：
 
 - 删除 scheduler job 只删内存，不删 SQLite
 - 重启后 job 会复活
@@ -15843,33 +10660,6 @@ npx eslint src/components/projects-panel.tsx src/components/scheduler-panel.tsx
 
 - `deleteScheduledJobRecord(jobId)` in `gateway-db.ts`
 - `deleteScheduledJob()` 调用真实 SQLite 删除
-
-### 验证
-
-单测：
-
-```bash
-npm test -- src/lib/agents/ceo-agent.test.ts
-```
-
-结果：
-
-- `6 passed`
-
-覆盖：
-
-- playbook 内容注入 LLM parser prompt
-- LLM 输出驱动即时 `dispatch-prompt`
-- LLM 输出驱动即时 template dispatch
-- LLM 输出驱动定时 `dispatch-prompt`
-- LLM 不可用时仅保留状态查询 fallback
-- LLM 不可用时拒绝用 regex 自动路由业务执行
-
-运行时清理：
-
-- 临时 5 秒 AI 大事件 scheduler job 已删除
-- 测试残留的 3 条 scheduler job 已从 SQLite 清理
-- `AI情报工作室` provider 已恢复为 `antigravity`
 
 ### 结论
 
@@ -16007,71 +10797,6 @@ run 终态：
 - 从 `5` 增长到 `9`
 - 本次新增 `4` 条
 - 与 run 的 `reportedEventCount = 4` 一致
-
-### 升级后的验证点
-
-#### 1. SQLite 主库
-
-- `/Users/darrel/.gemini/antigravity/gateway/storage.sqlite`
-- 执行后：
-  - `projects = 145`
-  - `runs = 195`
-- `runs` 表已能回读：
-  - `run_id = ae6e53b5-0651-4eb6-b620-2d4b573cc5df`
-  - `status = completed`
-  - `provider = native-codex`
-
-#### 2. run-history.jsonl
-
-- `/Users/darrel/.gemini/antigravity/gateway/runs/ae6e53b5-0651-4eb6-b620-2d4b573cc5df/run-history.jsonl`
-- `line_count = 15`
-- 包含：
-  - `workflow.preflight.started/completed`
-  - `conversation.message.user`
-  - `conversation.message.assistant`
-  - `workflow.finalize.started/completed`
-  - `result.discovered`
-  - `artifact.discovered`
-  - `verification.discovered`
-  - `session.completed`
-
-#### 3. Conversation API
-
-- `GET /api/agent-runs/ae6e53b5-0651-4eb6-b620-2d4b573cc5df/conversation`
-  - `kind = transcript`
-  - `provider = native-codex`
-  - `messageCount = 2`
-
-#### 4. Deliverables API
-
-- `GET /api/projects/37b8ba3e-1c4a-442f-8c5a-2db1bc0999c6/deliverables`
-  - `length = 5`
-
-标题：
-
-- `Daily Events Build`
-- `Daily Events Report`
-- `Daily Events Verification`
-- `Native Codex Ai Bigevent Draft`
-- `Prepared Ai Bigevent Context`
-
-#### 5. Artifact 落盘
-
-目录：
-
-- `/Users/darrel/Documents/baogaoai/demolong/projects/37b8ba3e-1c4a-442f-8c5a-2db1bc0999c6/runs/ae6e53b5-0651-4eb6-b620-2d4b573cc5df`
-
-关键文件：
-
-- `prepared-ai-bigevent-context.json`
-- `daily-events-build.json`
-- `daily-events-report.json`
-- `daily-events-verification.json`
-- `native-codex-ai-bigevent-draft.md`
-- `artifacts.manifest.json`
-- `result.json`
-- `result-envelope.json`
-- `task-envelope.json`
 
 ### 恢复
 
@@ -16280,58 +11005,6 @@ run 终态：
 
 - 一次性迁移导入
 - 迁移后的 legacy backup
-
-### 验证
-
-#### SQLite 迁移回跑
-
-```bash
-npx tsx scripts/migrate-storage-to-sqlite.ts
-```
-
-结果：
-
-- `projects = 144`
-- `runs = 192`
-- `conversations = 102`
-- `scheduledJobs = 1`
-- `deliverables = 8`
-
-最新 backup：
-
-- `/Users/darrel/.gemini/antigravity/gateway/legacy-backup/2026-04-17T22-53-38-544Z`
-
-#### Deliverables API
-
-```bash
-npx tsx -e 'import { GET } from "./src/app/api/projects/[id]/deliverables/route"; (async()=>{ const response = await GET(new Request("http://localhost/api/projects/79dc21b7-7916-4651-8638-421ab99c30c0/deliverables"), { params: Promise.resolve({ id: "79dc21b7-7916-4651-8638-421ab99c30c0" }) }); const payload = await response.json(); console.log(JSON.stringify({ status: response.status, length: payload.length }, null, 2)); })();'
-```
-
-结果：
-
-- `status = 200`
-- `length = 5`
-
-#### 真实 Antigravity smoke
-
-真实 run：
-
-- `runId = 73163290-593d-41e3-9339-226d7783f39d`
-- `provider = antigravity`
-- `status = completed`
-- `artifactCount = 1`
-- `historyCount = 44`
-
-关键 event types：
-
-- `provider.step`
-- `session.started`
-- `session.live_state`
-- `workflow.finalize.completed`
-- `result.discovered`
-- `artifact.discovered`
-- `session.completed`
-- `conversation.message.assistant`
 
 ### 已知问题
 
@@ -16660,17 +11333,6 @@ npx tsx -e 'import { GET } from "./src/app/api/projects/[id]/deliverables/route"
 4. 若内存会话丢失：
    - 会从 artifact 目录里的 `.md` 草稿回退构建 transcript
 
-### 验证
-
-- `npx eslint src/components/agent-run-detail.tsx src/components/project-workbench.tsx src/app/api/agent-runs/[id]/conversation/route.ts` ✅
-- 真实接口：
-  - `GET /api/agent-runs/e06490c0-15ce-4faa-8bc3-b08eccc180fa/conversation`
-  - 返回：
-    - `status = 200`
-    - `kind = transcript`
-    - `provider = native-codex`
-    - `messageCount = 2`
-
 ### 输出文档
 
 - `docs/research/agent-conversation-visibility-restore-2026-04-17.md`
@@ -16717,10 +11379,6 @@ npx tsx -e 'import { GET } from "./src/app/api/projects/[id]/deliverables/route"
    - `结果概览`
    - `交付物`
    - `关注项`
-
-### 验证
-
-- `npx eslint src/components/project-workbench.tsx src/components/prompt-runs-section.tsx src/components/agent-run-detail.tsx src/components/projects-panel.tsx src/components/deliverables-panel.tsx src/lib/agents/run-artifacts.ts src/lib/i18n/messages/zh.ts src/lib/i18n/messages/en.ts` ✅
 
 ### 输出文档
 
@@ -16813,14 +11471,6 @@ npx tsx -e 'import { GET } from "./src/app/api/projects/[id]/deliverables/route"
 
 - 统一显示 `AI 诊断 / AI Diagnose`
 
-### 验证
-
-- `npx eslint src/lib/agents/run-artifacts.ts src/lib/i18n/messages/zh.ts src/lib/i18n/messages/en.ts src/components/project-workbench.tsx src/components/prompt-runs-section.tsx src/components/agent-run-detail.tsx src/components/deliverables-panel.tsx src/components/projects-panel.tsx` ✅
-- `npx vitest run src/lib/agents/run-artifacts.test.ts` ✅
-- 真实样本：
-  - `e06490c0-15ce-4faa-8bc3-b08eccc180fa`
-  - 重扫 manifest 后 `count = 5` ✅
-
 ### 仍存在的已知问题
 
 - `npm run build` 仍被仓库内既有问题拦住：
@@ -16883,18 +11533,6 @@ npx tsx -e 'import { GET } from "./src/app/api/projects/[id]/deliverables/route"
 
 不再让“部门介绍 / skill 结构”抢占首屏主视觉。
 
-### 验证
-
-- `npx eslint src/components/projects-panel.tsx src/components/project-workbench.tsx src/components/prompt-runs-section.tsx src/components/agent-run-detail.tsx` ✅
-
-尝试执行：
-
-- `npm run build`
-
-仍被仓库内既有 TypeScript 问题拦住：
-
-- `src/lib/agents/canonical-assets.ts`
-
 ### 输出文档
 
 - `docs/research/quick-project-detail-layout-redesign-2026-04-17.md`
@@ -16951,19 +11589,6 @@ npx tsx -e 'import { GET } from "./src/app/api/projects/[id]/deliverables/route"
 - 产出了多少 artifacts
 - 命中了哪个 workflow
 - 是否存在验证字段，以及是否通过验证
-
-### 验证
-
-- `npx eslint src/components/project-workbench.tsx src/components/prompt-runs-section.tsx src/components/agent-run-detail.tsx` ✅
-
-尝试执行：
-
-- `npm run build`
-
-但仍被仓库内与本次改动无关的既有 TypeScript 问题拦住：
-
-- `src/lib/agents/canonical-assets.ts`
-- `src/lib/agents/department-capability-registry.ts`
 
 ### 输出文档
 
@@ -17103,12 +11728,6 @@ CEO 命令：
 
 - `docs/research/native-codex-ai-bigevent-shanghai-rollover-2026-04-17.md`
 
-### 测试后恢复
-
-已将 `AI情报工作室` 的 provider 恢复为：
-
-- `antigravity`
-
 ## 任务：补充 Native Codex AI 日报命令行测试文档
 
 **状态**: ✅ 已完成
@@ -17217,20 +11836,9 @@ CEO 命令：
 - `backendId = native-codex`
 - `resolvedWorkflowRef = /ai_digest`
 
-### 验证
-
-- `npx vitest run src/lib/agents/prompt-executor.test.ts src/lib/agents/ceo-agent.test.ts src/lib/agents/department-execution-resolver.test.ts src/lib/agents/department-capability-registry.test.ts` ✅
-  - `27/27` 通过
-
 ### 输出文档
 
 - `docs/research/native-codex-daily-digest-adhoc-project-rerun-2026-04-17.md`
-
-### 测试后恢复
-
-已将 `AI情报工作室` 的 provider 恢复为：
-
-- `antigravity`
 
 ## 任务：使用当前默认 Provider 跑 AI 日报生成
 
@@ -17324,22 +11932,6 @@ CEO 命令：
 - template 明确时走 template run
 - 否则走项目内 prompt run
 
-### 验证
-
-- `npx vitest run src/lib/agents/ceo-agent.test.ts` ✅
-  - `14/14` 通过
-- 新增测试验证：
-  - LLM parser prompt 中包含 `<ceo-playbook>`
-  - 包含 `CEO 决策与派发工作流`
-  - 包含 `<ceo-scheduler-playbook>`
-  - 包含 `CEO 定时调度 + 即时执行工作流`
-- 真实接口验证：
-  - `POST /api/ceo/command`
-  - 命令：`让AI情报工作室只创建项目，不要执行，测试 playbook 驱动`
-  - 返回 `action = create_project`
-  - 返回真实 `projectId`
-  - 验证后已删除测试项目
-
 ### 输出文档
 
 - `docs/research/ceo-command-playbook-driven-runtime-2026-04-17.md`
@@ -17402,16 +11994,6 @@ CEO 命令：
 - `Template` 可选
 - 即时部门任务不允许裸 prompt run
 
-### 验证
-
-- `npx vitest run src/lib/agents/ceo-agent.test.ts src/lib/agents/department-execution-resolver.test.ts src/lib/agents/department-capability-registry.test.ts` ✅
-  - `20/20` 通过
-- `POST /api/ceo/command` with:
-  - `让AI情报工作室只创建项目，不要执行，测试即时任务项目化`
-  - 返回 `action = create_project`
-  - 返回真实 `projectId`
-  - 项目成功写入 registry，验证后已删除
-
 ### 输出文档
 
 - `docs/research/ceo-immediate-adhoc-project-enforcement-2026-04-17.md`
@@ -17467,12 +12049,6 @@ runId：
 ### 输出文档
 
 - `docs/research/native-codex-ai-bigevent-rerun-2026-04-17.md`
-
-### 测试后恢复
-
-已将 `AI情报工作室` 的 provider 恢复为：
-
-- `antigravity`
 
 ## 任务：Provider Runtime 去硬编码收口
 
@@ -17549,20 +12125,6 @@ runId：
   - 唯一部门匹配
   - 有效 goal
 
-### 验证
-
-- `npx eslint src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/canonical-assets.ts src/lib/agents/gateway-home.ts src/lib/agents/prompt-executor.ts src/lib/agents/department-execution-resolver.ts` ✅
-- `npx vitest run src/lib/agents/department-execution-resolver.test.ts src/lib/agents/department-capability-registry.test.ts` ✅
-- `python3 -m py_compile .../fetch_context.py .../build_report.py .../report_daily_events.py` ✅
-- `report_daily_events.py --token-file .../private.json` ✅
-  - `status = success`
-  - `saved = 5`
-  - `verificationPassed = true`
-- `POST /api/ceo/command` 使用同一条：
-  - `AI情报工作室提炼今天的 AI 大事件并上报`
-  - 仍返回 `dispatch_prompt`
-  - 并命中 `resolvedWorkflowRef = /ai_bigevent`
-
 ### 输出文档
 
 - `docs/research/provider-runtime-hardening-2026-04-17.md`
@@ -17627,54 +12189,9 @@ runId：
 
 - `AI 大事件 -> workflowRef=/ai_bigevent -> skillRefs=['baogaoai-ai-bigevent-generator']`
 
-### 验证
-
-#### 单测
-
-- `npx vitest run src/lib/agents/department-execution-resolver.test.ts src/lib/agents/department-capability-registry.test.ts` ✅
-  - `8/8` 通过
-
-#### lint
-
-- `npx eslint src/lib/agents/prompt-executor.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/department-execution-resolver.ts src/lib/agents/department-execution-resolver.test.ts src/lib/agents/gateway-home.ts` ✅
-
-#### 脚本层 smoke
-
-- `fetch_context.py`：`articleCount = 18`
-- `build_report.py`：成功生成合法 payload
-
-#### 端到端
-
-CEO 命令：
-
-- `AI情报工作室提炼今天的 AI 大事件并上报`
-
-runId：
-
-- `b44974e2-ea70-4937-b447-0b40e5389144`
-
-结果：
-
-- `status = completed`
-- `backendId = native-codex`
-- `resolvedWorkflowRef = /ai_bigevent`
-- `reportedEventDate = 2026-04-17`
-- `reportedEventCount = 5`
-- `verificationPassed = true`
-
-后端回读：
-
-- `GET /daily-events?from=2026-04-17&to=2026-04-17` 返回 `total = 5`
-
 ### 输出文档
 
 - `docs/research/native-codex-ai-bigevent-success-2026-04-17.md`
-
-### 测试后恢复
-
-已将 `AI情报工作室` 的 provider 恢复为：
-
-- `antigravity`
 
 ## 任务：Native Codex 今日日报总结链路打通（成功）
 
@@ -17717,24 +12234,6 @@ runId：
 - 若当天 digest 已存在，则直接读取 `https://api.aitrend.us/digest?date=YYYY-MM-DD`
 - 将标题、summary、正文文本和绝对日期注入 provider prompt
 
-### 最终测试
-
-CEO 命令：
-
-- `AI情报工作室汇总今天的日报`
-
-runId：
-
-- `09603826-eb44-449f-8124-4ab9911d2ad7`
-
-最终结果：
-
-- `status = completed`
-- `backend = native-codex`
-- `promptResolution.mode = workflow`
-- `matchedWorkflowRefs = ['/ai_digest']`
-- `matchedSkillRefs = ['baogaoai-ai-digest-generator']`
-
 ### 业务表现
 
 成功点：
@@ -17749,29 +12248,10 @@ runId：
 
 - `docs/research/native-codex-daily-report-success-2026-04-17.md`
 
-### 测试后恢复
-
-已将 `AI情报工作室` 的 provider 恢复为：
-
-- `antigravity`
-
 ## 任务：Canonical Workflow + Resolver 后的 Native Codex 日报场景复测
 
 **状态**: ✅ 已完成（实测）
 **日期**: 2026-04-16
-
-### 测试目标
-
-在完成 canonical workflow / department resolver 第一阶段后，重新测试：
-
-- `AI情报工作室`
-- `native-codex`
-- CEO 命令：总结今天日报
-
-### 测试命令
-
-1. `让 AI情报工作室生成今天的日报总结报告`
-2. `AI情报工作室汇总今天的日报`
 
 ### 结果
 
@@ -17818,12 +12298,6 @@ runId：
 - 现在系统能结构化说明“为什么不对”：
   - 不是 provider 问题
   - 而是部门没有配置到任何 canonical workflow / skill，因此只能走 prompt fallback
-
-### 测试后恢复
-
-已将 `AI情报工作室` 的 provider 恢复为：
-
-- `antigravity`
 
 ### 输出文档
 
@@ -17876,11 +12350,6 @@ runId：
 - skills 展示改成结构化卡片
 - 明确展示 `skill -> workflowRef -> skillRefs`
 - 同时显示交付格式 / 质量要求等辅助信息
-
-### 验证
-
-- `npx eslint src/components/department-setup-dialog.tsx src/components/onboarding-wizard.tsx src/components/skill-browser.tsx` ✅
-- 仅存在既有 `<img>` 提示 warning，无 error
 
 ### 说明
 
@@ -17998,21 +12467,6 @@ runId：
 - Department Setup 可编辑 `skill -> workflowRef -> skillRefs`
 - AssetsManager 展示 canonical source，并阻止“详情加载失败后空编辑器覆盖”
 
-### 验证
-
-#### 单元测试
-
-- `npx vitest run src/lib/agents/department-capability-registry.test.ts src/lib/agents/department-execution-resolver.test.ts src/lib/providers/ai-config.test.ts src/lib/bridge/native-codex-adapter.test.ts` ✅
-- 25 条测试全绿
-
-#### 接口实测
-
-- `/api/workflows` → `68`
-- `/api/workflows/ai-topic-discovery` → `200`
-- `/api/skills` → `18`
-- `/api/skills/browser-testing` → `200`
-- workflow / skill 返回对象都带 `source = canonical`
-
 ### 输出文档
 
 - `docs/research/canonical-workflow-department-resolver-implementation-2026-04-16.md`
@@ -18026,29 +12480,6 @@ runId：
 
 **状态**: ✅ 已完成（实测）
 **日期**: 2026-04-16
-
-### 测试目标
-
-验证真实部门切到 `Native Codex` 后，是否能走完：
-
-- 部门识别
-- provider 路由
-- CEO 命令即时派发
-- Prompt Mode 执行
-- 结果产出
-
-### 测试对象
-
-- 部门名：`AI情报工作室`
-- 工作区：`/Users/darrel/Documents/baogaoai`
-
-### 测试过程
-
-1. 临时将 `baogaoai/.department/config.json` 中的 `provider` 从 `antigravity` 改为 `native-codex`
-2. 通过 CEO 命令发起两条即时任务：
-   - `让 AI情报工作室生成今天的日报总结报告`
-   - `AI情报工作室汇总今天的日报`
-3. 轮询 `/api/agent-runs/:id` 查看最终状态与 backend
 
 ### 结果
 
@@ -18094,12 +12525,6 @@ runId：
 ### 输出文档
 
 - `docs/research/native-codex-department-daily-report-test-2026-04-16.md`
-
-### 测试后恢复
-
-已将 `AI情报工作室` 的部门 provider 恢复为：
-
-- `antigravity`
 
 ## 任务：Native Codex AI 功能实测 + 路径修复
 
@@ -18176,42 +12601,6 @@ runId：
 - 缓存来源区分为 `file / override / default`
 - 读取磁盘配置时检查 `mtimeMs`
 - 当 `/api/ai-config` 更新文件后，其他 API 路由再次读取时会自动 reload，不再依赖同一个内存实例
-
-### 新增测试
-
-1. `src/lib/bridge/native-codex-adapter.test.ts`
-2. `src/lib/providers/ai-config.test.ts`（补充 mtime reload 场景）
-
-### 验证
-
-#### 单元测试
-
-- `npx vitest run src/lib/providers/ai-config.test.ts src/lib/bridge/native-codex-adapter.test.ts` ✅
-- 18 条测试全绿
-
-#### Lint
-
-- `npx eslint src/lib/providers/ai-config.ts src/lib/providers/ai-config.test.ts src/lib/bridge/native-codex-adapter.ts src/lib/bridge/native-codex-adapter.test.ts` ✅
-
-#### 真实 API 验证
-
-1. **Template dispatch 成功**
-   - runId: `9e9a3e36-b81a-4db9-bc72-6b17aac648df`
-   - `provider = native-codex`
-   - `sessionProvenance.backendId = native-codex`
-   - `result.summary = NATIVE_CODEX_TEMPLATE_OK`
-
-2. **Prompt mode 成功**
-   - runId: `69b463c1-441e-4bba-a167-3420ca78e460`
-   - `sessionProvenance.backendId = native-codex`
-   - `result.summary = NATIVE_CODEX_PROMPT_OK`
-
-#### 测试后恢复配置
-
-测试时临时将 `execution` layer 改为 `native-codex`，完成后已恢复为：
-
-- `defaultProvider = antigravity`
-- `layers.executive/management/execution/utility = antigravity`
 
 ### 输出文档
 
@@ -18344,43 +12733,6 @@ Settings 的 Provider 下拉直接使用硬编码列表 `PROVIDER_OPTIONS`，没
 3. `docs/guide/agent-user-guide.md`
 4. `ARCHITECTURE.md`
 
-### 测试与验证
-
-#### 单元测试
-
-- `npx vitest run src/lib/providers/provider-availability.test.ts src/app/api/ai-config/route.test.ts` ✅
-- 6 条测试全绿：
-  - 仅返回可选 Provider
-  - 历史非法 Provider 以 disabled 占位保留
-  - custom provider 完整性判断
-  - `PUT /api/ai-config` 拒绝未配置 Provider
-  - `PUT /api/ai-config` 接受合法配置
-
-#### Lint
-
-- `npx eslint src/components/settings-panel.tsx src/app/api/ai-config/route.ts src/app/api/api-keys/route.ts src/lib/providers/provider-availability.ts src/lib/providers/provider-inventory.ts src/lib/providers/provider-availability.test.ts src/app/api/ai-config/route.test.ts` ✅
-
-#### 页面级验证（bb-browser）
-
-- 打开本地运行中的 `http://127.0.0.1:3000`
-- 进入 Settings → Provider 配置 → 默认 Provider 下拉
-- 实际菜单项为：
-  - `Antigravity (Native)`
-  - `Codex Native (OAuth)`
-  - `Codex (MCP)`
-  - `Claude Code (CLI)`
-- 明确确认未再出现：
-  - `OpenAI API`
-  - `Gemini API`
-  - `Grok API`
-  - `OpenAI Compatible / Custom`
-
-#### 接口实测
-
-- `curl -X PUT http://127.0.0.1:3000/api/ai-config ... {"defaultProvider":"openai-api"}` → `400` ✅
-- 返回：
-  - `{"error":"Provider \"OpenAI API\" at \"defaultProvider\" is not configured and cannot be selected","issues":[{"path":"defaultProvider","provider":"openai-api"}]}`
-
 ## 任务：security-core 内化 + 构建修复
 
 **状态**: ✅ 已完成
@@ -18418,13 +12770,6 @@ Settings 的 Provider 下拉直接使用硬编码列表 `PROVIDER_OPTIONS`，没
 | package.json | 移除 `file:../claude-code/packages/security-core` 依赖 |
 | 新增依赖 | `shell-quote` + `@types/shell-quote` |
 
-### 验证
-- `npm run build` ✅ 完整构建通过（所有 API 路由 + 页面）
-- `npm run dev` ✅ Gateway 正常启动
-- 项目完全自包含，不再需要 claude-code 目录
-
----
-
 ## 任务：Obsidian 插件发送消息修复 + 连接稳定性
 
 **状态**: ✅ 已完成
@@ -18454,12 +12799,6 @@ Settings 的 Provider 下拉直接使用硬编码列表 `PROVIDER_OPTIONS`，没
 - 心跳优化：HTTP 失败但 WS 连通时不显示断连 banner
 - WS reconnecting 第 2 次重试后才显示 banner
 - 移除 Smart/Related toolbar 按钮
-
-### 测试验证
-- API 模拟：Create conversation → 立即 send message → 成功返回 `{"ok": true}`
-- 插件已编译部署到所有 6 个 Obsidian Vault
-
----
 
 ## 任务：Language Server 端口机制研究
 
@@ -18546,16 +12885,6 @@ Settings 的 Provider 下拉直接使用硬编码列表 `PROVIDER_OPTIONS`，没
   └── Gemini IDE    → Knowledge（自动消费）
 ```
 
-### 融合计划（5 阶段，~1300 行代码 + ~370 行测试）
-1. Phase 1 (P0): CE 执行层接线
-2. Phase 1b (P0): 管理层→执行层桥接
-3. Phase 2 (P1): 多层记忆发现
-4. Phase 3 (P1): 统一召回层
-5. Phase 4 (P2): 后台记忆提取
-6. Phase 5 (P2): CEO 统一合同
-
----
-
 ## 任务：Prompt Cache Break Detection — 缓存命中监控
 
 **状态**: ✅ 已完成
@@ -18597,10 +12926,6 @@ API 调用层缺少 prompt cache 命中率监控和 cache break 检测，无法�
 4. `src/lib/claude-engine/api/index.ts` — 新增导出
 5. `src/lib/claude-engine/engine/index.ts` — 新增导出
 
-### 测试
-- prompt-cache-monitor.test.ts：23 条全绿 ✅
-- 覆盖：基础指标、break 检测、compaction 感知、tool diff、多源、TTL、边界情况
-
 ### 覆盖率提升
 - API 调用层从 **85% → 90%**
 
@@ -18635,10 +12960,6 @@ API 调用层仅支持 529 模型级 fallback，缺少 Provider 级别的主→�
 ### 修改文件
 1. `src/lib/claude-engine/api/provider-fallback.ts` — 新建（190 行）
 2. `src/lib/claude-engine/api/index.ts` — 新增导出
-
-### 测试
-- provider-fallback.test.ts：14 条全绿 ✅
-- 覆盖：primary 成功、primary→fallback、多级 fallback、全部耗尽、FallbackTriggeredError 捕获、env 构建
 
 ### 覆盖率提升
 - API 调用层从 **80% → 85%**
@@ -18691,10 +13012,6 @@ API 调用层仅支持 529 模型级 fallback，缺少 Provider 级别的主→�
 2. `src/lib/claude-engine/engine/claude-engine.ts` — TranscriptStore 集成
 3. `src/lib/claude-engine/engine/index.ts` — 新增导出
 
-### 测试
-- transcript-store.test.ts：24 条全绿 ✅
-- 覆盖：生命周期、消息链接、加载恢复、列出会话、disabled 模式、project 隔离、JSONL 格式
-
 ### 覆盖率提升
 - 会话引擎从 **35% → 50%**
 
@@ -18732,12 +13049,6 @@ API 调用层仅支持 529 模型级 fallback，缺少 Provider 级别的主→�
 3. `src/lib/claude-engine/security/index.ts` — 导出新模块
 4. `src/lib/claude-engine/types/permissions.ts` — 添加 'auto' 到 PERMISSION_MODES
 
-### 测试
-- auto-mode-classifier.test.ts：40 条全绿 ✅
-- permissions.test.ts：从 24 → 31 条（新增 7 条 auto 模式测试）
-- types.test.ts：更新 PERMISSION_MODES 计数
-- claude-engine 全量测试：15 文件 / 517 条全绿 ✅
-
 ### 覆盖率提升
 - 安全子系统从 **35% → 55%**
 
@@ -18774,10 +13085,6 @@ MCP 子系统仅支持 stdio transport，无法连接远程 MCP 服务器。
 
 ### 修改文件
 1. `src/lib/claude-engine/mcp/client.ts` — 新增 SSE/HTTP transport 创建逻辑
-
-### 测试
-- MCP 测试从 25 条增长到 36 条（新增 11 条）
-- claude-engine 全量测试：14 文件 / 471 条全绿 ✅
 
 ### 覆盖率提升
 - MCP 子系统从 **30% → 55%**
@@ -18825,10 +13132,6 @@ MCP 子系统仅支持 stdio transport，无法连接远程 MCP 服务器。
 1. `src/lib/claude-engine/context/claudemd-loader.ts` — 完全重写（125 行 → 285 行）
 2. `src/lib/claude-engine/context/index.ts` — 导出新增函数
 
-### 测试
-- 上下文测试从 18 条增长到 37 条（新增 19 条）
-- claude-engine 全量测试：14 文件 / 460 条全绿 ✅
-
 ### 覆盖率提升
 - 上下文构建从 **15% → 45%**
 - 工作测试总数从 **441 → 460**
@@ -18854,15 +13157,6 @@ claude-code 原版有 51 个工具，Antigravity claude-engine 仅 15 个（覆�
 ### 修改文件
 1. `src/lib/claude-engine/tools/registry.ts` — 注册全部 24 个工具到 createDefaultRegistry()
 2. `src/lib/claude-engine/tools/index.ts` — 导出所有新工具及其辅助函数/类型
-
-### 测试
-1. `src/lib/claude-engine/tools/__tests__/new-tools.test.ts` — 58 条测试（新增 28 条）
-2. `src/lib/claude-engine/tools/__tests__/tools.test.ts` — 36 条测试（registry 更新）
-
-### 验证
-- 新工具测试：58 条全绿 ✅
-- claude-engine 全量测试：14 文件 / 441 条全绿 ✅
-- 无回归 ✅
 
 ### 工具总览（24 个）
 | 分类 | 工具名 | 批次 |
@@ -18922,15 +13216,6 @@ claude-engine 工具系统仅有 6 个核心工具（FileRead/Write/Edit + Bash 
 ### 修改文件
 1. `src/lib/claude-engine/tools/registry.ts` — 注册全部 15 个工具到 createDefaultRegistry()
 2. `src/lib/claude-engine/tools/index.ts` — 导出所有新工具及其类型
-
-### 测试
-1. `src/lib/claude-engine/tools/__tests__/new-tools.test.ts` — 30 条新工具专项测试
-2. `src/lib/claude-engine/tools/__tests__/tools.test.ts` — 原有测试更新（15 工具注册验证）
-
-### 验证
-- 新工具测试：30 条全绿 ✅
-- claude-engine 全量测试：14 文件 / 413 条全绿 ✅
-- 无回归 ✅
 
 ### 工具总览
 | 分类 | 工具名 | 状态 |
@@ -19052,15 +13337,6 @@ claude-engine API 层仅支持 Anthropic 单一 provider，覆盖率 20%。需�
 | API 行数 | 948 | 2,500 | 3,200 | **~3,600** |
 | 测试数量 | 37 | 68 | 128 | **154** (37+31+60+26) |
 
-### 验证
-- OAuth 测试：26 条全绿 ✅
-- 错误分类+缓存测试：60 条全绿 ✅
-- 多 Provider 测试：31 条全绿 ✅
-- claude-engine 全量测试：383 条全绿（266→383）✅
-- 无回归 ✅
-
----
-
 ## 任务：security-core 包提取 — claude-code 安全机制复用
 
 **状态**: ✅ 已完成
@@ -19104,13 +13380,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - ✅ 引号反同步检测
 - ✅ 反斜杠转义运算符检测
 
-### 验证
-- claude-code 安全包编译：零 TypeScript 错误 ✅
-- claude-code 全量测试：2509 条全绿（含新增 56 条安全测试）✅
-- Antigravity claude-engine 测试：257 条全绿 ✅
-- Antigravity 安全适配器测试：21 条全绿 ✅
-- Antigravity 主测试套件：无新增失败 ✅
-
 ### Phase 2 更新（权限规则引擎）
 新增提取模块：
 - `shellRuleMatching.ts` — 权限规则匹配（精确/前缀/通配符）
@@ -19141,16 +13410,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - `getOutputRedirections()` — 提取输出重定向目标和运算符
 - `checkSedConstraints/checkPathConstraints/checkPermissionMode/checkCommandOperatorPermissions` — 高级验证器
 
-### 验证（Phase 3 最终）
-- claude-code 安全包：87 条测试全绿（新增 fullChain.test.ts 31 条）✅
-- claude-code 全量测试：2540 条全绿（含新增 87 条安全测试）✅
-- Antigravity 安全测试：30 条全绿（新增 Phase 3 测试 9 条）✅
-- Antigravity claude-engine 测试：266 条全绿 ✅
-
-维护指南：`claude-code/packages/security-core/MAINTENANCE.md`
-
----
-
 ## 任务：Provider 管理增强 — Custom Provider + Key 测试 + 状态指示
 
 **状态**: ✅ 已完成
@@ -19168,16 +13427,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - **Custom Provider 表单**: 选 "Custom" 后自动展开配置表单（名称、API 端点、Key、默认模型）+ 测试连接按钮
 - **OpenAI Key 测试**: 通过 GET /v1/models 验证 Key 有效性
 - **Provider 状态指示**: 绿点=已连接/红点=未配置/转圈=检测中
-
-### 验证
-- Anthropic fake key → `invalid` ✅
-- OpenAI fake key → `invalid`（之前返回 `untested`，现在正确检测）✅
-- Custom provider fake URL → `error: fetch failed` ✅
-- ai-config PUT/GET customProvider 字段 → 保存读取正确 ✅
-- TypeScript: 3 个文件零错误 ✅
-- 测试: 240 条全绿 ✅
-
----
 
 ## 任务：P0 前端用户旅程缺口修复 — Workflow/Skill/Rule CRUD
 
@@ -19202,17 +13451,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 3. `src/lib/api.ts` — 新增 9 个 CRUD 函数：workflowDetail, deleteWorkflow, skillDetail, updateSkill, deleteSkill, ruleDetail, updateRule, deleteRule
 4. `src/app/page.tsx` — skills/workflows/rules 改为可加载状态 + useEffect 数据加载 + 导入 AssetsManager + 放入 Operations 面板
 
-### 验证
-- Workflow CRUD: PUT→GET→DELETE 全链路通过 ✅
-- Rule CRUD: PUT→GET→DELETE 全链路通过 ✅
-- Skill CRUD: PUT→DELETE 全链路通过 ✅
-- 数据加载: Skills=18, Workflows=32, Rules=0（正常）✅
-- TypeScript: 6 个文件零错误 ✅
-- 测试: 240 条全绿 ✅
-- 前端 HTML 50KB 正常渲染 ✅
-
----
-
 ## 任务：MCP 服务器配置管理 + 工具浏览功能
 
 **状态**: ✅ 已完成
@@ -19232,16 +13470,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - **GET /api/mcp/tools**：返回已配置的服务器列表（含 name/type/command/url/description）
 - **McpServersTab UI**：添加表单（名称、类型、命令/URL、参数、描述）+ 服务器列表展示 + 删除功能
 
-### 验证
-- GET /api/mcp → `{"servers":[]}` ✅
-- POST /api/mcp/servers → `{"ok":true}` ✅
-- GET /api/mcp → 返回新增服务器 ✅
-- GET /api/mcp/tools → 返回 servers 配置列表 ✅
-- DELETE /api/mcp/servers → `{"ok":true}`，列表清空 ✅
-- TypeScript: settings-panel.tsx / mcp/servers/route.ts / mcp/tools/route.ts 无错误 ✅
-
----
-
 ## 任务：MCP 配置管理 + 工具浏览 UI
 
 **状态**: ✅ 已完成
@@ -19257,13 +13485,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - McpServersTab 组件：添加/删除服务器表单、服务器列表、类型选择（stdio/SSE/HTTP）
 - McpServer 类型扩展：新增 type, args, env, url 字段
 - 新增 McpToolInfo 类型
-
-### 验证
-- API 端点测试通过（CRUD 全链路）
-- 241 条测试全绿
-- TypeScript 零错误
-
----
 
 ## 任务：Phase D — ClaudeEngine 健壮性（D1 + D2 + D3）
 
@@ -19293,15 +13514,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - `EngineConfig` 新增 `compactModel` + `maxContinuationRetries`
 - `StopReason` 新增 `'compacted'` + `'continuation_exhausted'`
 - `EngineEvent` 新增 `retry` / `compaction` / `continuation` 事件
-
-### 新增测试
-- `compactor.test.ts` — 11 条测试（estimateTokenCount + compactMessages）
-
-### 验证
-- **230 条测试全绿**（10 文件）
-- TypeScript 零错误
-
----
 
 ## 任务：Phase C — 可观测性增强（C1 + C3）
 
@@ -19333,12 +13545,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - `src/lib/backends/claude-engine-backend.ts` — 发射 text_delta / tool_start / tool_end / completed / failed 事件
 - `src/components/agent-run-detail.tsx` — 活跃 run 自动订阅 SSE，result tab 显示流式文本
 
-### 验证
-- 219 条测试全绿
-- TypeScript 零错误（所有改动文件）
-
----
-
 ## 任务：Settings 页面框架 + AI Config 管理 + API Key 管理
 
 **状态**: ✅ 已完成
@@ -19365,19 +13571,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 - **Provider 配置 Tab**：组织默认 provider/model、4 层（executive/management/execution/utility）独立配置
 - **API Keys Tab**：Anthropic + OpenAI key 输入（password 类型，可切显示）、key 设置状态展示、Anthropic 连接测试
 - **Scene 覆盖 Tab**：列表展示 + inline 编辑 provider/model、添加/删除 scene、保存到 ai-config
-
-### 验证证据
-
-1. **Biome lint 通过**
-   - 执行：`npx biome check src/app/api/ai-config/route.ts src/app/api/api-keys/route.ts src/app/api/api-keys/test/route.ts src/components/settings-panel.tsx`
-   - 结果：通过，无输出
-2. **TypeScript 新文件零错误**（仅预存 contract-validator.test.ts 等历史错误）
-3. **GET /api/ai-config** → `AI Config OK: antigravity` ✅
-4. **GET /api/api-keys** → `{'anthropic': {'set': False}, 'openai': {'set': False}}` ✅
-5. **PUT /api/ai-config** → `{'ok': True}` ✅
-6. **GET /** → HTTP 200 ✅
-
----
 
 ## 任务：Phase A + B — Provider 配置可用性 + Settings 管理面
 
@@ -19417,15 +13610,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 6. `src/app/page.tsx` — SidebarSection 增加 'settings'，渲染 SettingsPanel
 7. `src/components/sidebar.tsx` — 导航增加 Settings 入口
 
-### 验证
-
-- 219 条 vitest 测试全绿
-- TS 零错误
-- Biome lint 通过
-- API 端点 GET/PUT 正常响应
-
----
-
 ## 任务：M9 Agent Pipeline 接入 + 文档更新
 
 **状态**: ✅ 已完成
@@ -19452,14 +13636,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 5. `README.md` — 核心功能表增加"多 Provider 支持"
 6. `README_EN.md` — Key Features 增加 Multi-Provider
 
-### 验证证据
-
-- `npx vitest run src/lib/claude-engine/` → 8 文件 215 条全绿
-- `npx vitest run src/lib/backends/__tests__/claude-engine-backend.test.ts` → 4 条全绿
-- 合计 9 文件 219 条测试全部通过
-
----
-
 ## 任务：M8 查询引擎实现
 
 **状态**: ✅ 已完成
@@ -19483,21 +13659,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 1. `ARCHITECTURE.md` — Claude Engine 子系统扩展到 M8 查询引擎，并补充依赖图、边界与关键文件
 2. `docs/guide/agent-user-guide.md` — Claude Engine 基础层章节扩展到 M1-M8，并补充 query loop / tool executor / ClaudeEngine 说明
 3. `docs/PROJECT_PROGRESS.md` — 记录 M8 实现、验证证据与当前回归结果
-
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/engine/__tests__/engine.test.ts`
-  - 结果：失败，报错 `Cannot find module '..'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/engine/__tests__/engine.test.ts`
-  - 结果：1 个测试文件通过，18 个测试全部通过，0 失败
-3. **新目录 Biome 检查通过**
-  - 执行：`npx biome check src/lib/claude-engine/engine/`
-  - 结果：通过，无输出
-4. **Claude Engine 范围回归通过**
-  - 执行：`npx vitest run src/lib/claude-engine/`
-  - 结果：8 个测试文件通过，215 个测试全部通过，0 失败
 
 ### 本次结论
 
@@ -19531,21 +13692,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 3. `docs/design/claude-code-migration-master-plan.md` — 把 M7 从旧的多 transport / OAuth 设想修正为当前真实落地的 stdio-only 方案
 4. `docs/PROJECT_PROGRESS.md` — 记录 M7 实现、验证证据与当前回归结果
 
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/mcp/__tests__/mcp.test.ts`
-  - 结果：失败，报错 `Cannot find module '../json-rpc'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/mcp/__tests__/mcp.test.ts`
-  - 结果：1 个测试文件通过，25 个测试全部通过，0 失败
-3. **新目录 Biome 检查通过**
-  - 执行：`npx biome check src/lib/claude-engine/mcp/`
-  - 结果：通过，无输出
-4. **Claude Engine 范围回归通过**
-  - 执行：`npx vitest run src/lib/claude-engine/`
-  - 结果：7 个测试文件通过，197 个测试全部通过，0 失败
-
 ### 本次结论
 
 1. `McpClient` 已能通过 SDK 完成 stdio-only MCP connect、工具发现、工具调用、资源发现与资源读取，并把结果映射到 Claude Engine 自己的 MCP 合同。
@@ -19578,21 +13724,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 3. `docs/design/claude-code-migration-master-plan.md` — 把 M6 口径从 SDK 设想修正为当前真实落地的原生 `fetch` + SSE 方案
 4. `docs/PROJECT_PROGRESS.md` — 记录 M6 实现、验证证据与回归结果
 
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/api/__tests__/api.test.ts`
-  - 结果：失败，报错 `Cannot find module '../client'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/api/__tests__/api.test.ts`
-  - 结果：1 个测试文件通过，37 个测试全部通过，0 失败
-3. **新目录 Biome 检查通过**
-  - 执行：`npx biome check src/lib/claude-engine/api/`
-  - 结果：通过，无输出
-4. **Claude Engine 范围回归通过**
-  - 执行：`npx vitest run src/lib/claude-engine/`
-  - 结果：6 个测试文件通过，172 个测试全部通过，0 失败
-
 ### 本次结论
 
 1. `streamQuery()` 已能直接通过原生 `fetch` 调用 Anthropic Messages API，构建 headers/body，并解析 SSE stream 为 `StreamEvent`
@@ -19622,25 +13753,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 1. `ARCHITECTURE.md` — Claude Engine 子系统扩展到 M5 权限层，并补充关键文件与边界
 2. `docs/guide/agent-user-guide.md` — Claude Engine 基础层章节扩展到 M1-M5，并补充权限层 API 与边界说明
 3. `docs/PROJECT_PROGRESS.md` — 记录 M5 实现、验证证据与当前全仓测试现状
-
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/permissions/__tests__/permissions.test.ts`
-  - 结果：失败，报错 `Cannot find module '..'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/permissions/__tests__/permissions.test.ts`
-  - 结果：1 个测试文件通过，25 个测试全部通过，0 失败
-3. **新目录 Biome 检查通过**
-  - 执行：`npx biome check src/lib/claude-engine/permissions/`
-  - 结果：通过，无输出
-4. **Claude Engine 范围回归通过**
-  - 执行：`npx vitest run src/lib/claude-engine/`
-  - 结果：5 个测试文件通过，135 个测试全部通过，0 失败
-5. **全仓回归现状已确认**
-  - 执行：`npx vitest run --reporter=basic`
-  - 结果：63 个测试文件中 59 个通过、4 个失败；947 条测试中 931 条通过、16 条失败
-  - 说明：失败仍集中在 `src/lib/agents/generation-context.test.ts`、`src/lib/agents/risk-assessor.test.ts`、`src/lib/agents/subgraph.test.ts`、`src/lib/agents/pipeline/graph-pipeline-converter.test.ts`，不是本轮改动引入
 
 ### 本次结论
 
@@ -19674,22 +13786,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 1. `ARCHITECTURE.md` — Claude Engine 子系统补充 M4 工具层结构、边界与关键文件
 2. `docs/guide/agent-user-guide.md` — Claude Engine 基础层章节扩展到 M1-M4，并补充 6 个核心工具与注册器说明
 
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/tools/__tests__/tools.test.ts`
-  - 结果：失败，报错 `Cannot find module '../bash'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/tools/__tests__/tools.test.ts`
-  - 结果：1 个测试文件通过，23 个测试全部通过，0 失败
-3. **新目录 Biome 检查通过**
-  - 执行：`npx --yes @biomejs/biome check --write --unsafe src/lib/claude-engine/tools/`
-  - 结果：检查通过，并修复格式、导出排序与 `node:` 内建模块导入协议
-4. **全量回归已执行**
-  - 执行：`npx vitest run`
-  - 结果：62 个测试文件中 58 个通过、4 个失败；909 条测试中 893 条通过、16 条失败；新加的 `src/lib/claude-engine/tools/__tests__/tools.test.ts` 通过
-  - 说明：失败仍集中在 `src/lib/agents/generation-context.test.ts`、`src/lib/agents/risk-assessor.test.ts`、`src/lib/agents/subgraph.test.ts`、`src/lib/agents/pipeline/graph-pipeline-converter.test.ts`，不是本轮改动引入
-
 ### 本次结论
 
 1. `ToolRegistry` 已支持独立实例、alias 查找、enabled/read-only 过滤，以及默认 6 工具注册
@@ -19721,22 +13817,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 1. `ARCHITECTURE.md` — Claude Engine 子系统补充 M3 记忆层结构、边界与关键文件
 2. `docs/guide/agent-user-guide.md` — 补充 M3 记忆层能力、边界与 MEMORY.md 约束
 
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/memory/__tests__/memory.test.ts`
-  - 结果：失败，报错 `Cannot find module '../memory-prompt-builder'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/memory/__tests__/memory.test.ts`
-  - 结果：1 个测试文件通过，25 个测试全部通过，0 失败
-3. **新目录 lint 通过**
-  - 执行：`npx eslint src/lib/claude-engine/memory`
-  - 结果：通过，无输出
-4. **全量回归已执行**
-  - 执行：`npx vitest run`
-  - 结果：61 个测试文件中 57 个通过、4 个失败；886 条测试中 870 条通过、16 条失败；新加的 `src/lib/claude-engine/memory/__tests__/memory.test.ts` 通过
-  - 说明：失败仍集中在 `src/lib/agents/generation-context.test.ts`、`src/lib/agents/risk-assessor.test.ts`、`src/lib/agents/subgraph.test.ts`、`src/lib/agents/pipeline/graph-pipeline-converter.test.ts`，不是本轮改动引入
-
 ### 本次结论
 
 1. `MemoryStore` 已可独立完成 per-project memory 目录创建、单文件读写删除与 `MEMORY.md` 截断
@@ -19765,22 +13845,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 1. `ARCHITECTURE.md` — Claude Engine 子系统补充 M2 上下文层结构与边界
 2. `docs/guide/agent-user-guide.md` — 补充 M2 上下文模块与使用边界说明
 
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/context/__tests__/context.test.ts`
-  - 结果：失败，报错 `Cannot find module '../git-context'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/context/__tests__/context.test.ts`
-  - 结果：1 个测试文件通过，18 个测试全部通过，0 失败
-3. **新目录 lint 通过**
-  - 执行：`npx eslint src/lib/claude-engine/context`
-  - 结果：通过，无输出
-4. **全量回归已执行**
-  - 执行：`npx vitest run`
-  - 结果：60 个测试文件中 56 个通过、4 个失败；861 条测试中 845 条通过、16 条失败；新加的 `src/lib/claude-engine/context/__tests__/context.test.ts` 通过
-  - 说明：失败仍集中在 `src/lib/agents/generation-context.test.ts`、`src/lib/agents/risk-assessor.test.ts`、`src/lib/agents/subgraph.test.ts`、`src/lib/agents/pipeline/graph-pipeline-converter.test.ts`，不是本轮改动引入
-
 ### 本次结论
 
 1. `getGitContext()` 已可独立返回分支、默认分支、最近提交、状态、用户名与远端地址
@@ -19808,22 +13872,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 
 1. `ARCHITECTURE.md` — 新增 Claude Engine 子系统（M1）章节与依赖图
 2. `docs/guide/agent-user-guide.md` — 更新 Provider 列表并补充 Claude Engine M1 说明
-
-### TDD 与验证证据
-
-1. **红灯阶段已确认**
-  - 执行：`npx vitest run src/lib/claude-engine/types/__tests__/types.test.ts`
-  - 结果：失败，报错 `Cannot find module './tool'`，说明测试先于实现落地
-2. **单测通过**
-  - 执行：`npx vitest run src/lib/claude-engine/types/__tests__/types.test.ts`
-  - 结果：1 个测试文件通过，22 个测试全部通过，0 失败
-3. **新文件 lint 通过**
-  - 执行：`npx eslint src/lib/claude-engine/types`
-  - 结果：通过，无输出
-4. **全量回归已执行**
-  - 执行：`npx vitest run`
-  - 结果：59 个测试文件中 55 个通过、4 个失败；834 条测试中 818 条通过、16 条失败；新加的 `src/lib/claude-engine/types/__tests__/types.test.ts` 通过
-  - 说明：失败集中在 `src/lib/agents/generation-context.test.ts`、`src/lib/agents/risk-assessor.test.ts`、`src/lib/agents/subgraph.test.ts`、`src/lib/agents/pipeline/graph-pipeline-converter.test.ts`，不是本轮改动引入
 
 ### 本次结论
 
@@ -19897,24 +13945,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 2. `src/lib/backends/builtin-backends.ts` — ClaudeCodeAgentSession.run() 新增 live_state 事件
 3. `src/lib/backends/builtin-backends.test.ts` — 适配 3 事件流（started + live_state + completed）
 
-### 测试统计
-
-| Phase | 测试文件 | 测试数 | 状态 |
-|:------|:------:|:------:|:----:|
-| Phase 1 | 8 | 83 | ✅ 全绿 |
-| Phase 2 | 10 | 83 | ✅ 全绿 |
-| Phase 3 | 10 | 115 | ✅ 全绿 |
-
-### Phase 3 验收标准达成
-
-1. ✅ NormalizedStep 类型：provider/kind/status/title/preview/toolCategory/toolName/affectedPaths/timestamp/rawRef
-2. ✅ 工具分类：15+ 个工具 → 8 个分类（file_read/file_write/file_edit/shell/web/search/agent/plan/other）
-3. ✅ changedFiles 提取：从 tool_use 和 message content 块两种格式中提取
-4. ✅ Token Usage 提取：累加 input/output + cache 统计
-5. ✅ LiveState 生成：cascadeStatus/stepCount/lastStepAt/lastStepType
-6. ✅ Backend 发出 live_state 事件（完成后、在 completed 之前）
-7. ✅ Raw events 保留为 trace（steps 字段不变）
-
 ### Phase 4：Intervention Contract
 
 **新增文件**：
@@ -19931,14 +13961,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 4. ✅ cancel 幂等，不重复杀进程
 5. ✅ attachExistingRunSession 使用 provenance backendId，不再猜测 provider
 6. ✅ evaluate diagnosticsProvider 使用 provenance fallback
-
-### 累计测试统计（Phase 1-4）
-
-| Phase | 测试文件 | 测试数 | 状态 |
-|:------|:------:|:------:|:----:|
-| Phase 1→4 | 11 | 121 | ✅ 全绿 |
-
----
 
 ## 任务：校正 Claude Code 文档一致性口径
 
@@ -20187,24 +14209,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
   - review 中指出的 major finding 已修正
   - `group-runtime.ts` 已不再直接依赖 Antigravity runtime resolver helper
 
-### 验证证据
-1. **Phase 4 直接相关测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts`
-  - 结果：2 个测试文件通过，24 个测试全部通过，0 失败
-2. **关键运行时测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/backends/builtin-backends.test.ts`
-  - 结果：3 个测试文件通过，37 个测试全部通过，0 失败
-3. **扩展护栏测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：10 个测试文件通过，61 个测试全部通过，0 失败
-4. **直接命中检查通过**
-  - 检查：`grep resolveAntigravityRuntimeConnection|discoverLanguageServers|getApiKey src/lib/agents/group-runtime.ts`
-  - 结果：无命中
-5. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：构建通过
-  - 说明：输出里仍有一个既有的 Turbopack 宽匹配 warning，来自 `src/lib/agents/run-registry.ts`，不是本轮改动引入
-
 ### 结论
 1. Task B 原定范围已完成。
 2. 当前剩余若继续推进，属于后续优化，而不是 Task B blocker。
@@ -20230,21 +14234,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
   - `group-runtime.ts` 已不再直接 import `resolveAntigravityRuntimeConnection`
 4. **补 resolver 扩展直接测试**
   - `src/lib/backends/builtin-backends.test.ts` 新增 workspace runtime resolution 用例
-
-### 验证证据
-1. **关键运行时测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/backends/builtin-backends.test.ts`
-  - 结果：3 个测试文件通过，37 个测试全部通过，0 失败
-2. **扩展护栏测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：10 个测试文件通过，59 个测试全部通过，0 失败
-3. **直接命中检查通过**
-  - 检查：`grep resolveAntigravityRuntimeConnection|discoverLanguageServers|getApiKey src/lib/agents/group-runtime.ts`
-  - 结果：无命中
-4. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：构建通过
-  - 说明：输出里仍有一个既有的 Turbopack 宽匹配 warning，来自 `src/lib/agents/run-registry.ts`，不是本次改动引入
 
 ### 结论
 1. review 里指出的 major finding 已修正。
@@ -20296,14 +14285,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 3. **新增 attached-session attach 不支持路径 characterization**
   - 锁定当前行为：resolved backend 不支持 attach 时，nudge 直接失败
 
-### 验证证据
-1. **Phase 4 直接相关测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/backends/builtin-backends.test.ts`
-  - 结果：3 个测试文件通过，36 个测试全部通过，0 失败
-2. **扩展护栏测试再次通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：10 个测试文件通过，58 个测试全部通过，0 失败
-
 ### 当前剩余的下一步
 1. 继续补齐 attached-session 的 timeout / superseded 路径
 2. 如需更严格，可以再补 evaluate session 的更细粒度 malformed / empty response 组合路径
@@ -20315,11 +14296,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 
 ### 概要
 在 Task B 的 Phase 1、Phase 2、Phase 3 都落地之后，为了确认 recent steps、annotation、resolver 下沉没有影响 prompt、single-role、multi-role 和 backend/session 主链，重新执行了一次更大范围的扩展护栏测试集。
-
-### 验证证据
-1. **扩展护栏测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：10 个测试文件通过，53 个测试全部通过，0 失败
 
 ### 结论
 1. Task B 当前已落地的 3 个阶段，没有影响 PromptExecutor 主链。
@@ -20350,18 +14326,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
   - 仍然把解析失败转成运行时可理解的错误
   - 恢复路径与 review-loop 恢复链路不回退
 
-### 验证证据
-1. **关键运行时测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/backends/builtin-backends.test.ts src/lib/agents/group-runtime.multi-role.test.ts`
-  - 结果：3 个测试文件通过，31 个测试全部通过，0 失败
-2. **直接命中检查通过**
-  - 检查：`grep discoverLanguageServers|getApiKey src/lib/agents/group-runtime.ts`
-  - 结果：无命中
-3. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：构建通过
-  - 说明：输出里仍有一个既有的 Turbopack 宽匹配 warning，来自 `src/lib/agents/run-registry.ts`，不是本次改动引入
-
 ### 当前剩余的下一步
 1. Phase 4：补齐 evaluate / attached-session / unattached cancel 异常矩阵
 2. 如需继续净化，可再评估是否把 resolver helper 进一步下沉成更 provider-neutral 的 transport adapter 结构
@@ -20387,18 +14351,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 4. **专项测试补齐**
   - `src/lib/backends/builtin-backends.test.ts` 新增 Antigravity backend metadata writer 用例
   - `src/lib/agents/group-runtime.test.ts` 的 evaluate characterization tests 继续通过
-
-### 验证证据
-1. **专项测试通过**
-  - 执行：`npm test -- src/lib/backends/builtin-backends.test.ts src/lib/agents/group-runtime.test.ts`
-  - 结果：2 个测试文件通过，22 个测试全部通过，0 失败
-2. **直接命中检查通过**
-  - 检查：`grep getOwnerConnection|updateConversationAnnotations src/lib/agents/group-runtime.ts`
-  - 结果：无命中
-3. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：构建通过
-  - 说明：输出里仍有一个既有的 Turbopack 宽匹配 warning，来自 `src/lib/agents/run-registry.ts`，不是本次改动引入
 
 ### 当前剩余的下一步
 1. Phase 3：继续收 owner / apiKey / language server resolver
@@ -20429,15 +14381,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 5. **专项测试补齐**
   - `src/lib/backends/builtin-backends.test.ts` 新增 Antigravity backend diagnostics 用例
   - `src/lib/agents/group-runtime.test.ts` 的 evaluate characterization tests 继续通过
-
-### 验证证据
-1. **专项测试通过**
-  - 执行：`npm test -- src/lib/backends/builtin-backends.test.ts src/lib/agents/group-runtime.test.ts`
-  - 结果：2 个测试文件通过，21 个测试全部通过，0 失败
-2. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：构建通过
-  - 说明：输出里仍有一个既有的 Turbopack 宽匹配 warning，来自 `src/lib/agents/run-registry.ts`，不是本次改动引入
 
 ### 当前剩余的下一步
 1. Phase 2：把 evaluate 的 annotation 写回从 `group-runtime.ts` 下沉到 backend session metadata writer extension
@@ -20858,17 +14801,6 @@ Antigravity 的 claude-engine 是 claude-code 的精简重写版，安全机制�
 ### 概要
 针对此前一度不稳定、且直接关联 `prompt-builder` 决策提取与 AgentBackend 运行时迁移的关键测试组，重新执行了一次集中回归，确认当前代码在本地已经稳定通过，不再存在可复现的自动化失败。
 
-### 本次验证范围
-1. `src/lib/agents/prompt-builder.test.ts`
-2. `src/lib/agents/group-runtime.test.ts`
-3. `src/lib/agents/group-runtime.multi-role.test.ts`
-4. `src/lib/backends/builtin-backends.test.ts`
-
-### 验证证据
-1. **关键回归测试重跑通过**
-  - 执行：`npm test -- src/lib/agents/prompt-builder.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/backends/builtin-backends.test.ts`
-  - 结果：`4` 个测试文件通过，`54` 个测试全部通过，`0` 失败。
-
 ### 结论
 1. `prompt-builder` 中的 review decision 提取逻辑当前测试通过。
 2. `group-runtime` 的 intervention / cancel / attached session 路径当前测试通过。
@@ -21135,14 +15067,6 @@ Prompt Mode 现在已经具备完整的新链路：
 3. 事件消费统一走 session-consumer
 4. 取消路径统一走 session-registry
 
-### 验证证据
-1. **相关护栏测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：`7` 个测试文件全部通过，`23` 个测试全部通过，`0` 失败。
-2. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成，PromptExecutor 接入后的整体项目编译通过。
-
 ## 任务：继续补 Phase 1 Session Consumer 骨架
 
 **状态**: ✅ 已完成
@@ -21162,14 +15086,6 @@ Prompt Mode 现在已经具备完整的新链路：
    - 按顺序消费 started/live_state/completed 并在 terminal 后释放 session
    - local cancel 后抑制晚到 completion
    - `terminalSeen` 已置位时忽略后续全部事件
-
-### 验证证据
-1. **backends 骨架测试通过**
-  - 执行：`npm test -- src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：`3` 个测试文件全部通过，`10` 个测试全部通过，`0` 失败。
-2. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成，新增 `session-consumer` 骨架与导出均编译通过。
 
 ## 任务：开始 Phase 1 AgentBackend 最小骨架实现
 
@@ -21209,14 +15125,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - 本轮没有把 `AgentBackend` 接到 `prompt-executor.ts` 或 `group-runtime.ts`。
 - 目标是先把合同和注册表立起来，为后续 Prompt Mode 接入做准备，避免在抽象尚未稳定时半接入现有运行时。
 
-### 验证证据
-1. **骨架单测通过**
-  - 执行：`npm test -- src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts`
-  - 结果：`2` 个测试文件全部通过，`7` 个测试全部通过，`0` 失败。
-2. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成，新增 `backends/` 目录与此前 runtime 调整均编译通过。
-
 ## 任务：补 Phase 0 第二批 group-runtime characterization tests
 
 **状态**: ✅ 已完成
@@ -21235,14 +15143,6 @@ Prompt Mode 现在已经具备完整的新链路：
    - `../approval/handler`
    - `./project-registry`
 3. **`group-runtime.ts`**：在下游自动触发逻辑中补 `pipelineState` 局部变量，修复静态 import 后暴露出的 TypeScript 收窄问题，确保生产构建继续通过。
-
-### 验证证据
-1. **Phase 0 基线测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts`
-  - 结果：`4` 个测试文件全部通过，`13` 个测试全部通过，`0` 失败。
-2. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成，相关 API 和运行时代码编译通过。
 
 ## 任务：补 Phase 0 第一批 characterization tests
 
@@ -21266,11 +15166,6 @@ Prompt Mode 现在已经具备完整的新链路：
 ### 说明
 - 原计划一度尝试直接给 `group-runtime.ts` 补纯单元 characterization tests，但其内部仍大量使用运行时 `require()` 加载 `project-registry` / `token-quota` 等模块，这条路径在当前 Vitest ESM 环境下不适合作为第一批稳定基线。
 - 因此本轮先锁更底层、对后续 AgentBackend 抽象更关键的行为边界；`group-runtime` 的基线建议放到下一批，用更接近集成层的测试方式处理。
-
-### 验证证据
-1. **第一批基线测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts`
-  - 结果：`3` 个测试文件全部通过，`10` 个测试全部通过，`0` 失败。
 
 ## 任务：完成 AgentBackend 统一抽象详细技术设计文档
 
@@ -21327,13 +15222,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | "周一和周五" | 只取周一 ❌ | `0 9 * * 1,5` ✅ |
 | "每两周" | 失败 ❌ | interval 14天 ✅ |
 
-### 测试证据
-- 25 个测试全绿（含 LLM 解析专项测试 3 个）
-- 生产构建通过
-- Smoke test 确认 fallback 路径正常（LLM 不可用时正则兜底）
-
----
-
 ## 任务：CEO Dashboard 即时 Prompt Mode 指令卡片
 
 **状态**: ✅ 已完成
@@ -21356,10 +15244,6 @@ Prompt Mode 现在已经具备完整的新链路：
 ### 新增 / 更新的核心文件
 - `src/components/ceo-scheduler-command-card.tsx`
 - `src/lib/api.ts`
-
-### 验证证据
-1. 26 个测试全绿 + 生产构建通过
-2. 静态类型检查零错误
 
 ## 任务：补 Prompt Run 前端展示入口 + 项目详情集成 + 接口文档
 
@@ -21390,10 +15274,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - `src/app/api/agent-runs/route.ts`
 - `src/lib/agents/run-registry.ts`
 
-### 验证证据
-1. 26 个测试全绿 + 生产构建通过
-2. 静态类型检查零错误
-
 ## 任务：Scheduler dispatch-prompt + CEO 自然语言→Prompt Mode（定时+即时）
 
 **状态**: ✅ 已完成
@@ -21423,10 +15303,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - `src/mcp/server.ts`
 - `src/lib/agents/scheduler.test.ts`
 - `src/lib/agents/ceo-agent.test.ts`
-
-### 验证证据
-1. **单元测试通过**：4 个文件 26 个测试全绿，覆盖：dispatch-prompt 定时触发、CEO 定时无唯一 template 走 prompt、CEO 即时执行匹配部门走 prompt、即时执行无部门匹配回退、executePrompt 失败处理
-2. **生产构建通过**
 
 ## 任务：CEO 原生定时调度能力闭环落地
 
@@ -21464,30 +15340,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - `docs/guide/agent-user-guide.md`
 - `~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-playbook.md`
 - `~/.gemini/antigravity/ceo-workspace/.agents/workflows/ceo-scheduler-playbook.md`
-
-### 验证证据
-1. **单元测试通过**
-  - 执行：`npm test -- src/lib/agents/scheduler.test.ts src/lib/agents/ceo-agent.test.ts src/lib/ceo-events.test.ts`
-  - 结果：`3` 个测试文件全部通过，`14` 个测试全部通过，`0` 失败。
-2. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成，所有相关 API 路由与页面编译成功。
-3. **真实接口 smoke test 通过**
-  - 调用：`POST /api/ceo/command`
-  - 指令：`明天上午 9 点让超级 IT 研发部创建一个 ad-hoc 项目，目标是 smoke test`
-  - 返回：成功创建 `jobId = 38d088ad-37f0-4c13-be62-966d7a4be32b`，`nextRunAt = 2026-04-09T07:00:00.000Z`
-  - 进一步验证：`GET /api/scheduler/jobs` 能查到该 job，随后已通过 `DELETE /api/scheduler/jobs/:id` 清理，避免残留脏数据。
-4. **Scheduler 契约回归 smoke test 通过**
-  - 验证 1：通过 `POST /api/scheduler/jobs` 创建 `create-project` job，再 `PATCH` 更新成 `health-check`，返回结果中 `opcAction` 与 `departmentWorkspaceUri` 已被正确清空。
-  - 验证 2：对 `PATCH /api/scheduler/jobs/:id` 发送非法 JSON，请求返回 `400` 与 `{"error":"Invalid JSON body"}`，不再把坏请求吞成空更新。
-5. **Auto-run 单测通过**
-  - 执行：`npm test -- src/lib/agents/scheduler.test.ts src/lib/agents/ceo-agent.test.ts`
-  - 结果：`2` 个测试文件全部通过，`12` 个测试全部通过，覆盖了 create-project 自动派发、仅创建项目降级路径，以及 CEO 创建时的模板选择回退。
-6. **真实 API smoke test 通过（安全路径，不触发真实 run）**
-  - 调用：`POST /api/ceo/command`
-  - 指令：`明天上午 9 点让超级 IT 研发部创建一个日报任务项目，目标是汇总当前进行中的项目与风险 smoke-<timestamp>`
-  - 返回：成功创建 `jobId = b0cd76f4-023f-4f22-9a2f-8e938f388cab`，响应消息已明确写出将派发模板 `Universal Batch Research (Fan-out)`。
-  - 进一步验证：`GET /api/scheduler/jobs` 查得该 job 的 `opcAction.templateId = universal-batch-template`，随后已通过 `DELETE /api/scheduler/jobs/:id` 清理。
 
 ### 结果判断
 本轮已把此前文档中定义的核心缺口真正打通：
@@ -21658,18 +15510,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - `src/app/api/agent-runs/route.test.ts` (新增)
 - `src/lib/agents/prompt-executor.test.ts` (新增)
 
-### 验证证据
-1. **单元测试通过**
-   - 执行：`npm test -- src/app/api/agent-runs/route.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/run-artifacts.test.ts src/lib/agents/scheduler.test.ts`
-   - 结果：4 个测试文件全部通过，41 个测试全部通过，0 失败
-   - 覆盖点：legacy template 兼容、prompt 分流、显式 template executionTarget、unsupported kind 拒绝、同步 provider 完整生命周期、watcher 路径完整生命周期、取消后晚到结果保护、Antigravity dispatch 失败收口
-2. **生产构建通过**
-   - 执行：`npm run build`
-   - 结果：Next.js 生产构建完成，所有 API 路由编译成功
-3. **独立代码审查**
-   - 第一轮审查发现 3 个 MAJOR 问题：watcher 未透传 apiKey（heartbeat 失效）、Antigravity 分支失败/取消收口缺失、template executionTarget 未真正打通
-   - 三个问题均已修复并通过回归测试和重新构建验证
-
 ### 审查修复明细
 1. **watcher apiKey 透传**：`startPromptWatch` 的连接类型从 `{ port, csrf }` 扩展为 `{ port, csrf, apiKey? }`，并把 apiKey 传给 `watchConversation` 的第五参数，恢复 heartbeat 兜底轮询
 2. **Antigravity 失败收口**：executeTask 的 await 用 try/catch 包裹，抛错时回写 `status: 'failed'` 并清理 activePromptRuns；await 返回后在写回 running 之前重新检查 run 是否已进入终态
@@ -21744,16 +15584,6 @@ Prompt Mode 现在已经具备完整的新链路：
 ### 产出
 - 新增研究文档：`docs/internals/antigravity-vs-craft-feasibility-study.md`
 
-### 验证依据
-- Antigravity 架构与运行时：`ARCHITECTURE.md`
-- Antigravity dispatch/runtime：`src/lib/agents/dispatch-service.ts`、`src/lib/agents/group-runtime.ts`
-- Antigravity provider：`src/lib/providers/ai-config.ts`、`src/lib/providers/index.ts`、`src/lib/providers/types.ts`
-- Antigravity conversation/workspace：`src/app/api/conversations/route.ts`、`src/app/api/conversations/[id]/send/route.ts`、`src/app/api/workspaces/launch/route.ts`
-- Antigravity orchestration state：`src/lib/agents/project-registry.ts`、`src/lib/agents/run-registry.ts`
-- craft backend/provider：`craft-agents-oss/packages/shared/src/agent/backend/factory.ts`、`craft-agents-oss/packages/shared/src/agent/backend/types.ts`
-- craft workspace/session：`craft-agents-oss/packages/shared/src/workspaces/storage.ts`、`craft-agents-oss/packages/shared/src/sessions/storage.ts`
-- craft session orchestration：`craft-agents-oss/packages/server-core/src/sessions/SessionManager.ts`
-
 ### 说明
 - 本次为架构研究与本地文档写作，没有修改 craft-agents-oss 源码。
 - 中途尝试调用研究子代理，但遇到网络切换错误，最终改为主代理直接完成源码对比。
@@ -21773,11 +15603,6 @@ Prompt Mode 现在已经具备完整的新链路：
 3. **自动补全干扰**：grok.com 的自动补全建议会修改输入内容。现在插入文本后按 Escape 关闭建议，并验证内容长度。
 4. **Cookie banner 遮挡**：模型切换后可能触发 cookie consent / 偏好中心弹窗，遮挡编辑器和提交按钮。新增 `dismissOverlays()` 独立函数，在发送消息前和模型切换后都会调用。
 5. **`bbEval` shell 注入问题**：原来用 `execSync` 拼接字符串导致 `a[href]` 等选择器被 shell 解释。改用 `spawnSync` 传数组参数绕过 shell。
-
-### 验证结果
-全部 7 项功能测试通过：Expert/Fast/Heavy 模型问答、继续对话、管道输入、历史记录、关键词恢复、文件输出。
-
----
 
 ## 任务：补齐 CEO Playbook 状态查阅与干预 curl 指南
 
@@ -21818,11 +15643,6 @@ Prompt Mode 现在已经具备完整的新链路：
    - 清理未使用的 imports：`TemplateBrowser`、`CEODashboard`、`Layers` icon、`browseView` state
    - OPC 面板现在只聚焦项目列表和项目详情
 
-### 验证
-- TypeScript 编译：三个文件零错误
-
----
-
 ## 任务：CEO Chat Window 专属会话入口与配置门户
 
 **状态**: ✅ 已完成
@@ -21835,12 +15655,6 @@ Prompt Mode 现在已经具备完整的新链路：
 1. **清理遗留系统**：移除了 `src/components/ceo-dashboard.tsx` 以及 `projects-panel.tsx` 中涉及快捷指令框的所有代码和冗余状态。
 2. **新增配置侧边栏**：开发了全新的 `src/components/ceo-office-settings.tsx`，与底层的 `src/app/api/ceo/setup/route.ts` API 进行双工通讯，实时渲染并高频热更新位于 `~/.gemini/antigravity/ceo-workspace/` 内部的 `department-identity.md` (Persona) 和 `ceo-playbook.md` (Playbook) 文件。
 3. **集成进布局逻辑**：拓展 `SidebarSection` 类型，新增了 `ceo` 枚举。利用已有的 `page.tsx` Chat WebSocket 机制，只要用户从左侧导航栏点击「👔 CEO Office」，系统即可使用原有的 `handleSelect(ceoConv.id)` 机制自动吸附并载入该 Workspace 的活跃回话；在页面布局上采用了纯左右两栏（左边流式会话界面、右手边配置大屏界面）分离模式，彻底贯彻了 CEO "开箱即用 + 配置驱动"的产品哲学。
-
-### 验证
-- ✅ 编译通过，Sidebar / page.tsx 中对新模块的路由与 React Hooks 生命周期已完美对接。
-- ✅ 取消历史的 `api.ceoCommand` 调用使得之前 404 的问题从源头上被瓦解。
-
----
 
 ## 任务：CEO 原生化：实现跨 Provider 的统一会话底层支持
 
@@ -21894,13 +15708,6 @@ Prompt Mode 现在已经具备完整的新链路：
   - 决策边界：**C 混合模式**
   - 无 IDE 优先级：**C 分层落地**
   - 前端形态：**C 混合入口**
-
-### 验证
-- 静态核对：逐文件比对设计文档与实现，确认 CEO 路径、Provider 能力、dispatch 契约、memory/rules 能力边界。
-- 输出校验：确认审阅报告文件已写入并包含要求的四类结构（通过项、风险项、建议修改项、三个决策点推荐）。
-- 仓库检查：执行 `git diff --check`，结果：**通过**。
-- 相关单测：执行 `node node_modules/vitest/vitest.mjs run --config vitest.review.config.mts src/lib/providers/providers.test.ts src/lib/providers/ai-config.test.ts`，结果：**2 个测试文件通过，26 个测试通过，0 失败**。
-- 说明：仓库默认 `npm test -- ...` 会因现有 `vitest.config.ts` / Vite ESM 加载问题报 `ERR_REQUIRE_ESM`；本次未修复该无关问题，改用临时 ESM config 完成只读验证。
 
 ## Git Version Checkpoint: Phase 6 & Core Architecture Align
 
@@ -21965,23 +15772,6 @@ Prompt Mode 现在已经具备完整的新链路：
 3. Antigravity 单会话路径保留了旧 watcher 的关键运行语义，没有因为抽象迁移而行为缩水。
 4. Codex 的 session 能力边界被重新锁清：可本地取消，但不暴露 session append。
 
-### 验证证据
-1. **builtin-backends parity 专项测试通过**
-  - 执行：`npm test -- src/lib/backends/builtin-backends.test.ts`
-  - 结果：`1` 个测试文件通过，`9` 个测试全部通过，`0` 失败。
-2. **核心迁移测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：`7` 个测试文件通过，`30` 个测试全部通过，`0` 失败。
-3. **扩展护栏测试通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：`9` 个测试文件通过，`36` 个测试全部通过，`0` 失败。
-4. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成。
-5. **独立代码审查通过**
-  - `Code-Review-subagent` 最终结论：`APPROVED`
-  - 结论：本轮 5 条验收标准全部通过，无阻塞问题。
-
 ### 当前剩余的非阻塞项
 1. Codex session handle 仍是合成值，若后续要开放真实多轮 reply，需要再与真实 thread handle 对齐。
 2. MemoryHooks 目前已具备生命周期骨架，但尚未把 memoryContext 真正注入到底层执行提示中。
@@ -22024,20 +15814,6 @@ Prompt Mode 现在已经具备完整的新链路：
 2. shared conversation 仍保留为显式旧 fallback，而不是被新抽象误吞掉。
 3. multi-role runtime 在 failed / blocked 等非完成终态下已经会及时停止链路并传播终态，不会继续错误 finalize。
 4. multi-role 迁移后的关键行为现在有 runtime 级测试证据，而不只是静态代码判断。
-
-### 验证证据
-1. **multi-role 专项测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.multi-role.test.ts`
-  - 结果：`1` 个测试文件通过，`8` 个测试全部通过，`0` 失败。
-2. **完整迁移测试集通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：`10` 个测试文件通过，`45` 个测试全部通过，`0` 失败。
-3. **生产构建通过**
-  - 执行：`npm run build`
-  - 结果：Next.js 生产构建完成。
-4. **独立代码审查通过**
-  - `Code-Review-subagent` 最终结论：`APPROVED`
-  - 结论：delivery-single-pass、review-loop isolated、shared fallback、non-completed terminal propagation 均已满足验收标准，无阻塞问题。
 
 ### 当前剩余的非阻塞项
 1. multi-role runtime 目前显式锁住了 failed / blocked 终态；cancelled / timeout 仍主要依赖共享传播分支，后续可继续补两条 runtime 级 characterization tests。
@@ -22117,17 +15893,6 @@ Prompt Mode 现在已经具备完整的新链路：
 2. 当前“现有功能是否还在走旧入口”这个问题，答案已经是否。
 3. 剩余未做的是 `任务 B：transport 下沉与 group-runtime 净化`，不再是功能迁移未完成。
 
-### 验证证据
-1. **关键 attach / cancel 护栏测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.test.ts src/lib/backends/builtin-backends.test.ts`
-  - 结果：`2` 个测试文件通过，`20` 个测试全部通过，`0` 失败。
-2. **完整迁移测试集通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：`10` 个测试文件通过，`50` 个测试全部通过，`0` 失败。
-3. **生产构建通过**
-  - 执行：`rm -rf .next && npm run build`
-  - 结果：Next.js 生产构建完成。
-
 ### 当前剩余的非阻塞项
 1. `group-runtime.ts` 仍直接读取 `grpc.getTrajectorySteps()` 和 `grpc.updateConversationAnnotations()`，这属于 Task B 的 transport 下沉，不再属于功能级旧入口残留。
 
@@ -22148,14 +15913,6 @@ Prompt Mode 现在已经具备完整的新链路：
   - 在 `group-runtime.multi-role.test.ts` 中新增 `calls afterRun memory hooks for each completed role session in review-loop` 用例
   - 注册一个 spy memory hook，验证 review-loop 中 author + reviewer 两个角色各触发一次 afterRun
   - 9/9 multi-role 测试通过
-
-### 验证证据
-1. **multi-role 专项测试通过**
-  - 执行：`npm test -- src/lib/agents/group-runtime.multi-role.test.ts`
-  - 结果：9 个测试全部通过，0 失败
-2. **完整迁移测试集通过**
-  - 执行：`npm test -- src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/run-registry.test.ts src/lib/agents/watch-conversation.test.ts src/lib/backends/builtin-backends.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/registry.test.ts src/lib/backends/session-registry.test.ts src/lib/backends/session-consumer.test.ts`
-  - 结果：10 个测试文件通过，51 个测试全部通过，0 失败
 
 ### 当前效果
 - prompt / legacy-single / multi-role 三条路径的 afterRun MemoryHooks 生命周期已经统一
@@ -22178,13 +15935,6 @@ Prompt Mode 现在已经具备完整的新链路：
 
 ### 产出
 - 新增分析文档：`docs/design/ceo-cron-capability-gap-analysis.md`
-
-### 验证依据
-- 前端入口与表单：`src/components/ceo-dashboard.tsx`、`src/components/ceo-office-settings.tsx`、`src/components/scheduler-panel.tsx`
-- 后端调度：`src/lib/agents/scheduler.ts`、`src/lib/agents/scheduler-types.ts`
-- API：`src/app/api/scheduler/jobs/route.ts`、`src/app/api/scheduler/jobs/[id]/route.ts`、`src/app/api/scheduler/jobs/[id]/trigger/route.ts`
-- CEO 与事件流：`src/app/api/ceo/command/route.ts`、`src/lib/ceo-events.ts`
-- MCP 与设计文档：`src/mcp/server.ts`、`delivery/ceo-memo-context-and-scheduler.md`、`docs/design/ceo-native-conversation-design.md`
 
 ### 说明
 - 本次为只读分析与本地文档沉淀，没有修改业务代码。
@@ -22209,15 +15959,6 @@ Prompt Mode 现在已经具备完整的新链路：
 
 ### 产出
 - 新增研究文档：`docs/internals/craft-agents-provider-routing-and-pi-agent-study.md`
-
-### 验证依据
-- 双 backend 与 provider 分流：`craft-agents-oss/packages/shared/src/agent/backend/factory.ts`
-- Claude backend：`craft-agents-oss/packages/shared/src/agent/claude-agent.ts`
-- Pi backend：`craft-agents-oss/packages/shared/src/agent/pi-agent.ts`
-- Pi 子进程与真实 provider session：`craft-agents-oss/packages/pi-agent-server/src/index.ts`
-- 事件适配：`craft-agents-oss/packages/shared/src/agent/backend/pi/event-adapter.ts`、`craft-agents-oss/packages/shared/src/agent/backend/claude/event-adapter.ts`
-- 连接保存与 compat 路由：`craft-agents-oss/packages/server-core/src/handlers/rpc/llm-connections.ts`
-- README 对照：`craft-agents-oss/README.md`
 
 ### 说明
 - 本次为本地研究文档写作，没有修改 craft-agents-oss 源码。
@@ -22248,16 +15989,6 @@ Prompt Mode 现在已经具备完整的新链路：
 4. **Workspace 本质上是按文件夹组织**：服务端明确是“Obsidian-style: folder IS the workspace”；session 数据也直接存放在 `{workspaceRootPath}/sessions/{id}` 下。
 5. **同时还有全局注册层**：`~/.craft-agent/config.json` 负责登记 workspace 列表与激活状态，`~/.craft-agent/workspaces/{id}` 还承载部分补充性 workspace 数据（如 conversation / plan），但不是主工作目录本体。
 
-### 验证依据
-- 文档与说明：`craft-agents-oss/README.md`
-- CLI 连接与 workspace 引导：`craft-agents-oss/apps/cli/src/index.ts`
-- Backend 工厂与 provider 解析：`craft-agents-oss/packages/shared/src/agent/backend/factory.ts`
-- Claude backend：`craft-agents-oss/packages/shared/src/agent/claude-agent.ts`
-- Pi backend：`craft-agents-oss/packages/shared/src/agent/pi-agent.ts`
-- Pi 子进程服务：`craft-agents-oss/packages/pi-agent-server/src/index.ts`
-- LLM connection 配置与 auth env 解析：`craft-agents-oss/packages/shared/src/config/llm-connections.ts`
-- workspace / session 存储：`craft-agents-oss/packages/shared/src/workspaces/storage.ts`、`craft-agents-oss/packages/shared/src/sessions/storage.ts`
-
 ### 说明
 - 本次为静态代码审阅，没有修改 craft-agents-oss 业务代码。
 - 未运行集成测试；结论基于 README、CLI、server-core、shared agent/backend 与 storage 代码交叉核对。
@@ -22277,11 +16008,6 @@ Prompt Mode 现在已经具备完整的新链路：
 4. **CEO 决策入口埋在项目详情深处**：`ceoDecision` 和 `needs_decision` 的可操作 UI 主要存在于 `projects-panel.tsx` 的详情态，CEO 若停留在 CEO Office 会话页，不会获得统一的待决策工作台。
 5. **运行监控闭环不足**：Header 的 Runs Drawer 只展示 active runs，没有把“最近完成 / 最近失败 / 下一步建议”串回 CEO 的监控流；CEO 仍需手动跳项目、跳详情才能形成完整判断。
 
-### 验证
-- 静态核对：`src/app/page.tsx`、`src/components/ceo-office-settings.tsx`、`src/components/ceo-dashboard.tsx`、`src/components/projects-panel.tsx`、`src/components/project-workbench.tsx`、`src/components/notification-indicators.tsx`、`src/lib/ceo-events.ts`
-- 文档对照：`docs/opc-interaction-design-v2.md`、`docs/user-journey-gaps.md`
-- 结论依据：通过源码阅读和关键词回扫确认当前实际挂载关系、导航跳转、事件来源与决策入口分布；本次为前端静态分析，无运行时代码改动
-
 ## 任务：创建本地 Git 快照提交（不 push）
 
 **状态**: ✅ 已完成
@@ -22298,11 +16024,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - 当前分支：`main`
 - 操作方式：本地 `git add` + `git commit`
 - 不执行 `git push`
-
-### 验证
-- 提交前确认当前分支与工作区状态
-- 提交后通过 `git rev-parse HEAD` / `git log -1 --oneline` 确认 commit 已落地
-- 通过 `git status --short --branch` 确认工作区已收敛
 
 ## 任务：复核并修正 `ARCHITECTURE.md` 的 stage-centric 说明
 
@@ -22322,17 +16043,6 @@ Prompt Mode 现在已经具备完整的新链路：
 |:-----|:-----|
 | `ARCHITECTURE.md` | 修正 Agent Engine / Provider / CLI / 目录结构中的旧口径，统一到 stage-centric 终态 |
 
-### 验证
-- 关键字回扫：
-  - `rg -n -- '--template|group-runtime|Agent Engine<br/>Stage Runtime|Stage Runtime 角色执行|dispatch <templateId>|stageId|/api/agent-groups|dispatch-group|acceptedSourceGroupIds|group-registry|loadAllGroups' ARCHITECTURE.md`
-  - 结果：仅保留合理的 `group-runtime.ts` 文件名引用；CLI 和架构说明已收口到 `templateId + stageId`。
-- 旧接口残留检查：
-  - `rg -n "agent-groups|dispatch-group|groupId|--template|templateId \\| Pipeline 模板|stageId \\|" ARCHITECTURE.md`
-  - 结果：无命中。
-- 仓库静态检查：
-  - `git diff --check`
-  - 结果：通过。
-
 ### 结论
 - `ARCHITECTURE.md` 现在和当前实现是一致的。
 - 文档里仍出现 `group-runtime.ts` 仅表示**文件名仍未重命名**，不再表示对外存在 Group 派发语义。
@@ -22349,17 +16059,6 @@ Prompt Mode 现在已经具备完整的新链路：
 3. **唯一命中的 `browser-testing` 不是问题**：它在 `SKILL.md` 中出现的 `http://localhost:3000` 只是本地 Web 应用测试示例 URL，不依赖 Antigravity runtime 或 `templateId + stageId` 契约。
 4. **源码和数据文件中的 `dispatch` 命中也不是问题**：例如 `docx/scripts/accept_changes.py` 的 UNO dispatcher、`ui-ux-pro-max` 数据文件中的 `dispatch` 文本，都与 Gateway 调度完全无关。
 
-### 验证
-- Skill 文档契约扫描：
-  - `rg -n "groupId|templateId|stageId|/api/agent-runs|/api/projects|projectId|runId|sourceRunIds|pipelineStageIndex|acceptedSourceStageIds|acceptedSourceGroupIds|dispatch-group|/api/agent-groups|resume|intervene" ~/.gemini/antigravity/skills/*/SKILL.md`
-  - 结果：无命中。
-- 泛化运行时关键词扫描：
-  - `rg -n "localhost:3000|localhost:3000|file:///|Active Workspace|Project|Supervisor AI|Agent 运行时|dispatch 到" ~/.gemini/antigravity/skills/*/SKILL.md`
-  - 结果：仅 `browser-testing/SKILL.md` 命中本地 URL 示例；其余命中不涉及 Gateway 契约。
-- 全目录补充扫描：
-  - `rg -n "localhost:3000|/api/agent-runs|/api/projects|templateId|stageId|projectId|runId|sourceRunIds|pipelineStageIndex|groupId|dispatch-group|/api/agent-groups|acceptedSourceGroupIds|acceptedSourceStageIds|resume|intervene|dispatch" ~/.gemini/antigravity/skills`
-  - 结果：除 `browser-testing` 示例 URL 与非 Gateway 语义的 `dispatch` 文本外，无需要处理的命中。
-
 ### 结论
 - **当前无需修改的 skills**：`browser-testing`、`frontend-design`、`mcp-builder`、`theme-factory`、`webapp-testing` 等所有现有 skills
 - **当前需要继续关注的外部契约文档**：仍然是 `~/.gemini/antigravity/global_workflows/team-dispatch.md`，而不是 `skills/` 目录
@@ -22375,17 +16074,6 @@ Prompt Mode 现在已经具备完整的新链路：
 2. **结论明确**：当前直接绑定 Antigravity runtime 契约的 workflow，只有 `team-dispatch.md`。
 3. **其余 workflow 无需修改**：剩下文件要么是通用技能说明，要么只是引用 `~/.gemini/antigravity/skills/.../SKILL.md` 的 skill 入口文案，不直接描述 Gateway API、dispatch payload 或 stage/source contract。
 4. **因此本轮没有新增 workflow 改动**：上一轮已修好的 `team-dispatch.md` 仍是唯一需要收口的 runtime-bound workflow。
-
-### 验证
-- 运行时协议关键词扫描：
-  - `rg -n "localhost:3000|/api/agent-runs|/api/projects|templateId|stageId|projectId|runId|sourceRunIds|pipelineStageIndex|groupId" ~/.gemini/antigravity/global_workflows`
-  - 结果：只有 `team-dispatch.md` 命中。
-- 运行时耦合语义扫描：
-  - `rg -n "antigravity|gateway|Supervisor AI|Active Workspace|file:///|dispatch 到 Agent 运行时|多 Agent" ~/.gemini/antigravity/global_workflows`
-  - 结果：除 `team-dispatch.md` 外，其余命中均为 skill 路径引用或通用说明，不包含 Gateway API 契约。
-- 仓库静态检查：
-  - `git diff --check`
-  - 结果：通过。
 
 ### 结论
 - **需要继续关注的 runtime workflow**：仅 `~/.gemini/antigravity/global_workflows/team-dispatch.md`
@@ -22408,14 +16096,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | 文件 | 变更 |
 |:-----|:-----|
 | `~/.gemini/antigravity/global_workflows/team-dispatch.md` | 去掉单组 / `groupId` 派发说明，改为 `templateId + stageId` 语义 |
-
-### 测试与验证
-- 旧语义残留检查：
-  - `rg -n "groupId|单组派发|Group ID|\"groupId\"|acceptedSourceGroupIds|/api/agent-groups|dispatch-group" ~/.gemini/antigravity/global_workflows/team-dispatch.md`
-  - 结果：无命中。
-- 模板 stage 对齐检查：
-  - `jq -r '.id + ": " + (if .pipeline then (.pipeline | map(.stageId) | join(", ")) else (.graphPipeline.nodes | map(.id) | join(", ")) end)' .agents/assets/templates/*.json`
-  - 结果：已确认 `development-template-1` / `ux-driven-dev-template` 使用 `autonomous-dev-pilot`，并据此修正 workflow 示例。
 
 ### 额外说明
 - 本次只修改了外部 workflow 引导文案，没有变更仓库内模板资产；`.agents/assets/templates/*.json` 仍保持此前验证通过的 inline-only / stage-centric 状态。
@@ -22447,17 +16127,6 @@ Prompt Mode 现在已经具备完整的新链路：
   - `.agents/assets/templates/v4-smoke-branch-template.json`
   - `.agents/assets/templates/v4-smoke-template.json`
 
-### 验证
-- 关键词筛查：
-  - `rg -n "groupId|group id|groupIds|group-registry|dispatch-group|/api/agent-groups|acceptedSourceGroupIds|Group:" ~/.gemini/antigravity/global_workflows .agents/assets/templates`
-  - 结果：只有 `team-dispatch.md` 命中旧 Group 语义。
-- 模板残留检查：
-  - `rg -n '"groups"|"groupId"|acceptedSourceGroupIds|dispatch-group|/api/agent-groups' .agents/assets/templates`
-  - 结果：无命中。
-- 模板迁移稳定性：
-  - `npx tsx scripts/migrate-inline-templates.ts --check`
-  - 结果：10 个模板全部 `unchanged`。
-
 ### 额外说明
 - 本次是复核，没有直接修改 `~/.gemini/antigravity/global_workflows/team-dispatch.md`。如果需要，可以在下一步把它改成“单阶段派发 / `templateId + stageId`”版本。
 
@@ -22480,17 +16149,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | `scripts/ag.ts` | `dispatch` 改为 `dispatch <templateId> [--stage <stageId>]`；`runs` 支持 `--stage`；`run` / `project` 输出改成 Stage |
 | `docs/guide/cli-guide.md` | 更新 CLI 示例、参数表、输出示例与说明，去掉 `dispatch <groupId>` / `Group:` |
 | `docs/internals/agent-internals.md` | 将 `antigravity.task.groupId` 改为 `antigravity.task.stageId`，并刷新内部模块树说明 |
-
-### 测试与验证
-- CLI 帮助输出：
-  - `npx tsx scripts/ag.ts help`
-  - 结果：通过。帮助文本已显示 `dispatch <templateId>` 与 `--stage <stageId>`。
-- 构建验证：
-  - `npm run build`
-  - 结果：通过。Next.js production build 完成；构建日志中 `RunRegistry` 明确按新规则跳过 legacy run，记录 `skippedLegacy: 30`。
-- 静态检查：
-  - `git diff --check`
-  - 结果：通过。
 
 ### 额外说明
 - `npm run build` 期间 `ProjectRegistry` 仍会同步 demo 项目状态，因此再次回写了若干 `demolong/projects/*/project.json`。这些是运行态样本数据刷新，不是代码回退。
@@ -22543,17 +16201,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | `docs/guide/cli-api-reference.md` / `docs/guide/gateway-api.md` / `docs/guide/agent-user-guide.md` | 补充 `recover` 的迁移边界说明 |
 | `src/lib/agents/project-diagnostics.test.ts` / `src/lib/agents/project-reconciler.test.ts` / `src/lib/agents/checkpoint-manager.test.ts` / `src/lib/agents/pipeline/dag-runtime.test.ts` / `src/lib/ceo-events.test.ts` / `src/lib/agents/ceo-agent.test.ts` | 清理运行态 `groupId` 夹具与断言依赖 |
 
-### 测试与验证
-- 构建验证：
-  - `npm run build`
-  - 结果：通过。构建阶段日志确认旧 persisted run 已按新规则跳过，`RunRegistry` 记录 `skippedLegacy: 30`。
-- 相关测试：
-  - `npx vitest run src/lib/agents/pipeline/dag-runtime.test.ts src/lib/agents/project-diagnostics.test.ts src/lib/agents/project-reconciler.test.ts src/lib/agents/checkpoint-manager.test.ts src/lib/ceo-events.test.ts src/lib/agents/ceo-agent.test.ts`
-  - 结果：`6` 个测试文件全部通过，`108` 个测试全部通过。
-- 静态检查：
-  - `git diff --check`
-  - 结果：通过。
-
 ### 额外说明
 - `npm run build` 期间 `ProjectRegistry` 会继续同步 demo 项目状态，因此再次回写了若干 `demolong/projects/*/project.json`。这些是运行态样本数据更新，不是回退。
 - 当前仓库中剩余的 `groupId` 仅用于模板加载期 normalize、模板编辑器兼容类型和历史模板测试，不再参与 run/project 恢复。
@@ -22588,19 +16235,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | `.agents/assets/templates/*.json` | 全量迁移为 inline-only persisted templates |
 | `scripts/migrate-inline-templates.ts` | 新增正式模板迁移脚本 |
 
-### 测试与验证
-- 构建验证：
-  - `npm run build`
-  - 结果：通过。Next.js production build 完成，`/api/agent-groups` 路由已不再出现在构建产物中。
-- 模板迁移验证：
-  - `npx tsx scripts/migrate-inline-templates.ts --check`
-  - 结果：10 个 repo 模板全部 `unchanged`，说明 inline-only 迁移结果稳定。
-- 相关测试：
-  - `npx vitest run src/lib/agents/pipeline/dag-runtime.test.ts src/lib/agents/pipeline/graph-compiler.test.ts src/lib/agents/pipeline-generator.test.ts 'src/app/api/pipelines/[id]/route.test.ts' 'src/app/api/pipelines/generate/[draftId]/confirm/route.test.ts' src/lib/agents/project-diagnostics.test.ts src/lib/agents/project-reconciler.test.ts src/lib/agents/scheduler.test.ts`
-  - 结果：`8` 个测试文件全部通过，`149` 个测试全部通过。
-
----
-
 ## 任务：收尾 Group Elimination 文档与前端语义残留
 
 **状态**: ✅ 已完成
@@ -22627,17 +16261,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | `src/components/template-node-editor.tsx` | 编辑面板语义改为 Stage Config |
 | `src/components/template-group-card.tsx` | 删除未使用的旧 Group 组件 |
 | `docs/PROJECT_PROGRESS.md` | 记录本次收尾修改与验证结果 |
-
-### 验证结果
-- 构建验证：
-  - `npm run build`
-  - 结果：通过。
-- 回归测试：
-  - `npx vitest run src/lib/agents/pipeline-generator.test.ts 'src/app/api/pipelines/generate/[draftId]/confirm/route.test.ts' 'src/app/api/pipelines/[id]/route.test.ts'`
-  - 结果：`3` 个测试文件全部通过，`35` 个测试全部通过。
-- 静态残留检查：
-  - 对 `docs/design/group-elimination-design.md`、`docs/guide/graph-pipeline-guide.md`、`docs/guide/agent-user-guide.md` 以及模板编辑器相关组件执行 `rg` 检查
-  - 结果：文档中的 `groupId` 仅剩迁移说明；代码中的 `groupId` 仅保留 deprecated alias / 兼容读取路径
 
 ### 额外说明
 - `npm run build` 期间 `ProjectRegistry` 会加载并持久化 demo 项目状态，因此回写了若干 `demolong/projects/*/project.json`。这些是运行态样本数据更新，不是模板或业务逻辑回退。
@@ -22669,17 +16292,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | CEO 链路 | 已使用 stage-centric 摘要与派发 | `src/lib/agents/ceo-prompts.ts`、`src/components/projects-panel.tsx`、`src/app/page.tsx` |
 | 前端 / FE 类型残留 | 仍保留 Group 命名与兼容结构，未彻底收尾 | `src/components/template-browser.tsx`、`src/components/template-group-card.tsx`、`src/components/project-workbench.tsx`、`src/lib/types.ts` |
 | 文档同步 | 已做主文档同步，但设计审核文档与深层示例仍落后于实现 | `ARCHITECTURE.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md`、`docs/guide/mcp-server.md`、`docs/guide/graph-pipeline-guide.md` |
-
-### 验证依据
-- 构建验证：
-  - `npm run build`
-  - 结果：通过。
-- 模板迁移验证：
-  - `npx tsx scripts/migrate-inline-templates.ts --check`
-  - 结果：10 个模板全部稳定，无需额外回写。
-- 测试验证：
-  - `npx vitest run src/lib/agents/pipeline/dag-runtime.test.ts src/lib/agents/pipeline/graph-compiler.test.ts src/lib/agents/pipeline-generator.test.ts 'src/app/api/pipelines/[id]/route.test.ts' 'src/app/api/pipelines/generate/[draftId]/confirm/route.test.ts' src/lib/agents/project-diagnostics.test.ts src/lib/agents/project-reconciler.test.ts src/lib/agents/scheduler.test.ts`
-  - 结果：`8` 个测试文件全部通过，`149` 个测试全部通过。
 
 ### 结论
 - `docs/design/group-elimination-design.md` 现在更像是“审核期的历史计划”，不是仓库当前真实状态的终态说明。
@@ -22714,14 +16326,6 @@ Prompt Mode 现在已经具备完整的新链路：
 - AI 生成链路：`pipeline-generator.ts`、`generation-context.ts`、`risk-assessor.ts`、`pipelines/generate/[draftId]/confirm/route.ts`
 - API / MCP / 前端：`/api/pipelines*`、`/api/agent-runs`、`src/mcp/server.ts`、`template-browser.tsx`、`project-workbench.tsx`、`stage-detail-panel.tsx`、`scheduler-panel.tsx`
 
-### 测试结果
-- 运行命令：
-  `npx vitest run src/lib/agents/pipeline/dag-runtime.test.ts src/lib/agents/pipeline/graph-compiler.test.ts src/lib/agents/pipeline-generator.test.ts 'src/app/api/pipelines/[id]/route.test.ts' 'src/app/api/pipelines/generate/[draftId]/confirm/route.test.ts' src/lib/agents/project-diagnostics.test.ts src/lib/agents/project-reconciler.test.ts`
-- 结果：`7` 个测试文件全部通过，`146` 个测试全部通过。
-- 用时：`453ms`
-
----
-
 ## 任务：计算 1+10 并打印结果
 
 **状态**: ✅ 已完成
@@ -22735,12 +16339,6 @@ Prompt Mode 现在已经具备完整的新链路：
 | 文件 | 变更 |
 |:-----|:-----|
 | `/tmp/calculate_1_plus_10.py` | 新增脚本文件（临时） |
-
-### 测试结果
-- 运行 `python3 -c "print(1 + 10)"` 输出结果为 `11`。
-- 脚本验证通过。
-
----
 
 ## Phase 6.1: CEO 决策持久化 + 项目详情展示
 ... (preserved original content)
@@ -22860,13 +16458,6 @@ Prompt Mode 现在已经具备完整的新链路：
 }
 ```
 
-### 验证结果
-- ✅ TypeScript 编译通过（0 新增错误）
-- ✅ `native-codex` 已注册到 Provider Registry
-- ✅ NativeCodexExecutor 已接入 getExecutor() 工厂
-- ✅ GPT-5.4 / GPT-5.4-mini 模型配置正确
-- ✅ OAuth 认证流程完整实现
-
 ## 任务：OPC 前端导航重构（Header 主菜单 + Context Sidebar）
 
 **状态**: ✅ 已完成
@@ -22894,33 +16485,11 @@ Prompt Mode 现在已经具备完整的新链路：
 - `src/components/projects-panel.tsx`
   - 修复移动端顶部操作条溢出，`AI Generate` / `Create Project` 在窄屏下可换行且不再被裁切
 
-### 构建修复（为完成端到端验证一并处理）
-- `src/app/api/conversations/route.ts`
-  - 修复 `discoverLanguageServers()` / `getLanguageServer()` 的 Promise 漏 `await` 类型错误
-- `src/lib/agents/group-runtime.ts`
-  - 将若干 provider 路由值显式收口到 `ProviderId`
-- `src/lib/claude-engine/tools/session-search.ts`
-  - 补齐 `Tool` 必需字段并修正 `description` 签名
-- `scripts/ag-wechat.ts`
-  - 添加模块边界，消除全局脚本重复 `main()` 的 TypeScript 错误
-- `test-xueqiu.ts`
-  - 改为标准 async 入口，移除顶层 `await` 构建错误
-
 ### 文档同步
 - `docs/opc-interaction-design-v2.md`
   - 标注当前已落地的实现形态为 **顶部主导航 + 左侧上下文栏**
 - `docs/guide/agent-user-guide.md`
   - 更新主界面入口说明，明确 Header 一级主菜单、Sidebar 二级上下文、Settings 迁移到工具区
-
-### 验证
-- `npm run build` ✅
-  - 最终完整通过；保留一个 Turbopack 现有性能 warning（`run-registry.ts` 广泛文件模式），但不阻塞构建
-- Playwright 截图验证 ✅
-  - 桌面 `1440px`：`/tmp/opc-nav-desktop.png`
-  - 平板 `1024px`：`/tmp/opc-nav-tablet.png`
-  - 移动端首页：`/tmp/opc-nav-mobile-home.png`
-  - 移动端主菜单：`/tmp/opc-nav-mobile-menu.png`
-  - 移动端上下文侧栏：`/tmp/opc-nav-mobile-context.png`
 
 ## 任务：第三方 Provider 入口与对接交互补全
 
@@ -22961,19 +16530,6 @@ Prompt Mode 现在已经具备完整的新链路：
 ### 文档同步
 - `docs/guide/agent-user-guide.md`
   - 新增 Web UI 第三方 Provider 使用说明，包括入口位置、接入流程和执行语义
-
-### 验证
-- `npm run build` ✅
-  - 完整通过；仍保留现有 Turbopack 广泛文件模式 warning，不阻塞构建
-- Playwright 截图验证 ✅
-  - Settings 首屏第三方 Provider：`/tmp/provider-settings.png`
-  - Ops 快捷入口：`/tmp/provider-ops.png`
-  - Ops → Settings 聚焦跳转：`/tmp/provider-settings-from-ops.png`
-- 接口与持久化验证 ✅
-  - `POST /api/api-keys/test` with invalid custom base URL → `{"status":"error","error":"base URL invalid"}`
-  - `PUT /api/ai-config` with temporary `customProvider.vendor = "openai-compatible"` → `{"ok":true}`
-  - 随后 `GET /api/ai-config` 成功读回 `vendor/baseUrl/defaultModel`
-  - 测试后已自动恢复原始 `ai-config.json`
 
 ## 任务：Provider 完整支持补全（Claude / Codex / Gemini / Grok）
 
@@ -23048,17 +16604,6 @@ Prompt Mode 现在已经具备完整的新链路：
   - 新增 Provider Credentials API 示例
 - `docs/guide/agent-user-guide.md`
   - 新增 Claude / Codex / Gemini / Grok / OpenAI Compatible 支持矩阵说明
-
-### 验证
-- `npm run build` ✅
-- `curl -s http://127.0.0.1:3000/api/api-keys` ✅
-  - 返回 `anthropic/openai/gemini/grok` key 状态
-  - 返回 `codex/nativeCodex/claudeCode` 安装/登录态
-- Backend registry 验证 ✅
-  - `antigravity,claude-api,claude-code,codex,custom,gemini-api,grok-api,native-codex,openai-api`
-- Playwright 截图验证 ✅
-  - 完整 Provider 配置页：`/tmp/provider-matrix-settings.png`
-  - 完整 API Keys 页：`/tmp/provider-matrix-api-keys.png`
 
 ## 任务：仓库级浏览器验证工具偏好切换为 bb-browser
 
@@ -23337,43 +16882,6 @@ proposal 发布后，系统会基于后续 runs 观测：
 
 这让 CEO 经营面真正开始看到“知识 -> 提案 -> 治理 -> 发布 -> 观察”的链路。
 
-### 验证
-
-#### 自动化测试
-
-通过：
-
-```bash
-npm test -- src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/proposals/generate/route.test.ts 'src/app/api/evolution/proposals/[id]/publish/route.test.ts' src/lib/evolution/__tests__/generator.test.ts src/lib/evolution/__tests__/evaluator.test.ts src/lib/evolution/__tests__/publisher.test.ts src/lib/approval/__tests__/handler.test.ts
-```
-
-结果：
-
-- `7 files passed`
-- `7 tests passed`
-
-覆盖：
-
-1. proposal list route
-2. generate route
-3. publish route
-4. knowledge/repeated-runs proposal generation
-5. historical evaluation
-6. proposal publish
-7. approval callback 真正发布 workflow
-
-#### lint
-
-通过：
-
-```bash
-npx eslint src/lib/evolution/contracts.ts src/lib/evolution/store.ts src/lib/evolution/generator.ts src/lib/evolution/evaluator.ts src/lib/evolution/publisher.ts src/lib/evolution/index.ts src/lib/evolution/__tests__/generator.test.ts src/lib/evolution/__tests__/evaluator.test.ts src/lib/evolution/__tests__/publisher.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/dispatcher.ts src/lib/approval/types.ts src/app/api/evolution/proposals/route.ts src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/proposals/generate/route.ts src/app/api/evolution/proposals/generate/route.test.ts 'src/app/api/evolution/proposals/[id]/route.ts' 'src/app/api/evolution/proposals/[id]/evaluate/route.ts' 'src/app/api/evolution/proposals/[id]/publish/route.ts' 'src/app/api/evolution/proposals/[id]/publish/route.test.ts' 'src/app/api/evolution/proposals/[id]/observe/route.ts' src/components/ceo-dashboard.tsx src/components/knowledge-panel.tsx src/components/approval-panel.tsx src/lib/api.ts src/lib/types.ts src/lib/storage/gateway-db.ts
-```
-
-#### Patch 校验
-
-待本轮所有文档补齐后统一通过 `git diff --check`。
-
 ### 本轮收口判断
 
 按用户文档里 `Phase 5：Evolution Pipeline v1` 的出口标准：
@@ -23406,34 +16914,6 @@ npx eslint src/lib/evolution/contracts.ts src/lib/evolution/store.ts src/lib/evo
 7. Ops 准出证据可跳转到关联 Projects 执行记录。
 8. 自动边界仍止于 `ready-to-merge`；merge / restart 仍需 CEO / Ops 显式准出。
 
-验证通过：
-
-```bash
-npm test -- src/lib/app-url-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts
-```
-
-结果：`3 files passed, 11 tests passed`
-
-```bash
-npx eslint src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/ops-dashboard.tsx src/lib/app-url-state.ts src/lib/app-url-state.test.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实浏览器体验验证通过：
-
-1. CEO Office 决策队列可见 `Self-evolution Codex runner smoke test`。
-2. 点击后进入 `/?section=operations&proposal=system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950`。
-3. Ops 可见 `准出证据`、proposal 标题和 `查看项目执行`。
-4. 刷新后仍保留 proposal 深链并显示同一准出证据。
-5. `查看项目执行` 可跳到 `/?section=projects&project=7d8969c5-93db-417a-b933-813586c78d83`。
-
 ## 2026-05-01：Self-Evolution Release Gate 产品化
 
 **状态**: ✅ 已完成并验证
@@ -23455,34 +16935,6 @@ git diff --check
 6. Ops 的“准出证据”卡片升级为 release gate 工作台，可查看 checks、patch、merge / verify / restart / rollback 命令，并执行准出状态流转。
 7. CEO Office 决策队列和 CEO Dashboard 已显示 release gate 状态摘要。
 
-验证通过：
-
-```bash
-npm test -- src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts src/lib/company-kernel/self-improvement-execution.test.ts src/lib/app-url-state.test.ts
-```
-
-结果：`4 files passed, 13 tests passed`
-
-```bash
-npm test -- src/app/api/company/loops-self-improvement.route.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts
-```
-
-结果：`2 files passed, 5 tests passed`
-
-```bash
-npx eslint src/lib/company-kernel/self-improvement-release-gate.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.ts src/lib/company-kernel/self-improvement-observer.ts src/lib/company-kernel/contracts.ts src/lib/types.ts src/lib/api.ts src/components/ops-dashboard.tsx src/components/ceo-office-cockpit.tsx src/components/ceo-dashboard.tsx 'src/app/api/company/self-improvement/proposals/[id]/release-gate/route.ts' src/server/control-plane/company-routes.ts
-```
-
-```bash
-npx tsc --noEmit --pretty false
-```
-
-真实浏览器体验验证通过：
-
-1. Ops 深链 `/?section=operations&proposal=system-improvement-proposal-8012b3c4-1cc8-42a7-bbd5-31f8a0773950` 可见 Release Gate。
-2. 点击 `准出预检` 会真实调用 release gate API。
-3. 当前 smoke proposal 因 worktree patch 存在 trailing whitespace 被预检挡住，状态显示 `预检失败`。
-4. 页面刷新后仍保留 release gate 状态。
 # 任务：系统改进待审批 ghost 与决策深链收口
 
 **状态**: ✅ 已完成
@@ -23522,54 +16974,3 @@ npx tsc --noEmit --pretty false
    - `ARCHITECTURE.md`
    - `docs/design/decision-control-plane-audit-2026-05-06.md`
    - `docs/guide/agent-user-guide.md`
-
-### 本轮验证
-
-通过：
-
-```bash
-npx eslint src/lib/decision-control.ts src/lib/decision-control.test.ts src/lib/company-kernel/self-improvement-control-state.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-store.ts src/lib/company-kernel/self-improvement.test.ts src/lib/bridge/codex-adapter.ts src/lib/bridge/codex-adapter.test.ts
-```
-
-```bash
-npx vitest run --maxWorkers=1 --minWorkers=1 --testTimeout=60000 src/lib/decision-control.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement.test.ts src/lib/bridge/codex-adapter.test.ts
-```
-
-结果：4 个测试文件、14 个测试全部通过。
-
-```bash
-cp .next/types/routes.d.ts .next/dev/types/routes.d.ts
-npx tsc --noEmit --pretty false
-```
-
-```bash
-git diff --check
-```
-
-真实链路验证通过：
-
-1. `GET /api/company/ceo/decisions?limit=20`
-   - 返回 `items=[]`
-   - CEO 决策队列已不存在 ghost 系统改进待审批
-2. `GET /api/company/self-improvement/proposals/system-improvement-proposal-4e55...`
-   - 返回：
-     - `status = rejected`
-     - `controlState.currentOwner = none`
-     - `controlState.nextAction = none`
-     - `entryApprovalSummary.status = approved`
-   - 说明：
-     - 真实准入批准事实仍保留
-     - 该 proposal 已按“主仓已落地”关闭，不再进入 CEO 队列
-3. `GET /api/company/self-improvement/proposals/:id/run-codex`
-   - 在 `localhost:3000` 现有 web watcher 重新加载后返回 `405 Method Not Allowed`
-   - 说明路由已被正确挂载，不再是之前的 `404`
-4. `POST /api/company/self-improvement/proposals/:id/run-codex`（经 `localhost:3101` 真实触发）
-   - 实际观察到新的子进程：
-     - `codex exec --cd <worktree> --sandbox workspace-write -`
-   - 已不再复现旧错误 `Reading additional input from stdin...`
-   - 随后因为我触发了 watcher 重载，live run 被打断为：
-     - `Process restarted while run was in progress`
-   - 说明 stdin 崩溃路径已消失，后续剩余的是正常服务重载副作用，而不是旧执行器 bug
-5. 短 URL 验证：
-   - `GET http://localhost:3000/?decision=si~system-improvement-proposal-4e55adf5-9863-4b61-bbdc-7f7f808f99f6`
-   - 返回 `HTTP/1.1 200 OK`

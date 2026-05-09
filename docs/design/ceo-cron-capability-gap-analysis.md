@@ -3,7 +3,7 @@
 **日期**: 2026-04-08
 **范围**: CEO Office / Scheduler / CEO Command / MCP / Event Flow
 
-> 更新说明：本文记录的是实现前的能力差距快照。截止 2026-04-08 晚间，仓库已经补齐 CEO Dashboard 自然语言创建定时任务、`/api/ceo/command` 的 schedule intent 解析、MCP 的 scheduler 写能力，以及 scheduler 审计事件回流 CEO 视图。本文剩余价值主要在于解释当时为什么会出现这个缺口，以及哪些深层产品问题仍值得继续优化。
+> 更新说明：本文记录的是实现前的能力差距快照。截止 2026-04-08 晚间，仓库曾补齐 CEO Dashboard 自然语言创建定时任务、legacy CEO command API 的 schedule intent 解析、MCP 的 scheduler 写能力，以及 scheduler 审计事件回流 CEO 视图。本文剩余价值主要在于解释当时为什么会出现这个缺口，以及哪些深层产品问题仍值得继续优化。
 
 ## 一页结论
 
@@ -111,7 +111,7 @@ Scheduler 基础能力并不缺：
 
 从现有代码和搜索结果看，CEO 命令链路目前并没有一个显式的 scheduler 创建能力：
 
-1. [src/app/api/ceo/command/route.ts](src/app/api/ceo/command/route.ts) 仍然把自然语言交给 `processCEOCommand(...)`。
+1. legacy CEO command route 仍然把自然语言交给 legacy CEO command processor。
 2. 现有仓库中没有找到与 scheduler / cron / schedule 相关的 CEO prompt、playbook 或 agent 分支实现。
 3. [docs/design/ceo-native-conversation-design.md](docs/design/ceo-native-conversation-design.md) 也明确写了当前 CEO 路径仍是 `llm-oneshot`，**无多轮对话、无流式、无工具调用**。
 

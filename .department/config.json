@@ -1,8 +1,20 @@
 {
-  "name": "超级 IT 研发部",
+  "departmentId": "department:file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+  "name": "Antigravity-Mobility-CLI",
   "type": "operations",
   "typeIcon": "⚙️",
-  "description": "开发 OPC 的主要部门，通过 AI 技术，让 OPC 可以落地，主要目标肯定是产品研发，但是产品研发是为了服务内部 AI 的落地。",
   "skills": [],
-  "okr": null
+  "okr": null,
+  "workspaceBindings": [
+    {
+      "workspaceUri": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+      "role": "primary",
+      "alias": "Antigravity-Mobility-CLI",
+      "writeAccess": true
+    }
+  ],
+  "executionPolicy": {
+    "defaultWorkspaceUri": "file:///Users/darrel/Documents/Antigravity-Mobility-CLI",
+    "contextDocumentPaths": []
+  }
 }

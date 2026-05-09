@@ -339,6 +339,23 @@ describe('GET /api/agent-runs', () => {
     );
   });
 
+  it('supports filtering by workspace and projectless', async () => {
+    const req = new Request('http://localhost/api/agent-runs?workspace=file%3A%2F%2F%2Ftmp%2Fai-news&projectless=true');
+    await GET(req);
+
+    expect(vi.mocked(countRunRecordsByFilter)).toHaveBeenCalledWith({
+      workspace: 'file:///tmp/ai-news',
+      projectless: true,
+    });
+    expect(vi.mocked(listRunRecordsByFilter)).toHaveBeenCalledWith(
+      {
+        workspace: 'file:///tmp/ai-news',
+        projectless: true,
+      },
+      { limit: 50, offset: 0 },
+    );
+  });
+
   it('returns paginated list items without heavyweight detail envelopes', async () => {
     vi.mocked(countRunRecordsByFilter).mockReturnValue(1);
     vi.mocked(listRunRecordsByFilter).mockReturnValue([
@@ -442,5 +459,45 @@ describe('GET /api/agent-runs', () => {
       total: 1,
       hasMore: false,
     });
+  });
+
+  it('keeps projectless list items free of synthetic projectId fields', async () => {
+    vi.mocked(countRunRecordsByFilter).mockReturnValue(1);
+    vi.mocked(listRunRecordsByFilter).mockReturnValue([
+      {
+        runId: 'run-projectless-1',
+        stageId: 'prompt',
+        workspace: 'file:///tmp/workspace',
+        prompt: 'Generate a digest',
+        status: 'completed',
+        createdAt: '2026-04-20T10:00:00.000Z',
+        triggerContext: {
+          source: 'scheduler',
+          schedulerJobId: 'job-1',
+        },
+        result: {
+          status: 'completed',
+          summary: 'Digest posted',
+          changedFiles: [],
+          blockers: [],
+          needsReview: [],
+        },
+      } as never,
+    ]);
+
+    const res = await GET(new Request('http://localhost/api/agent-runs?projectless=true'));
+    const payload = await res.json();
+
+    expect(payload.items).toEqual([
+      expect.objectContaining({
+        runId: 'run-projectless-1',
+        workspace: 'file:///tmp/workspace',
+        triggerContext: {
+          source: 'scheduler',
+          schedulerJobId: 'job-1',
+        },
+      }),
+    ]);
+    expect(payload.items[0]).not.toHaveProperty('projectId');
   });
 });

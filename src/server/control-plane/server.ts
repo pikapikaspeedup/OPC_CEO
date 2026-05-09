@@ -31,7 +31,6 @@ import {
 import { handleApprovalEventsStream } from '@/server/control-plane/routes/approval-events';
 import { createCompanyControlPlaneRoutes } from '@/server/control-plane/company-routes';
 import {
-  handleCEOCommandPost,
   handleCEOEventsGet,
   handleCEOProfileFeedbackPost,
   handleCEOProfileGet,
@@ -367,15 +366,6 @@ export function createControlPlaneRoutes(options: { includeHealth?: boolean } = 
         handler: async (req) => {
           if (req.method === 'POST') {
             return handleProviderImageGenerationPost(req);
-          }
-          return methodNotAllowedResponse(['POST']);
-        },
-      },
-      {
-        pattern: /^\/api\/ceo\/command$/,
-        handler: async (req) => {
-          if (req.method === 'POST') {
-            return handleCEOCommandPost(req);
           }
           return methodNotAllowedResponse(['POST']);
         },

@@ -198,6 +198,42 @@ describe('guarded self-improvement kernel', () => {
     expect(passed?.testEvidence.map((item) => item.status)).toEqual(['failed', 'passed']);
   });
 
+  it('promotes story-top candidates directly into CEO admission approval', async () => {
+    const modules = await loadModules();
+    const signal = modules.signal.createSystemImprovementSignal({
+      source: 'user-story-gap',
+      title: '系统改进：候选改进支持直接立项',
+      summary: '候选故事应可直接升格为正式提案。',
+      evidenceRefs: [{
+        id: 'ev-story-top',
+        type: 'file',
+        label: 'Story source',
+        filePath: '/tmp/User Story/CEO Office/CEO 办公室.md',
+        excerpt: '作为 CEO，我希望候选改进可以直接立项。',
+        createdAt: '2026-05-07T08:00:00.000Z',
+      }],
+      metadata: {
+        candidateKind: 'story-top',
+        candidateActive: true,
+        storyKey: 'ceo-office-direct-proposal',
+        sourcePath: 'User Story/CEO Office/CEO 办公室.md',
+        storyText: '作为 CEO，我希望候选改进可以直接立项。',
+        expectedOutcome: 'CEO 能直接把故事升格成正式提案。',
+        rationale: '缩短立项链路。',
+      },
+    });
+
+    const proposal = modules.planner.generateSystemImprovementProposal({
+      signalIds: [signal.id],
+    });
+
+    expect(proposal.status).toBe('approval-required');
+    expect(proposal.risk).toBe('high');
+
+    const withApproval = await modules.approval.ensureSystemImprovementApprovalRequest(proposal.id);
+    expect(withApproval.approvalRequestId).toBeTruthy();
+  });
+
   it('deletes legacy approval-required proposals that have no approval request', async () => {
     const modules = await loadModules();
 

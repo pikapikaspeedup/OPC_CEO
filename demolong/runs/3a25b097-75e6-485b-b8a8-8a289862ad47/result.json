@@ -1,0 +1,18 @@
+{
+  "status": "failed",
+  "summary": "Top 3 候选写回失败：story-top-candidates.json not found",
+  "changedFiles": [],
+  "blockedReason": "Top 3 候选写回失败：story-top-candidates.json not found",
+  "promptResolution": {
+    "mode": "workflow",
+    "requestedWorkflowRefs": [
+      "/platform_engineering_story_candidates"
+    ],
+    "requestedSkillHints": [],
+    "matchedWorkflowRefs": [
+      "/platform_engineering_story_candidates"
+    ],
+    "matchedSkillRefs": [],
+    "resolutionReason": "Prompt Mode received explicit workflow refs (platform_engineering_story_candidates); provider should prefer them."
+  }
+}

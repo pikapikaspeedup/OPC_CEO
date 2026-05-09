@@ -35,6 +35,15 @@ export function countConfiguredDepartments(
   ), 0);
 }
 
+export function countExistingDepartments(
+  workspaces: Array<{ uri: string }>,
+  departments: Map<string, DepartmentConfig>,
+): number {
+  return workspaces.reduce((count, workspace) => (
+    count + (departments.has(workspace.uri) ? 1 : 0)
+  ), 0);
+}
+
 export function getSidebarLoadPlan(section: AppShellSection): SidebarLoadPlan {
   switch (section) {
     case 'conversations':
@@ -110,4 +119,11 @@ export function shouldShowShellSidebar(
   utilityPanel: AppShellUtilityPanel,
 ): boolean {
   return utilityPanel === null;
+}
+
+export function shouldIncludeConversationInUrl(
+  section: AppShellSection,
+  scope: 'ceo' | 'conversations' | null,
+): boolean {
+  return section === 'conversations' && scope === 'conversations';
 }

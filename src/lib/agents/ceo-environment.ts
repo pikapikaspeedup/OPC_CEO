@@ -186,7 +186,8 @@ curl -X POST http://localhost:3000/api/projects \\
   -d '{
     "name": "<业务缩写名，如: aitrend-feature-dev>",
     "goal": "<项目要达成的核心指标>",
-    "workspace": "<确认后的部门绝对路径>"
+    "workspace": "<确认后的部门绝对路径>",
+    "projectType": "adhoc"
   }'
 \`\`\`
 记下返回的 \`projectId\`。
@@ -206,7 +207,11 @@ curl -X POST http://localhost:3000/api/agent-runs \\
     "projectId": "<Step 3.1 拿到的 projectId>",
     "workspace": "<部门绝对路径>",
     "prompt": "<结构化的任务目标描述>",
-    "model": "<Step 2.4 选出的模型 ID>"
+    "model": "<Step 2.4 选出的模型 ID>",
+    "triggerContext": {
+      "source": "ceo-workflow",
+      "intentSummary": "<用户原始指令摘要>"
+    }
   }'
 \`\`\`
 
@@ -222,7 +227,11 @@ curl -X POST http://localhost:3000/api/agent-runs \\
     "projectId": "<projectId>",
     "workspace": "<部门绝对路径>",
     "prompt": "<目标>",
-    "model": "<模型 ID>"
+    "model": "<模型 ID>",
+    "triggerContext": {
+      "source": "ceo-workflow",
+      "intentSummary": "<用户原始指令摘要>"
+    }
   }'
 \`\`\`
 
@@ -238,6 +247,10 @@ curl -X POST http://localhost:3000/api/agent-runs \\
     "workspace": "<部门绝对路径>",
     "prompt": "<目标：你要批量干什么？必须提供详细数据清单>",
     "model": "",
+    "triggerContext": {
+      "source": "ceo-workflow",
+      "intentSummary": "<用户原始指令摘要>"
+    },
     "templateOverrides": { "maxConcurrency": 5 }
   }'
 \`\`\`
@@ -313,6 +326,7 @@ MCP 创建参数示例：
   "goal": "创建一个日报任务项目，目标是汇总当前进行中的项目与风险",
   "skillHint": "reporting",
   "createProjectTemplateId": "universal-batch-template",
+  "createdBy": "ceo-workflow",
   "intentSummary": "每天工作日上午 9 点让市场部创建一个日报任务项目，目标是汇总当前进行中的项目与风险"
 }
 \`\`\`
@@ -352,6 +366,7 @@ MCP 创建参数示例：
   "cronExpression": "0 10 * * 1",
   "actionKind": "health-check",
   "projectId": "<projectId>",
+  "createdBy": "ceo-workflow",
   "intentSummary": "每周一上午 10 点巡检项目 Alpha 的健康度"
 }
 \`\`\`
@@ -370,6 +385,7 @@ MCP 创建参数示例：
   "prompt": "执行每周 UX 巡检并生成评审结论",
   "templateId": "ux-driven-dev-template",
   "stageId": "ux-review",
+  "createdBy": "ceo-workflow",
   "intentSummary": "每周一 10 点让设计部执行 UX 周检"
 }
 \`\`\`
@@ -488,7 +504,7 @@ export function ensureCEOWorkspaceOpen(runningWorkspaces: string[]): void {
       stdio: 'ignore',
     });
     log.info('CEO workspace launched successfully');
-  } catch (e: any) {
-    log.error({ err: e.message }, 'Failed to auto-launch CEO workspace');
+  } catch (e: unknown) {
+    log.error({ err: e instanceof Error ? e.message : String(e) }, 'Failed to auto-launch CEO workspace');
   }
 }

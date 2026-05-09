@@ -122,4 +122,21 @@ describe('scheduler company loop integration', () => {
     expect(weekly?.action).toEqual({ kind: 'company-loop', loopKind: 'weekly-review', policyId: policy.id });
     modules.scheduler.stopScheduler();
   });
+
+  it('installs built-in platform engineering story candidate job on scheduler init', async () => {
+    const modules = await loadModules();
+
+    modules.scheduler.initializeScheduler();
+
+    const job = modules.scheduler.listScheduledJobs().find((item) => item.jobId === 'builtin-platform-engineering-story-top-candidates');
+    expect(job).toBeTruthy();
+    expect(job?.type).toBe('cron');
+    expect(job?.cronExpression).toBe('0 9 * * *');
+    expect(job?.action).toEqual(expect.objectContaining({
+      kind: 'dispatch-prompt',
+      promptAssetRefs: ['/platform_engineering_story_candidates'],
+    }));
+    expect(job?.action.kind === 'dispatch-prompt' ? job.action.workspace : '').toContain('file://');
+    modules.scheduler.stopScheduler();
+  });
 });

@@ -31,10 +31,10 @@ Antigravity Mobility CLI 是一个 Multi-Agent 协作平台，核心能力是：
 
 **调用链**：
 ```
-用户在 GlobalCommandBar 输入 → api.ceoCommand(text)
-→ POST /api/ceo/command/route.ts
+用户在 GlobalCommandBar 输入 → legacy CEO command client
+→ legacy CEO command route
 → loadDepartments()  [读取所有 workspace 的 .department/config.json]
-→ processCEOCommand(command, departments)  [ceo-agent.ts, 808行]
+→ legacy CEO command processor
   ├─ 快速路径：状态查询（关键词匹配 → 直接返回统计数据）
   ├─ 快速路径：干预意图（取消/暂停/重试 → 直接操作 Run/Project）
   └─ LLM 决策路径：
@@ -45,7 +45,7 @@ Antigravity Mobility CLI 是一个 Multi-Agent 协作平台，核心能力是：
         ├─ ceoCreateProject()  [创建项目]
         ├─ executeDispatch()   [dispatch-service.ts: 解析 template→stage→派发 Run]
         └─ updateProject()     [持久化 ceoDecision 到项目记录]
-→ 返回 CEOCommandResult → 前端 Toast 展示
+→ 返回 legacy command result → 前端 Toast 展示
 ```
 
 **关键特征**：
@@ -126,7 +126,7 @@ Chat 组件 (chat.tsx, 524行) → /api/conversations/[id]/send
 ### Phase 2：CEO 后处理逻辑解耦
 
 **修改** `src/lib/agents/ceo-agent.ts`
-- 把 `processDispatchDecision()` 等后处理逻辑从"只能被 `/api/ceo/command` 调用"的封闭结构中抽出
+- 把 `processDispatchDecision()` 等后处理逻辑从"只能被 legacy CEO command API 调用"的封闭结构中抽出
 - 确保 `/api/projects` POST + `/api/agent-runs` POST 的组合能覆盖 CEO 的所有调度操作
 - 这样，未来在对话模式中，AI 可以通过调用这些标准 API（而非需要解析 JSON 的 oneshot 模式）来完成同样的操作
 
@@ -163,7 +163,7 @@ Chat 组件 (chat.tsx, 524行) → /api/conversations/[id]/send
 
 **无破坏（No Breaking）**：
 - 所有现有的 `dispatch-service.ts`、`group-runtime.ts`、`project-registry.ts` 保持原样
-- `/api/ceo/command` 保留作为短平快兼容入口
+- legacy CEO command API 保留作为短平快兼容入口
 
 ---
 

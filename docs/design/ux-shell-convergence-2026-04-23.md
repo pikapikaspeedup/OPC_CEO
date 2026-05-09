@@ -556,7 +556,7 @@ web 角色隔离已落地：
 - OPC / CEO 深层组件
   - `ProjectOpsPanel` 从旧暗色卡片迁移到 `WorkspaceSurface`，覆盖 health、stage、branch、reconcile、policy、journal、checkpoint、audit
   - `Chat` 的 planner/notify/empty state 改为浅色气泡与浅色空态，工具组不再使用暗底
-  - `CEOSchedulerCommandCard` 改为浅色渐变、浅色 preset、浅色结果卡，并移除 Prompt Run / Ad-hoc Project emoji
+  - legacy CEO scheduler command card 改为浅色渐变、浅色 preset、浅色结果卡，并移除 Prompt Run / Ad-hoc Project emoji
   - `CEODashboard / DepartmentComparisonWidget / DepartmentMemoryPanel / DepartmentDetailDrawer` 移除显性 emoji 标题，改用 lucide 图标
 - Settings / 弹窗 / Portal
   - `CEOProfileSettingsTab` 从旧深色 profile 卡片改为浅色 token 和公共 field/action class

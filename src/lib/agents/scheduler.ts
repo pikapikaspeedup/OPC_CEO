@@ -32,6 +32,8 @@ import type { BudgetLedgerEntry, OperatingAgendaItem } from '../company-kernel/c
 import { buildSchedulerOperatingSignal } from '../company-kernel/operating-signal';
 import { updateOperatingSignalStatus, upsertOperatingSignal } from '../company-kernel/operating-signal-store';
 import type { PipelineStageProgress } from './project-types';
+import { getPlatformEngineeringWorkspaceUri } from '../platform-engineering';
+import { STORY_TOP_CANDIDATE_WORKFLOW_REF } from '../story-top-candidates';
 
 const log = createLogger('Scheduler');
 const MIN_LOOP_INTERVAL_MS = 1_000;
@@ -153,6 +155,7 @@ function loadJobs(force = false): void {
 
 const BUILT_IN_COMPANY_DAILY_LOOP_ID = 'builtin-company-daily-loop';
 const BUILT_IN_COMPANY_WEEKLY_REVIEW_ID = 'builtin-company-weekly-review';
+const BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID = 'builtin-platform-engineering-story-top-candidates';
 const BUILT_IN_LOOP_WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function clampInteger(value: number, min: number, max: number): number {
@@ -167,6 +170,19 @@ function safeLoopTimeZone(timeZone: string): string {
   } catch {
     return 'Asia/Shanghai';
   }
+}
+
+function detectLocalTimeZone(): string {
+  const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (resolved) {
+    try {
+      validateTimeZone(resolved);
+      return resolved;
+    } catch {
+      // fall through
+    }
+  }
+  return 'UTC';
 }
 
 function buildBuiltInCompanyLoopJobs(now: string): ScheduledJob[] {
@@ -202,6 +218,28 @@ function buildBuiltInCompanyLoopJobs(now: string): ScheduledJob[] {
       intentSummary: 'Weekly autonomous company growth and risk review',
     },
   ];
+}
+
+function buildBuiltInPlatformEngineeringStoryCandidateJob(now: string): ScheduledJob {
+  const repoWorkspaceUri = normalizeWorkspaceUri(`file://${process.cwd()}`) || `file://${process.cwd()}`;
+  return {
+    jobId: BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID,
+    name: 'Platform Engineering Story Top 3 · 09:00',
+    type: 'cron',
+    cronExpression: '0 9 * * *',
+    timeZone: detectLocalTimeZone(),
+    action: {
+      kind: 'dispatch-prompt',
+      workspace: repoWorkspaceUri,
+      prompt: '从 User Story 中提炼当前全局 Top 3 的待立项候选，写出结构化候选 JSON。',
+      promptAssetRefs: [STORY_TOP_CANDIDATE_WORKFLOW_REF],
+    },
+    enabled: true,
+    createdAt: now,
+    createdBy: 'api',
+    intentSummary: 'Daily platform engineering Top 3 story candidate extraction',
+    departmentWorkspaceUri: getPlatformEngineeringWorkspaceUri(),
+  };
 }
 
 function shouldReplaceBuiltInCompanyLoopJob(existing: ScheduledJob | undefined, next: ScheduledJob): boolean {
@@ -240,9 +278,38 @@ function ensureBuiltInCompanyLoopJobs(): void {
   }
 }
 
+function ensureBuiltInPlatformEngineeringStoryCandidateJob(): void {
+  const now = new Date().toISOString();
+  const job = normalizeScheduledJobDefinition({
+    ...buildBuiltInPlatformEngineeringStoryCandidateJob(now),
+    ...(state.jobs.get(BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID) || {}),
+    ...buildBuiltInPlatformEngineeringStoryCandidateJob(now),
+    createdAt: state.jobs.get(BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID)?.createdAt || now,
+  });
+  const existing = state.jobs.get(job.jobId);
+  const changed = !existing
+    || existing.name !== job.name
+    || existing.type !== job.type
+    || existing.cronExpression !== job.cronExpression
+    || existing.timeZone !== job.timeZone
+    || existing.enabled !== job.enabled
+    || existing.intentSummary !== job.intentSummary
+    || existing.departmentWorkspaceUri !== job.departmentWorkspaceUri
+    || JSON.stringify(existing.action) !== JSON.stringify(job.action);
+  if (changed) {
+    state.jobs.set(job.jobId, job);
+    saveJobs();
+  }
+}
+
 function getActionSummary(action: ScheduledAction): string {
   if (action.kind === 'dispatch-pipeline') {
     return `dispatch template ${action.templateId}${action.stageId ? ` stage ${action.stageId}` : ''}`;
+  }
+  if (action.kind === 'dispatch-prompt') {
+    return action.promptAssetRefs?.[0]
+      ? `dispatch prompt ${action.promptAssetRefs[0]}`
+      : 'dispatch prompt';
   }
   if (action.kind === 'dispatch-execution-profile') {
     return `dispatch ${summarizeExecutionProfile(action.executionProfile).label.toLowerCase()}`;
@@ -301,6 +368,18 @@ function normalizeScheduledAction(action: ScheduledAction): ScheduledAction {
       ...(action.projectId ? { projectId: action.projectId } : {}),
       ...(action.model ? { model: action.model } : {}),
       ...(action.sourceRunIds?.length ? { sourceRunIds: action.sourceRunIds } : {}),
+    };
+  }
+
+  if (action.kind === 'dispatch-prompt') {
+    return {
+      ...action,
+      workspace: normalizeWorkspaceUri(action.workspace) || action.workspace,
+      prompt: action.prompt.trim(),
+      ...(action.promptAssetRefs?.length ? { promptAssetRefs: action.promptAssetRefs } : {}),
+      ...(action.skillHints?.length ? { skillHints: action.skillHints } : {}),
+      ...(action.projectId ? { projectId: action.projectId } : {}),
+      ...(action.model ? { model: action.model } : {}),
     };
   }
 
@@ -867,6 +946,7 @@ async function tick(): Promise<void> {
   try {
     loadJobs(true);
     ensureBuiltInCompanyLoopJobs();
+    ensureBuiltInPlatformEngineeringStoryCandidateJob();
     const now = new Date();
     const dueJobs = Array.from(state.jobs.values()).filter(job => isScheduledJobDue(job, now));
     for (const job of dueJobs) {
@@ -895,6 +975,7 @@ export function initializeScheduler(): void {
   if (state.initialized) return;
   loadJobs();
   ensureBuiltInCompanyLoopJobs();
+  ensureBuiltInPlatformEngineeringStoryCandidateJob();
   state.initialized = true;
   scheduleNextTick();
   log.info({ minIntervalMs: MIN_LOOP_INTERVAL_MS, maxIntervalMs: MAX_LOOP_INTERVAL_MS }, 'Scheduler initialized');
@@ -912,6 +993,7 @@ export function listScheduledJobs(): ScheduledJob[] {
   loadJobs(true);
   if (state.initialized) {
     ensureBuiltInCompanyLoopJobs();
+    ensureBuiltInPlatformEngineeringStoryCandidateJob();
   }
   return Array.from(state.jobs.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }

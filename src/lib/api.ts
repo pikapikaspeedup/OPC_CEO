@@ -7,6 +7,7 @@ import type {
   SubgraphSummaryFE, ResourcePolicyFE, PolicyEvalResultFE,
   JournalEntryFE, CheckpointFE,
   DepartmentConfig,
+  DepartmentDirectoryEntry,
   DailyDigestFE,
   DecisionItemViewFE,
   Deliverable,
@@ -219,31 +220,6 @@ export interface CEOSuggestion {
   payload?: Record<string, string>;
 }
 
-export interface CEOCommandResult {
-  success: boolean;
-  action:
-    | 'create_project'
-    | 'create_scheduler_job'
-    | 'dispatch_prompt'
-    | 'report_to_human'
-    | 'info'
-    | 'cancel'
-    | 'pause'
-    | 'resume'
-    | 'retry'
-    | 'skip'
-    | 'multi_create'
-    | 'needs_decision';
-  message: string;
-  projectId?: string;
-  projectIds?: string[];
-  runId?: string;
-  runIds?: string[];
-  jobId?: string;
-  nextRunAt?: string | null;
-  suggestions?: CEOSuggestion[];
-}
-
 const API = (
   process.env.NEXT_PUBLIC_API_BASE_URL
   || process.env.AG_PUBLIC_API_BASE_URL
@@ -430,6 +406,8 @@ export const api = {
     }),
 
   // OPC: Department config
+  departments: () =>
+    fetchJson<DepartmentDirectoryEntry[]>('/api/departments'),
   getDepartment: (workspaceUri: string) =>
     fetchJson<DepartmentConfig>(`/api/departments?workspace=${encodeURIComponent(workspaceUri)}`),
   updateDepartment: (workspaceUri: string, config: DepartmentConfig) =>
@@ -1070,7 +1048,16 @@ export const api = {
     return result.items ?? [];
   },
   agentRunsByFilter: async (
-    filter: { stageId?: string; status?: string; reviewOutcome?: string; schedulerJobId?: string; projectId?: string; executorKind?: string },
+    filter: {
+      stageId?: string;
+      status?: string;
+      reviewOutcome?: string;
+      schedulerJobId?: string;
+      projectId?: string;
+      workspace?: string;
+      executorKind?: string;
+      projectless?: boolean;
+    },
     pagination?: PaginationQueryFE,
   ) => {
     const params = new URLSearchParams();
@@ -1079,7 +1066,9 @@ export const api = {
     if (filter.reviewOutcome) params.set('reviewOutcome', filter.reviewOutcome);
     if (filter.schedulerJobId) params.set('schedulerJobId', filter.schedulerJobId);
     if (filter.projectId) params.set('projectId', filter.projectId);
+    if (filter.workspace) params.set('workspace', filter.workspace);
     if (filter.executorKind) params.set('executorKind', filter.executorKind);
+    if (filter.projectless) params.set('projectless', 'true');
     appendPaginationParams(params, {
       page: pagination?.page,
       pageSize: pagination?.pageSize ?? 100,
@@ -1088,7 +1077,16 @@ export const api = {
     return result.items ?? [];
   },
   agentRunsByFilterAll: async (
-    filter: { stageId?: string; status?: string; reviewOutcome?: string; schedulerJobId?: string; projectId?: string; executorKind?: string },
+    filter: {
+      stageId?: string;
+      status?: string;
+      reviewOutcome?: string;
+      schedulerJobId?: string;
+      projectId?: string;
+      workspace?: string;
+      executorKind?: string;
+      projectless?: boolean;
+    },
     pagination?: Omit<PaginationQueryFE, 'page'>,
   ) => {
     const pageSize = pagination?.pageSize ?? 100;
@@ -1099,7 +1097,9 @@ export const api = {
       if (filter.reviewOutcome) params.set('reviewOutcome', filter.reviewOutcome);
       if (filter.schedulerJobId) params.set('schedulerJobId', filter.schedulerJobId);
       if (filter.projectId) params.set('projectId', filter.projectId);
+      if (filter.workspace) params.set('workspace', filter.workspace);
       if (filter.executorKind) params.set('executorKind', filter.executorKind);
+      if (filter.projectless) params.set('projectless', 'true');
       appendPaginationParams(params, { page, pageSize });
       return `/api/agent-runs?${params.toString()}`;
     });
@@ -1298,6 +1298,8 @@ export const api = {
     scheduledAt?: string;
     action: { kind: string; [key: string]: unknown };
     enabled?: boolean;
+    createdBy?: 'ceo-workflow' | 'mcp' | 'web' | 'api';
+    intentSummary?: string;
     departmentWorkspaceUri?: string;
     opcAction?: { type: 'create_project'; projectType: 'adhoc'; goal: string; skillHint?: string; templateId?: string };
   }) =>
@@ -1439,13 +1441,6 @@ export const api = {
         body: JSON.stringify({ checkpointId }),
       },
     ),
-
-  ceoCommand: (command: string, options?: { model?: string }) =>
-    fetchJson<CEOCommandResult>('/api/ceo/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, ...(options?.model ? { model: options.model } : {}) }),
-    }),
 
   ceoDecisions: (params?: { limit?: number }) => {
     const sp = new URLSearchParams();

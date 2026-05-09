@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   Activity,
   BarChart3,
@@ -34,7 +34,17 @@ import ApprovalPanel from '@/components/approval-panel';
 import DepartmentDetailDrawer from '@/components/department-detail-drawer';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { api, type AuditEvent } from '@/lib/api';
+import {
+  buildImprovementCandidateViews,
+  type ImprovementCandidateView,
+} from '@/lib/ceo-office-improvement-pool';
 import { getDepartmentBoundWorkspaceUris } from '@/lib/department-config';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
 import { pickLatestDailyDigest } from '@/lib/ceo-office-home';
@@ -59,6 +69,7 @@ import type {
 	  GrowthProposalFE,
 	  ManagementOverviewFE,
   SystemImprovementProposalFE,
+  SystemImprovementSignalFE,
   ModelConfig,
   Project,
   Skill,
@@ -170,6 +181,90 @@ type RoutineItem = {
   priority: 'low' | 'medium' | 'high';
   action?: CEORoutineSummaryFE['actions'][number];
 };
+
+type OfficeLoadSnapshot = {
+  routine: CEORoutineSummaryFE | null;
+  managementOverview: ManagementOverviewFE | null;
+  growthProposals: GrowthProposalFE[];
+  loopPolicy: CompanyLoopPolicyFE | null;
+  loopRuns: CompanyLoopRunFE[];
+  loopDigests: CompanyLoopDigestFE[];
+  improvementSignals: SystemImprovementSignalFE[];
+  improvementProposals: SystemImprovementProposalFE[];
+  decisionViews: DecisionItemViewFE[];
+};
+
+function ImprovementCandidateRow({
+  candidate,
+  locale,
+  busy,
+  onGenerate,
+  onOpenProposal,
+}: {
+  candidate: ImprovementCandidateView;
+  locale: Locale;
+  busy: boolean;
+  onGenerate: (signal: SystemImprovementSignalFE) => void;
+  onOpenProposal: (proposalId: string) => void;
+}) {
+  const proposal = candidate.proposal;
+
+  return (
+    <div className="rounded-[12px] border border-[#e3e8f2] bg-[#fbfcff] px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-semibold text-[#111827]">{candidate.signal.title}</div>
+          <div className="mt-1 line-clamp-2 text-[12px] leading-5 text-[#6b768a]">{candidate.signal.summary}</div>
+        </div>
+        <span className={cn(
+          'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+          toneClasses(candidate.proposalStatusTone as Tone),
+        )}>
+          {candidate.proposalStatusLabel}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <span className="rounded-full bg-[#eef4ff] px-2 py-0.5 text-[11px] font-semibold text-[#2563eb]">
+          {candidate.sourceLabel}
+        </span>
+        <span className={cn(
+          'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+          toneClasses(candidate.severityTone as Tone),
+        )}>
+          {candidate.severityLabel}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#7c8799]">
+        <span>{candidate.areasLabel}</span>
+        <span>{candidate.signal.evidenceRefs.length} 证据</span>
+        <span>{formatRelativeTime(candidate.signal.createdAt, locale)}</span>
+      </div>
+      <div className="mt-3 flex justify-end">
+        {proposal ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 rounded-[10px] border-[#dfe5ee] bg-white text-[12px]"
+            onClick={() => onOpenProposal(proposal.id)}
+          >
+            打开提案
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 rounded-[10px] bg-[#2f6df6] px-3 text-[12px] text-white hover:bg-[#245ee8]"
+            disabled={busy}
+            onClick={() => onGenerate(candidate.signal)}
+          >
+            {busy ? '生成中' : '生成提案'}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const navItems = [
   { key: 'ceo', label: 'CEO Office', icon: UserRound },
@@ -772,6 +867,7 @@ export default function CeoOfficeCockpit({
   const [loopPolicy, setLoopPolicy] = useState<CompanyLoopPolicyFE | null>(null);
   const [loopRuns, setLoopRuns] = useState<CompanyLoopRunFE[]>([]);
   const [loopDigests, setLoopDigests] = useState<CompanyLoopDigestFE[]>([]);
+  const [improvementSignals, setImprovementSignals] = useState<SystemImprovementSignalFE[]>([]);
   const [improvementProposals, setImprovementProposals] = useState<SystemImprovementProposalFE[]>([]);
   const [runningLoopKind, setRunningLoopKind] = useState<CompanyLoopRunKindFE | null>(null);
   const [togglingLoopPolicy, setTogglingLoopPolicy] = useState(false);
@@ -781,6 +877,9 @@ export default function CeoOfficeCockpit({
   const [showThreadWorkbench, setShowThreadWorkbench] = useState(false);
   const [showDeepWorkbench, setShowDeepWorkbench] = useState(false);
   const [showApprovalInbox, setShowApprovalInbox] = useState(false);
+  const [showImprovementCandidateSheet, setShowImprovementCandidateSheet] = useState(false);
+  const [improvementCandidateBusySignalId, setImprovementCandidateBusySignalId] = useState<string | null>(null);
+  const [improvementCandidateError, setImprovementCandidateError] = useState<string | null>(null);
   const [selectedDepartmentUri, setSelectedDepartmentUri] = useState<string | null>(null);
   const [clockNow, setClockNow] = useState<Date | null>(null);
 
@@ -810,37 +909,67 @@ export default function CeoOfficeCockpit({
     };
   }, []);
 
+  const applyOfficeData = useCallback((snapshot: OfficeLoadSnapshot) => {
+    setRoutine(snapshot.routine);
+    setManagementOverview(snapshot.managementOverview);
+    setGrowthProposals(snapshot.growthProposals);
+    setLoopPolicy(snapshot.loopPolicy);
+    setLoopRuns(snapshot.loopRuns);
+    setLoopDigests(snapshot.loopDigests);
+    setImprovementSignals(snapshot.improvementSignals);
+    setImprovementProposals(snapshot.improvementProposals);
+    setDecisionViews(snapshot.decisionViews);
+  }, []);
+
+  const loadOfficeData = useCallback(async (): Promise<OfficeLoadSnapshot> => {
+    const [
+      nextRoutine,
+      nextOverview,
+      nextGrowthProposals,
+      nextLoopPolicies,
+      nextLoopRuns,
+      nextLoopDigests,
+      nextImprovementSignals,
+      nextImprovementProposals,
+      nextDecisions,
+    ] = await Promise.all([
+      api.ceoRoutine().catch(() => null),
+      api.managementOverview().catch(() => null),
+      api.companyGrowthProposals({ pageSize: 4 }).catch(() => ({ items: [] as GrowthProposalFE[] })),
+      api.companyLoopPolicies({ pageSize: 20 }).catch(() => ({ items: [] as CompanyLoopPolicyFE[] })),
+      api.companyLoopRuns({ pageSize: 4 }).catch(() => ({ items: [] as CompanyLoopRunFE[] })),
+      api.companyLoopDigests({ pageSize: 2 }).catch(() => ({ items: [] as CompanyLoopDigestFE[] })),
+      api.systemImprovementSignals({ pageSize: 200 }).catch(() => ({ items: [] as SystemImprovementSignalFE[], total: 0 })),
+      api.systemImprovementProposals({ pageSize: 50 }).catch(() => ({ items: [] as SystemImprovementProposalFE[] })),
+      api.ceoDecisions({ limit: 8 }).catch(() => ({ items: [] as DecisionItemViewFE[] })),
+    ]);
+
+    return {
+      routine: nextRoutine as CEORoutineSummaryFE | null,
+      managementOverview: nextOverview as ManagementOverviewFE | null,
+      growthProposals: (nextGrowthProposals as { items?: GrowthProposalFE[] } | null)?.items || [],
+      loopPolicy: (((nextLoopPolicies as { items?: CompanyLoopPolicyFE[] } | null)?.items || [])
+        .find((policy) => policy.scope === 'organization' && !policy.scopeId) || null),
+      loopRuns: (nextLoopRuns as { items?: CompanyLoopRunFE[] } | null)?.items || [],
+      loopDigests: (nextLoopDigests as { items?: CompanyLoopDigestFE[] } | null)?.items || [],
+      improvementSignals: (nextImprovementSignals as { items?: SystemImprovementSignalFE[] } | null)?.items || [],
+      improvementProposals: (nextImprovementProposals as { items?: SystemImprovementProposalFE[] } | null)?.items || [],
+      decisionViews: (nextDecisions as { items?: DecisionItemViewFE[] } | null)?.items || [],
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
-	    Promise.all([
-	      api.ceoRoutine().catch(() => null),
-	      api.managementOverview().catch(() => null),
-	      api.companyGrowthProposals({ pageSize: 4 }).catch(() => ({ items: [] as GrowthProposalFE[] })),
-	      api.companyLoopPolicies({ pageSize: 20 }).catch(() => ({ items: [] as CompanyLoopPolicyFE[] })),
-	      api.companyLoopRuns({ pageSize: 4 }).catch(() => ({ items: [] as CompanyLoopRunFE[] })),
-	      api.companyLoopDigests({ pageSize: 2 }).catch(() => ({ items: [] as CompanyLoopDigestFE[] })),
-	      api.systemImprovementProposals({ pageSize: 4 }).catch(() => ({ items: [] as SystemImprovementProposalFE[] })),
-	      api.ceoDecisions({ limit: 8 }).catch(() => ({ items: [] as DecisionItemViewFE[] })),
-	    ]).then(([nextRoutine, nextOverview, nextGrowthProposals, nextLoopPolicies, nextLoopRuns, nextLoopDigests, nextImprovementProposals, nextDecisions]) => {
-	      if (cancelled) return;
-	      setRoutine(nextRoutine as CEORoutineSummaryFE | null);
-	      setManagementOverview(nextOverview as ManagementOverviewFE | null);
-	      setGrowthProposals((nextGrowthProposals as { items?: GrowthProposalFE[] } | null)?.items || []);
-	      setLoopPolicy(
-	        ((nextLoopPolicies as { items?: CompanyLoopPolicyFE[] } | null)?.items || [])
-	          .find((policy) => policy.scope === 'organization' && !policy.scopeId) || null,
-	      );
-	      setLoopRuns((nextLoopRuns as { items?: CompanyLoopRunFE[] } | null)?.items || []);
-	      setLoopDigests((nextLoopDigests as { items?: CompanyLoopDigestFE[] } | null)?.items || []);
-	      setImprovementProposals((nextImprovementProposals as { items?: SystemImprovementProposalFE[] } | null)?.items || []);
-	      setDecisionViews((nextDecisions as { items?: DecisionItemViewFE[] } | null)?.items || []);
-	    });
+    loadOfficeData().then((snapshot) => {
+      if (cancelled) return;
+      applyOfficeData(snapshot);
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [projects.length, refreshSignal, workspaces.length]);
+  }, [applyOfficeData, loadOfficeData, projects.length, refreshSignal, workspaces.length]);
 
   const runCompanyLoopFromOffice = async (kind: CompanyLoopRunKindFE) => {
     setRunningLoopKind(kind);
@@ -984,6 +1113,41 @@ export default function CeoOfficeCockpit({
     }),
     [decisionViews],
   );
+
+  const improvementCandidates = useMemo(
+    () => buildImprovementCandidateViews(improvementSignals, improvementProposals),
+    [improvementProposals, improvementSignals],
+  );
+  const previewImprovementCandidates = useMemo(
+    () => improvementCandidates.slice(0, 5),
+    [improvementCandidates],
+  );
+  const improvementEntryReviewCount = useMemo(
+    () => improvementProposals.filter((item) => item.controlState?.stage === 'entry-review').length,
+    [improvementProposals],
+  );
+  const improvementExitReviewCount = useMemo(
+    () => improvementProposals.filter((item) => item.controlState?.stage === 'exit-review').length,
+    [improvementProposals],
+  );
+
+  const handleGenerateImprovementProposal = useCallback(async (signal: SystemImprovementSignalFE) => {
+    setImprovementCandidateBusySignalId(signal.id);
+    setImprovementCandidateError(null);
+    try {
+      await api.generateSystemImprovementProposal({ signalIds: [signal.id] });
+      const snapshot = await loadOfficeData();
+      applyOfficeData(snapshot);
+    } catch (error) {
+      setImprovementCandidateError(error instanceof Error ? error.message : '当前无法生成提案。');
+    } finally {
+      setImprovementCandidateBusySignalId(null);
+    }
+  }, [applyOfficeData, loadOfficeData]);
+  const handleOpenImprovementProposalFromPool = useCallback((proposalId: string) => {
+    setShowImprovementCandidateSheet(false);
+    onOpenImprovementProposal(proposalId);
+  }, [onOpenImprovementProposal]);
 
   const departmentPulse = useMemo<DepartmentPulse[]>(
     () => workspaces.map((workspace) => {
@@ -1503,6 +1667,98 @@ export default function CeoOfficeCockpit({
 	              )}
 	            </WorkspaceSurface>
 
+            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
+              <div className="flex items-center justify-between border-b border-[#edf1f7] px-4 py-4">
+                <SectionHeader
+                  title={(
+                    <span className="flex items-center gap-2">
+                      候选改进
+                      <span className="rounded-full bg-[#edf2fa] px-2 py-0.5 text-[12px] text-[#566176]">{improvementCandidates.length}</span>
+                    </span>
+                  )}
+                />
+                <button type="button" onClick={() => setShowImprovementCandidateSheet(true)} className="inline-flex items-center gap-1 text-[12px] font-medium text-[#1768d9]">
+                  查看全部
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-3 p-4">
+                {improvementCandidateError ? (
+                  <div className="rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+                    {improvementCandidateError}
+                  </div>
+                ) : null}
+                {previewImprovementCandidates.length ? previewImprovementCandidates.map((candidate) => (
+                  <ImprovementCandidateRow
+                    key={candidate.signal.id}
+                    candidate={candidate}
+                    locale={locale}
+                    busy={improvementCandidateBusySignalId === candidate.signal.id}
+                    onGenerate={(signal) => { void handleGenerateImprovementProposal(signal); }}
+                    onOpenProposal={handleOpenImprovementProposalFromPool}
+                  />
+                )) : (
+                  <div className="p-1 text-sm leading-6 text-[#7c8799]">当前没有候选项。</div>
+                )}
+              </div>
+            </WorkspaceSurface>
+
+            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
+              <div className="flex items-center justify-between border-b border-[#edf1f7] px-4 py-4">
+                <SectionHeader
+                  title={(
+                    <span className="flex items-center gap-2">
+                      系统改进进展
+                      <span className="rounded-full bg-[#edf2fa] px-2 py-0.5 text-[12px] text-[#566176]">{improvementProposals.length}</span>
+                    </span>
+                  )}
+                />
+                <button type="button" onClick={() => onOpenOps()} className="inline-flex items-center gap-1 text-[12px] font-medium text-[#1768d9]">
+                  Ops
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-3 p-4">
+                <div className="flex items-center justify-between rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-800">
+                  <span>审批阶段</span>
+                  <span className="font-semibold">{improvementEntryReviewCount} 准入 / {improvementExitReviewCount} 准出</span>
+                </div>
+                {improvementProposals.length ? (
+                  <div className="space-y-2">
+                    {improvementProposals.slice(0, 2).map((proposal) => (
+                      <button
+                        key={proposal.id}
+                        type="button"
+                        onClick={() => onOpenImprovementProposal(proposal.id)}
+                        className="w-full rounded-xl border border-[#edf1f7] bg-[#fbfcff] p-3 text-left hover:bg-[#f8fbff]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-[12px] font-semibold text-[#111827]">{proposal.title}</div>
+                            <div className="mt-1 text-[12px] text-[#6b768a]">{formatImprovementExecutionSummary(proposal)}</div>
+                          </div>
+                          <span className={cn(
+                            'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                            getImprovementDecisionTone(proposal) === 'success'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : getImprovementDecisionTone(proposal) === 'warning'
+                                ? 'bg-amber-50 text-amber-700'
+                                : getImprovementDecisionTone(proposal) === 'danger'
+                                  ? 'bg-red-50 text-red-600'
+                                  : 'bg-sky-50 text-sky-700',
+                          )}>
+                            {formatImprovementMergeGateLabel(proposal)}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-1 text-sm leading-6 text-[#7c8799]">当前没有提案。</div>
+                )}
+              </div>
+            </WorkspaceSurface>
+
 	            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
 	              <div className="flex items-center justify-between border-b border-[#edf1f7] px-4 py-4">
 	                <SectionHeader title="公司循环" />
@@ -1562,45 +1818,6 @@ export default function CeoOfficeCockpit({
 	                    {togglingLoopPolicy ? '切换中' : loopPolicy?.enabled ? 'Pause' : 'Resume'}
 	                  </Button>
 	                </div>
-	                {improvementProposals.length ? (
-	                  <div className="space-y-2">
-	                    <div className="flex items-center justify-between rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-800">
-	                      <span>系统改进</span>
-	                      <span className="font-semibold">
-                          {improvementProposals.filter(item => item.controlState?.stage === 'entry-review').length} 准入 / {improvementProposals.filter(item => item.controlState?.stage === 'exit-review').length} 准出
-                        </span>
-	                    </div>
-	                    <div className="space-y-2">
-	                      {improvementProposals.slice(0, 2).map((proposal) => (
-	                        <button
-	                          key={proposal.id}
-	                          type="button"
-	                          onClick={() => onOpenImprovementProposal(proposal.id)}
-	                          className="w-full rounded-xl border border-[#edf1f7] bg-[#fbfcff] p-3 text-left hover:bg-[#f8fbff]"
-	                        >
-	                          <div className="flex items-start justify-between gap-3">
-	                            <div className="min-w-0">
-	                              <div className="truncate text-[12px] font-semibold text-[#111827]">{proposal.title}</div>
-	                              <div className="mt-1 text-[12px] text-[#6b768a]">{formatImprovementExecutionSummary(proposal)}</div>
-	                            </div>
-	                            <span className={cn(
-	                              'rounded-full px-2 py-0.5 text-[11px] font-semibold',
-	                              getImprovementDecisionTone(proposal) === 'success'
-	                                ? 'bg-emerald-50 text-emerald-700'
-	                                : getImprovementDecisionTone(proposal) === 'warning'
-	                                  ? 'bg-amber-50 text-amber-700'
-	                                  : getImprovementDecisionTone(proposal) === 'danger'
-	                                    ? 'bg-red-50 text-red-600'
-	                                    : 'bg-sky-50 text-sky-700',
-	                            )}>
-	                              {formatImprovementMergeGateLabel(proposal)}
-	                            </span>
-	                          </div>
-	                        </button>
-	                      ))}
-	                    </div>
-	                  </div>
-	                ) : null}
 	              </div>
 	            </WorkspaceSurface>
 
@@ -1704,6 +1921,38 @@ export default function CeoOfficeCockpit({
           </aside>
         </div>
       </ScrollArea>
+      <Sheet open={showImprovementCandidateSheet} onOpenChange={setShowImprovementCandidateSheet}>
+        <SheetContent className="w-full max-w-[720px] overflow-y-auto border-[#dfe5ee] bg-[#f8fafc] sm:max-w-[720px]">
+          <SheetHeader className="border-b border-[#edf1f7] pb-4">
+            <SheetTitle className="text-left text-[18px] font-semibold text-[#111827]">候选改进</SheetTitle>
+          </SheetHeader>
+          <div className="space-y-4 py-5">
+            {improvementCandidateError ? (
+              <div className="rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+                {improvementCandidateError}
+              </div>
+            ) : null}
+            {improvementCandidates.length ? (
+              <div className="space-y-3">
+                {improvementCandidates.map((candidate) => (
+                  <ImprovementCandidateRow
+                    key={candidate.signal.id}
+                    candidate={candidate}
+                    locale={locale}
+                    busy={improvementCandidateBusySignalId === candidate.signal.id}
+                    onGenerate={(signal) => { void handleGenerateImprovementProposal(signal); }}
+                    onOpenProposal={handleOpenImprovementProposalFromPool}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-[12px] border border-[#e3e8f2] bg-white px-4 py-6 text-center text-sm text-[#7c8799]">
+                当前没有候选项。
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
       {selectedDepartmentWorkspace && selectedDepartmentConfig ? (
         <DepartmentDetailDrawer
           open={!!selectedDepartmentUri}

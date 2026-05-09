@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { STORY_TOP_CANDIDATE_ARTIFACT } from '../story-top-candidates';
 
 vi.mock('../logger', () => ({
   createLogger: () => ({
@@ -40,6 +41,17 @@ describe('workflow runtime hooks', () => {
         'runtimeScriptsDir: ai_digest',
         '---',
         '# AI Digest',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    fs.writeFileSync(
+      path.join(workflowsDir, 'platform_engineering_story_candidates.md'),
+      [
+        '---',
+        'runtimeProfile: story-top-candidates',
+        '---',
+        '# Story Top Candidates',
       ].join('\n'),
       'utf-8',
     );
@@ -181,5 +193,95 @@ describe('workflow runtime hooks', () => {
     expect(finalized.changedFiles).toContain('runs/run-1/daily-digest-verification.json');
     expect(fs.existsSync(path.join(artifactDir, 'daily-digest-report-payload.json'))).toBe(true);
     expect(fs.existsSync(path.join(artifactDir, 'daily-digest-verification.json'))).toBe(true);
+  });
+
+  it('ingests story-top candidate artifacts into active self-improvement signals', async () => {
+    const hooks = await import('./workflow-runtime-hooks');
+    const store = await import('../company-kernel/self-improvement-store');
+    const signalModule = await import('../company-kernel/story-top-candidate-signals');
+
+    fs.mkdirSync(path.join(tempWorkspace, 'User Story', 'CEO Office'), { recursive: true });
+    fs.writeFileSync(path.join(tempWorkspace, 'User Story', 'CEO Office', 'CEO 办公室.md'), '# test\n', 'utf-8');
+    fs.writeFileSync(
+      path.join(artifactDir, STORY_TOP_CANDIDATE_ARTIFACT),
+      JSON.stringify([
+        {
+          sourcePath: 'User Story/CEO Office/CEO 办公室.md',
+          storyText: '作为 CEO，我希望候选改进可以直接立项。',
+          title: '系统改进：候选改进支持直接立项',
+          summary: '当前候选改进从发现到立项还要跨层操作。',
+          expectedOutcome: 'CEO 能在候选池里直接把高价值故事升格为正式提案。',
+          severity: 'high',
+          rationale: '这会直接缩短自迭代立项链路。',
+          affectedAreas: ['frontend', 'runtime'],
+        },
+      ], null, 2),
+      'utf-8',
+    );
+
+    const finalized = await hooks.finalizeWorkflowRun(
+      '/platform_engineering_story_candidates',
+      tempWorkspace,
+      artifactDir,
+      {
+        status: 'completed',
+        summary: '候选提炼完成',
+        changedFiles: [],
+        blockers: [],
+        needsReview: [],
+      },
+    );
+
+    expect(finalized.status).toBe('completed');
+    expect(finalized.summary).toContain('Top 3 已刷新');
+    expect(finalized.changedFiles).toContain(`runs/run-1/${STORY_TOP_CANDIDATE_ARTIFACT}`);
+    const signals = store.listSystemImprovementSignals({ source: 'user-story-gap' });
+    expect(signals.filter((signal) => signalModule.isActiveStoryTopCandidateSignal(signal))).toHaveLength(1);
+    expect(signals[0]?.metadata?.candidateKind).toBe('story-top');
+  });
+
+  it('falls back to finalText JSON when story-top candidate artifact file was not written', async () => {
+    const hooks = await import('./workflow-runtime-hooks');
+    const store = await import('../company-kernel/self-improvement-store');
+    const signalModule = await import('../company-kernel/story-top-candidate-signals');
+
+    fs.mkdirSync(path.join(tempWorkspace, 'User Story', 'Settings'), { recursive: true });
+    fs.writeFileSync(path.join(tempWorkspace, 'User Story', 'Settings', '个人偏好.md'), '# test\n', 'utf-8');
+
+    const finalized = await hooks.finalizeWorkflowRun(
+      '/platform_engineering_story_candidates',
+      tempWorkspace,
+      artifactDir,
+      {
+        status: 'completed',
+        summary: '候选提炼完成',
+        changedFiles: [],
+        blockers: [],
+        needsReview: [],
+      },
+      {
+        workflowOutputText: [
+          '```json',
+          JSON.stringify([
+            {
+              sourcePath: 'User Story/Settings/个人偏好.md',
+              storyText: '作为用户，我希望汇报详略可以真实影响 AI 行为。',
+              title: '系统改进：个人偏好真正接入 AI 主链',
+              summary: '当前个人偏好还没有真实作用到 AI 执行与汇报。',
+              expectedOutcome: '用户偏好能稳定影响 AI 行为与输出。',
+              severity: 'high',
+              rationale: '这是 Settings 到 AI 主链的重要闭环缺口。',
+              affectedAreas: ['provider', 'runtime'],
+            },
+          ], null, 2),
+          '```',
+        ].join('\n'),
+      },
+    );
+
+    expect(finalized.status).toBe('completed');
+    expect(fs.existsSync(path.join(artifactDir, STORY_TOP_CANDIDATE_ARTIFACT))).toBe(true);
+    const signals = store.listSystemImprovementSignals({ source: 'user-story-gap' });
+    expect(signals.filter((signal) => signalModule.isActiveStoryTopCandidateSignal(signal))).toHaveLength(1);
   });
 });

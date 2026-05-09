@@ -1,0 +1,35 @@
+[
+  {
+    "storyKey": "knowledge-api-auth-schema-permissions",
+    "sourcePath": "User Story/Knowledge/知识库.md",
+    "storyText": "作为用户，我希望 Knowledge API 提供权限校验、身份绑定和租户隔离，以便不同用户、部门或组织之间不会串读串写知识。",
+    "title": "系统改进：为 Knowledge API 建立权限与租户隔离基线",
+    "summary": "当前 Knowledge API 已具备基础读写能力，但缺少权限校验、身份绑定和租户隔离，意味着知识资产在多用户、多部门或多组织场景下没有可靠边界。这是知识治理与平台化开放前必须先补齐的底座能力。",
+    "expectedOutcome": "落地后知识库可安全支持团队协作、外部接入和多租户扩展，避免串读串写，形成可持续扩张的知识治理基础设施。",
+    "severity": "critical",
+    "rationale": "知识库是平台核心资产层，缺少权限与隔离会直接阻断团队化和平台化落地，风险和影响面都高于单点体验优化，因此进入全局 Top 3。",
+    "affectedAreas": ["api", "database", "knowledge", "runtime"]
+  },
+  {
+    "storyKey": "ceo-command-fanout-budget-approval-priority",
+    "sourcePath": "User Story/CEO Office/CEO 办公室.md",
+    "storyText": "作为 CEO，我希望通过 CEO command API 指定预算、成本上限、审批策略或执行优先级。",
+    "title": "系统改进：让 CEO 指令原生携带预算与审批治理参数",
+    "summary": "当前 CEO command 已能派发任务，但还不能在下达指令时直接声明预算上限、审批策略和执行优先级，导致关键治理约束无法和派发动作一次完成。这会让高价值管理指令仍依赖后续人工补控制。",
+    "expectedOutcome": "落地后 CEO 可在一次指令中完成业务目标与治理边界设定，减少人工补步骤，让高风险、高成本任务进入可控且高效的派发闭环。",
+    "severity": "high",
+    "rationale": "这条直接命中 CEO 主路径和核心治理闭环，能把“发任务”和“设约束”合并为一个动作，显著提升高层调度效率与平台可控性，因此优先级极高。",
+    "affectedAreas": ["frontend", "api", "scheduler", "approval", "runtime"]
+  },
+  {
+    "storyKey": "projects-department-tree-create-and-configure",
+    "sourcePath": "User Story/Projects/项目工作台.md",
+    "storyText": "作为用户，我希望 Projects 左树以部门为一级节点、项目为二级节点，并在同一工作面直接新增部门。",
+    "title": "系统改进：在 Projects 建立部门即入口的组织化工作台",
+    "summary": "当前 Projects 主要围绕项目展开，部门对象的创建与配置仍然割裂，导致组织结构、执行空间和项目管理没有在同一工作面闭环。把部门作为一级对象纳入 Projects 左树，可显著打通组织管理到执行落地的主路径。",
+    "expectedOutcome": "落地后用户可在 Projects 内直接完成部门创建、挂载项目和进入执行管理，减少跨页切换，形成从组织搭建到项目执行的一站式闭环。",
+    "severity": "high",
+    "rationale": "部门是项目派发、默认执行目录、上下文和治理策略的上游对象，这条能力缺口影响 Projects 主路径与组织建模闭环，价值明显高于局部交互优化。",
+    "affectedAreas": ["frontend", "api", "runtime", "docs"]
+  }
+]

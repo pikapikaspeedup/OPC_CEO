@@ -2,7 +2,7 @@
  * Unified Dispatch Service
  *
  * Single execution path for all dispatch sources:
- *   - CEO command (GlobalCommandBar / QuickTaskInput)
+ *   - CEO workflow dispatches (Conversation / QuickTaskInput)
  *   - team-dispatch workflow (Copilot + curl)
  *   - Frontend manual dispatch (ProjectsPanel)
  *

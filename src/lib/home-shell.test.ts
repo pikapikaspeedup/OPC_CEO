@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  countExistingDepartments,
   countConfiguredDepartments,
   getAgentStateRefreshMs,
   getSidebarLoadPlan,
   getSidebarPollMs,
   isDepartmentConfigured,
+  shouldIncludeConversationInUrl,
   shouldShowShellSidebar,
 } from './home-shell';
 
@@ -48,6 +50,19 @@ describe('home-shell', () => {
     ], departments)).toBe(1);
   });
 
+  it('counts existing departments separately from profile completeness', () => {
+    const departments = new Map([
+      ['file:///ws-1', { name: 'Eng', type: 'build', skills: [], okr: null }],
+      ['file:///ws-2', { name: 'Ops', type: 'operations', skills: [], okr: null }],
+    ]);
+
+    expect(countExistingDepartments([
+      { uri: 'file:///ws-1' },
+      { uri: 'file:///ws-2' },
+      { uri: 'file:///ws-3' },
+    ], departments)).toBe(2);
+  });
+
   it('returns section-specific sidebar data plans', () => {
     expect(getSidebarLoadPlan('projects')).toEqual({
       conversations: false,
@@ -88,5 +103,11 @@ describe('home-shell', () => {
     expect(shouldShowShellSidebar('ceo', null)).toBe(true);
     expect(shouldShowShellSidebar('projects', 'settings')).toBe(false);
     expect(shouldShowShellSidebar('projects', null)).toBe(true);
+  });
+
+  it('keeps CEO conversations out of the canonical URL while preserving the chat section URL', () => {
+    expect(shouldIncludeConversationInUrl('ceo', 'ceo')).toBe(false);
+    expect(shouldIncludeConversationInUrl('conversations', 'ceo')).toBe(false);
+    expect(shouldIncludeConversationInUrl('conversations', 'conversations')).toBe(true);
   });
 });

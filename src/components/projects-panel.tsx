@@ -15,6 +15,7 @@ import {
   getDepartmentWorkspaceBindings,
   workspaceNameFromUri,
 } from '@/lib/department-config';
+import { buildProjectTreeSectionSeeds } from '@/lib/project-tree-sections';
 import {
   FolderKanban,
   Clock,
@@ -53,6 +54,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ProjectWorkbench from '@/components/project-workbench';
+import AgentRunDetail from '@/components/agent-run-detail';
 import PipelineGenerateDialog from '@/components/pipeline-generate-dialog';
 import SkillBrowser from '@/components/skill-browser';
 
@@ -373,6 +375,7 @@ type ProjectTreeSection = {
   tone: WorkspaceTone;
   projects: Project[];
   totalCount: number;
+  runOnlyCount: number;
   primaryWorkspaceUri?: string;
   boundWorkspaceUris: string[];
   hasDepartmentConfig: boolean;
@@ -539,7 +542,9 @@ export default function ProjectsPanel({
   }, [onProjectSearchQueryChange]);
   const [projectFilter, setProjectFilter] = useState<ProjectFilterValue>('all');
   const [browseFocusedProjectId, setBrowseFocusedProjectId] = useState<string | null>(null);
-  const [showAllTreeSections, setShowAllTreeSections] = useState(false);
+  const [browseFocusedWorkspaceUri, setBrowseFocusedWorkspaceUri] = useState<string | null>(null);
+  const [expandedTreeSectionKeys, setExpandedTreeSectionKeys] = useState<Set<string>>(() => new Set());
+  const [collapsedTreeSectionKeys, setCollapsedTreeSectionKeys] = useState<Set<string>>(() => new Set());
   const lastCreateRequestTokenRef = useRef(createProjectRequestToken ?? 0);
 
 
@@ -574,7 +579,7 @@ export default function ProjectsPanel({
       }
     : null;
 
-  // CEO command quick-task feedback
+  // CEO workflow quick-task feedback
   const [ceoToast, setCeoToast] = useState<{ success: boolean; message: string } | null>(null);
   // Per-project pending CEO suggestions (for needs_decision projects)
   const [pendingSuggestions, setPendingSuggestions] = useState<Record<string, import('@/lib/api').CEOSuggestion[]>>({});
@@ -606,6 +611,8 @@ export default function ProjectsPanel({
   const [convertMessage, setConvertMessage] = useState<string | null>(null);
   const [focusedProjectRuns, setFocusedProjectRuns] = useState<AgentRun[]>([]);
   const [focusedProjectRunsProjectId, setFocusedProjectRunsProjectId] = useState<string | null>(null);
+  const [projectlessRuns, setProjectlessRuns] = useState<AgentRun[]>([]);
+  const [selectedProjectlessRunDetail, setSelectedProjectlessRunDetail] = useState<AgentRun | null>(null);
 
   const openDepartmentDialog = useCallback((targetWorkspaceUri?: string | null) => {
     if (targetWorkspaceUri) {
@@ -615,6 +622,66 @@ export default function ProjectsPanel({
     }
     onOpenDepartmentSettings?.();
   }, [onOpenDepartmentSettings]);
+
+  const focusWorkspaceSection = useCallback((workspaceUri?: string | null) => {
+    if (!workspaceUri) return;
+    setBrowseFocusedProjectId(null);
+    setBrowseFocusedWorkspaceUri(workspaceUri);
+  }, []);
+
+  const expandTreeSection = useCallback((sectionKey: string) => {
+    setCollapsedTreeSectionKeys((prev) => {
+      if (!prev.has(sectionKey)) return prev;
+      const next = new Set(prev);
+      next.delete(sectionKey);
+      return next;
+    });
+    setExpandedTreeSectionKeys((prev) => {
+      if (prev.has(sectionKey)) return prev;
+      const next = new Set(prev);
+      next.add(sectionKey);
+      return next;
+    });
+  }, []);
+
+  const handleTreeSectionSelect = useCallback((section: ProjectTreeSection) => {
+    expandTreeSection(section.key);
+    if (!section.key.startsWith('status-')) {
+      focusWorkspaceSection(section.primaryWorkspaceUri || section.boundWorkspaceUris[0]);
+    }
+  }, [expandTreeSection, focusWorkspaceSection]);
+
+  const toggleTreeSection = useCallback((event: React.MouseEvent, sectionKey: string, expanded: boolean) => {
+    event.stopPropagation();
+    if (expanded) {
+      setExpandedTreeSectionKeys((prev) => {
+        if (!prev.has(sectionKey)) return prev;
+        const next = new Set(prev);
+        next.delete(sectionKey);
+        return next;
+      });
+      setCollapsedTreeSectionKeys((prev) => {
+        if (prev.has(sectionKey)) return prev;
+        const next = new Set(prev);
+        next.add(sectionKey);
+        return next;
+      });
+      return;
+    }
+
+    setCollapsedTreeSectionKeys((prev) => {
+      if (!prev.has(sectionKey)) return prev;
+      const next = new Set(prev);
+      next.delete(sectionKey);
+      return next;
+    });
+    setExpandedTreeSectionKeys((prev) => {
+      if (prev.has(sectionKey)) return prev;
+      const next = new Set(prev);
+      next.add(sectionKey);
+      return next;
+    });
+  }, []);
 
   const handleCreateDepartment = useCallback(() => {
     setDepartmentActionError(null);
@@ -696,6 +763,7 @@ export default function ProjectsPanel({
       .filter(p => !p.parentProjectId) // Only top-level projects
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [projects]);
+  const hasDepartmentDirectory = Boolean(departments && departments.size > 0);
 
   // Build lookup of child projects by parent ID
   const childProjectsByParent = useMemo(() => {
@@ -736,8 +804,86 @@ export default function ProjectsPanel({
     });
   }, [agentRuns, departments, projectFilter, projectSearch, sortedProjects, workspaces]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProjectlessRuns = async () => {
+      try {
+        const runs = await api.agentRunsByFilterAll({ projectless: true }, { pageSize: 100 });
+        if (!cancelled) {
+          setProjectlessRuns(
+            runs
+              .filter((run) => !run.projectId)
+              .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setProjectlessRuns(
+            agentRuns
+              .filter((run) => !run.projectId)
+              .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+          );
+        }
+      }
+    };
+
+    void loadProjectlessRuns();
+    const interval = setInterval(() => {
+      void loadProjectlessRuns();
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [agentRuns, refreshSignal]);
+
+  const projectlessRunSource = useMemo(() => {
+    if (projectlessRuns.length > 0) return projectlessRuns;
+    return [...agentRuns]
+      .filter((run) => !run.projectId)
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  }, [agentRuns, projectlessRuns]);
+
+  const projectlessRunsByWorkspace = useMemo(() => {
+    const map = new Map<string, AgentRun[]>();
+    for (const run of projectlessRunSource) {
+      const existing = map.get(run.workspace) || [];
+      existing.push(run);
+      map.set(run.workspace, existing);
+    }
+    for (const runs of map.values()) {
+      runs.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+    }
+    return map;
+  }, [projectlessRunSource]);
+
+  const getSectionProjectlessRuns = useCallback((section: ProjectTreeSection) => {
+    return section.boundWorkspaceUris
+      .flatMap((workspaceUri) => projectlessRunsByWorkspace.get(workspaceUri) || [])
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+      .slice(0, 10);
+  }, [projectlessRunsByWorkspace]);
+
   const projectTreeSections = useMemo(() => {
     const sections = new Map<string, ProjectTreeSection>();
+
+    if (projectFilter !== 'completed') {
+      for (const seed of buildProjectTreeSectionSeeds(workspaces, departments, projectSearch)) {
+        const runOnlyCount = seed.boundWorkspaceUris.reduce(
+          (sum, workspaceUri) => sum + (projectlessRunsByWorkspace.get(workspaceUri)?.length || 0),
+          0,
+        );
+        sections.set(seed.key, {
+          ...seed,
+          tone: 'neutral',
+          projects: [],
+          totalCount: 0,
+          runOnlyCount,
+        });
+      }
+    }
 
     for (const project of filteredProjects) {
       const statusGroup = isClosedProjectStatus(project.status);
@@ -764,10 +910,19 @@ export default function ProjectsPanel({
         : department
           ? `${boundWorkspaceUris.length} 个工作区`
           : '待配置部门';
+      const runOnlyCount = statusGroup
+        ? 0
+        : boundWorkspaceUris.reduce(
+            (sum, workspaceUri) => sum + (projectlessRunsByWorkspace.get(workspaceUri)?.length || 0),
+            0,
+          );
 
       if (existing) {
         existing.projects.push(project);
         existing.totalCount += 1;
+        if (existing.tone === 'neutral' || tone === 'danger' || (tone === 'warning' && existing.tone !== 'danger')) {
+          existing.tone = tone;
+        }
       } else {
         sections.set(key, {
           key,
@@ -776,6 +931,7 @@ export default function ProjectsPanel({
           tone,
           projects: [project],
           totalCount: 1,
+          runOnlyCount,
           primaryWorkspaceUri,
           boundWorkspaceUris,
           hasDepartmentConfig: Boolean(department),
@@ -787,9 +943,11 @@ export default function ProjectsPanel({
       const leftClosed = left.key.startsWith('status-') ? 1 : 0;
       const rightClosed = right.key.startsWith('status-') ? 1 : 0;
       if (leftClosed !== rightClosed) return leftClosed - rightClosed;
+      if (left.totalCount === 0 && right.totalCount > 0) return 1;
+      if (right.totalCount === 0 && left.totalCount > 0) return -1;
       return left.title.localeCompare(right.title);
     });
-  }, [departments, filteredProjects, workspaces]);
+  }, [departments, filteredProjects, projectFilter, projectSearch, projectlessRunsByWorkspace, workspaces]);
 
   const openTreeSections = useMemo(() => {
     return projectTreeSections
@@ -808,29 +966,13 @@ export default function ProjectsPanel({
           }
           return new Date(getProjectActivityTime(right, agentRuns)).getTime() - new Date(getProjectActivityTime(left, agentRuns)).getTime();
         });
-        const showcaseProjects = sortedSectionProjects.filter(project => !isNoisyProjectName(project.name));
-        const displayProjects = (showcaseProjects.length > 0 ? showcaseProjects : sortedSectionProjects).slice(0, 4);
-        const activeCount = sortedSectionProjects.filter(project => project.status === 'active').length;
-        const attentionCount = sortedSectionProjects.filter(project => getProjectAttentionCount(project, agentRuns) > 0).length;
-        const showcaseCount = showcaseProjects.length;
-        const topPresentation = displayProjects[0] ? getProjectPresentationScore(displayProjects[0], agentRuns) : -100;
-        const sectionPresentationScore = topPresentation + activeCount * 8 + attentionCount * 5 + showcaseCount * 4 - (isNoisyWorkspaceLabel(section.title) ? 24 : 0);
-
         return {
           ...section,
-          projects: displayProjects,
-          hiddenCount: Math.max(0, section.totalCount - displayProjects.length),
-          activeCount,
-          showcaseCount,
-          sectionPresentationScore,
+          projects: sortedSectionProjects,
         };
       })
       .sort((left, right) => {
-        if (left.sectionPresentationScore !== right.sectionPresentationScore) {
-          return right.sectionPresentationScore - left.sectionPresentationScore;
-        }
-        if (left.activeCount !== right.activeCount) return right.activeCount - left.activeCount;
-        return right.totalCount - left.totalCount;
+        return left.title.localeCompare(right.title, undefined, { sensitivity: 'base', numeric: true });
       });
   }, [agentRuns, projectTreeSections]);
 
@@ -842,36 +984,17 @@ export default function ProjectsPanel({
         projects: [...section.projects].sort((left, right) =>
           new Date(getProjectActivityTime(right, agentRuns)).getTime() - new Date(getProjectActivityTime(left, agentRuns)).getTime(),
         ),
-        hiddenCount: 0,
-        activeCount: 0,
       }));
   }, [agentRuns, projectTreeSections]);
 
-  useEffect(() => {
-    if (projectSearch.trim() || projectFilter !== 'all') {
-      setShowAllTreeSections(false);
-    }
-  }, [projectFilter, projectSearch]);
-
   const visibleOpenTreeSections = useMemo(() => {
-    if (projectSearch.trim() || projectFilter !== 'all') return openTreeSections;
-    const showcaseSections = openTreeSections.filter(section => section.showcaseCount > 0);
-    const prioritizedSections = showcaseSections.length >= 4
-      ? showcaseSections
-      : [...showcaseSections, ...openTreeSections.filter(section => section.showcaseCount === 0 && section.activeCount > 0)];
-    if (showAllTreeSections) return openTreeSections;
-    return prioritizedSections.slice(0, 4);
-  }, [openTreeSections, projectFilter, projectSearch, showAllTreeSections]);
+    return openTreeSections;
+  }, [openTreeSections]);
 
   const visibleTreeSections = useMemo(() => {
     if (projectFilter === 'completed') return closedTreeSections;
     return visibleOpenTreeSections;
   }, [closedTreeSections, projectFilter, visibleOpenTreeSections]);
-
-  const extraOpenSectionCount = useMemo(() => {
-    if (projectSearch.trim() || projectFilter !== 'all') return 0;
-    return Math.max(0, openTreeSections.length - 4);
-  }, [openTreeSections, projectFilter, projectSearch]);
 
   const closedProjects = useMemo(() => {
     return filteredProjects
@@ -884,15 +1007,41 @@ export default function ProjectsPanel({
     [visibleTreeSections],
   );
 
+  const browseCandidateSections = useMemo(
+    () => visibleTreeSections.filter((section) => !section.key.startsWith('status-')),
+    [visibleTreeSections],
+  );
+
+  const explicitBrowseFocusSection = useMemo(() => {
+    if (!browseFocusedWorkspaceUri) return null;
+    return browseCandidateSections.find((section) =>
+      section.primaryWorkspaceUri === browseFocusedWorkspaceUri || section.boundWorkspaceUris.includes(browseFocusedWorkspaceUri),
+    ) || null;
+  }, [browseCandidateSections, browseFocusedWorkspaceUri]);
+
   const browseFocusProject = useMemo(() => {
+    const pickBrowseProject = (candidateProjects: Project[]) => {
+      return candidateProjects.find((project) =>
+        project.status === 'active' && !isNoisyProjectName(project.name),
+      ) || candidateProjects.find((project) =>
+        getProjectAttentionCount(project, agentRuns) > 0 && !isNoisyProjectName(project.name),
+      ) || candidateProjects[0]
+        || null;
+    };
     const explicitProject = browseFocusedProjectId
       ? visibleTreeProjects.find((project) => project.projectId === browseFocusedProjectId) || null
       : null;
     if (explicitProject) return explicitProject;
 
-    if (visibleTreeProjects.length > 0) {
-      return visibleTreeProjects.find((project) => projectFilter === 'completed' || !isClosedProjectStatus(project.status))
-        || visibleTreeProjects[0]
+    const scopedVisibleProjects = explicitBrowseFocusSection
+      ? visibleTreeProjects.filter((project) =>
+          explicitBrowseFocusSection.boundWorkspaceUris.includes(project.workspace || ''),
+        )
+      : visibleTreeProjects;
+
+    if (scopedVisibleProjects.length > 0) {
+      return scopedVisibleProjects.find((project) => projectFilter === 'completed' || !isClosedProjectStatus(project.status))
+        || scopedVisibleProjects[0]
         || null;
     }
 
@@ -901,7 +1050,10 @@ export default function ProjectsPanel({
     }
 
     const candidateProjects = sortedProjects
-      .filter((project) => !['archived', 'cancelled'].includes(project.status))
+      .filter((project) =>
+        !isClosedProjectStatus(project.status)
+        && (!explicitBrowseFocusSection || explicitBrowseFocusSection.boundWorkspaceUris.includes(project.workspace || '')),
+      )
       .sort((left, right) => {
         const leftScore = getProjectPresentationScore(left, agentRuns);
         const rightScore = getProjectPresentationScore(right, agentRuns);
@@ -909,14 +1061,34 @@ export default function ProjectsPanel({
         return new Date(getProjectActivityTime(right, agentRuns)).getTime() - new Date(getProjectActivityTime(left, agentRuns)).getTime();
       });
 
-    return candidateProjects.find((project) =>
-      project.status === 'active' && !isNoisyProjectName(project.name),
-    ) || candidateProjects.find((project) =>
-      getProjectAttentionCount(project, agentRuns) > 0 && !isNoisyProjectName(project.name),
-    ) || candidateProjects[0]
-      || sortedProjects[0]
-      || null;
-  }, [agentRuns, browseFocusedProjectId, projectFilter, projectSearch, sortedProjects, visibleTreeProjects]);
+    return pickBrowseProject(candidateProjects);
+  }, [agentRuns, browseFocusedProjectId, explicitBrowseFocusSection, projectFilter, projectSearch, sortedProjects, visibleTreeProjects]);
+
+  const browseFocusSection = useMemo(() => {
+    if (explicitBrowseFocusSection) return explicitBrowseFocusSection;
+    if (browseFocusProject?.workspace) {
+      return browseCandidateSections.find((section) => section.boundWorkspaceUris.includes(browseFocusProject.workspace || '')) || null;
+    }
+    if (projectSearch.trim() || projectFilter !== 'all') {
+      return null;
+    }
+    return browseCandidateSections.find((section) => section.runOnlyCount > 0) || browseCandidateSections[0] || null;
+  }, [browseCandidateSections, browseFocusProject, explicitBrowseFocusSection, projectFilter, projectSearch]);
+
+  const browseContextWorkspaceUris = useMemo(() => {
+    if (browseFocusSection?.boundWorkspaceUris.length) {
+      return browseFocusSection.boundWorkspaceUris;
+    }
+    return browseFocusProject?.workspace ? [browseFocusProject.workspace] : [];
+  }, [browseFocusProject, browseFocusSection]);
+
+  const browseContextWorkspaceUri = browseFocusProject?.workspace
+    || browseFocusSection?.primaryWorkspaceUri
+    || browseFocusSection?.boundWorkspaceUris[0]
+    || null;
+
+  const browseContextWorkspaceLabel = browseFocusSection?.title
+    || (browseContextWorkspaceUri ? getWorkspaceLabel(browseContextWorkspaceUri, workspaces, departments) : '执行工作区');
 
   const browseFocusRuns = useMemo(() => {
     if (!browseFocusProject) return [];
@@ -932,19 +1104,22 @@ export default function ProjectsPanel({
   }, [browseFocusProject, childProjectsByParent]);
 
   const browseFocusWorkspaceProjects = useMemo(() => {
-    if (!browseFocusProject?.workspace) return [];
+    if (!browseFocusProject || browseContextWorkspaceUris.length === 0) return [];
     return sortedProjects
-      .filter(project => project.workspace === browseFocusProject.workspace && project.projectId !== browseFocusProject.projectId)
+      .filter(project =>
+        browseContextWorkspaceUris.includes(project.workspace || '')
+        && project.projectId !== browseFocusProject.projectId,
+      )
       .sort((left, right) => {
         const leftScore = getProjectPresentationScore(left, agentRuns);
         const rightScore = getProjectPresentationScore(right, agentRuns);
         if (leftScore !== rightScore) return rightScore - leftScore;
         return new Date(getProjectActivityTime(right, agentRuns)).getTime() - new Date(getProjectActivityTime(left, agentRuns)).getTime();
       });
-  }, [agentRuns, browseFocusProject, sortedProjects]);
+  }, [agentRuns, browseContextWorkspaceUris, browseFocusProject, sortedProjects]);
 
   const browseFocusContextRuns = useMemo(() => {
-    if (!browseFocusProject?.workspace) return browseFocusRuns;
+    if (!browseFocusProject || browseContextWorkspaceUris.length === 0) return browseFocusRuns;
     const primaryIds = new Set([
       browseFocusProject.projectId,
       ...browseFocusChildren.map(project => project.projectId),
@@ -964,11 +1139,12 @@ export default function ProjectsPanel({
     return runsSource
       .filter(run => {
         if (!run.projectId) return false;
-        return primaryIds.has(run.projectId) || (run.workspace === browseFocusProject.workspace && workspaceIds.has(run.projectId));
+        return primaryIds.has(run.projectId) || (browseContextWorkspaceUris.includes(run.workspace) && workspaceIds.has(run.projectId));
       })
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   }, [
     agentRuns,
+    browseContextWorkspaceUris,
     browseFocusChildren,
     browseFocusProject,
     browseFocusRuns,
@@ -977,18 +1153,37 @@ export default function ProjectsPanel({
     focusedProjectRunsProjectId,
   ]);
 
+  const browseFocusProjectlessRunPool = useMemo(() => {
+    if (browseContextWorkspaceUris.length === 0) return [];
+    return projectlessRunSource
+      .filter((run) => browseContextWorkspaceUris.includes(run.workspace))
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  }, [browseContextWorkspaceUris, projectlessRunSource]);
+
+  const browseFocusProjectlessRuns = useMemo(
+    () => browseFocusProjectlessRunPool.slice(0, 10),
+    [browseFocusProjectlessRunPool],
+  );
+
+  const browseFocusRunOnlyStatusCounts = useMemo(() => ({
+    total: browseFocusProjectlessRunPool.length,
+    completed: browseFocusProjectlessRunPool.filter((run) => run.status === 'completed').length,
+    active: browseFocusProjectlessRunPool.filter((run) => ['queued', 'starting', 'running'].includes(run.status)).length,
+    attention: browseFocusProjectlessRunPool.filter((run) => ['failed', 'blocked', 'cancelled'].includes(run.status)).length,
+  }), [browseFocusProjectlessRunPool]);
+
   const browseFocusDepartment = useMemo(() => {
-    if (!browseFocusProject?.workspace || !departments) return null;
-    return departments.get(browseFocusProject.workspace) || null;
-  }, [browseFocusProject?.workspace, departments]);
+    if (!browseContextWorkspaceUri || !departments) return null;
+    return departments.get(browseContextWorkspaceUri) || null;
+  }, [browseContextWorkspaceUri, departments]);
   const browseFocusWorkspaceBindings = useMemo(() => {
-    if (!browseFocusProject?.workspace) return [];
+    if (!browseContextWorkspaceUri) return [];
     return getDepartmentWorkspaceBindings(
       browseFocusDepartment,
-      browseFocusProject.workspace,
-      getWorkspaceLabel(browseFocusProject.workspace, workspaces, departments),
+      browseContextWorkspaceUri,
+      browseContextWorkspaceLabel,
     );
-  }, [browseFocusDepartment, browseFocusProject?.workspace, departments, workspaces]);
+  }, [browseContextWorkspaceLabel, browseContextWorkspaceUri, browseFocusDepartment]);
   const browseFocusContextDocs = useMemo(
     () => getDepartmentContextDocumentPaths(browseFocusDepartment),
     [browseFocusDepartment],
@@ -1066,6 +1261,28 @@ export default function ProjectsPanel({
     .filter((item, index, items) => items.findIndex(candidate => candidate.key === item.key) === index)
     .slice(0, 4);
 
+  const selectedProjectlessRun = useMemo(() => {
+    if (!selectedRunId || selectedProjectId) return null;
+    const candidates = [
+      ...(selectedProjectlessRunDetail ? [selectedProjectlessRunDetail] : []),
+      ...projectlessRuns,
+      ...agentRuns,
+    ];
+    const run = candidates.find((item) => item.runId === selectedRunId) || null;
+    return run && !run.projectId ? run : null;
+  }, [agentRuns, projectlessRuns, selectedProjectId, selectedProjectlessRunDetail, selectedRunId]);
+
+  const resolvedSelectedProjectlessRun = useMemo(() => {
+    if (!selectedProjectlessRun) return null;
+    if (!selectedProjectlessRunDetail || selectedProjectlessRunDetail.runId !== selectedProjectlessRun.runId) {
+      return selectedProjectlessRun;
+    }
+    return {
+      ...selectedProjectlessRun,
+      ...selectedProjectlessRunDetail,
+    };
+  }, [selectedProjectlessRun, selectedProjectlessRunDetail]);
+
   useEffect(() => {
     if (!browseFocusedProjectId) return;
     if (projects.some(project => project.projectId === browseFocusedProjectId)) return;
@@ -1077,6 +1294,14 @@ export default function ProjectsPanel({
     if (visibleTreeProjects.some((project) => project.projectId === browseFocusedProjectId)) return;
     setBrowseFocusedProjectId(null);
   }, [browseFocusedProjectId, visibleTreeProjects]);
+
+  useEffect(() => {
+    if (!browseFocusedWorkspaceUri) return;
+    if (browseCandidateSections.some((section) =>
+      section.primaryWorkspaceUri === browseFocusedWorkspaceUri || section.boundWorkspaceUris.includes(browseFocusedWorkspaceUri),
+    )) return;
+    setBrowseFocusedWorkspaceUri(null);
+  }, [browseCandidateSections, browseFocusedWorkspaceUri]);
 
   // In detail mode, resolve the top-level project to display
   const detailProject = useMemo(() => {
@@ -1172,6 +1397,37 @@ export default function ProjectsPanel({
       cancelled = true;
     };
   }, [linkedImprovementProposalId, refreshSignal]);
+
+  useEffect(() => {
+    if (!selectedProjectlessRun?.runId) {
+      setSelectedProjectlessRunDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadRunDetail = async () => {
+      try {
+        const detail = await api.agentRun(selectedProjectlessRun.runId);
+        if (!cancelled) {
+          setSelectedProjectlessRunDetail(detail.projectId ? null : detail);
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedProjectlessRunDetail(null);
+        }
+      }
+    };
+
+    void loadRunDetail();
+    const interval = setInterval(() => {
+      void loadRunDetail();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedProjectlessRun?.runId]);
 
   useEffect(() => {
     if (!focusedRunsProjectId) {
@@ -1306,11 +1562,11 @@ export default function ProjectsPanel({
     }
   };
 
-  const openCreateDialog = useCallback(() => {
+  const openCreateDialog = useCallback((workspaceUri?: string) => {
     setFormData({
       name: '',
       goal: '',
-      workspace: workspaces[0]?.uri || '',
+      workspace: workspaceUri || workspaces[0]?.uri || '',
       templateId: '',
     });
     setIsCreateDialogOpen(true);
@@ -1355,7 +1611,7 @@ export default function ProjectsPanel({
 
   return (
     <>
-      {sortedProjects.length === 0 ? (
+      {sortedProjects.length === 0 && !hasDepartmentDirectory ? (
         <div className="space-y-6">
 
           {/* CEO response toast */}
@@ -1376,7 +1632,7 @@ export default function ProjectsPanel({
             <p className="mt-2 text-sm text-[var(--app-text-soft)]">
               {t('projects.createPrompt')}
             </p>
-            <Button onClick={openCreateDialog} className="mt-6 gap-2 rounded-full">
+            <Button onClick={() => openCreateDialog()} className="mt-6 gap-2 rounded-full">
               <Plus className="h-4 w-4" />
               {t('projects.createProject')}
             </Button>
@@ -1384,6 +1640,60 @@ export default function ProjectsPanel({
               <Sparkles className="h-4 w-4 text-purple-400" />
               {t('generate.title')}
             </Button>
+          </WorkspaceSurface>
+        </div>
+      ) : resolvedSelectedProjectlessRun ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <button
+              className="flex items-center gap-2 text-sm text-[var(--app-text-soft)] transition-colors hover:text-[var(--app-text)]"
+              onClick={() => (onSelectProject as (id: string | null) => void)?.(null)}
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>{t('projects.title')}</span>
+            </button>
+            <div className="flex items-center gap-2">
+              <WorkspaceBadge tone="neutral">{getRunOwnerLabel(resolvedSelectedProjectlessRun, workspaces, departments)}</WorkspaceBadge>
+              {resolvedSelectedProjectlessRun.triggerContext?.schedulerJobId ? (
+                <WorkspaceBadge tone="info">scheduler</WorkspaceBadge>
+              ) : null}
+            </div>
+          </div>
+
+          <WorkspaceSurface className={cn('space-y-3', PROJECT_SURFACE_CLASS)} padding="sm">
+            <WorkspaceSectionHeader
+              title="运行结果"
+              description="未挂到 Project 的最近执行详情"
+              icon={<Activity className="h-4 w-4" />}
+            />
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className={cn(PROJECT_INSET_CARD_CLASS, 'px-4 py-3')}>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">执行来源</div>
+                <div className="mt-2 text-sm font-semibold text-[var(--app-text)]">
+                  {resolvedSelectedProjectlessRun.triggerContext?.source || 'run'}
+                </div>
+              </div>
+              <div className={cn(PROJECT_INSET_CARD_CLASS, 'px-4 py-3')}>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">状态</div>
+                <div className="mt-2">
+                  <StatusBadge status={resolvedSelectedProjectlessRun.status} />
+                </div>
+              </div>
+              <div className={cn(PROJECT_INSET_CARD_CLASS, 'px-4 py-3')}>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--app-text-muted)]">创建时间</div>
+                <div className="mt-2 text-sm font-semibold text-[var(--app-text)]">
+                  {formatRelativeTime(resolvedSelectedProjectlessRun.createdAt, locale)}
+                </div>
+              </div>
+            </div>
+            <AgentRunDetail
+              run={resolvedSelectedProjectlessRun}
+              models={models || []}
+              onCancel={onCancelRun || (() => {})}
+              onEvaluateRun={handleEvaluateRun}
+              onOpenConversation={onOpenConversation}
+              onOpenImprovementProposal={onOpenImprovementProposal}
+            />
           </WorkspaceSurface>
         </div>
       ) : detailProject ? (
@@ -2195,7 +2505,9 @@ export default function ProjectsPanel({
                 title="项目树"
                 description={projectSearch.trim() || projectFilter !== 'all'
                   ? `${filteredProjects.length} visible / ${sortedProjects.length} total`
-                  : '先建部门，再在部门下推进项目'}
+                  : departments && departments.size > 0
+                    ? '按部门查看当前项目'
+                    : '先建部门，再在部门下推进项目'}
                 icon={<FolderKanban className="h-4 w-4" />}
                 actions={(
                   <div className="flex items-center gap-2">
@@ -2213,7 +2525,7 @@ export default function ProjectsPanel({
                       type="button"
                       size="sm"
                       className="h-8 gap-1.5 rounded-[8px]"
-                      onClick={openCreateDialog}
+                      onClick={() => openCreateDialog()}
                     >
                       <Plus className="h-4 w-4" />
                       新建项目
@@ -2256,11 +2568,13 @@ export default function ProjectsPanel({
                 </div>
               ) : null}
 
-              {filteredProjects.length === 0 ? (
+              {visibleTreeSections.length === 0 ? (
                 <WorkspaceEmptyBlock
                   icon={<Search className="h-5 w-5" />}
-                  title="没有匹配项目"
-                  description="调整搜索或筛选条件后再查看，或者先创建一个部门。"
+                  title={departments && departments.size > 0 ? '没有匹配结果' : '没有匹配项目'}
+                  description={departments && departments.size > 0
+                    ? '调整搜索或筛选条件后再查看，或直接在已有部门下新建项目。'
+                    : '调整搜索或筛选条件后再查看，或者先创建一个部门。'}
                 >
                   <Button size="sm" className="mt-4 gap-2 rounded-[8px]" onClick={() => void handleCreateDepartment()}>
                     <Building2 className="h-4 w-4" />
@@ -2268,104 +2582,171 @@ export default function ProjectsPanel({
                   </Button>
                 </WorkspaceEmptyBlock>
               ) : (
-                <div className="max-h-[670px] space-y-3 overflow-y-auto pr-1">
-                  {visibleTreeSections.map(section => (
-                    <div key={section.key} className="space-y-2">
-                      <div className="flex h-8 items-center justify-between gap-3 px-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />
-                          {section.key.startsWith('status-') ? (
-                            <FolderKanban className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />
-                          ) : (
-                            <Building2 className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />
+                <div className="max-h-[670px] space-y-1 overflow-y-auto pr-1">
+                  {visibleTreeSections.map(section => {
+                    const isStatusSection = section.key.startsWith('status-');
+                    const sectionActive = browseFocusSection?.key === section.key
+                      || (!!browseFocusedWorkspaceUri && (
+                        section.primaryWorkspaceUri === browseFocusedWorkspaceUri
+                        || section.boundWorkspaceUris.includes(browseFocusedWorkspaceUri)
+                      ));
+                    const sectionCollapsed = collapsedTreeSectionKeys.has(section.key);
+                    const sectionExpanded = !sectionCollapsed && (
+                      sectionActive
+                      || expandedTreeSectionKeys.has(section.key)
+                      || projectSearch.trim().length > 0
+                      || projectFilter !== 'all'
+                    );
+                    const sectionRunOnlyRuns = isStatusSection ? [] : getSectionProjectlessRuns(section);
+
+                    return (
+                      <div key={section.key} className="group/tree-section">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className={cn(
+                            'flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-[8px] px-2 py-1.5 text-left transition-colors',
+                            sectionActive
+                              ? 'bg-[var(--app-accent-soft)] text-[var(--app-accent)]'
+                              : 'text-[var(--app-text-soft)] hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]',
                           )}
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-[var(--app-text)]">{section.title}</div>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2 text-[10px] text-[var(--app-text-muted)]">
-                          {!section.key.startsWith('status-') ? (
+                          onClick={() => handleTreeSectionSelect(section)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              handleTreeSectionSelect(section);
+                            }
+                          }}
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
                             <button
                               type="button"
-                              className="inline-flex h-6 items-center rounded-full border border-[var(--app-border-soft)] px-2 text-[10px] transition-colors hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]"
-                              onClick={() => openDepartmentDialog(section.primaryWorkspaceUri)}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] text-[var(--app-text-muted)] transition-colors hover:bg-[var(--app-raised-2)] hover:text-[var(--app-text)]"
+                              aria-label={sectionExpanded ? '收起部门' : '展开部门'}
+                              onClick={(event) => toggleTreeSection(event, section.key, sectionExpanded)}
                             >
-                              设置
+                              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', !sectionExpanded && '-rotate-90')} />
                             </button>
-                          ) : null}
-                          <WorkspaceStatusDot tone={section.tone} pulse={section.tone === 'info'} />
-                          <span>{section.activeCount > 0 ? '进行中' : section.subtitle}</span>
-                          <span>{section.totalCount}</span>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        {section.projects.map(project => {
-                          const progress = getProjectProgress(project);
-                          const attentionCount = getProjectAttentionCount(project, agentRuns);
-                          const itemActive = browseFocusProject?.projectId === project.projectId;
-
-                          return (
-                            <div
-                              key={project.projectId}
-                              role="button"
-                              tabIndex={0}
+                            {isStatusSection ? (
+                              <FolderKanban className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />
+                            ) : (
+                              <Building2 className="h-3.5 w-3.5 shrink-0 text-[var(--app-text-muted)]" />
+                            )}
+                            <span className={cn('truncate text-sm font-semibold', sectionActive ? 'text-[var(--app-accent)]' : 'text-[var(--app-text)]')}>
+                              {section.title}
+                            </span>
+                          </div>
+                          {!isStatusSection ? (
+                            <button
+                              type="button"
                               className={cn(
-                'group flex min-h-10 w-full cursor-pointer items-center gap-2 rounded-[8px] px-3 py-1.5 text-left transition-all',
-                                itemActive
-                                  ? 'bg-[var(--app-accent-soft)] text-[var(--app-accent)]'
-                                  : 'text-[var(--app-text-soft)] hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]',
+                                'flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] border border-[var(--app-border-soft)] bg-white text-[var(--app-text-muted)] opacity-0 shadow-sm transition-all hover:border-[var(--app-border-strong)] hover:text-[var(--app-text)] group-hover/tree-section:opacity-100 group-focus-within/tree-section:opacity-100',
+                                sectionActive && 'opacity-100',
                               )}
-                              onClick={() => setBrowseFocusedProjectId(project.projectId)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  setBrowseFocusedProjectId(project.projectId);
-                                }
+                              aria-label={`设置 ${section.title}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openDepartmentDialog(section.primaryWorkspaceUri);
                               }}
                             >
-                              <WorkspaceStatusDot tone={getStatusTone(project.status)} pulse={project.status === 'active'} className="shrink-0" />
-                              <div className="min-w-0 flex-1">
-                                <div className={cn('truncate text-sm font-medium', itemActive ? 'text-[var(--app-accent)]' : 'text-[var(--app-text)]')}>
-                                  {project.name}
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {sectionExpanded ? (
+                          <div className="ml-4 border-l border-[var(--app-border-soft)] pl-3">
+                            <div className="space-y-1 py-1">
+                              {section.projects.map(project => {
+                                const progress = getProjectProgress(project);
+                                const attentionCount = getProjectAttentionCount(project, agentRuns);
+                                const itemActive = browseFocusProject?.projectId === project.projectId;
+
+                                return (
+                                  <div
+                                    key={project.projectId}
+                                    role="button"
+                                    tabIndex={0}
+                                    className={cn(
+                                      'group flex min-h-10 w-full cursor-pointer items-center gap-2 rounded-[8px] px-3 py-1.5 text-left transition-all',
+                                      itemActive
+                                        ? 'bg-[var(--app-accent-soft)] text-[var(--app-accent)]'
+                                        : 'text-[var(--app-text-soft)] hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]',
+                                    )}
+                                    onClick={() => {
+                                      setBrowseFocusedWorkspaceUri(section.primaryWorkspaceUri || null);
+                                      setBrowseFocusedProjectId(project.projectId);
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault();
+                                        setBrowseFocusedWorkspaceUri(section.primaryWorkspaceUri || null);
+                                        setBrowseFocusedProjectId(project.projectId);
+                                      }
+                                    }}
+                                  >
+                                    <WorkspaceStatusDot tone={getStatusTone(project.status)} pulse={project.status === 'active'} className="shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <div className={cn('truncate text-sm font-medium', itemActive ? 'text-[var(--app-accent)]' : 'text-[var(--app-text)]')}>
+                                        {project.name}
+                                      </div>
+                                      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-[var(--app-text-muted)]">
+                                        <span className="truncate">{project.goal || getWorkspaceLabel(project.workspace, workspaces, departments)}</span>
+                                        <span className="shrink-0 tabular-nums">{progress.percent}%</span>
+                                      </div>
+                                    </div>
+                                    <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[10px]', attentionCount > 0 ? 'bg-amber-400/10 text-amber-700' : 'text-[var(--app-text-muted)]')}>
+                                      {attentionCount > 0 ? attentionCount : project.status}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+
+                              {section.projects.length === 0 ? (
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center justify-between rounded-[8px] border border-dashed border-[var(--app-border-soft)] px-3 py-2 text-left text-[11px] text-[var(--app-text-muted)] transition-colors hover:border-[var(--app-border-strong)] hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]"
+                                  onClick={() => openCreateDialog(section.primaryWorkspaceUri)}
+                                >
+                                  <span>暂无项目</span>
+                                  <span className="inline-flex items-center gap-1">
+                                    新建项目
+                                    <ArrowRight className="h-3.5 w-3.5" />
+                                  </span>
+                                </button>
+                              ) : null}
+
+                              {sectionRunOnlyRuns.length > 0 ? (
+                                <div className={cn('space-y-1', section.projects.length > 0 && 'pt-1')}>
+                                  <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--app-text-muted)]">
+                                    最近运行结果
+                                  </div>
+                                  {sectionRunOnlyRuns.map(run => (
+                                    <button
+                                      key={run.runId}
+                                      type="button"
+                                      className="flex w-full items-start gap-2 rounded-[8px] px-3 py-2 text-left transition-colors hover:bg-[var(--app-raised)]"
+                                      onClick={() => onSelectRun?.(run.runId, run.projectId)}
+                                    >
+                                      <Activity className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--app-accent)]" />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate text-[12px] font-medium text-[var(--app-text)]">{getRunDisplayTitle(run)}</div>
+                                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-[var(--app-text-muted)]">
+                                          <WorkspaceStatusDot tone={getStatusTone(run.status)} pulse={run.status === 'running'} />
+                                          <span>{run.status}</span>
+                                          <span>{formatRelativeTime(run.createdAt, locale)}</span>
+                                        </div>
+                                      </div>
+                                    </button>
+                                  ))}
                                 </div>
-                                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-[var(--app-text-muted)]">
-                                  <span className="truncate">{project.goal || getWorkspaceLabel(project.workspace, workspaces, departments)}</span>
-                                  <span className="shrink-0 tabular-nums">{progress.percent}%</span>
-                                </div>
-                              </div>
-                              <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[10px]', attentionCount > 0 ? 'bg-amber-400/10 text-amber-700' : 'text-[var(--app-text-muted)]')}>
-                                {attentionCount > 0 ? attentionCount : project.status}
-                              </span>
+                              ) : null}
                             </div>
-                          );
-                        })}
-                        {section.hiddenCount > 0 ? (
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left text-[11px] text-[var(--app-text-muted)] transition-colors hover:bg-[var(--app-raised)] hover:text-[var(--app-text)]"
-                            onClick={() => setProjectSearch(section.title)}
-                          >
-                            <span>查看其余 {section.hiddenCount} 个项目</span>
-                            <ArrowRight className="h-3.5 w-3.5" />
-                          </button>
+                          </div>
                         ) : null}
                       </div>
-                    </div>
-                  ))}
-                  {extraOpenSectionCount > 0 ? (
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between rounded-[10px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-3 text-left transition-colors hover:border-[var(--app-border-strong)] hover:bg-[var(--app-surface)]"
-                      onClick={() => setShowAllTreeSections((prev) => !prev)}
-                    >
-                      <span className="inline-flex items-center gap-2 text-sm font-medium text-[var(--app-text)]">
-                        <FolderKanban className="h-4 w-4 text-[var(--app-accent)]" />
-                        {showAllTreeSections ? '收起其他部门' : `查看其余 ${extraOpenSectionCount} 个部门`}
-                      </span>
-                      <ChevronDown className={cn('h-4 w-4 text-[var(--app-text-muted)] transition-transform', showAllTreeSections && 'rotate-180')} />
-                    </button>
-                  ) : null}
+                    );
+                  })}
                   {closedProjects.length > 0 ? (
                     <button
                       type="button"
@@ -2599,16 +2980,101 @@ export default function ProjectsPanel({
                       </div>
                     </>
                   );
-                })() : (
+                })() : browseFocusProjectlessRuns.length > 0 ? (
+                  <>
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="flex min-w-0 gap-3">
+                        <WorkspaceIconFrame tone={browseFocusRunOnlyStatusCounts.attention > 0 ? 'warning' : 'info'} className="h-11 w-11 rounded-[10px]">
+                          <Activity className="h-5 w-5" />
+                        </WorkspaceIconFrame>
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-[var(--app-text-soft)]">
+                            最近运行结果
+                          </div>
+                          <h3 className="mt-1 truncate text-2xl font-semibold tracking-[0] text-[var(--app-text)]">
+                            {browseContextWorkspaceLabel}
+                          </h3>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <WorkspaceBadge tone="neutral">{browseContextWorkspaceLabel}</WorkspaceBadge>
+                            {browseFocusDepartment?.provider ? <WorkspaceBadge tone="info">{browseFocusDepartment.provider}</WorkspaceBadge> : null}
+                            <WorkspaceBadge tone="success">{browseFocusRunOnlyStatusCounts.total} 条 run-only 结果</WorkspaceBadge>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-[var(--app-text-muted)]">
+                        当前工作区暂无 Project，以下结果未挂到项目容器。
+                      </div>
+                    </div>
+
+                    <div className={cn(PROJECT_INSET_CARD_CLASS, 'grid gap-3 p-4 md:grid-cols-4')}>
+                      {[
+                        { label: '运行结果', value: String(browseFocusRunOnlyStatusCounts.total) },
+                        { label: '已完成', value: String(browseFocusRunOnlyStatusCounts.completed) },
+                        { label: '进行中', value: String(browseFocusRunOnlyStatusCounts.active) },
+                        { label: '需关注', value: String(browseFocusRunOnlyStatusCounts.attention) },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-[8px] border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-3 py-2">
+                          <div className="text-[11px] text-[var(--app-text-muted)]">{item.label}</div>
+                          <div className="mt-1 text-sm font-semibold tabular-nums text-[var(--app-text)]">{item.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={PROJECT_INSET_CARD_CLASS}>
+                      <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border-soft)] px-4 py-3">
+                        <div className="text-sm font-semibold text-[var(--app-text)]">最近运行结果</div>
+                        <div className="text-xs text-[var(--app-text-muted)]">最多显示 10 条</div>
+                      </div>
+                      <div className="divide-y divide-[var(--app-border-soft)]">
+                        {browseFocusProjectlessRuns.map((run) => (
+                          <button
+                            key={run.runId}
+                            type="button"
+                            className="grid w-full grid-cols-[minmax(0,1fr)] items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-[var(--app-surface)] sm:grid-cols-[minmax(0,1fr)_120px_72px_24px] sm:gap-3"
+                            onClick={() => onSelectRun?.(run.runId, run.projectId)}
+                          >
+                            <div className="flex min-w-0 items-start gap-3">
+                              <span className={cn(
+                                'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
+                                run.status === 'completed' && 'bg-emerald-400/12 text-emerald-700',
+                                (run.status === 'failed' || run.status === 'blocked' || run.status === 'cancelled') && 'bg-red-400/12 text-red-600',
+                                (run.status === 'running' || run.status === 'starting' || run.status === 'queued') && 'bg-sky-400/12 text-sky-700',
+                                !['completed', 'failed', 'blocked', 'cancelled', 'running', 'starting', 'queued'].includes(run.status) && 'bg-[var(--app-raised-2)] text-[var(--app-text-muted)]',
+                              )}>
+                                <Activity className="h-4 w-4" />
+                              </span>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-[var(--app-text)]">{getRunDisplayTitle(run)}</div>
+                                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--app-text-muted)]">
+                                  <span>{run.status}</span>
+                                  <span>{formatRelativeTime(run.createdAt, locale)}</span>
+                                  {run.triggerContext?.schedulerJobId ? <span>scheduler</span> : null}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="hidden truncate text-xs text-[var(--app-text-soft)] sm:block">{getRunOwnerLabel(run, workspaces, departments)}</div>
+                            <div className="hidden text-right text-xs tabular-nums text-[var(--app-text-muted)] sm:block">{getRunDuration(run)}</div>
+                            <div className="hidden justify-end sm:flex">
+                              <WorkspaceStatusDot tone={getStatusTone(run.status)} pulse={run.status === 'running'} />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : (
                   <WorkspaceEmptyBlock
                     icon={<FolderKanban className="h-5 w-5" />}
                     title="暂无项目可展示"
-                    description="创建项目后会显示项目树和执行工作台。"
+                    description={departments && departments.size > 0
+                      ? '已识别部门，创建项目后这里会显示执行工作台。'
+                      : '创建项目后会显示项目树和执行工作台。'}
                   />
                 )}
               </WorkspaceSurface>
 
-	              <div className="grid gap-3 xl:grid-cols-2">
+	              {browseFocusProject ? (
+                  <div className="grid gap-3 xl:grid-cols-2">
 	                <WorkspaceSurface className={PROJECT_SURFACE_CLASS} padding="sm">
                   <WorkspaceSectionHeader
                     title={`阻塞项 ${browseFocusAllBlockers.length}`}
@@ -2715,6 +3181,7 @@ export default function ProjectsPanel({
                   </div>
                 </WorkspaceSurface>
               </div>
+                ) : null}
             </div>
 
 	            <aside className="space-y-3 lg:col-span-2 xl:col-span-1">
@@ -2789,7 +3256,43 @@ export default function ProjectsPanel({
                       </div>
                     </div>
                   );
-                })() : (
+                })() : browseFocusProjectlessRuns.length > 0 ? (
+                  <div className={cn('space-y-4 p-4', PROJECT_INSET_CARD_CLASS)}>
+                    <div className="flex items-center justify-between gap-3">
+                      <WorkspaceBadge tone="neutral">{browseContextWorkspaceLabel}</WorkspaceBadge>
+                      <span className="text-xs text-[var(--app-text-muted)]">
+                        {browseFocusProjectlessRuns[0] ? formatRelativeTime(browseFocusProjectlessRuns[0].createdAt, locale) : '暂无结果'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { label: '运行结果', value: String(browseFocusRunOnlyStatusCounts.total) },
+                        { label: '已完成', value: String(browseFocusRunOnlyStatusCounts.completed) },
+                        { label: '进行中', value: String(browseFocusRunOnlyStatusCounts.active) },
+                        { label: '需关注', value: String(browseFocusRunOnlyStatusCounts.attention) },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-[8px] border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-3 py-2">
+                          <div className="text-[11px] text-[var(--app-text-muted)]">{item.label}</div>
+                          <div className="mt-1 text-sm font-semibold tabular-nums text-[var(--app-text)]">{item.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="space-y-1 text-xs text-[var(--app-text-soft)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>最新结果</span>
+                        <span className="truncate text-right text-[var(--app-text)]">
+                          {browseFocusProjectlessRuns[0] ? getRunDisplayTitle(browseFocusProjectlessRuns[0]) : '暂无结果'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span>部门提供方</span>
+                        <span className="truncate text-right text-[var(--app-text)]">
+                          {browseFocusDepartment?.provider || '未配置'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                   <WorkspaceEmptyBlock title="暂无执行概览" />
                 )}
               </WorkspaceSurface>
@@ -2800,9 +3303,9 @@ export default function ProjectsPanel({
                   description="真实工作区绑定和部门配置"
                   icon={<Building2 className="h-4 w-4" />}
                 />
-                {browseFocusProject ? (
+                {browseContextWorkspaceUri ? (
                   (() => {
-                    const workspaceLabel = getWorkspaceLabel(browseFocusProject.workspace, workspaces, departments);
+                    const workspaceLabel = browseContextWorkspaceLabel;
                     const workflowBoundCount = browseFocusDepartment?.skills.filter((skill) => skill.workflowRef?.trim()).length || 0;
                     const templateCount = browseFocusDepartment?.templateIds?.length || 0;
                     const skillCount = browseFocusDepartment?.skills.length || 0;
@@ -2817,14 +3320,14 @@ export default function ProjectsPanel({
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-sm font-semibold text-[var(--app-text)]">{workspaceLabel}</div>
                             <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--app-text-soft)]">
-                              {browseFocusProject.workspace || '未绑定工作区'}
+                              {browseContextWorkspaceUri || '未绑定工作区'}
                             </div>
                           </div>
                         </div>
                         <div className="mt-4 flex flex-wrap gap-2">
                           {browseFocusDepartment?.type ? <WorkspaceBadge>{browseFocusDepartment.type}</WorkspaceBadge> : null}
                           {browseFocusDepartment?.provider ? <WorkspaceBadge tone="info">{browseFocusDepartment.provider}</WorkspaceBadge> : null}
-                          <WorkspaceBadge tone="neutral">{browseFocusProject.projectType || '未标注类型'}</WorkspaceBadge>
+                          <WorkspaceBadge tone="neutral">{browseFocusProject?.projectType || 'run-only'}</WorkspaceBadge>
                           {primaryBinding ? (
                             <WorkspaceBadge tone="success">
                               默认执行：{primaryBinding.alias || workspaceNameFromUri(primaryBinding.workspaceUri)}
@@ -2876,7 +3379,7 @@ export default function ProjectsPanel({
                           </div>
                         ) : null}
                         <div className="mt-4 text-[11px] text-[var(--app-text-muted)]">
-                          绑定模板：<span className="text-[var(--app-text)]">{getTemplateLabel(browseFocusProject.pipelineState?.templateId || browseFocusProject.templateId, templates)}</span>
+                          绑定模板：<span className="text-[var(--app-text)]">{getTemplateLabel(browseFocusProject?.pipelineState?.templateId || browseFocusProject?.templateId, templates)}</span>
                         </div>
                         {browseFocusDepartment ? (
                           <Button
@@ -2887,10 +3390,10 @@ export default function ProjectsPanel({
                               browseFocusDepartment
                                 ? getDepartmentGroupKey(
                                     browseFocusDepartment,
-                                    browseFocusProject.workspace || '',
+                                    browseContextWorkspaceUri || '',
                                     workspaceLabel,
                                   )
-                                : browseFocusProject.workspace,
+                                : browseContextWorkspaceUri,
                             )}
                           >
                             <Building2 className="h-4 w-4" />
@@ -2908,7 +3411,7 @@ export default function ProjectsPanel({
               <WorkspaceSurface className={cn('space-y-3', PROJECT_SURFACE_CLASS)} padding="sm">
                 <WorkspaceSectionHeader
                   title="关联运行"
-                  description="子项目和最近执行"
+                  description={browseFocusProject ? '子项目和最近执行' : '只展示未挂到 Project 的最近结果'}
                   icon={<Link2 className="h-4 w-4" />}
                   actions={browseFocusProject ? (
                     <button
@@ -2916,10 +3419,12 @@ export default function ProjectsPanel({
                       className="inline-flex items-center gap-1 text-xs font-medium text-[var(--app-accent)] hover:underline"
                       onClick={() => onSelectProject?.(browseFocusProject.projectId)}
                     >
-                      查看全部
-                      <ArrowRight className="h-3.5 w-3.5" />
-                    </button>
-                  ) : null}
+                        查看全部
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </button>
+                    ) : browseFocusProjectlessRuns.length > 0 ? (
+                      <span className="text-xs text-[var(--app-text-muted)]">最多显示 10 条</span>
+                    ) : null}
                 />
                 <div className="space-y-2">
                   {browseFocusChildren.slice(0, 3).map(child => (
@@ -2939,7 +3444,7 @@ export default function ProjectsPanel({
                       </div>
                     </button>
                   ))}
-                  {browseFocusChildren.length === 0 && browseFocusContextRuns.length === 0 ? (
+                  {browseFocusChildren.length === 0 && browseFocusContextRuns.length === 0 && browseFocusProjectlessRuns.length === 0 ? (
                     <WorkspaceEmptyBlock title="暂无关联推进" />
                   ) : null}
                   {browseFocusContextRuns.slice(0, browseFocusChildren.length > 0 ? 2 : 4).map(run => (
@@ -2947,6 +3452,29 @@ export default function ProjectsPanel({
                       key={run.runId}
                       type="button"
 	                      className="flex w-full items-start gap-3 rounded-[8px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-3 text-left transition-colors hover:border-[var(--app-border-strong)] hover:bg-[var(--app-surface)]"
+                      onClick={() => onSelectRun?.(run.runId, run.projectId)}
+                    >
+                      <Activity className="mt-0.5 h-4 w-4 shrink-0 text-[var(--app-accent)]" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-[var(--app-text)]">{getRunDisplayTitle(run)}</div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-[var(--app-text-soft)]">
+                          <WorkspaceStatusDot tone={getStatusTone(run.status)} pulse={run.status === 'running'} />
+                          <span>{run.status}</span>
+                          <span>{formatRelativeTime(run.createdAt, locale)}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                  {browseFocusProject && browseFocusProjectlessRuns.length > 0 ? (
+                    <div className="px-1 pt-2 text-[11px] font-medium text-[var(--app-text-muted)]">
+                      Run-only 结果
+                    </div>
+                  ) : null}
+                  {browseFocusProjectlessRuns.map(run => (
+                    <button
+                      key={run.runId}
+                      type="button"
+                      className="flex w-full items-start gap-3 rounded-[8px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-3 text-left transition-colors hover:border-[var(--app-border-strong)] hover:bg-[var(--app-surface)]"
                       onClick={() => onSelectRun?.(run.runId, run.projectId)}
                     >
                       <Activity className="mt-0.5 h-4 w-4 shrink-0 text-[var(--app-accent)]" />
@@ -2970,7 +3498,7 @@ export default function ProjectsPanel({
                 />
                 <div className="grid grid-cols-2 gap-2">
                   <Button
-                    onClick={browseFocusProject ? () => openDispatchProject(browseFocusProject) : openCreateDialog}
+                    onClick={browseFocusProject ? () => openDispatchProject(browseFocusProject) : () => openCreateDialog(browseContextWorkspaceUri || undefined)}
 	                    className="justify-start gap-2 rounded-[8px]"
                   >
                     {browseFocusProject ? <Play className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
@@ -2978,7 +3506,7 @@ export default function ProjectsPanel({
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={openCreateDialog}
+                    onClick={() => openCreateDialog(browseContextWorkspaceUri || undefined)}
 	                    className={cn('justify-start gap-2 rounded-[8px]', workspaceOutlineActionClassName)}
                   >
                     <Plus className="h-4 w-4" />

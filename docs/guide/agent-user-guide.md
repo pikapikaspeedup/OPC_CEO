@@ -9,21 +9,22 @@
 
 ## 1. 快速上手
 
-### 方式一：CEO 命令
+### 方式一：CEO Conversation
 
 适合自然语言调度：
 
 ```bash
-curl -X POST http://localhost:3000/api/ceo/command \
+curl -X POST http://localhost:3000/api/conversations \
   -H "Content-Type: application/json" \
-  -d '{"command":"每天工作日上午 9 点让研发部创建日报任务项目"}'
+  -d '{"workspace":"file:///Users/darrel/.gemini/antigravity/ceo-workspace"}'
 ```
 
 适用场景：
 
-1. 创建定时任务
-2. 让某个部门启动临时任务
-3. 查询公司、项目、部门状态
+1. 多轮 CEO 对话和澄清
+2. 通过 playbook 创建定时任务
+3. 让某个部门启动 Ad-hoc Project + run
+4. 查询公司、项目、部门状态
 
 ### 方式二：直接派发 Run
 
@@ -163,7 +164,7 @@ Company Kernel 约束：
 14. Knowledge 页面提供候选记忆详情态和增长提案入口，支持 refresh、promote、reject、generate、evaluate、approve、dry-run、publish、observe，不做高频轮询。
 15. 候选记忆详情可以直接触发 GrowthProposal 生成；KnowledgeAsset 详情会展示 linked GrowthProposal，避免增长提案和来源证据脱节。
 16. Company Loop 只处理 Top-N agenda，默认每轮最多 autonomous dispatch 1 个；`approve` 不会被自动批准，高风险 dispatch 只进 digest / approval。
-17. Scheduler 内置 company daily/weekly loop 使用 cron job，不创建 5 秒 interval，不启动第二套 worker。
+17. Scheduler 内置 company daily/weekly loop 使用 cron job，不创建 5 秒 interval，不启动第二套 worker；平台工程部还会自动确保一个每日 `09:00` 的 `dispatch-prompt` 内置任务，用真实 `User Story/**/*.md` 直接提炼全局 Top 3 待立项故事候选。
 18. CEO 决策队列只消费 `/api/company/ceo/decisions` 返回的 `DecisionItemView[]`，只展示系统改进、Growth 与 Project stage gate 这三类正式业务决策；点击后按 `DecisionTarget` 进入对应业务详情。Decision deep link 使用紧凑 token，例如 `?decision=si~<proposalId>`；ApprovalPanel 只保留通用审批收件箱，不再承担正式决策控制面。
 19. SystemImprovement 在 proposal 被 approve 后，会自动在内置平台工程部创建受控开发 Project，并派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链：隔离 worktree、Codex 执行、evidence、preflight、release gate；准入接口在执行被派发后立即返回，不同步等待整条 Codex 链跑完。平台工程 Project governance 会显式保存 `systemImprovementProposalId`，Projects 只作为执行证据入口，并用于阻断 self-iteration 失败后的递归 follow-up proposal。CEO / Ops 页面不再直接解释 `proposal.status / humanGate / automationState / releaseGate`，而是统一消费服务端派生的 `controlState`。`controlState` 会固定输出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`，并通过 `entryApprovalSummary` 把准入审批事实直接聚合到 proposal 详情；若审批事实已经是 `rejected`，即使旧 proposal 状态仍停在 `approval-required`，它也不会重新进入 CEO 队列。
 20. Codex 受控执行成功后，只要 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 还是 `not-run`，系统就会自动触发一次 `preflight`；`syncSystemImprovementProposalsForRun()` 只做幂等兜底，不承担主触发责任。
@@ -172,7 +173,9 @@ Company Kernel 约束：
 23. Settings 的 `Autonomy 预算` 是自治策略入口，用于维护组织级 budget、部门默认 budget、loop policy、并发、失败预算、operation cooldown 与 high-risk approval threshold。
 24. 平台工程部是内置 Department 实例，workspace 位于 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`；它继续复用 Project / Company Kernel / Approval / Scheduler，不引入第二套自进化机制。
 25. 平台工程部项目默认开启 `governance.platformEngineering.observe = true` 与 `allowProposal = true`；这类项目出现 `failed / blocked / timeout` run 时，系统会自动生成 `SystemImprovementSignal`，并可继续自动生成 proposal 给 CEO。
-26. `User Story` 中的 `[不支持]` 场景会被同步成平台工程部的长期改进信号池；第一版默认不批量自动生成 proposal，避免直接淹没 CEO 决策面。
+26. `User Story` 中的 `[不支持]` 场景会先同步成平台工程部的文件级长期改进信号池；随后由内置每日 Top 3 prompt 任务从真实 `User Story/**/*.md` 中直接挑选全局 Top 3，并把结果写回 story-level `SystemImprovementSignal`（`metadata.candidateKind = story-top`）。
+27. CEO Office 右栏“候选改进”只展示当前激活的 Top 3 story-level candidate signal，不再直接展示文件级聚合 gap。每条候选都支持独立 `生成提案` / `打开提案`。
+28. 从 `story-top` candidate 生成 proposal 时，会直接进入 `approval-required` 并自动创建准入审批请求，必须经 CEO 准入审批后才允许进入 direct Codex 开发链；这不会改变其他 signal 源现有的 proposal 风险与审批策略。
 
 ---
 
@@ -507,6 +510,7 @@ POST /api/scheduler/jobs/:id/trigger
 相关 API：
 
 ```bash
+GET /api/departments
 GET /api/departments?workspace=<uri>
 PUT /api/departments?workspace=<uri>
 GET /api/departments/quota
@@ -516,8 +520,9 @@ POST /api/departments/sync
 
 说明：
 
-1. `GET /api/departments` 会返回归一化后的 `workspaceBindings` 与 `executionPolicy`
-2. `PUT /api/departments` 会把同一份部门配置镜像写入所有已绑定 workspace 的 `.department/config.json`
+1. `GET /api/departments` 不带参数时会列出所有已存在 `.department/config.json` 的部门目录
+2. `GET /api/departments?workspace=<uri>` 会返回归一化后的 `workspaceBindings` 与 `executionPolicy`
+3. `PUT /api/departments` 会把同一份部门配置镜像写入所有已绑定 workspace 的 `.department/config.json`
 
 内置平台工程部补充约束：
 

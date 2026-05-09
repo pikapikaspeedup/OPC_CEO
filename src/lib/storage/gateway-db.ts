@@ -64,8 +64,10 @@ export interface RunRecordFilter {
   stageId?: string;
   reviewOutcome?: string;
   projectId?: string;
+  workspace?: string;
   executorKind?: string;
   schedulerJobId?: string;
+  projectless?: boolean;
 }
 
 export interface DbPaginationWindow {
@@ -976,6 +978,11 @@ function buildRunRecordFilterClause(filter?: RunRecordFilter): {
     params.push(filter.projectId);
   }
 
+  if (filter?.workspace) {
+    where.push('workspace = ?');
+    params.push(filter.workspace);
+  }
+
   if (filter?.executorKind) {
     where.push('executor_kind = ?');
     params.push(filter.executorKind);
@@ -984,6 +991,10 @@ function buildRunRecordFilterClause(filter?: RunRecordFilter): {
   if (filter?.schedulerJobId) {
     where.push('scheduler_job_id = ?');
     params.push(filter.schedulerJobId);
+  }
+
+  if (filter?.projectless) {
+    where.push("(project_id IS NULL OR project_id = '')");
   }
 
   return {
