@@ -81,44 +81,6 @@ function buildGrowthProposalWhere(query: GrowthProposalListQuery = {}): {
   };
 }
 
-export function upsertGrowthProposal(proposal: GrowthProposal): GrowthProposal {
-  const db = getGatewayDb();
-  db.prepare(`
-    INSERT INTO growth_proposals(
-      proposal_id, kind, status, risk, score, workspace, target_name, target_ref,
-      created_at, updated_at, payload_json
-    )
-    VALUES (
-      @proposal_id, @kind, @status, @risk, @score, @workspace, @target_name, @target_ref,
-      @created_at, @updated_at, @payload_json
-    )
-    ON CONFLICT(proposal_id) DO UPDATE SET
-      kind = excluded.kind,
-      status = excluded.status,
-      risk = excluded.risk,
-      score = excluded.score,
-      workspace = excluded.workspace,
-      target_name = excluded.target_name,
-      target_ref = excluded.target_ref,
-      created_at = excluded.created_at,
-      updated_at = excluded.updated_at,
-      payload_json = excluded.payload_json
-  `).run({
-    proposal_id: proposal.id,
-    kind: proposal.kind,
-    status: proposal.status,
-    risk: proposal.risk,
-    score: proposal.score,
-    workspace: proposal.workspaceUri || null,
-    target_name: proposal.targetName,
-    target_ref: proposal.targetRef,
-    created_at: proposal.createdAt,
-    updated_at: proposal.updatedAt,
-    payload_json: JSON.stringify(proposal),
-  });
-  return proposal;
-}
-
 export function getGrowthProposal(id: string): GrowthProposal | null {
   const db = getGatewayDb();
   const row = db.prepare(`
@@ -128,19 +90,6 @@ export function getGrowthProposal(id: string): GrowthProposal | null {
     LIMIT 1
   `).get(id) as GrowthProposalRow | undefined;
   return row ? hydrateGrowthProposal(row) : null;
-}
-
-export function findGrowthProposalByTarget(input: {
-  kind: GrowthProposalKind;
-  targetName: string;
-  workspaceUri?: string;
-}): GrowthProposal | null {
-  return listGrowthProposals({
-    kind: input.kind,
-    targetName: input.targetName,
-    ...(input.workspaceUri ? { workspaceUri: input.workspaceUri } : {}),
-    limit: 1,
-  })[0] || null;
 }
 
 export function countGrowthProposals(query: GrowthProposalListQuery = {}): number {
@@ -171,17 +120,4 @@ export function listGrowthProposals(query: GrowthProposalListQuery = {}): Growth
     ${paginationSql}
   `).all(params) as GrowthProposalRow[];
   return rows.map(hydrateGrowthProposal);
-}
-
-export function patchGrowthProposal(
-  id: string,
-  patch: Partial<Omit<GrowthProposal, 'id' | 'createdAt'>>,
-): GrowthProposal | null {
-  const existing = getGrowthProposal(id);
-  if (!existing) return null;
-  return upsertGrowthProposal({
-    ...existing,
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  });
 }

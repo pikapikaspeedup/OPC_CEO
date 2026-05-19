@@ -1,4 +1,4 @@
-export type EvolutionProposalKind = 'workflow' | 'skill';
+export type EvolutionProposalKind = 'sop' | 'workflow' | 'skill' | 'script' | 'rule';
 
 export type EvolutionProposalStatus =
   | 'draft'
@@ -8,11 +8,13 @@ export type EvolutionProposalStatus =
   | 'rejected';
 
 export interface EvolutionProposalEvidence {
-  source: 'knowledge' | 'repeated-runs';
+  source: 'knowledge' | 'memory-candidate' | 'run-capsules' | 'repeated-runs';
   label: string;
   detail: string;
   workspaceUri?: string;
   knowledgeId?: string;
+  candidateIds?: string[];
+  capsuleIds?: string[];
   runIds?: string[];
   count?: number;
 }
@@ -77,5 +79,7 @@ export function buildEvolutionTargetName(input: string, fallbackPrefix: Evolutio
 }
 
 export function buildEvolutionTargetRef(kind: EvolutionProposalKind, targetName: string): string {
-  return kind === 'workflow' ? `/${targetName}` : targetName;
+  if (kind === 'workflow') return `/${targetName}`;
+  if (kind === 'skill') return targetName;
+  return `${kind}:${targetName}`;
 }

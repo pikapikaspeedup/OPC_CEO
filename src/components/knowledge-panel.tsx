@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '@/lib/api';
-import type { GrowthProposalFE, KnowledgeDetail, KnowledgeItem, MemoryCandidateFE, Project, Workspace } from '@/lib/types';
+import type { EvolutionProposalFE, KnowledgeDetail, KnowledgeItem, MemoryCandidateFE, Project, Workspace } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/components/locale-provider';
 import {
@@ -17,7 +17,6 @@ import {
   Loader2,
   RotateCcw,
   ShieldAlert,
-  Sparkles,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -45,7 +44,7 @@ interface KnowledgeWorkspaceProps {
 }
 
 type MemoryCandidate = MemoryCandidateFE;
-type GrowthProposal = GrowthProposalFE;
+type EvolutionProposal = EvolutionProposalFE;
 
 function refIcon(type: string) {
   if (type === 'workspace') return <FolderOpen className="h-3.5 w-3.5 shrink-0 text-sky-400" />;
@@ -94,10 +93,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   const [memoryCandidatesLoading, setMemoryCandidatesLoading] = useState(false);
   const [memoryCandidatesError, setMemoryCandidatesError] = useState('');
   const [memoryCandidateBusyId, setMemoryCandidateBusyId] = useState<string | null>(null);
-  const [growthProposals, setGrowthProposals] = useState<GrowthProposal[]>([]);
-  const [growthProposalsLoading, setGrowthProposalsLoading] = useState(false);
-  const [growthProposalsError, setGrowthProposalsError] = useState('');
-  const [growthProposalBusyId, setGrowthProposalBusyId] = useState<string | null>(null);
+  const [evolutionProposals, setEvolutionProposals] = useState<EvolutionProposal[]>([]);
 
   const resetSelectionState = useCallback(() => {
     setDetail(null);
@@ -165,17 +161,12 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
     }
   }, []);
 
-  const loadGrowthProposals = useCallback(async () => {
-    setGrowthProposalsLoading(true);
-    setGrowthProposalsError('');
+  const loadEvolutionProposals = useCallback(async () => {
     try {
-      const response = await api.companyGrowthProposals({ pageSize: 24 });
-      setGrowthProposals(response.items || []);
-    } catch (err) {
-      setGrowthProposals([]);
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to load growth proposals');
-    } finally {
-      setGrowthProposalsLoading(false);
+      const response = await api.evolutionProposals();
+      setEvolutionProposals(response.proposals || []);
+    } catch {
+      setEvolutionProposals([]);
     }
   }, []);
 
@@ -185,8 +176,8 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
 
   useEffect(() => {
     void loadMemoryCandidates();
-    void loadGrowthProposals();
-  }, [loadGrowthProposals, loadMemoryCandidates, refreshSignal]);
+    void loadEvolutionProposals();
+  }, [loadEvolutionProposals, loadMemoryCandidates, refreshSignal]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -314,113 +305,6 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
     }
   };
 
-  const handleGenerateGrowthProposals = async () => {
-    setGrowthProposalsLoading(true);
-    setGrowthProposalsError('');
-    try {
-      await api.generateCompanyGrowthProposals({ limit: 20 });
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to generate growth proposals');
-    } finally {
-      setGrowthProposalsLoading(false);
-    }
-  };
-
-  const handleGenerateGrowthProposalForCandidate = async (candidate: MemoryCandidate) => {
-    setMemoryCandidateBusyId(candidate.id);
-    setGrowthProposalsError('');
-    try {
-      await api.generateCompanyGrowthProposals({
-        ...(candidate.workspaceUri ? { workspaceUri: candidate.workspaceUri } : {}),
-        limit: 20,
-      });
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to generate growth proposal');
-    } finally {
-      setMemoryCandidateBusyId(null);
-    }
-  };
-
-  const handleEvaluateGrowthProposal = async (proposalId: string) => {
-    setGrowthProposalBusyId(proposalId);
-    setGrowthProposalsError('');
-    try {
-      await api.evaluateCompanyGrowthProposal(proposalId);
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to evaluate growth proposal');
-    } finally {
-      setGrowthProposalBusyId(null);
-    }
-  };
-
-  const handleApproveGrowthProposal = async (proposalId: string) => {
-    setGrowthProposalBusyId(proposalId);
-    setGrowthProposalsError('');
-    try {
-      await api.approveCompanyGrowthProposal(proposalId);
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to approve growth proposal');
-    } finally {
-      setGrowthProposalBusyId(null);
-    }
-  };
-
-  const handleDryRunGrowthProposal = async (proposalId: string) => {
-    setGrowthProposalBusyId(proposalId);
-    setGrowthProposalsError('');
-    try {
-      await api.dryRunCompanyGrowthProposal(proposalId);
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to dry-run growth proposal');
-    } finally {
-      setGrowthProposalBusyId(null);
-    }
-  };
-
-  const handleRejectGrowthProposal = async (proposalId: string) => {
-    setGrowthProposalBusyId(proposalId);
-    setGrowthProposalsError('');
-    try {
-      await api.rejectCompanyGrowthProposal(proposalId, 'Rejected from Knowledge growth review');
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to reject growth proposal');
-    } finally {
-      setGrowthProposalBusyId(null);
-    }
-  };
-
-  const handlePublishGrowthProposal = async (proposalId: string) => {
-    setGrowthProposalBusyId(proposalId);
-    setGrowthProposalsError('');
-    try {
-      await api.publishCompanyGrowthProposal(proposalId);
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to publish growth proposal');
-    } finally {
-      setGrowthProposalBusyId(null);
-    }
-  };
-
-  const handleObserveGrowthProposal = async (proposalId: string) => {
-    setGrowthProposalBusyId(proposalId);
-    setGrowthProposalsError('');
-    try {
-      await api.observeCompanyGrowthProposal(proposalId);
-      await loadGrowthProposals();
-    } catch (err) {
-      setGrowthProposalsError(err instanceof Error ? err.message : 'Failed to observe growth proposal');
-    } finally {
-      setGrowthProposalBusyId(null);
-    }
-  };
-
   const activeArtifactContent = detail && activeArtifact ? (detail.artifacts[activeArtifact] || '') : '';
   const hasUnsavedArtifact = Boolean(activeArtifact && artifactDraft !== activeArtifactContent);
   const duplicateArtifactHeading = detail && activeArtifact
@@ -453,10 +337,8 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
   }, [knowledgeItems]);
 
   const reviewQueueCount = useMemo(() => {
-    const openCandidates = memoryCandidates.filter(isOpenMemoryCandidate).length;
-    const pendingGrowth = growthProposals.filter((proposal) => proposal.status === 'approval-required' || proposal.status === 'evaluated').length;
-    return openCandidates + pendingGrowth;
-  }, [growthProposals, memoryCandidates]);
+    return memoryCandidates.filter(isOpenMemoryCandidate).length;
+  }, [memoryCandidates]);
 
   return (
     <>
@@ -481,7 +363,7 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
             icon={<ShieldAlert className="h-4 w-4" />}
             label="待复核"
             value={reviewQueueCount}
-            detail="候选记忆与增长提案"
+            detail="候选记忆待复核"
             tone={reviewQueueCount > 0 ? 'warning' : 'success'}
           />
           <KnowledgeMetricCard
@@ -543,28 +425,13 @@ const KnowledgeWorkspace = memo(function KnowledgeWorkspace({
           <div className="space-y-6">
             <MemoryCandidateReviewBoard
               candidates={memoryCandidates}
-              proposals={growthProposals}
+              proposals={evolutionProposals}
               loading={memoryCandidatesLoading}
               error={memoryCandidatesError}
               busyId={memoryCandidateBusyId}
               onRefresh={loadMemoryCandidates}
               onPromote={handlePromoteMemoryCandidate}
               onReject={handleRejectMemoryCandidate}
-              onGenerateProposal={handleGenerateGrowthProposalForCandidate}
-            />
-            <GrowthProposalBoard
-              proposals={growthProposals}
-              loading={growthProposalsLoading}
-              error={growthProposalsError}
-              busyId={growthProposalBusyId}
-              onRefresh={loadGrowthProposals}
-              onGenerate={handleGenerateGrowthProposals}
-              onEvaluate={handleEvaluateGrowthProposal}
-              onApprove={handleApproveGrowthProposal}
-              onDryRun={handleDryRunGrowthProposal}
-              onReject={handleRejectGrowthProposal}
-              onPublish={handlePublishGrowthProposal}
-              onObserve={handleObserveGrowthProposal}
             />
             {workspaces.length > 0 ? (
               <Pane tone="strong" className="p-5">
@@ -707,17 +574,15 @@ function MemoryCandidateReviewBoard({
   onRefresh,
   onPromote,
   onReject,
-  onGenerateProposal,
 }: {
   candidates: MemoryCandidate[];
-  proposals: GrowthProposal[];
+  proposals: EvolutionProposal[];
   loading: boolean;
   error: string;
   busyId: string | null;
   onRefresh: () => Promise<void>;
   onPromote: (candidateId: string) => Promise<void>;
   onReject: (candidateId: string) => Promise<void>;
-  onGenerateProposal: (candidate: MemoryCandidate) => Promise<void>;
 }) {
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const openCount = candidates.filter(isOpenMemoryCandidate).length;
@@ -818,11 +683,15 @@ function MemoryCandidateReviewBoard({
           {selectedCandidate ? (
             <MemoryCandidateDetail
               candidate={selectedCandidate}
-              linkedProposals={proposals.filter((proposal) => proposal.sourceCandidateIds.includes(selectedCandidate.id))}
+              linkedProposals={proposals.filter((proposal) => (
+                proposal.evidence.some((evidence) => (
+                  (evidence.runIds && selectedCandidate.sourceRunId && evidence.runIds.includes(selectedCandidate.sourceRunId))
+                  || proposal.sourceKnowledgeIds.some((id) => selectedCandidate.evidenceRefs.some((ref) => ref.id === id))
+                ))
+              ))}
               busy={busyId === selectedCandidate.id}
               onPromote={onPromote}
               onReject={onReject}
-              onGenerateProposal={onGenerateProposal}
             />
           ) : null}
         </div>
@@ -836,218 +705,20 @@ function MemoryCandidateReviewBoard({
   );
 }
 
-function GrowthProposalBoard({
-  proposals,
-  loading,
-  error,
-  busyId,
-  onRefresh,
-  onGenerate,
-  onEvaluate,
-  onApprove,
-  onDryRun,
-  onReject,
-  onPublish,
-  onObserve,
-}: {
-  proposals: GrowthProposal[];
-  loading: boolean;
-  error: string;
-  busyId: string | null;
-  onRefresh: () => Promise<void>;
-  onGenerate: () => Promise<void>;
-  onEvaluate: (proposalId: string) => Promise<void>;
-  onApprove: (proposalId: string) => Promise<void>;
-  onDryRun: (proposalId: string) => Promise<void>;
-  onReject: (proposalId: string) => Promise<void>;
-  onPublish: (proposalId: string) => Promise<void>;
-  onObserve: (proposalId: string) => Promise<void>;
-}) {
-  const visibleProposals = proposals.slice(0, 8);
-  const publishableCount = proposals.filter((proposal) => proposal.status === 'evaluated' || proposal.status === 'approved').length;
-
-  return (
-    <WorkspaceSurface padding="lg" className="space-y-4">
-      <WorkspaceSectionHeader
-        eyebrow="Company Growth"
-        title="增长提案"
-        icon={<Sparkles className="h-4 w-4" />}
-        actions={(
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 rounded-full"
-              disabled={loading}
-              onClick={() => void onRefresh()}
-            >
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-              Refresh
-            </Button>
-            <Button
-              size="sm"
-              className="h-9 rounded-full"
-              disabled={loading}
-              onClick={() => void onGenerate()}
-            >
-              <Sparkles className="mr-2 h-4 w-4" />
-              Generate
-            </Button>
-          </div>
-        )}
-      />
-
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusChip>{proposals.length} loaded</StatusChip>
-        <StatusChip tone={publishableCount > 0 ? 'success' : 'neutral'}>{publishableCount} publishable</StatusChip>
-      </div>
-
-      {error ? (
-        <div className="flex items-center gap-2 rounded-[18px] border border-red-400/18 bg-red-400/10 px-4 py-3 text-sm text-red-700">
-          <ShieldAlert className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 truncate">{error}</span>
-        </div>
-      ) : null}
-
-      {loading && visibleProposals.length === 0 ? (
-        <WorkspaceEmptyBlock
-          icon={<Loader2 className="h-5 w-5 animate-spin" />}
-          title="Loading growth proposals"
-        />
-      ) : visibleProposals.length > 0 ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          {visibleProposals.map((proposal) => {
-            const scriptDryRun = proposal.metadata?.scriptDryRun as { status?: string } | undefined;
-            const scriptNeedsDryRun = proposal.kind === 'script' && scriptDryRun?.status !== 'passed';
-            return (
-            <div key={proposal.id} className="rounded-[22px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] p-4">
-              <div className="flex items-start gap-3">
-                <WorkspaceIconFrame tone={proposal.risk === 'high' ? 'danger' : proposal.risk === 'medium' ? 'warning' : 'success'}>
-                  <Sparkles className="h-4 w-4" />
-                </WorkspaceIconFrame>
-                <div className="min-w-0 flex-1">
-                  <div className="line-clamp-1 text-sm font-semibold text-[var(--app-text)]">{proposal.title}</div>
-                  <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--app-text-soft)]">{proposal.summary}</div>
-                </div>
-                <StatusChip tone={memoryCandidateScoreTone(proposal.score)}>{proposal.score}</StatusChip>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                <StatusChip>{proposal.kind}</StatusChip>
-                <StatusChip tone={proposal.risk === 'high' ? 'danger' : proposal.risk === 'medium' ? 'warning' : 'success'}>{proposal.risk}</StatusChip>
-                <StatusChip>{proposal.status}</StatusChip>
-                {proposal.kind === 'script' ? <StatusChip tone={scriptDryRun?.status === 'passed' ? 'success' : 'warning'}>dry-run {scriptDryRun?.status || 'required'}</StatusChip> : null}
-                <StatusChip>{proposal.sourceRunIds.length} runs</StatusChip>
-                <StatusChip>{proposal.evidenceRefs.length} evidence</StatusChip>
-              </div>
-              {proposal.evaluation?.reasons.length ? (
-                <div className="mt-3 rounded-[16px] border border-[var(--app-border-soft)] bg-white/60 px-3 py-2 text-[11px] leading-5 text-[var(--app-text-soft)]">
-                  {proposal.evaluation.reasons.slice(0, 2).join(' ')}
-                </div>
-              ) : null}
-              {proposal.publishedAssetRef ? (
-                <div className="mt-3 truncate rounded-[16px] border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-[11px] text-emerald-700">
-                  {proposal.publishedAssetRef}
-                </div>
-              ) : null}
-              <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 rounded-full"
-                  disabled={busyId === proposal.id || proposal.status === 'published' || proposal.status === 'rejected' || proposal.status === 'observing'}
-                  onClick={() => void onEvaluate(proposal.id)}
-                >
-                  {busyId === proposal.id ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                  Eval
-                </Button>
-                {proposal.status === 'approval-required' ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-full"
-                    disabled={busyId === proposal.id}
-                    onClick={() => void onApprove(proposal.id)}
-                  >
-                    Approve
-                  </Button>
-                ) : null}
-                {scriptNeedsDryRun ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-full"
-                    disabled={busyId === proposal.id}
-                    onClick={() => void onDryRun(proposal.id)}
-                  >
-                    Dry-run
-                  </Button>
-                ) : null}
-                {(proposal.status === 'evaluated' || proposal.status === 'approved') ? (
-                  <Button
-                    size="sm"
-                    className="h-8 rounded-full"
-                    disabled={busyId === proposal.id || scriptNeedsDryRun}
-                    onClick={() => void onPublish(proposal.id)}
-                  >
-                    Publish
-                  </Button>
-                ) : null}
-                {proposal.status === 'published' ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-full"
-                    disabled={busyId === proposal.id}
-                    onClick={() => void onObserve(proposal.id)}
-                  >
-                    Observe
-                  </Button>
-                ) : null}
-                {proposal.status !== 'published' && proposal.status !== 'observing' && proposal.status !== 'rejected' ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 rounded-full text-red-600 hover:text-red-700"
-                    disabled={busyId === proposal.id}
-                    onClick={() => void onReject(proposal.id)}
-                  >
-                    Reject
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          );
-          })}
-        </div>
-      ) : (
-        <WorkspaceEmptyBlock
-          icon={<Sparkles className="h-5 w-5" />}
-          title="No growth proposals"
-        />
-      )}
-    </WorkspaceSurface>
-  );
-}
-
 function MemoryCandidateDetail({
   candidate,
   linkedProposals,
   busy,
   onPromote,
   onReject,
-  onGenerateProposal,
 }: {
   candidate: MemoryCandidate;
-  linkedProposals: GrowthProposal[];
+  linkedProposals: EvolutionProposal[];
   busy: boolean;
   onPromote: (candidateId: string) => Promise<void>;
   onReject: (candidateId: string) => Promise<void>;
-  onGenerateProposal: (candidate: MemoryCandidate) => Promise<void>;
 }) {
   const open = isOpenMemoryCandidate(candidate);
-  const canGenerateProposal = candidate.kind === 'workflow-proposal'
-    || candidate.kind === 'skill-proposal'
-    || candidate.kind === 'pattern';
   const scoreRows: Array<[string, number]> = [
     ['Evidence', candidate.score.evidence],
     ['Reuse', candidate.score.reuse],
@@ -1131,22 +802,28 @@ function MemoryCandidateDetail({
         </MemoryCandidateDetailSection>
       ) : null}
 
-      <MemoryCandidateDetailSection title="Growth Proposals" empty="No linked proposals">
-        {linkedProposals.map((proposal) => (
-          <div key={proposal.id} className="rounded-[16px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-xs font-semibold text-[var(--app-text)]">{proposal.title}</span>
-              <StatusChip tone={proposal.risk === 'high' ? 'danger' : proposal.risk === 'medium' ? 'warning' : 'success'}>
-                {proposal.score}
-              </StatusChip>
+      <MemoryCandidateDetailSection title="Evolution Proposals" empty="No linked proposals">
+        {linkedProposals.map((proposal) => {
+          const recommendation = proposal.evaluation?.recommendation;
+          const recommendationTone = recommendation === 'publish' ? 'success' : recommendation === 'hold' ? 'warning' : recommendation === 'revise' ? 'warning' : 'neutral';
+          const totalRuns = proposal.evidence.reduce((sum, e) => sum + (e.runIds?.length || 0), 0);
+          return (
+            <div key={proposal.id} className="rounded-[16px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-[var(--app-text)]">{proposal.title}</span>
+                <StatusChip tone={recommendationTone}>
+                  {recommendation || 'pending'}
+                </StatusChip>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <StatusChip>{proposal.kind}</StatusChip>
+                <StatusChip>{proposal.status}</StatusChip>
+                {totalRuns > 0 ? <StatusChip>{totalRuns} runs</StatusChip> : null}
+                <StatusChip>{proposal.evidence.length} evidence</StatusChip>
+              </div>
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              <StatusChip>{proposal.kind}</StatusChip>
-              <StatusChip>{proposal.status}</StatusChip>
-              <StatusChip>{proposal.sourceRunIds.length} runs</StatusChip>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </MemoryCandidateDetailSection>
 
       <div className="grid gap-2 rounded-[18px] border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-3 py-3 text-xs text-[var(--app-text-soft)] md:grid-cols-2">
@@ -1199,16 +876,6 @@ function MemoryCandidateDetail({
         >
           <XCircle className="mr-2 h-3.5 w-3.5" />
           Reject
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-9 rounded-full"
-          disabled={!canGenerateProposal || busy}
-          onClick={() => void onGenerateProposal(candidate)}
-        >
-          {busy ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-          Generate proposal
         </Button>
       </div>
     </WorkspaceSurface>

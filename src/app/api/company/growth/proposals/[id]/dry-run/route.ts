@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { runGrowthProposalScriptDryRun } from '@/lib/company-kernel/growth-script-dry-run';
+import { getGrowthProposal } from '@/lib/company-kernel/growth-proposal-store';
+import { buildLegacyGrowthReadOnlyPayload } from '@/lib/company-kernel/legacy-growth';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -18,15 +19,9 @@ export async function POST(
 
   const rawParams = await params as { id?: string };
   const id = rawParams.id || '';
-  try {
-    const proposal = runGrowthProposalScriptDryRun(id);
-    if (!proposal) {
-      return NextResponse.json({ error: 'Growth proposal not found' }, { status: 404 });
-    }
-    const dryRun = proposal.metadata?.scriptDryRun as { status?: string } | undefined;
-    return NextResponse.json({ proposal, dryRun }, { status: dryRun?.status === 'failed' ? 409 : 200 });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 409 });
+  const proposal = getGrowthProposal(id);
+  if (!proposal) {
+    return NextResponse.json({ error: 'Growth proposal not found' }, { status: 404 });
   }
+  return NextResponse.json(buildLegacyGrowthReadOnlyPayload(`dry-run-growth-proposal:${proposal.id}`), { status: 410 });
 }

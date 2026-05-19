@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { buildEvolutionProposalRollout, listEvolutionProposals } from '@/lib/evolution';
+import type { EvolutionProposalKind, EvolutionProposalStatus } from '@/lib/evolution';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,8 +13,8 @@ export async function GET(req: Request) {
   const observe = url.searchParams.get('observe') !== 'false';
   const proposals = listEvolutionProposals({
     ...(workspaceUri ? { workspaceUri } : {}),
-    ...(kind ? { kind: kind as 'workflow' | 'skill' } : {}),
-    ...(status ? { status: status as 'draft' | 'evaluated' | 'pending-approval' | 'published' | 'rejected' } : {}),
+    ...(kind ? { kind: kind as EvolutionProposalKind } : {}),
+    ...(status ? { status: status as EvolutionProposalStatus } : {}),
   }).map((proposal) => (
     observe && proposal.publishedAt
       ? { ...proposal, rollout: buildEvolutionProposalRollout(proposal) }

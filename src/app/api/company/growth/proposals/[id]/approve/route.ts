@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { approveGrowthProposal } from '@/lib/company-kernel/growth-evaluator';
+import { getGrowthProposal } from '@/lib/company-kernel/growth-proposal-store';
+import { buildLegacyGrowthReadOnlyPayload } from '@/lib/company-kernel/legacy-growth';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -17,9 +18,9 @@ export async function POST(
   }
 
   const { id } = await params;
-  const proposal = approveGrowthProposal(id);
+  const proposal = getGrowthProposal(id);
   if (!proposal) {
     return NextResponse.json({ error: 'Growth proposal not found' }, { status: 404 });
   }
-  return NextResponse.json({ proposal });
+  return NextResponse.json(buildLegacyGrowthReadOnlyPayload(`approve-growth-proposal:${proposal.id}`), { status: 410 });
 }

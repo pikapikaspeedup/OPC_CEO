@@ -128,27 +128,11 @@ export {
   resetCircuitBreaker,
   upsertCircuitBreaker,
 } from './circuit-breaker';
-export { ensureGrowthProposalApprovalRequest } from './growth-approval';
-export { generateGrowthProposals } from './crystallizer';
-export {
-  approveGrowthProposal,
-  evaluateGrowthProposal,
-  rejectGrowthProposal,
-} from './growth-evaluator';
-export { runGrowthProposalScriptDryRun } from './growth-script-dry-run';
-export {
-  listGrowthObservations,
-  observeGrowthProposal,
-  upsertGrowthObservation,
-} from './growth-observer';
-export { publishGrowthProposal } from './growth-publisher';
+export { listGrowthObservations } from './growth-observation-store';
 export {
   countGrowthProposals,
-  findGrowthProposalByTarget,
   getGrowthProposal,
   listGrowthProposals,
-  patchGrowthProposal,
-  upsertGrowthProposal,
 } from './growth-proposal-store';
 export { getCompanyOperatingDay } from './operating-day';
 export {

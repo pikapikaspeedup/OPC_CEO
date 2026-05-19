@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 
 import { getGrowthProposal } from '@/lib/company-kernel/growth-proposal-store';
+import { buildLegacyGrowthReadOnlyPayload } from '@/lib/company-kernel/legacy-growth';
 import {
   listGrowthObservations,
-  observeGrowthProposal,
-} from '@/lib/company-kernel/growth-observer';
+} from '@/lib/company-kernel/growth-observation-store';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -44,5 +44,5 @@ export async function POST(req: Request) {
   if (proposal.status !== 'published' && proposal.status !== 'observing') {
     return NextResponse.json({ error: 'Growth proposal must be published before observation' }, { status: 409 });
   }
-  return NextResponse.json({ observation: observeGrowthProposal(proposal) }, { status: 201 });
+  return NextResponse.json(buildLegacyGrowthReadOnlyPayload(`observe-growth-proposal:${proposal.id}`), { status: 410 });
 }

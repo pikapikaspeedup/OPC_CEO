@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import type { AgentRunState } from '../../agents/group-types';
+import type { MemoryCandidate, RunCapsule } from '../../company-kernel/contracts';
 
 let tempHome: string;
 let previousHome: string | undefined;
@@ -13,9 +14,77 @@ async function loadModules() {
   vi.resetModules();
   delete (globalThis as Record<string, unknown>).__AG_GATEWAY_DB__;
   return {
+    candidateStore: await import('../../company-kernel/memory-candidate-store'),
     knowledgeStore: await import('../../knowledge/store'),
     gatewayDb: await import('../../storage/gateway-db'),
     generator: await import('../generator'),
+    runCapsuleStore: await import('../../company-kernel/run-capsule-store'),
+  };
+}
+
+function makeMemoryCandidate(overrides: Partial<MemoryCandidate> = {}): MemoryCandidate {
+  return {
+    id: 'candidate-skill-1',
+    workspaceUri: 'file:///tmp/research',
+    sourceRunId: 'run-candidate-1',
+    sourceCapsuleId: 'capsule-candidate-1',
+    kind: 'skill-proposal',
+    title: 'Research digest quality checker',
+    content: 'Reusable quality checks for research digests.',
+    evidenceRefs: [],
+    volatility: 'stable',
+    score: {
+      total: 82,
+      evidence: 80,
+      reuse: 90,
+      specificity: 80,
+      stability: 80,
+      novelty: 70,
+      risk: 20,
+    },
+    reasons: ['Repeated review steps were successful.', 'The checks are reusable across digests.'],
+    conflicts: [],
+    status: 'promoted',
+    promotedKnowledgeId: 'knowledge-skill-source',
+    createdAt: '2026-04-19T00:00:00.000Z',
+    updatedAt: '2026-04-19T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeRunCapsule(index: number, overrides: Partial<RunCapsule> = {}): RunCapsule {
+  return {
+    capsuleId: `capsule-script-${index}`,
+    runId: `run-script-${index}`,
+    workspaceUri: 'file:///tmp/research',
+    goal: 'Automate daily report publishing',
+    prompt: 'Create daily report automation script with approval policy',
+    status: 'completed',
+    checkpoints: [],
+    verifiedFacts: ['Result status: completed'],
+    decisions: ['Must keep approval before publishing reports.'],
+    reusableSteps: ['Automate daily report script with approval rule'],
+    blockers: [],
+    changedFiles: [],
+    outputArtifacts: [{
+      id: `artifact-${index}`,
+      type: 'file',
+      label: 'Automation script',
+      runId: `run-script-${index}`,
+      filePath: `scripts/report-${index}.sh`,
+      createdAt: '2026-04-19T00:00:00.000Z',
+    }],
+    qualitySignals: {
+      resultStatus: 'completed',
+      verificationPassed: true,
+      hasResultEnvelope: true,
+      hasArtifactManifest: false,
+      hasDeliveryPacket: false,
+    },
+    sourceRunUpdatedAt: '2026-04-19T00:00:00.000Z',
+    createdAt: '2026-04-19T00:00:00.000Z',
+    updatedAt: '2026-04-19T00:00:00.000Z',
+    ...overrides,
   };
 }
 
@@ -81,6 +150,34 @@ describe('evolution generator', () => {
         status: 'draft',
         evidence: expect.arrayContaining([
           expect.objectContaining({ source: 'repeated-runs', count: 3 }),
+        ]),
+      }),
+    ]));
+  });
+
+  it('crystallizes memory candidates and reusable run capsules into business evolution proposals', async () => {
+    const { candidateStore, generator, runCapsuleStore } = await loadModules();
+
+    candidateStore.upsertMemoryCandidate(makeMemoryCandidate());
+    [0, 1, 2].forEach((index) => {
+      runCapsuleStore.upsertRunCapsule(makeRunCapsule(index));
+    });
+
+    const proposals = generator.generateEvolutionProposals({ workspaceUri: 'file:///tmp/research', limit: 10 });
+    const kinds = proposals.map((proposal) => proposal.kind);
+
+    expect(kinds).toEqual(expect.arrayContaining(['skill', 'workflow', 'script', 'rule']));
+    expect(proposals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'skill',
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ source: 'memory-candidate', candidateIds: ['candidate-skill-1'] }),
+        ]),
+      }),
+      expect.objectContaining({
+        kind: 'script',
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ source: 'run-capsules', count: 3 }),
         ]),
       }),
     ]));

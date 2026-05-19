@@ -1,9 +1,17 @@
 import { createHash, randomUUID } from 'crypto';
 
 import type { AgentRunState } from '../agents/group-types';
-import { getCanonicalSkill, getCanonicalWorkflow } from '../agents/canonical-assets';
+import {
+  getCanonicalRule,
+  getCanonicalSkill,
+  getCanonicalWorkflow,
+  getCanonicalWorkflowScriptsDir,
+} from '../agents/canonical-assets';
 import { listKnowledgeAssets } from '../knowledge';
 import type { KnowledgeAsset } from '../knowledge/contracts';
+import type { MemoryCandidate, RunCapsule } from '../company-kernel/contracts';
+import { listMemoryCandidates } from '../company-kernel/memory-candidate-store';
+import { listRunCapsules } from '../company-kernel/run-capsule-store';
 import { listRunRecords } from '../storage/gateway-db';
 import {
   buildEvolutionTargetName,
@@ -38,6 +46,22 @@ function pickTargetName(rawTitle: string, kind: EvolutionProposalKind, scopeSeed
   const normalized = buildEvolutionTargetName(rawTitle, kind);
   if (normalized !== `${kind}-proposal`) return normalized;
   return `${kind}-${hashSuffix(scopeSeed)}`;
+}
+
+function canonicalAssetExists(kind: EvolutionProposalKind, targetName: string): boolean {
+  if (kind === 'workflow') return Boolean(getCanonicalWorkflow(targetName));
+  if (kind === 'skill') return Boolean(getCanonicalSkill(targetName));
+  if (kind === 'rule') return Boolean(getCanonicalRule(targetName));
+  if (kind === 'script') return Boolean(getCanonicalWorkflowScriptsDir(targetName));
+  return false;
+}
+
+function shouldSkipProposal(input: {
+  kind: EvolutionProposalKind;
+  targetName: string;
+  workspaceUri?: string;
+}): boolean {
+  return Boolean(findEvolutionProposalByTarget(input)) || canonicalAssetExists(input.kind, input.targetName);
 }
 
 function buildWorkflowDraft(input: {
@@ -115,25 +139,137 @@ function buildSkillDraft(input: {
   ].join('\n');
 }
 
+function buildSopDraft(input: {
+  title: string;
+  rationale: string;
+  examples?: string[];
+}): string {
+  const examples = (input.examples || []).slice(0, 8);
+  return [
+    `# ${input.title}`,
+    '',
+    input.rationale,
+    '',
+    '## Steps',
+    ...(examples.length > 0
+      ? examples.map((example, index) => `${index + 1}. ${example}`)
+      : ['1. Review the source evidence before applying this SOP.']),
+    '',
+    '## Control',
+    '- Keep the source evidence attached to future runs.',
+    '- Re-evaluate after real use before promoting to workflow or skill.',
+    '',
+  ].join('\n');
+}
+
+function buildRuleDraft(input: {
+  title: string;
+  rationale: string;
+  examples?: string[];
+}): string {
+  return [
+    `# ${input.title}`,
+    '',
+    input.rationale,
+    '',
+    '## Rule',
+    'Apply this operating rule when a new task matches the evidence below.',
+    '',
+    '## Evidence',
+    ...(input.examples || []).slice(0, 8).map((example) => `- ${example}`),
+    '',
+  ].join('\n');
+}
+
+function buildScriptDraft(input: {
+  title: string;
+  rationale: string;
+  examples?: string[];
+}): string {
+  return [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    '',
+    `# ${input.title}`,
+    `# ${input.rationale}`,
+    '',
+    'DRY_RUN="${DRY_RUN:-1}"',
+    'if [ "$DRY_RUN" = "1" ]; then',
+    '  echo "[dry-run] validate inputs and planned side effects before execution"',
+    '  exit 0',
+    'fi',
+    '',
+    'echo "Implement the approved automation steps here."',
+    '',
+    '# Evidence examples:',
+    ...(input.examples || []).slice(0, 8).map((example) => `# - ${example}`),
+    '',
+  ].join('\n');
+}
+
+function buildDraftContent(input: {
+  kind: EvolutionProposalKind;
+  title: string;
+  rationale: string;
+  workspaceUri?: string;
+  examples?: string[];
+}): string {
+  if (input.kind === 'workflow') {
+    return buildWorkflowDraft({
+      title: input.title,
+      rationale: input.rationale,
+      workspaceUri: input.workspaceUri,
+      samplePrompts: input.examples,
+    });
+  }
+  if (input.kind === 'skill') {
+    return buildSkillDraft({
+      title: input.title,
+      rationale: input.rationale,
+      workspaceUri: input.workspaceUri,
+    });
+  }
+  if (input.kind === 'rule') {
+    return buildRuleDraft(input);
+  }
+  if (input.kind === 'script') {
+    return buildScriptDraft(input);
+  }
+  return buildSopDraft(input);
+}
+
+function proposalKindForKnowledge(asset: KnowledgeAsset): EvolutionProposalKind | null {
+  if (asset.category === 'skill-proposal') return 'skill';
+  if (asset.category === 'workflow-proposal') return 'workflow';
+  if (asset.category === 'pattern' || asset.category === 'lesson') return 'sop';
+  return null;
+}
+
+function proposalKindForCandidate(candidate: MemoryCandidate): EvolutionProposalKind {
+  if (candidate.kind === 'skill-proposal') return 'skill';
+  if (candidate.kind === 'workflow-proposal') return 'workflow';
+  return 'sop';
+}
+
 function buildProposalFromKnowledge(asset: KnowledgeAsset): EvolutionProposal | null {
-  const kind: EvolutionProposalKind = asset.category === 'skill-proposal' ? 'skill' : 'workflow';
+  const kind = proposalKindForKnowledge(asset);
+  if (!kind) return null;
   const targetName = pickTargetName(
     asset.title,
     kind,
     `${asset.workspaceUri || 'global'}:${asset.id}:${asset.title}`,
   );
-  if (findEvolutionProposalByTarget({ kind, targetName, ...(asset.workspaceUri ? { workspaceUri: asset.workspaceUri } : {}) })) {
-    return null;
-  }
-  if ((kind === 'workflow' && getCanonicalWorkflow(targetName)) || (kind === 'skill' && getCanonicalSkill(targetName))) {
+  if (shouldSkipProposal({ kind, targetName, ...(asset.workspaceUri ? { workspaceUri: asset.workspaceUri } : {}) })) {
     return null;
   }
 
   const rationale = extractKnowledgeReason(asset);
   const title = titleizeName(targetName);
-  const content = kind === 'workflow'
-    ? buildWorkflowDraft({ title, rationale, workspaceUri: asset.workspaceUri })
-    : buildSkillDraft({ title, rationale, workspaceUri: asset.workspaceUri });
+  const examples = [
+    asset.source.runId ? `Knowledge came from run ${asset.source.runId}` : 'Promoted knowledge asset.',
+    ...(asset.promotion?.sourceCapsuleIds || []).map((capsuleId) => `Promoted from capsule ${capsuleId}`),
+    ...(asset.tags || []),
+  ];
   const now = new Date().toISOString();
 
   return {
@@ -145,7 +281,7 @@ function buildProposalFromKnowledge(asset: KnowledgeAsset): EvolutionProposal | 
     targetName,
     targetRef: buildEvolutionTargetRef(kind, targetName),
     rationale,
-    content,
+    content: buildDraftContent({ kind, title, rationale, workspaceUri: asset.workspaceUri, examples }),
     sourceKnowledgeIds: [asset.id],
     evidence: [{
       source: 'knowledge',
@@ -153,7 +289,56 @@ function buildProposalFromKnowledge(asset: KnowledgeAsset): EvolutionProposal | 
       detail: asset.content,
       workspaceUri: asset.workspaceUri,
       knowledgeId: asset.id,
+      ...(asset.promotion?.sourceCandidateId ? { candidateIds: [asset.promotion.sourceCandidateId] } : {}),
+      ...(asset.promotion?.sourceCapsuleIds ? { capsuleIds: asset.promotion.sourceCapsuleIds } : {}),
       ...(asset.source.runId ? { runIds: [asset.source.runId] } : {}),
+      count: 1,
+    }],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function buildProposalFromCandidate(candidate: MemoryCandidate): EvolutionProposal | null {
+  const kind = proposalKindForCandidate(candidate);
+  const titleSeed = candidate.title.replace(/^Review memory candidate:\s*/i, '');
+  const targetName = pickTargetName(
+    titleSeed,
+    kind,
+    `${candidate.workspaceUri || 'global'}:${candidate.id}:${candidate.title}`,
+  );
+  if (shouldSkipProposal({ kind, targetName, ...(candidate.workspaceUri ? { workspaceUri: candidate.workspaceUri } : {}) })) {
+    return null;
+  }
+
+  const title = titleizeName(targetName);
+  const rationale = candidate.content;
+  const now = new Date().toISOString();
+  return {
+    id: `proposal-${randomUUID()}`,
+    kind,
+    status: 'draft',
+    workspaceUri: candidate.workspaceUri,
+    title,
+    targetName,
+    targetRef: buildEvolutionTargetRef(kind, targetName),
+    rationale,
+    content: buildDraftContent({
+      kind,
+      title,
+      rationale,
+      workspaceUri: candidate.workspaceUri,
+      examples: candidate.reasons,
+    }),
+    sourceKnowledgeIds: candidate.promotedKnowledgeId ? [candidate.promotedKnowledgeId] : [],
+    evidence: [{
+      source: 'memory-candidate',
+      label: candidate.title,
+      detail: candidate.content,
+      workspaceUri: candidate.workspaceUri,
+      candidateIds: [candidate.id],
+      capsuleIds: [candidate.sourceCapsuleId],
+      runIds: [candidate.sourceRunId],
       count: 1,
     }],
     createdAt: now,
@@ -209,10 +394,9 @@ function buildProposalFromRunCluster(cluster: {
     'workflow',
     `${cluster.workspaceUri}:${cluster.key}:${cluster.runs.map((run) => run.runId).join(',')}`,
   );
-  if (findEvolutionProposalByTarget({ kind: 'workflow', targetName, workspaceUri: cluster.workspaceUri })) {
+  if (shouldSkipProposal({ kind: 'workflow', targetName, workspaceUri: cluster.workspaceUri })) {
     return null;
   }
-  if (getCanonicalWorkflow(targetName)) return null;
 
   const samplePrompts = cluster.runs.slice(0, 3).map((run) => run.prompt.trim()).filter(Boolean);
   const title = titleizeName(targetName);
@@ -243,17 +427,141 @@ function buildProposalFromRunCluster(cluster: {
   };
 }
 
+function reusableKey(capsule: RunCapsule): string {
+  return buildEvolutionTargetName(
+    `${capsule.reusableSteps[0] || capsule.decisions[0] || capsule.goal || capsule.prompt}`,
+    'sop',
+  ) || `run-pattern-${hashSuffix(capsule.runId)}`;
+}
+
+function capsuleClusterText(cluster: RunCapsule[]): string {
+  return cluster.map((capsule) => [
+    capsule.goal,
+    capsule.prompt,
+    ...capsule.reusableSteps,
+    ...capsule.decisions,
+    ...capsule.outputArtifacts.map((artifact) => [
+      artifact.label,
+      artifact.artifactPath,
+      artifact.filePath,
+      artifact.excerpt,
+    ].filter(Boolean).join(' ')),
+  ].join('\n')).join('\n').toLowerCase();
+}
+
+function shouldGenerateScriptProposal(cluster: RunCapsule[]): boolean {
+  const text = capsuleClusterText(cluster);
+  return /\.(?:sh|bash|py|js|mjs|ts)\b/.test(text)
+    || /\b(script|cli|automation|cron|shell|python|node|fetch|upload|report)\b/.test(text)
+    || /(脚本|自动化|抓取|上报|定时|日报|报告)/.test(text);
+}
+
+function shouldGenerateRuleProposal(cluster: RunCapsule[]): boolean {
+  const text = capsuleClusterText(cluster);
+  return /\b(must|should|always|never|required|policy|rule|constraint|approval)\b/.test(text)
+    || /(必须|应该|总是|不要|禁止|规则|原则|约束|审批)/.test(text);
+}
+
+function listRunCapsuleClusters(workspaceUri?: string): RunCapsule[][] {
+  const clusters = new Map<string, RunCapsule[]>();
+  for (const capsule of listRunCapsules({
+    ...(workspaceUri ? { workspaceUri } : {}),
+    status: 'completed',
+    limit: 300,
+  })) {
+    if (capsule.reusableSteps.length === 0 && capsule.decisions.length === 0) continue;
+    const key = `${capsule.workspaceUri}:${reusableKey(capsule)}`;
+    const cluster = clusters.get(key) || [];
+    cluster.push(capsule);
+    clusters.set(key, cluster);
+  }
+  return Array.from(clusters.values())
+    .filter((cluster) => cluster.length >= 2)
+    .sort((a, b) => b.length - a.length);
+}
+
+function buildProposalFromRunCapsules(
+  cluster: RunCapsule[],
+  kind: Extract<EvolutionProposalKind, 'sop' | 'workflow' | 'script' | 'rule'>,
+  nameSuffix = '',
+): EvolutionProposal | null {
+  const baseName = reusableKey(cluster[0]);
+  const targetName = pickTargetName(
+    `${baseName}${nameSuffix ? ` ${nameSuffix}` : ''}`,
+    kind,
+    `${cluster[0].workspaceUri}:${baseName}:${cluster.map((capsule) => capsule.runId).join(',')}:${kind}`,
+  );
+  if (shouldSkipProposal({ kind, targetName, workspaceUri: cluster[0].workspaceUri })) {
+    return null;
+  }
+
+  const title = titleizeName(targetName);
+  const examples = cluster
+    .flatMap((capsule) => capsule.reusableSteps.length > 0 ? capsule.reusableSteps : capsule.decisions)
+    .slice(0, 8);
+  const rationale = kind === 'script'
+    ? `Repeated task appears automatable across ${cluster.length} run capsules.`
+    : kind === 'rule'
+      ? `Repeated operating constraint detected across ${cluster.length} run capsules.`
+      : `Repeated successful run pattern detected across ${cluster.length} run capsules.`;
+  const now = new Date().toISOString();
+
+  return {
+    id: `proposal-${randomUUID()}`,
+    kind,
+    status: 'draft',
+    workspaceUri: cluster[0].workspaceUri,
+    title,
+    targetName,
+    targetRef: buildEvolutionTargetRef(kind, targetName),
+    rationale,
+    content: buildDraftContent({
+      kind,
+      title,
+      rationale,
+      workspaceUri: cluster[0].workspaceUri,
+      examples,
+    }),
+    sourceKnowledgeIds: [],
+    evidence: [{
+      source: 'run-capsules',
+      label: `${cluster.length} reusable run capsules`,
+      detail: examples.join('\n'),
+      workspaceUri: cluster[0].workspaceUri,
+      capsuleIds: cluster.map((capsule) => capsule.capsuleId),
+      runIds: cluster.map((capsule) => capsule.runId),
+      count: cluster.length,
+    }],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export function generateEvolutionProposals(input?: {
   workspaceUri?: string;
   limit?: number;
 }): EvolutionProposal[] {
   const generated: EvolutionProposal[] = [];
 
+  const candidates = listMemoryCandidates({
+    ...(input?.workspaceUri ? { workspaceUri: input.workspaceUri } : {}),
+    kind: ['workflow-proposal', 'skill-proposal', 'pattern', 'lesson'],
+    status: ['promoted', 'auto-promoted', 'pending-review'],
+    limit: Math.max(input?.limit || 20, 20) * 2,
+  });
+
+  for (const candidate of candidates) {
+    const proposal = buildProposalFromCandidate(candidate);
+    if (!proposal) continue;
+    generated.push(upsertEvolutionProposal(proposal));
+    if (input?.limit && generated.length >= input.limit) return generated;
+  }
+
   const knowledgeAssets = listKnowledgeAssets({
     ...(input?.workspaceUri ? { workspaceUri: input.workspaceUri } : {}),
-    category: ['workflow-proposal', 'skill-proposal'],
-    status: 'proposal',
-    limit: Math.max(input?.limit || 20, 20),
+    category: ['workflow-proposal', 'skill-proposal', 'pattern', 'lesson'],
+    status: ['active', 'proposal'],
+    limit: Math.max(input?.limit || 20, 20) * 2,
   });
 
   for (const asset of knowledgeAssets) {
@@ -261,6 +569,28 @@ export function generateEvolutionProposals(input?: {
     if (!proposal) continue;
     generated.push(upsertEvolutionProposal(proposal));
     if (input?.limit && generated.length >= input.limit) return generated;
+  }
+
+  for (const cluster of listRunCapsuleClusters(input?.workspaceUri)) {
+    const proposal = buildProposalFromRunCapsules(cluster, cluster.length >= 3 ? 'workflow' : 'sop');
+    if (proposal) {
+      generated.push(upsertEvolutionProposal(proposal));
+      if (input?.limit && generated.length >= input.limit) return generated;
+    }
+    if (shouldGenerateScriptProposal(cluster)) {
+      const scriptProposal = buildProposalFromRunCapsules(cluster, 'script', 'script');
+      if (scriptProposal) {
+        generated.push(upsertEvolutionProposal(scriptProposal));
+        if (input?.limit && generated.length >= input.limit) return generated;
+      }
+    }
+    if (shouldGenerateRuleProposal(cluster)) {
+      const ruleProposal = buildProposalFromRunCapsules(cluster, 'rule', 'rule');
+      if (ruleProposal) {
+        generated.push(upsertEvolutionProposal(ruleProposal));
+        if (input?.limit && generated.length >= input.limit) return generated;
+      }
+    }
   }
 
   for (const cluster of listRepeatedPromptClusters(input?.workspaceUri)) {
