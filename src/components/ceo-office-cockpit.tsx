@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   Activity,
   BarChart3,
@@ -9,15 +9,17 @@ import {
   BriefcaseBusiness,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clock3,
   Command,
-  Gauge,
-  Layers3,
   MessageSquare,
   PackageCheck,
+  PanelRightClose,
+  PanelRightOpen,
   PauseCircle,
   PlayCircle,
+  Plus,
   Radio,
   RefreshCw,
   Search,
@@ -66,7 +68,6 @@ import type {
   DecisionItemViewFE,
   DecisionTargetFE,
 	  DepartmentConfig,
-	  GrowthProposalFE,
 	  ManagementOverviewFE,
   SystemImprovementProposalFE,
   SystemImprovementSignalFE,
@@ -114,7 +115,6 @@ type CeoOfficeCockpitProps = {
   ceoRecentEvents: AuditEvent[];
   refreshSignal?: number;
   onCreateCeoConversation: () => void | Promise<void>;
-  onOpenConversationWorkbench: () => void;
   onOpenProjects: () => void;
   onOpenKnowledge: () => void;
   onNavigateToKnowledge: (knowledgeId: string | null, title: string | null) => void;
@@ -185,7 +185,6 @@ type RoutineItem = {
 type OfficeLoadSnapshot = {
   routine: CEORoutineSummaryFE | null;
   managementOverview: ManagementOverviewFE | null;
-  growthProposals: GrowthProposalFE[];
   loopPolicy: CompanyLoopPolicyFE | null;
   loopRuns: CompanyLoopRunFE[];
   loopDigests: CompanyLoopDigestFE[];
@@ -517,128 +516,350 @@ function CeoRail({
   );
 }
 
-function TopUtilityBar({
+const WELCOME_SAMPLE_PROMPTS = [
+  '今天公司哪些事最值得我关心？',
+  '生成本周部门 OKR 进度报告',
+  '评估当前活跃项目的风险，并给出建议',
+  '帮我安排一个每天 20:00 自动汇总的日报任务',
+];
+
+function CockpitTopBar({
   displayName,
-  company,
+  companyName,
   greeting,
   todayLabel,
   pendingApprovals,
-  onOpenConversationWorkbench,
+  failedProjectCount,
+  activeRunsCount,
+  activeId,
+  activeTitle,
+  ceoHistory,
+  locale,
+  threadMenuOpen,
+  onToggleThreadMenu,
+  onCloseThreadMenu,
+  onSelectConversation,
+  onCreateConversation,
   onOpenKnowledge,
   onOpenApprovals,
+  opsOpen,
+  onToggleDesktopOps,
+  onToggleMobileOps,
 }: {
   displayName: string;
-  company: string;
+  companyName: string;
   greeting: string;
   todayLabel: string;
   pendingApprovals: number;
-  onOpenConversationWorkbench: () => void;
+  failedProjectCount: number;
+  activeRunsCount: number;
+  activeId: string | null;
+  activeTitle: string;
+  ceoHistory: Conversation[];
+  locale: Locale;
+  threadMenuOpen: boolean;
+  onToggleThreadMenu: () => void;
+  onCloseThreadMenu: () => void;
+  onSelectConversation: (id: string, title: string, targetSection?: 'ceo' | 'conversations') => void;
+  onCreateConversation: () => void | Promise<void>;
   onOpenKnowledge: () => void;
   onOpenApprovals: () => void;
+  opsOpen: boolean;
+  onToggleDesktopOps: () => void;
+  onToggleMobileOps: () => void;
 }) {
-  return (
-    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-      <div className="min-w-0">
-        <h1 className="text-[clamp(1.55rem,2vw,2rem)] font-semibold leading-tight tracking-[-0.06em] text-[#111827]">
-          {displayName}，{greeting}
-        </h1>
-        <div className="mt-1 truncate text-[13px] text-[#6b768a]">{company}{todayLabel ? ` · ${todayLabel}` : ''}</div>
-      </div>
+  const menuRef = useRef<HTMLDivElement>(null);
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={onOpenKnowledge}
-          className="hidden h-10 min-w-[184px] items-center gap-2 rounded-[10px] border border-[#dfe5ee] bg-white px-3 text-left text-[13px] text-[#8a95a8] shadow-[0_8px_20px_rgba(31,41,55,0.04)] md:flex"
-        >
-          <Search className="h-4 w-4" />
-          <span className="flex-1">打开知识库</span>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenConversationWorkbench}
-          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[#dfe5ee] bg-white px-3 text-[13px] font-medium text-[#1f2937] shadow-[0_8px_20px_rgba(31,41,55,0.04)] hover:bg-[#f9fbff]"
-        >
-          <MessageSquare className="h-4 w-4" />
-          对话线程
-        </button>
-        <button
-          type="button"
-          onClick={onOpenApprovals}
-          className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#dfe5ee] bg-white text-[#566176] shadow-[0_8px_20px_rgba(31,41,55,0.04)] hover:bg-[#f9fbff]"
-          aria-label="Notifications"
-        >
-          <Bell className="h-4 w-4" />
-          {pendingApprovals ? (
-            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#2f6df6] px-1 text-[11px] font-semibold text-white">
-              {pendingApprovals > 9 ? '9+' : pendingApprovals}
-            </span>
-          ) : null}
-        </button>
-      </div>
-    </div>
-  );
-}
+  useEffect(() => {
+    if (!threadMenuOpen) return;
+    const handler = (event: MouseEvent) => {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(event.target as Node)) {
+        onCloseThreadMenu();
+      }
+    };
+    window.addEventListener('mousedown', handler);
+    return () => window.removeEventListener('mousedown', handler);
+  }, [threadMenuOpen, onCloseThreadMenu]);
 
-function MobileNav({
-  onOpenProjects,
-  onOpenKnowledge,
-  onOpenOps,
-  onOpenSettings,
-}: {
-  onOpenProjects: () => void;
-  onOpenKnowledge: () => void;
-  onOpenOps: () => void;
-  onOpenSettings: () => void;
-}) {
+  const threadButtonLabel = activeId ? (activeTitle || 'CEO Office') : '新对话';
+
   return (
-    <div className="grid grid-cols-4 gap-2 lg:hidden">
-      {[
-        { label: 'Projects', icon: BriefcaseBusiness, onClick: onOpenProjects },
-        { label: 'Knowledge', icon: BookOpen, onClick: onOpenKnowledge },
-        { label: 'Ops', icon: Radio, onClick: onOpenOps },
-        { label: 'Settings', icon: Settings2, onClick: onOpenSettings },
-      ].map((item) => {
-        const Icon = item.icon;
-        return (
+    <header className="flex shrink-0 flex-col gap-3 border-b border-[#e3e8f2] bg-white px-3 py-3 md:px-6 md:py-4">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h1 className="truncate text-[15px] font-semibold leading-tight tracking-[-0.02em] text-[#111827] md:text-[17px]">
+              {displayName}，{greeting}
+            </h1>
+          </div>
+          <div className="mt-0.5 truncate text-[12px] text-[#6b768a]">
+            {companyName}{todayLabel ? ` · ${todayLabel}` : ''}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5 md:gap-2">
+          <div className="relative" ref={menuRef}>
+            <button
+              type="button"
+              onClick={onToggleThreadMenu}
+              data-testid="cockpit-thread-toggle"
+              className="inline-flex h-9 max-w-[200px] items-center gap-1.5 rounded-[10px] border border-[#dfe5ee] bg-white px-3 text-[13px] font-medium text-[#1f2937] hover:bg-[#f9fbff]"
+              aria-haspopup="menu"
+              aria-expanded={threadMenuOpen}
+            >
+              <MessageSquare className="h-3.5 w-3.5 shrink-0 text-[#1768d9]" />
+              <span className="truncate">{threadButtonLabel}</span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#98a2b3]" />
+            </button>
+            {threadMenuOpen ? (
+              <div
+                role="menu"
+                data-testid="cockpit-thread-menu"
+                className="absolute right-0 top-[44px] z-30 w-[280px] overflow-hidden rounded-[12px] border border-[#dfe5ee] bg-white shadow-[0_18px_40px_rgba(28,44,73,0.16)]"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCloseThreadMenu();
+                    void onCreateConversation();
+                  }}
+                  className="flex w-full items-center gap-2 border-b border-[#edf1f7] px-3 py-2.5 text-left text-[13px] font-medium text-[#1768d9] hover:bg-[#f8fbff]"
+                >
+                  <Plus className="h-4 w-4" />
+                  新建 CEO 线程
+                </button>
+                <div className="max-h-[320px] overflow-y-auto">
+                  {ceoHistory.length ? ceoHistory.slice(0, 12).map(conversation => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      onClick={() => {
+                        onCloseThreadMenu();
+                        onSelectConversation(conversation.id, conversation.title || 'CEO Office', 'ceo');
+                      }}
+                      className={cn(
+                        'flex w-full items-start gap-2 px-3 py-2.5 text-left hover:bg-[#f8fbff]',
+                        activeId === conversation.id && 'bg-[#eaf2ff]',
+                      )}
+                    >
+                      <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#7c8799]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium text-[#1f2937]">{conversation.title || 'CEO Office'}</span>
+                        <span className="mt-0.5 block truncate text-[11px] text-[#7c8799]">
+                          {conversation.steps} steps · {formatRelativeTime(new Date(conversation.mtime).toISOString(), locale)}
+                        </span>
+                      </span>
+                    </button>
+                  )) : (
+                    <div className="px-3 py-4 text-center text-[12px] text-[#7c8799]">暂无历史线程</div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <button
-            key={item.label}
             type="button"
-            onClick={item.onClick}
-            className="flex min-h-11 items-center justify-center gap-2 rounded-[12px] border border-[#dfe5ee] bg-white text-[12px] font-medium text-[#344054]"
+            onClick={onOpenKnowledge}
+            className="hidden h-9 w-9 items-center justify-center rounded-full border border-[#dfe5ee] bg-white text-[#566176] hover:bg-[#f9fbff] md:inline-flex"
+            aria-label="知识库"
+            title="知识库"
           >
-            <Icon className="h-4 w-4" />
-            <span className="hidden sm:inline">{item.label}</span>
+            <Search className="h-4 w-4" />
           </button>
-        );
-      })}
-    </div>
+
+          <button
+            type="button"
+            onClick={onOpenApprovals}
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#dfe5ee] bg-white text-[#566176] hover:bg-[#f9fbff]"
+            aria-label="待审批"
+            title="待审批"
+            data-testid="cockpit-approvals-button"
+          >
+            <Bell className="h-4 w-4" />
+            {pendingApprovals ? (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#2f6df6] px-1 text-[10px] font-semibold text-white">
+                {pendingApprovals > 9 ? '9+' : pendingApprovals}
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleDesktopOps}
+            data-testid="cockpit-ops-toggle"
+            className="hidden h-9 items-center gap-1.5 rounded-[10px] border border-[#dfe5ee] bg-white px-3 text-[12px] font-medium text-[#1f2937] hover:bg-[#f9fbff] xl:inline-flex"
+            aria-pressed={opsOpen}
+          >
+            {opsOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+            <span>运营总览</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleMobileOps}
+            data-testid="cockpit-ops-mobile-toggle"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#dfe5ee] bg-white text-[#566176] hover:bg-[#f9fbff] xl:hidden"
+            aria-label="运营总览"
+            title="运营总览"
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <StatusPill
+          tone={pendingApprovals ? 'warning' : 'success'}
+          icon={<CheckCircle2 className="h-3 w-3" />}
+          label={pendingApprovals ? `${pendingApprovals} 待审批` : '审批已清'}
+        />
+        <StatusPill
+          tone={failedProjectCount ? 'danger' : 'success'}
+          icon={<ShieldAlert className="h-3 w-3" />}
+          label={failedProjectCount ? `${failedProjectCount} 风险项目` : '风险清零'}
+        />
+        <StatusPill
+          tone={activeRunsCount ? 'info' : 'neutral'}
+          icon={<Activity className="h-3 w-3" />}
+          label={activeRunsCount ? `${activeRunsCount} 活跃任务` : '无活跃任务'}
+        />
+      </div>
+    </header>
   );
 }
 
-function CommandShortcut({
+function StatusPill({
+  tone,
   icon,
-  title,
-  subtitle,
-  onClick,
+  label,
 }: {
+  tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
   icon: ReactNode;
-  title: string;
-  subtitle: string;
-  onClick: () => void;
+  label: string;
 }) {
+  const toneClass = {
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    warning: 'border-amber-200 bg-amber-50 text-amber-700',
+    danger: 'border-red-200 bg-red-50 text-red-700',
+    info: 'border-sky-200 bg-sky-50 text-sky-700',
+    neutral: 'border-[#e3e8f2] bg-[#f4f7fb] text-[#566176]',
+  }[tone];
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex min-h-14 items-center gap-3 rounded-[12px] border border-[#e3e8f2] bg-[#fbfcff] px-3 text-left transition-colors hover:border-[#cfd8e8] hover:bg-white"
-    >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[#eaf2ff] text-[#1768d9]">{icon}</span>
-      <span className="min-w-0">
-        <span className="block truncate text-sm font-semibold text-[#1f2937]">{title}</span>
-        <span className="mt-0.5 block truncate text-[12px] text-[#7c8799]">{subtitle}</span>
-      </span>
-    </button>
+    <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium', toneClass)}>
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+function CeoOfficeWelcome({
+  displayName,
+  companyName,
+  greeting,
+  draft,
+  onDraftChange,
+  onSubmit,
+  loading,
+  hasHistory,
+  onOpenHistory,
+  sendError,
+}: {
+  displayName: string;
+  companyName: string;
+  greeting: string;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onSubmit: (text: string) => void;
+  loading: boolean;
+  hasHistory: boolean;
+  onOpenHistory: () => void;
+  sendError: string | null;
+}) {
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSubmit(draft);
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="ceo-office-welcome">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-4 py-10 md:px-8">
+        <div className="w-full max-w-[640px] text-center">
+          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-[18px] border border-[#dfe5ee] bg-white text-[#1768d9] shadow-[0_18px_48px_rgba(23,104,217,0.15)]">
+            <Command className="h-6 w-6" />
+          </div>
+          <h2 className="text-[clamp(1.4rem,2.2vw,1.85rem)] font-semibold tracking-[-0.04em] text-[#111827]">
+            {displayName}，{greeting}
+          </h2>
+          <p className="mx-auto mt-2 max-w-[480px] text-[13px] leading-6 text-[#6b768a]">
+            欢迎回到 {companyName} 的持续经营对话台。直接发送一条消息，即可开始新的 CEO 线程；
+            历史线程会保存在右上角的「线程」菜单里。
+          </p>
+
+          <form onSubmit={handleSubmit} className="relative mt-8">
+            <textarea
+              value={draft}
+              onChange={(event) => onDraftChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  onSubmit(draft);
+                }
+              }}
+              placeholder='向公司发起第一条对话，例如："今天公司有哪些异常？"'
+              rows={3}
+              data-testid="welcome-input"
+              className="w-full resize-none rounded-[14px] border border-[#cfd8e8] bg-white px-4 py-3 pr-14 text-[14px] leading-6 text-[#111827] shadow-[0_10px_28px_rgba(31,41,55,0.05)] outline-none transition-colors placeholder:text-[#98a2b3] focus:border-[#2f6df6] focus:ring-4 focus:ring-[#2f6df6]/10"
+            />
+            <button
+              type="submit"
+              disabled={loading || !draft.trim()}
+              data-testid="welcome-submit"
+              className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#2f6df6] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="发送"
+            >
+              <SendHorizontal className="h-4 w-4" />
+            </button>
+          </form>
+
+          {sendError ? (
+            <div className="mt-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-left text-[13px] text-red-700">
+              {sendError}
+            </div>
+          ) : null}
+
+          <div className="mt-8 text-left">
+            <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#98a2b3]">试试问</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {WELCOME_SAMPLE_PROMPTS.map((sample) => (
+                <button
+                  key={sample}
+                  type="button"
+                  onClick={() => onDraftChange(sample)}
+                  data-testid="welcome-sample"
+                  className="flex items-center gap-2 rounded-[12px] border border-[#e3e8f2] bg-white px-3 py-2.5 text-left text-[13px] text-[#1f2937] transition-colors hover:border-[#bfd1f5] hover:bg-[#f8fbff]"
+                >
+                  <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#1768d9]" />
+                  <span className="line-clamp-2">{sample}</span>
+                </button>
+              ))}
+            </div>
+            {hasHistory ? (
+              <button
+                type="button"
+                onClick={onOpenHistory}
+                className="mt-4 inline-flex items-center gap-1 text-[12px] font-medium text-[#1768d9] hover:underline"
+              >
+                查看历史线程
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -840,7 +1061,6 @@ export default function CeoOfficeCockpit({
   ceoRecentEvents,
   refreshSignal = 0,
   onCreateCeoConversation,
-  onOpenConversationWorkbench,
   onOpenProjects,
   onOpenKnowledge,
   onNavigateToKnowledge,
@@ -863,7 +1083,6 @@ export default function CeoOfficeCockpit({
   const [routine, setRoutine] = useState<CEORoutineSummaryFE | null>(null);
   const [managementOverview, setManagementOverview] = useState<ManagementOverviewFE | null>(null);
   const [decisionViews, setDecisionViews] = useState<DecisionItemViewFE[]>([]);
-  const [growthProposals, setGrowthProposals] = useState<GrowthProposalFE[]>([]);
   const [loopPolicy, setLoopPolicy] = useState<CompanyLoopPolicyFE | null>(null);
   const [loopRuns, setLoopRuns] = useState<CompanyLoopRunFE[]>([]);
   const [loopDigests, setLoopDigests] = useState<CompanyLoopDigestFE[]>([]);
@@ -874,7 +1093,9 @@ export default function CeoOfficeCockpit({
   const [latestDigest, setLatestDigest] = useState<DailyDigestFE | null>(null);
   const [commandDraft, setCommandDraft] = useState('');
   const [pendingCommand, setPendingCommand] = useState('');
-  const [showThreadWorkbench, setShowThreadWorkbench] = useState(false);
+  const [opsOpen, setOpsOpen] = useState(true);
+  const [mobileOpsOpen, setMobileOpsOpen] = useState(false);
+  const [threadMenuOpen, setThreadMenuOpen] = useState(false);
   const [showDeepWorkbench, setShowDeepWorkbench] = useState(false);
   const [showApprovalInbox, setShowApprovalInbox] = useState(false);
   const [showImprovementCandidateSheet, setShowImprovementCandidateSheet] = useState(false);
@@ -912,7 +1133,6 @@ export default function CeoOfficeCockpit({
   const applyOfficeData = useCallback((snapshot: OfficeLoadSnapshot) => {
     setRoutine(snapshot.routine);
     setManagementOverview(snapshot.managementOverview);
-    setGrowthProposals(snapshot.growthProposals);
     setLoopPolicy(snapshot.loopPolicy);
     setLoopRuns(snapshot.loopRuns);
     setLoopDigests(snapshot.loopDigests);
@@ -925,7 +1145,6 @@ export default function CeoOfficeCockpit({
     const [
       nextRoutine,
       nextOverview,
-      nextGrowthProposals,
       nextLoopPolicies,
       nextLoopRuns,
       nextLoopDigests,
@@ -935,7 +1154,6 @@ export default function CeoOfficeCockpit({
     ] = await Promise.all([
       api.ceoRoutine().catch(() => null),
       api.managementOverview().catch(() => null),
-      api.companyGrowthProposals({ pageSize: 4 }).catch(() => ({ items: [] as GrowthProposalFE[] })),
       api.companyLoopPolicies({ pageSize: 20 }).catch(() => ({ items: [] as CompanyLoopPolicyFE[] })),
       api.companyLoopRuns({ pageSize: 4 }).catch(() => ({ items: [] as CompanyLoopRunFE[] })),
       api.companyLoopDigests({ pageSize: 2 }).catch(() => ({ items: [] as CompanyLoopDigestFE[] })),
@@ -947,7 +1165,6 @@ export default function CeoOfficeCockpit({
     return {
       routine: nextRoutine as CEORoutineSummaryFE | null,
       managementOverview: nextOverview as ManagementOverviewFE | null,
-      growthProposals: (nextGrowthProposals as { items?: GrowthProposalFE[] } | null)?.items || [],
       loopPolicy: (((nextLoopPolicies as { items?: CompanyLoopPolicyFE[] } | null)?.items || [])
         .find((policy) => policy.scope === 'organization' && !policy.scopeId) || null),
       loopRuns: (nextLoopRuns as { items?: CompanyLoopRunFE[] } | null)?.items || [],
@@ -1041,7 +1258,6 @@ export default function CeoOfficeCockpit({
       onSend(command);
       setCommandDraft('');
       setPendingCommand('');
-      setShowThreadWorkbench(true);
     }, 0);
 
     return () => window.clearTimeout(timer);
@@ -1092,11 +1308,9 @@ export default function CeoOfficeCockpit({
     () => decisionViews.slice(0, 6).map((item) => {
       const icon = item.target.kind === 'system-improvement-proposal'
         ? <PackageCheck className="h-4 w-4" />
-        : item.target.kind === 'growth-proposal'
-          ? <Sparkles className="h-4 w-4" />
-          : item.target.kind === 'project-stage-gate'
-            ? <BriefcaseBusiness className="h-4 w-4" />
-            : <Command className="h-4 w-4" />;
+        : item.target.kind === 'project-stage-gate'
+          ? <BriefcaseBusiness className="h-4 w-4" />
+          : <Command className="h-4 w-4" />;
       return {
         id: item.id,
         title: item.title,
@@ -1245,20 +1459,17 @@ export default function CeoOfficeCockpit({
         : project.workspace === selectedDepartmentUri
     ))
     : [];
-  const handleCommandSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const nextCommand = commandDraft.trim();
+  const handleWelcomeSubmit = (text: string) => {
+    const nextCommand = text.trim();
     if (!nextCommand || loading) return;
 
     if (activeId) {
       onSend(nextCommand);
       setCommandDraft('');
-      setShowThreadWorkbench(true);
       return;
     }
 
     setPendingCommand(nextCommand);
-    setShowThreadWorkbench(true);
     void onCreateCeoConversation();
   };
 
@@ -1295,189 +1506,34 @@ export default function CeoOfficeCockpit({
       ? `${pendingRoutineCount} 项待确认`
       : '全部完成';
 
-  return (
-    <div className="flex h-full min-h-0 bg-[#f3f6fa] text-[#111827]">
-      <CeoRail
-        user={user}
-        onOpenProjects={onOpenProjects}
-        onOpenKnowledge={onOpenKnowledge}
-        onOpenOps={onOpenOps}
-        onOpenSettings={onOpenSettings}
-      />
+  const opsDashboard = (
+    <>
+      <section className="grid gap-3 md:grid-cols-2">
+        <MetricCard
+          label="待审批"
+          value={pendingApprovals}
+          detail={pendingApprovals ? '待处理审批入口' : '暂无待审批'}
+          tone={pendingApprovals ? 'warning' : 'success'}
+          icon={<CheckCircle2 className="h-5 w-5" />}
+        />
+        <MetricCard
+          label="风险项目"
+          value={failedProjectCount}
+          detail={`${activeProjectCount} 个活跃项目`}
+          tone={failedProjectCount ? 'danger' : 'success'}
+          icon={<ShieldAlert className="h-5 w-5" />}
+        />
+        <MetricCard
+          label="活跃任务"
+          value={activeRuns.length}
+          detail={activeRuns.length ? '当前运行中' : '无运行任务'}
+          tone={activeRuns.length ? 'info' : 'success'}
+          icon={<Activity className="h-5 w-5" />}
+        />
+        <SplitMetricCard activeSchedulers={activeSchedulers} completedToday={recentCompletedToday} schedulerRuntime={schedulerRuntime} />
+      </section>
 
-      <ScrollArea className="h-full min-w-0 flex-1">
-        <div className="mx-auto grid min-h-full w-full max-w-[1360px] grid-cols-[minmax(0,1fr)_280px] gap-4 px-5 py-6 max-xl:grid-cols-1 md:px-8">
-          <main className="min-w-0 space-y-4">
-            <TopUtilityBar
-              displayName={displayName}
-              company={companyName}
-              greeting={greetingLabel}
-              todayLabel={todayLabel}
-              pendingApprovals={pendingApprovals}
-              onOpenConversationWorkbench={onOpenConversationWorkbench}
-              onOpenKnowledge={onOpenKnowledge}
-              onOpenApprovals={() => setShowApprovalInbox(value => !value)}
-            />
-            <MobileNav
-              onOpenProjects={onOpenProjects}
-              onOpenKnowledge={onOpenKnowledge}
-              onOpenOps={onOpenOps}
-              onOpenSettings={onOpenSettings}
-            />
-
-            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1.38fr]">
-              <MetricCard
-                label="待审批"
-                value={pendingApprovals}
-                detail={pendingApprovals ? '待处理审批入口' : '暂无待审批'}
-                tone={pendingApprovals ? 'warning' : 'success'}
-                icon={<CheckCircle2 className="h-5 w-5" />}
-              />
-              <MetricCard
-                label="风险项目"
-                value={failedProjectCount}
-                detail={`${activeProjectCount} 个活跃项目`}
-                tone={failedProjectCount ? 'danger' : 'success'}
-                icon={<ShieldAlert className="h-5 w-5" />}
-              />
-              <MetricCard
-                label="活跃任务"
-                value={activeRuns.length}
-                detail={activeRuns.length ? '当前运行中' : '无运行任务'}
-                tone={activeRuns.length ? 'info' : 'success'}
-                icon={<Activity className="h-5 w-5" />}
-              />
-              <SplitMetricCard activeSchedulers={activeSchedulers} completedToday={recentCompletedToday} schedulerRuntime={schedulerRuntime} />
-            </section>
-
-            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
-              <div className="space-y-4 p-5">
-                <div className="flex flex-col gap-2 md:flex-row md:items-center">
-                  <SectionHeader title="CEO 指令中心" />
-                  <span className="rounded-full bg-[#f2f5fa] px-3 py-1 text-[12px] text-[#6b768a]">
-                    即时 / 定时 / 咨询
-                  </span>
-                </div>
-
-                <form onSubmit={handleCommandSubmit} className="relative">
-                  <input
-                    value={commandDraft}
-                    onChange={(event) => setCommandDraft(event.target.value)}
-                    placeholder="向公司下达指令，或询问任何业务问题..."
-                    className="h-[58px] w-full rounded-[12px] border border-[#cfd8e8] bg-white px-4 pr-14 text-[15px] text-[#111827] outline-none transition-colors placeholder:text-[#98a2b3] focus:border-[#2f6df6] focus:ring-4 focus:ring-[#2f6df6]/10"
-                  />
-                  <button
-                    type="submit"
-                    disabled={loading || !commandDraft.trim()}
-                    className="absolute right-3 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-[10px] bg-[#2f6df6] text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="发送指令"
-                  >
-                    <SendHorizontal className="h-4 w-4" />
-                  </button>
-                </form>
-
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <CommandShortcut
-                    icon={<ZapIcon />}
-                    title="即时任务"
-                    subtitle="立即执行的指令"
-                    onClick={() => {
-                      setShowThreadWorkbench(true);
-                      void onCreateCeoConversation();
-                    }}
-                  />
-                  <CommandShortcut icon={<CalendarClock className="h-4 w-4" />} title="定时任务" subtitle="按计划执行的任务" onClick={onOpenOps} />
-                  <CommandShortcut icon={<MessageSquare className="h-4 w-4" />} title="询问 / 咨询" subtitle="获取信息或建议" onClick={() => setShowThreadWorkbench(true)} />
-                  <CommandShortcut icon={<Layers3 className="h-4 w-4" />} title="多智能体协同" subtitle="跨部门协同任务" onClick={onOpenProjects} />
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 text-[12px] text-[#7c8799]">
-                  <span>示例指令：</span>
-                  {['生成本周部门 OKR 进度报告', '评估项目风险', '每天 20:00 生成 AI 日报', '分析 Q3 营收增长策略'].map(example => (
-                    <button
-                      key={example}
-                      type="button"
-                      onClick={() => setCommandDraft(example)}
-                      className="rounded-full bg-[#f2f5fa] px-3 py-1.5 text-[#566176] hover:bg-[#eaf2ff] hover:text-[#1768d9]"
-                    >
-                      {example}
-                    </button>
-                  ))}
-                  {activeId ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowThreadWorkbench(value => !value)}
-                      className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-1.5 text-[#1768d9] hover:bg-[#eaf2ff]"
-                    >
-                      {showThreadWorkbench ? '收起线程' : '查看线程'}
-                      <ChevronRight className={cn('h-4 w-4 transition-transform', showThreadWorkbench && 'rotate-90')} />
-                    </button>
-                  ) : null}
-                </div>
-
-                {sendError ? (
-                  <div className="rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">
-                    {sendError}
-                  </div>
-                ) : null}
-              </div>
-
-              {showThreadWorkbench ? (
-                <div className="border-t border-[#edf1f7] bg-[#fbfcff] p-4">
-                  {activeId ? (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-[#1f2937]">{activeTitle || 'CEO Office'}</div>
-                          <div className="text-[12px] text-[#7c8799]">
-                            {currentModel === 'MODEL_AUTO' ? '自动模型' : currentModel} · {steps?.steps?.length || 0} steps
-                          </div>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={onOpenConversationWorkbench} className="rounded-full border-[#dfe5ee] bg-white">
-                          打开完整线程
-                        </Button>
-                      </div>
-                      <div className="max-h-[300px] overflow-y-auto rounded-[12px] border border-[#e3e8f2] bg-white">
-                        <Chat
-                          steps={steps}
-                          loading={loading}
-                          currentModel={currentModel}
-                          onProceed={onProceed}
-                          onRevert={onRevert}
-                          isActive={isActive}
-                        />
-                      </div>
-                      <ChatInput
-                        activeId={activeId}
-                        onSend={onSend}
-                        onCancel={onCancel}
-                        disabled={loading}
-                        isRunning={isRunning}
-                        connected={connected}
-                        models={models}
-                        currentModel={currentModel}
-                        onModelChange={onModelChange}
-                        skills={skills}
-                        workflows={workflows}
-                        agenticMode={agenticMode}
-                        onAgenticModeChange={onAgenticModeChange}
-                      />
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={onCreateCeoConversation}
-                      className="flex min-h-24 w-full flex-col items-center justify-center rounded-[12px] border border-dashed border-[#cfd8e8] bg-white text-sm text-[#566176] hover:border-[#9fb2d2]"
-                    >
-                      <Command className="mb-2 h-5 w-5 text-[#1768d9]" />
-                      创建 CEO 线程后开始执行指令
-                    </button>
-                  )}
-                </div>
-              ) : null}
-            </WorkspaceSurface>
-
-            <div className="grid gap-4 xl:grid-cols-[0.62fr_1fr]">
+      <div className="grid gap-4">
               <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
                 <div className="border-b border-[#edf1f7] px-5 py-4">
                   <SectionHeader
@@ -1579,10 +1635,7 @@ export default function CeoOfficeCockpit({
                 </div>
               ) : null}
             </WorkspaceSurface>
-          </main>
-
-          <aside className="space-y-4">
-            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
+      <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
               <div className="flex items-center justify-between border-b border-[#edf1f7] px-4 py-4">
                 <SectionHeader title="今日关注" />
                 <span className="text-[12px] text-[#7c8799]">{routineSummaryLabel}</span>
@@ -1629,42 +1682,6 @@ export default function CeoOfficeCockpit({
               ) : (
                 <div className="p-4 text-sm leading-6 text-[#7c8799]">暂无部门日报。</div>
               )}
-	            </WorkspaceSurface>
-
-	            <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
-	              <div className="flex items-center justify-between border-b border-[#edf1f7] px-4 py-4">
-	                <SectionHeader title="增长提案" />
-	                <button type="button" onClick={onOpenKnowledge} className="inline-flex items-center gap-1 text-[12px] font-medium text-[#1768d9]">
-	                  Knowledge
-	                  <ChevronRight className="h-4 w-4" />
-	                </button>
-	              </div>
-	              {growthProposals.length ? (
-	                <div className="divide-y divide-[#edf1f7]">
-	                  {growthProposals.slice(0, 3).map((proposal) => (
-	                    <button key={proposal.id} type="button" onClick={onOpenKnowledge} className="w-full px-4 py-3 text-left hover:bg-[#f8fbff]">
-	                      <div className="flex items-start justify-between gap-3">
-	                        <div className="min-w-0">
-	                          <div className="truncate text-sm font-semibold text-[#111827]">{proposal.title}</div>
-	                          <div className="mt-1 text-[12px] text-[#7c8799]">{proposal.kind} · {proposal.status}</div>
-	                        </div>
-	                        <span className={cn(
-	                          'rounded-full px-2 py-0.5 text-[11px] font-semibold',
-	                          proposal.risk === 'high'
-	                            ? 'bg-red-50 text-red-600'
-	                            : proposal.risk === 'medium'
-	                              ? 'bg-amber-50 text-amber-700'
-	                              : 'bg-emerald-50 text-emerald-700',
-	                        )}>
-	                          {proposal.score}
-	                        </span>
-	                      </div>
-	                    </button>
-	                  ))}
-	                </div>
-	              ) : (
-	                <div className="p-4 text-sm leading-6 text-[#7c8799]">暂无增长提案。</div>
-	              )}
 	            </WorkspaceSurface>
 
             <WorkspaceSurface padding="none" className="overflow-hidden rounded-[14px] border-[#e3e8f2] bg-white shadow-[0_10px_28px_rgba(31,41,55,0.05)]">
@@ -1918,9 +1935,128 @@ export default function CeoOfficeCockpit({
                 <WorkspaceMiniMetric label="Projects" value={projects.length} detail={`${completedProjectCount} done`} tone="info" />
               </div>
             </WorkspaceSurface>
-          </aside>
+    </>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 bg-[#f3f6fa] text-[#111827]">
+      <CeoRail
+        user={user}
+        onOpenProjects={onOpenProjects}
+        onOpenKnowledge={onOpenKnowledge}
+        onOpenOps={onOpenOps}
+        onOpenSettings={onOpenSettings}
+      />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <CockpitTopBar
+          displayName={displayName}
+          companyName={companyName}
+          greeting={greetingLabel}
+          todayLabel={todayLabel}
+          pendingApprovals={pendingApprovals}
+          failedProjectCount={failedProjectCount}
+          activeRunsCount={activeRuns.length}
+          activeId={activeId}
+          activeTitle={activeTitle}
+          ceoHistory={ceoHistory}
+          locale={locale}
+          threadMenuOpen={threadMenuOpen}
+          onToggleThreadMenu={() => setThreadMenuOpen(value => !value)}
+          onCloseThreadMenu={() => setThreadMenuOpen(false)}
+          onSelectConversation={onSelectConversation}
+          onCreateConversation={onCreateCeoConversation}
+          onOpenKnowledge={onOpenKnowledge}
+          onOpenApprovals={() => {
+            setOpsOpen(true);
+            setMobileOpsOpen(true);
+            setShowApprovalInbox(true);
+          }}
+          opsOpen={opsOpen}
+          onToggleDesktopOps={() => setOpsOpen(value => !value)}
+          onToggleMobileOps={() => setMobileOpsOpen(true)}
+        />
+
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <section className="flex min-w-0 flex-1 flex-col bg-white" data-testid="ceo-chat-workspace">
+            {activeId ? (
+              <>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <Chat
+                    steps={steps}
+                    loading={loading}
+                    currentModel={currentModel}
+                    onProceed={onProceed}
+                    onRevert={onRevert}
+                    isActive={isActive}
+                    conversationId={activeId}
+                  />
+                </div>
+                <div className="shrink-0 border-t border-[#edf1f7] bg-white px-3 pb-3 pt-3 md:px-6 md:pb-5 md:pt-4">
+                  {sendError ? (
+                    <div className="mb-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">
+                      {sendError}
+                    </div>
+                  ) : null}
+                  <ChatInput
+                    activeId={activeId}
+                    onSend={onSend}
+                    onCancel={onCancel}
+                    disabled={loading}
+                    isRunning={isRunning}
+                    connected={connected}
+                    models={models}
+                    currentModel={currentModel}
+                    onModelChange={onModelChange}
+                    skills={skills}
+                    workflows={workflows}
+                    agenticMode={agenticMode}
+                    onAgenticModeChange={onAgenticModeChange}
+                  />
+                </div>
+              </>
+            ) : (
+              <CeoOfficeWelcome
+                displayName={displayName}
+                companyName={companyName}
+                greeting={greetingLabel}
+                draft={commandDraft}
+                onDraftChange={setCommandDraft}
+                onSubmit={handleWelcomeSubmit}
+                loading={loading}
+                hasHistory={ceoHistory.length > 0}
+                onOpenHistory={() => setThreadMenuOpen(true)}
+                sendError={sendError}
+              />
+            )}
+          </section>
+
+          {opsOpen ? (
+            <aside
+              data-testid="ceo-ops-sidebar"
+              className="hidden w-[400px] shrink-0 overflow-hidden border-l border-[#dfe5ee] bg-[#f3f6fa] xl:flex xl:flex-col"
+            >
+              <ScrollArea className="h-full">
+                <div className="space-y-4 px-4 py-5">
+                  {opsDashboard}
+                </div>
+              </ScrollArea>
+            </aside>
+          ) : null}
         </div>
-      </ScrollArea>
+      </div>
+
+      <Sheet open={mobileOpsOpen} onOpenChange={setMobileOpsOpen}>
+        <SheetContent side="right" className="w-full max-w-[420px] overflow-y-auto border-[#dfe5ee] bg-[#f3f6fa] sm:max-w-[420px]">
+          <SheetHeader className="border-b border-[#edf1f7] pb-4">
+            <SheetTitle className="text-left text-[16px] font-semibold text-[#111827]">运营总览</SheetTitle>
+          </SheetHeader>
+          <div className="space-y-4 py-4">
+            {opsDashboard}
+          </div>
+        </SheetContent>
+      </Sheet>
+
       <Sheet open={showImprovementCandidateSheet} onOpenChange={setShowImprovementCandidateSheet}>
         <SheetContent className="w-full max-w-[720px] overflow-y-auto border-[#dfe5ee] bg-[#f8fafc] sm:max-w-[720px]">
           <SheetHeader className="border-b border-[#edf1f7] pb-4">
@@ -1977,6 +2113,3 @@ export default function CeoOfficeCockpit({
   );
 }
 
-function ZapIcon() {
-  return <Gauge className="h-4 w-4" />;
-}

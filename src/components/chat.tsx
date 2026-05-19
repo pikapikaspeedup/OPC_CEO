@@ -28,7 +28,33 @@ interface ChatProps {
   onRevert?: (stepIndex: number) => void;
   totalSteps?: number;
   isActive?: boolean;
+  conversationId?: string | null;
 }
+
+const CHAT_SCROLL_STORAGE_KEY = 'ceo-office:chat-scroll';
+
+function readScrollAnchor(conversationId: string): number | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(`${CHAT_SCROLL_STORAGE_KEY}:${conversationId}`);
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeScrollAnchor(conversationId: string, value: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(`${CHAT_SCROLL_STORAGE_KEY}:${conversationId}`, String(Math.max(0, Math.round(value))));
+  } catch {
+    // sessionStorage may be unavailable (private mode); ignore silently.
+  }
+}
+
+export const __chatScrollAnchorTestApi = { readScrollAnchor, writeScrollAnchor, storageKey: CHAT_SCROLL_STORAGE_KEY };
 
 const TOOL_TYPES = new Set([
   'CORTEX_STEP_TYPE_CODE_ACTION',
@@ -471,10 +497,13 @@ function StepBubble({ step, originalIndex, allSteps, isFastMode, onProceed, onRe
   return null;
 }
 
-export default function Chat({ steps, loading, onProceed, onRevert, isActive }: ChatProps) {
+export default function Chat({ steps, loading, onProceed, onRevert, isActive, conversationId }: ChatProps) {
   const { t } = useI18n();
   const viewportRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const restoredForRef = useRef<string | null>(null);
+  const userPinnedRef = useRef(false);
 
   const renderItems = useMemo(() => {
     if (!steps?.steps) return [];
@@ -497,14 +526,67 @@ export default function Chat({ steps, loading, onProceed, onRevert, isActive }: 
     bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
   }, []);
 
-  // Scroll on initial load and message updates
+  // Resolve the scrollable container that wraps the viewport (Radix ScrollArea viewport).
   useEffect(() => {
-    if (renderItems.length > 0) {
-      // Small timeout to ensure DOM is ready
+    if (!viewportRef.current) return;
+    let node: HTMLElement | null = viewportRef.current;
+    while (node && node !== document.body) {
+      const overflowY = window.getComputedStyle(node).overflowY;
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        scrollContainerRef.current = node as HTMLDivElement;
+        return;
+      }
+      node = node.parentElement;
+    }
+    scrollContainerRef.current = null;
+  }, [renderItems.length, conversationId]);
+
+  // Reset scroll-pin tracking whenever the conversation changes.
+  useEffect(() => {
+    userPinnedRef.current = false;
+  }, [conversationId]);
+
+  // Track whether the user has scrolled up; if so, avoid auto-scrolling.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const handler = () => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      userPinnedRef.current = distanceFromBottom > 80;
+      if (conversationId) {
+        writeScrollAnchor(conversationId, container.scrollTop);
+      }
+    };
+    container.addEventListener('scroll', handler, { passive: true });
+    return () => container.removeEventListener('scroll', handler);
+  }, [conversationId, renderItems.length]);
+
+  // Restore scroll on mount / conversation change; otherwise auto-scroll to bottom.
+  useEffect(() => {
+    if (renderItems.length === 0) return;
+    const container = scrollContainerRef.current;
+
+    // First effect cycle after a conversation switch: try restore.
+    if (conversationId && restoredForRef.current !== conversationId) {
+      restoredForRef.current = conversationId;
+      const saved = readScrollAnchor(conversationId);
+      if (saved !== null && container) {
+        // Defer until DOM has measured.
+        const timer = setTimeout(() => {
+          container.scrollTop = saved;
+          const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+          userPinnedRef.current = distanceFromBottom > 80;
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+
+    // If the user has not pinned themselves above the fold, auto-scroll.
+    if (!userPinnedRef.current) {
       const timer = setTimeout(() => scrollToBottom('smooth'), 100);
       return () => clearTimeout(timer);
     }
-  }, [renderItems, scrollToBottom]);
+  }, [renderItems, scrollToBottom, conversationId]);
 
   if (!steps && !loading) {
     return (

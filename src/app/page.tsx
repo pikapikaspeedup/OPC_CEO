@@ -5,6 +5,7 @@ import Sidebar, { type PrimarySection } from '@/components/sidebar';
 import Chat from '@/components/chat';
 import ChatInput from '@/components/chat-input';
 import KnowledgeWorkspace from '@/components/knowledge-panel';
+import EvolutionWorkspace from '@/components/evolution-workspace';
 import LogViewerPanel from '@/components/log-viewer-panel';
 import ProjectsPanel from '@/components/projects-panel';
 import CeoOfficeCockpit from '@/components/ceo-office-cockpit';
@@ -14,11 +15,11 @@ import OnboardingWizard from '@/components/onboarding-wizard';
 import LocaleToggle from '@/components/locale-toggle';
 import NotificationIndicators from '@/components/notification-indicators';
 import SystemImprovementDetailDrawer from '@/components/system-improvement-detail-drawer';
-import GrowthProposalDetailDrawer from '@/components/growth-proposal-detail-drawer';
 import WorkspaceConceptShell from '@/components/workspace-concept-shell';
 import { useI18n } from '@/components/locale-provider';
 import { buildAppUrl, parseAppUrlState } from '@/lib/app-url-state';
 import { api, connectWs, type AuditEvent } from '@/lib/api';
+import { pickDefaultCeoConversation } from '@/lib/ceo-conversation-selection';
 import type { AgentRun, Conversation, DecisionTargetFE, Project, ModelConfig, Server, Skill, StepsData, Workflow, Rule, Workspace, TemplateSummaryFE, ResumeAction, DepartmentConfig, CEOEvent } from '@/lib/types';
 import ActiveTasksPanel, { ActiveTask } from '@/components/active-tasks-panel';
 import { generateCEOEventsWithAudit } from '@/lib/ceo-events';
@@ -173,7 +174,6 @@ export default function Home() {
   });
   const [activeDecisionTarget, setActiveDecisionTarget] = useState<DecisionTargetFE | null>(null);
   const [systemImprovementProposalId, setSystemImprovementProposalId] = useState<string | null>(null);
-  const [growthProposalId, setGrowthProposalId] = useState<string | null>(null);
   const [systemImprovementRefreshSignal, setSystemImprovementRefreshSignal] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState('Antigravity');
@@ -537,13 +537,6 @@ export default function Home() {
     }
   }, []);
 
-  const handleGrowthProposalDrawerOpenChange = useCallback((nextOpen: boolean) => {
-    if (!nextOpen) {
-      setGrowthProposalId(null);
-      setActiveDecisionTarget((target) => target?.kind === 'growth-proposal' ? null : target);
-    }
-  }, []);
-
   const refreshSystemImprovementViews = useCallback(() => {
     setSystemImprovementRefreshSignal((value) => value + 1);
     void loadAgentState(selectedAgentRunId);
@@ -603,7 +596,7 @@ export default function Home() {
         return;
       case 'growth-proposal':
         queueUrlSync(mode);
-        setGrowthProposalId(target.proposalId);
+        navigateToKnowledge(null, null, mode);
         setActiveDecisionTarget(target);
         return;
       case 'project':
@@ -741,11 +734,15 @@ export default function Home() {
     if (!urlStateReady || sidebarSection !== 'ceo' || utilityPanel !== null || activeDecisionTarget) return;
 
     let cancelled = false;
-    api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 1 }).then(data => {
+    Promise.all([
+      api.conversations({ workspace: CEO_WORKSPACE_URI, pageSize: 50 }),
+      api.aiConfig().catch(() => null),
+    ]).then(([data, aiConfig]) => {
        if (cancelled) return;
        const isCurrentlyCeo = activeId && data.some(c => c.id === activeId && c.workspace === CEO_WORKSPACE_URI);
        if (!isCurrentlyCeo) {
-         const ceoConv = data[0];
+         const executionProvider = aiConfig?.layers?.execution?.provider || aiConfig?.defaultProvider || null;
+         const ceoConv = pickDefaultCeoConversation(data, executionProvider);
          if (ceoConv) {
            handleSelect(ceoConv.id, ceoConv.title || 'CEO Office', 'ceo', 'replace');
          } else {
@@ -1234,14 +1231,6 @@ export default function Home() {
     [recentAuditEvents],
   );
 
-  const openConversationWorkbench = useCallback(() => {
-    if (activeId && activeConversationScope === 'ceo') {
-      handleSelect(activeId, activeTitle || 'CEO Office', 'conversations');
-      return;
-    }
-    activateSection('conversations');
-  }, [activateSection, activeConversationScope, activeId, activeTitle, handleSelect]);
-
   const useCeoOfficeShell = sidebarSection === 'ceo' && utilityPanel !== 'settings';
   const useWorkspaceConceptShell = utilityPanel === 'settings'
     || (utilityPanel === null && (sidebarSection === 'projects' || sidebarSection === 'knowledge' || sidebarSection === 'operations'));
@@ -1637,6 +1626,13 @@ export default function Home() {
               onDeleted={handleKnowledgeDeleted}
             />
           </WorkspaceConceptShell>
+        ) : sidebarSection === 'evolution' ? (
+          <div className="app-shell-stage relative flex-1 overflow-hidden">
+            <EvolutionWorkspace
+              workspaces={departmentWorkspaces}
+              refreshSignal={knowledgeRefreshSignal}
+            />
+          </div>
         ) : sidebarSection === 'operations' ? (
           <WorkspaceConceptShell
             activeSection="operations"
@@ -1722,7 +1718,6 @@ export default function Home() {
               ceoRecentEvents={ceoRecentEvents}
               refreshSignal={systemImprovementRefreshSignal}
               onCreateCeoConversation={() => void handleCreateCeoConversation('replace')}
-              onOpenConversationWorkbench={openConversationWorkbench}
               onOpenProjects={() => activateSection('projects')}
               onOpenKnowledge={() => activateSection('knowledge')}
               onNavigateToKnowledge={navigateToKnowledge}
@@ -1849,12 +1844,6 @@ export default function Home() {
         onNavigateToProject={navigateToProject}
         onOpenOps={openOpsPanel}
         onRefresh={refreshSystemImprovementViews}
-      />
-      <GrowthProposalDetailDrawer
-        open={!!growthProposalId}
-        proposalId={growthProposalId}
-        onOpenChange={handleGrowthProposalDrawerOpenChange}
-        onChanged={refreshSystemImprovementViews}
       />
       <LogViewerPanel open={logViewerOpen} onClose={() => setLogViewerOpen(false)} />
       <ActiveTasksPanel
