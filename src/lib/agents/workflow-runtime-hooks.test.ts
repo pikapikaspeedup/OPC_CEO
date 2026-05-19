@@ -151,6 +151,47 @@ describe('workflow runtime hooks', () => {
     expect(prepared.promptAppendix).toContain('First article');
   });
 
+  it('caches prepared context per run id and clears it explicitly', async () => {
+    const hooks = await import('./workflow-runtime-hooks');
+    const fetchScriptPath = path.join(
+      tempGatewayHome,
+      'assets',
+      'workflow-scripts',
+      'ai_digest',
+      'fetch_context.py',
+    );
+
+    const first = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir, 'run-cache');
+    fs.writeFileSync(
+      fetchScriptPath,
+      [
+        '#!/usr/bin/env python3',
+        'import json',
+        'import sys',
+        '',
+        'out_path = sys.argv[sys.argv.index("--out") + 1]',
+        'payload = {',
+        '  "status": "ok",',
+        '  "articleCount": 1,',
+        '  "sourceArticleIds": [303],',
+        '  "articles": [',
+        '    {"title": "Changed article", "summary": "Summary three", "url": "https://example.com/3"}',
+        '  ]',
+        '}',
+        'with open(out_path, "w", encoding="utf-8") as fh:',
+        '    json.dump(payload, fh, ensure_ascii=False)',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const second = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir, 'run-cache');
+    expect(second.promptAppendix).toBe(first.promptAppendix);
+
+    hooks.clearPreparedContextCache('run-cache');
+    const third = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir, 'run-cache');
+    expect(third.promptAppendix).toContain('Changed article');
+  });
+
   it('finalizes digest workflow runs by reporting generated output and persisting verification artifacts', async () => {
     const hooks = await import('./workflow-runtime-hooks');
 

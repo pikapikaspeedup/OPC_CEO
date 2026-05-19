@@ -9,22 +9,18 @@
  * Directly calls bridge/gRPC layer (no HTTP roundtrip, no adapter abstraction).
  */
 
-import {
-  grpc,
-} from '../bridge/gateway';
 import { createRun, updateRun, getRun } from './run-registry';
 import { checkTokenQuota, shouldAutoRequestQuota } from '../approval/token-quota';
 import { submitApprovalRequest } from '../approval/handler';
 import type {
   AgentRunState, TaskResult, GroupDefinition, GroupRoleDefinition,
-  RoleProgress, ReviewDecision, ReviewOutcome,
-  TaskEnvelope, ResultEnvelope, ArtifactManifest, ArtifactRef,
-  GroupSourceContract, RunLiveState, SupervisorReview, SupervisorDecision, SupervisorSummary,
-  RoleInputReadAudit, RoleReadEvidence, InputArtifactReadAuditEntry,
+  RoleProgress,
+  TaskEnvelope, ArtifactRef,
+  RunLiveState, SupervisorReview, SupervisorDecision,
   SharedConversationState, TriggerContext,
 } from './group-types';
 import { TERMINAL_STATUSES } from './group-types';
-import type { DevelopmentWorkPackage, DevelopmentDeliveryPacket, WriteScopeAudit } from './development-template-types';
+import type { DevelopmentWorkPackage } from './development-template-types';
 import { ARTIFACT_ROOT_DIR } from './gateway-home';
 import { createLogger } from '../logger';
 import * as fs from 'fs';
@@ -43,8 +39,6 @@ import {
   buildDeliveryPrompt,
   formatPromptArtifactLines,
   extractReviewDecision,
-  parseDecisionMarker,
-  getCopiedArtifactPath,
 } from './prompt-builder';
 import { startSupervisorLoop, summarizeStepForSupervisor, SUPERVISOR_MODEL } from './supervisor';
 import {
@@ -57,19 +51,13 @@ import {
   cancelCascadeBestEffort,
   propagateTermination,
   getFailureReason,
-  summarizeFailureText,
   getCanonicalTaskEnvelope,
-  normalizeComparablePath,
-  includesPathCandidate,
-  extractStepReadEvidence,
-  filterEvidenceByCandidates,
-  dedupeStringList,
   buildRoleInputReadAudit,
   enforceCanonicalInputReadProtocol,
 } from './runtime-helpers';
+import { buildLegacyConversationHandleBinding, resolveRunSessionHandle } from './session-handle';
 import { compactCodingResult } from './result-parser';
 import { finalizeAdvisoryRun, finalizeDeliveryRun } from './finalization';
-import { checkWriteScopeConflicts } from './scope-governor';
 import { resolveProvider } from '../providers';
 import type { AIProviderId, ProviderId } from '../providers';
 import { coerceConfigProviderId } from '../providers/types';
@@ -242,27 +230,32 @@ function resolveNativeRuntimeForWorkspace(workspacePath: string, workspaceUri: s
   return runtimeResolver.resolveWorkspaceRuntime(workspacePath, workspaceUri);
 }
 
-/**
- * Resolve the best available session handle for a run.
- * Priority: sessionProvenance.handle → activeConversationId → childConversationId → role-level fallback.
- */
-function resolveSessionHandle(run: AgentRunState, targetRoleId?: string): string | undefined {
-  // 1. Provenance-first: most authoritative source
-  if (run.sessionProvenance?.handle) {
-    return run.sessionProvenance.handle;
+async function resolveProviderRuntimeForWorkspace(
+  provider: ProviderId,
+  workspacePath: string,
+  workspaceUri: string,
+): Promise<{ server: { port: number; csrf: string; workspace?: string }; apiKey: string }> {
+  if (provider !== 'antigravity') {
+    return {
+      server: { port: 0, csrf: '' },
+      apiKey: '',
+    };
   }
-  // 2. Active conversation (set during execution)
-  if (run.activeConversationId) {
-    return run.activeConversationId;
-  }
-  // 3. Role-level fallback (for multi-role runs)
-  if (targetRoleId && run.roles?.length) {
-    const matchingRoles = run.roles.filter(r => r.roleId === targetRoleId && r.childConversationId);
-    const latest = matchingRoles[matchingRoles.length - 1];
-    if (latest?.childConversationId) return latest.childConversationId;
-  }
-  // 4. Run-level fallback
-  return run.childConversationId || undefined;
+
+  const { apiKey, ...server } = await resolveNativeRuntimeForWorkspace(workspacePath, workspaceUri);
+  return { server, apiKey };
+}
+
+function providerSupportsSupervisorLoop(provider: ProviderId): boolean {
+  ensureBuiltInAgentBackends();
+  const backend = getAgentBackend(provider);
+  return Boolean(getBackendDiagnosticsExtension(backend));
+}
+
+function providerSupportsSharedConversation(provider: ProviderId): boolean {
+  ensureBuiltInAgentBackends();
+  const backend = getAgentBackend(provider);
+  return Boolean(backend.attach) && backend.capabilities().supportsAppend;
 }
 
 interface RoleSessionExecutionOptions {
@@ -470,12 +463,7 @@ async function consumeTrackedRoleAgentSession(
     updateRun(options.runId, {
       roles,
       activeRoleId: options.role.id,
-      ...(options.provider === 'antigravity'
-        ? {
-            childConversationId: session.handle,
-            activeConversationId: session.handle,
-          }
-        : {}),
+      ...buildLegacyConversationHandleBinding(session.handle),
     });
   }
 
@@ -505,12 +493,7 @@ async function consumeTrackedRoleAgentSession(
       updateRun(options.runId, {
         status: 'running',
         activeRoleId: options.role.id,
-        ...(options.provider === 'antigravity'
-          ? {
-              childConversationId: event.handle,
-              activeConversationId: event.handle,
-            }
-          : {}),
+        ...buildLegacyConversationHandleBinding(event.handle),
       });
 
       if (options.registerRoleProgress !== false) {
@@ -1171,8 +1154,6 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
   const shortRunId = runId.slice(0, 8);
 
   try {
-    const wsUri = input.workspace.startsWith('file://') ? input.workspace : `file://${input.workspace}`;
-
     // V2.5: Route by executionMode
     if (group.executionMode === 'legacy-single') {
       // V3.5 Fix: Run-scoped artifact paths for legacy-single too
@@ -1189,7 +1170,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
         activeRoleId: group.roles[0].id,
       });
 
-      const workflowContent = AssetLoader.resolveWorkflowContent(group.roles[0].workflow);
+      const workflowContent = AssetLoader.resolveWorkflowContent(group.roles[0].workflow, { stripFrontmatter: true });
       const composedPrompt = applyProviderExecutionContext(
         `${workflowContent}\n\n${goal}`,
         input.promptPreamble
@@ -1285,7 +1266,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
         runId,
         activeRoleId: group.roles[0].id,
         backendConfig,
-        bindConversationHandleForProviders: ['antigravity'],
+        bindConversationHandleForProviders: [provider],
         onCompleted: (event) => {
           finalizeLegacySingleRun(runId, event.result);
           cleanup(runId);
@@ -1390,7 +1371,6 @@ export async function interveneRun(
     if (!roleDef) throw new Error(`Role ${targetRoleId} not found in group ${group.id}`);
 
     const isReviewer = group.roles.indexOf(roleDef) > 0 && group.executionMode === 'review-loop';
-    const wsUri = run.workspace.startsWith('file://') ? run.workspace : `file://${run.workspace}`;
     const artifactDir = run.artifactDir || (run.projectId ? `${ARTIFACT_ROOT_DIR}/projects/${run.projectId}/runs/${runId}/` : `${ARTIFACT_ROOT_DIR}/runs/${runId}/`);
     const artifactAbsDir = path.join(workspacePath, artifactDir);
 
@@ -1401,14 +1381,14 @@ export async function interveneRun(
       // V6: provenance-first handle resolution
       const matchingRoles = roles.filter(r => r.roleId === targetRoleId && r.childConversationId);
       const latestRole = matchingRoles[matchingRoles.length - 1];
-      const cascadeId = resolveSessionHandle(run, targetRoleId);
+      const cascadeId = resolveRunSessionHandle(run, targetRoleId);
       if (!cascadeId) throw new Error('No child conversation found to nudge');
 
       updateRun(runId, {
         status: run.status === 'starting' ? 'starting' : 'running',
         lastError: undefined,
-        activeConversationId: cascadeId,
         activeRoleId: targetRoleId,
+        ...buildLegacyConversationHandleBinding(cascadeId),
       });
 
       const nudgePrompt = prompt || (isReviewer
@@ -1428,6 +1408,12 @@ export async function interveneRun(
         }
 
         if (activeSession.providerId !== 'antigravity') {
+          throw new Error(`Cannot nudge run ${runId}: provider '${activeSession.providerId}' does not support append`);
+        }
+
+        ensureBuiltInAgentBackends();
+        const attachableBackend = getAgentBackend(activeSession.providerId);
+        if (!attachableBackend.attach) {
           throw new Error(`Cannot nudge run ${runId}: provider '${activeSession.providerId}' does not support append`);
         }
       }
@@ -1493,7 +1479,7 @@ export async function interveneRun(
       // ── EVALUATE: on-demand AI supervisor assessment — read-only, no state change ──
       const goal = run.taskEnvelope?.goal || run.prompt;
       // V6: provenance-first handle resolution
-      const cascadeId = resolveSessionHandle(run);
+      const cascadeId = resolveRunSessionHandle(run);
       const diagnosticsProvider = (getAgentSession(runId)?.providerId
         || run.sessionProvenance?.backendId
         || run.provider
@@ -1659,9 +1645,19 @@ Please analyze this run and provide:
       const goal = run.taskEnvelope?.goal || run.prompt;
       const round = run.currentRound || 1;
       // V6: provenance-first handle resolution
-      const previousCascadeId = resolveSessionHandle(run);
-      const nativeRuntime = await resolveNativeRuntimeForWorkspace(workspacePath, run.workspace);
-      const { apiKey, ...server } = nativeRuntime;
+      const previousCascadeId = resolveRunSessionHandle(run);
+      const provider = (run.provider
+        || resolveDepartmentExecutionProvider({
+          workspacePath,
+          requestedModel: run.model,
+          explicitModel: Boolean(run.model),
+          taskEnvelope: run.taskEnvelope,
+          requiredExecutionClass: inferRequiredExecutionClassForGroup(
+            group.executionMode,
+            run.taskEnvelope,
+          ),
+        }).provider) as ProviderId;
+      const { apiKey, server } = await resolveProviderRuntimeForWorkspace(provider, workspacePath, run.workspace);
 
       const retryTaskEnvelope = getCanonicalTaskEnvelope(runId, run.taskEnvelope);
       const retryPrompt = applyProviderExecutionContext(
@@ -1681,17 +1677,6 @@ Please analyze this run and provide:
         lastError: undefined,
         activeRoleId: targetRoleId,
       });
-      const provider = (run.provider
-        || resolveDepartmentExecutionProvider({
-          workspacePath,
-          requestedModel: run.model,
-          explicitModel: Boolean(run.model),
-          taskEnvelope: run.taskEnvelope,
-          requiredExecutionClass: inferRequiredExecutionClassForGroup(
-            group.executionMode,
-            run.taskEnvelope,
-          ),
-        }).provider) as ProviderId;
       const roleExecution = await executeRoleViaAgentSession({
         runId,
         provider,
@@ -1707,7 +1692,7 @@ Please analyze this run and provide:
         parentConversationId: run.parentConversationId,
         projectId: run.projectId,
         onSessionReady: async () => {
-          await cancelCascadeBestEffort(previousCascadeId, { port: server.port, csrf: server.csrf }, apiKey, shortRunId);
+          await cancelCascadeBestEffort(provider, previousCascadeId, { port: server.port, csrf: server.csrf }, apiKey, shortRunId);
         },
       });
 
@@ -1816,14 +1801,18 @@ export async function processInterventionResult(
       // Re-enter the review loop from the next round
       const workspacePath = originalRun.workspace.replace(/^file:\/\//, '');
       const wsUri = originalRun.workspace.startsWith('file://') ? originalRun.workspace : `file://${originalRun.workspace}`;
-      let nativeRuntime;
-      try {
-        nativeRuntime = await resolveNativeRuntimeForWorkspace(workspacePath, originalRun.workspace);
-      } catch (err: any) {
-        updateRun(runId, { status: 'failed', lastError: `Cannot resume review loop: ${err.message}` });
-        return;
-      }
-      const { apiKey, ...server } = nativeRuntime;
+      const provider = (originalRun.provider
+        || resolveDepartmentExecutionProvider({
+          workspacePath,
+          requestedModel: originalRun.model,
+          explicitModel: Boolean(originalRun.model),
+          taskEnvelope: originalRun.taskEnvelope,
+          requiredExecutionClass: inferRequiredExecutionClassForGroup(
+            group.executionMode,
+            originalRun.taskEnvelope,
+          ),
+        }).provider) as ProviderId;
+      const { apiKey, server } = await resolveProviderRuntimeForWorkspace(provider, workspacePath, originalRun.workspace);
 
       const input: DispatchRunInput = {
         stageId: group.id,
@@ -1860,14 +1849,18 @@ export async function processInterventionResult(
 
     const workspacePath = originalRun.workspace.replace(/^file:\/\//, '');
     const wsUri = originalRun.workspace.startsWith('file://') ? originalRun.workspace : `file://${originalRun.workspace}`;
-    let nativeRuntime;
-    try {
-      nativeRuntime = await resolveNativeRuntimeForWorkspace(workspacePath, originalRun.workspace);
-    } catch (err: any) {
-      updateRun(runId, { status: 'failed', lastError: `Cannot resume review round: ${err.message}` });
-      return;
-    }
-    const { apiKey, ...server } = nativeRuntime;
+    const provider = (originalRun.provider
+      || resolveDepartmentExecutionProvider({
+        workspacePath,
+        requestedModel: originalRun.model,
+        explicitModel: Boolean(originalRun.model),
+        taskEnvelope: originalRun.taskEnvelope,
+        requiredExecutionClass: inferRequiredExecutionClassForGroup(
+          group.executionMode,
+          originalRun.taskEnvelope,
+        ),
+      }).provider) as ProviderId;
+    const { apiKey, server } = await resolveProviderRuntimeForWorkspace(provider, workspacePath, originalRun.workspace);
 
     const input: DispatchRunInput = {
       stageId: group.id,
@@ -1938,7 +1931,7 @@ function buildRetryPrompt(
 
   if (isReviewer) {
     return [
-      AssetLoader.resolveWorkflowContent(role.workflow),
+      AssetLoader.resolveWorkflowContent(role.workflow, { stripFrontmatter: true }),
       '',
       'Retry context',
       '- This review role is being re-executed because the previous attempt failed to produce a valid output.',
@@ -1959,7 +1952,7 @@ function buildRetryPrompt(
   }
 
   return [
-    AssetLoader.resolveWorkflowContent(role.workflow),
+    AssetLoader.resolveWorkflowContent(role.workflow, { stripFrontmatter: true }),
     '',
     'Retry context',
     '- This role is being re-executed because the previous attempt failed.',
@@ -2139,13 +2132,13 @@ async function executeDeliverySinglePass(
     parentConversationId: input.parentConversationId,
     projectId: input.projectId,
     onSessionReady: (session) => {
-      if (provider === 'antigravity') {
+      if (providerSupportsSupervisorLoop(provider)) {
         void startSupervisorLoop(runId, session.handle, goal, apiKey, server, wsUri);
       }
     },
   });
 
-  if (provider === 'antigravity' && !isAuthoritativeConversation(getRun(runId), roleExecution.handle)) {
+  if (!isAuthoritativeConversation(getRun(runId), roleExecution.handle)) {
     log.info({ runId: shortRunId, cascadeId: roleExecution.handle.slice(0, 8) }, 'Skipping delivery writeback for superseded branch');
     return;
   }
@@ -2303,7 +2296,7 @@ async function executeReviewRound(
       }).provider) as ProviderId;
 
     // V5.5: Decide whether to reuse an existing cascade or create a new one
-    const canReuse = sharedState?.authorCascadeId && !isReviewer && round > 1 && provider === 'antigravity';
+    const canReuse = sharedState?.authorCascadeId && !isReviewer && round > 1 && providerSupportsSharedConversation(provider);
     let cascadeId: string;
     let steps: any[] = [];
     let result: TaskResult;
@@ -2356,7 +2349,7 @@ async function executeReviewRound(
         parentConversationId: input.parentConversationId,
         projectId: input.projectId,
         onSessionReady: (session) => {
-          if (round === 1 && i === 0 && provider === 'antigravity') {
+          if (round === 1 && i === 0 && providerSupportsSupervisorLoop(provider)) {
             void startSupervisorLoop(runId, session.handle, goal, apiKey, server, wsUri);
           }
         },
@@ -2367,7 +2360,7 @@ async function executeReviewRound(
       steps = roleExecution.steps;
       result = roleExecution.result;
 
-      if (sharedState && !isReviewer && provider === 'antigravity') {
+      if (sharedState && !isReviewer && providerSupportsSharedConversation(provider)) {
         sharedState = {
           ...sharedState,
           authorCascadeId: cascadeId,
@@ -2630,7 +2623,7 @@ export async function cancelRun(runId: string): Promise<void> {
     return;
   }
 
-  const activeCascadeId = resolveSessionHandle(run);
+  const activeCascadeId = resolveRunSessionHandle(run);
   if (activeCascadeId) {
     const attachedSession = await attachExistingRunSession(runId, run, activeCascadeId);
     if (attachedSession) {

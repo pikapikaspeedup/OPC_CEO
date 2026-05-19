@@ -12,6 +12,9 @@ import { createScheduledJob, deleteScheduledJob, getNextRunAt, getSchedulerLoopD
 import type { ScheduledJob } from './scheduler-types';
 import { buildDefaultBudgetPolicy, upsertBudgetPolicy } from '../company-kernel/budget-policy';
 import { listBudgetLedgerEntries } from '../company-kernel/budget-ledger-store';
+import { upsertScheduledJobRecord } from '../storage/gateway-db';
+
+const BUILT_IN_STORY_TOP_JOB_ID = 'builtin-platform-engineering-story-top-candidates';
 
 beforeEach(() => {
   vi.mocked(executeDispatch).mockClear();
@@ -23,7 +26,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   for (const job of listScheduledJobs()) {
-    deleteScheduledJob(job.jobId);
+    deleteScheduledJob(job.jobId, { allowBuiltIn: true });
   }
   stopScheduler();
   delete process.env.AG_ROLE;
@@ -141,6 +144,49 @@ describe('isScheduledJobDue', () => {
     expect(status.status).toBe('running');
     expect(status.loopActive).toBe(true);
     expect(status.configuredToStart).toBe(true);
+  });
+
+  it('preserves editable fields and run state when realigning the built-in story candidate job', () => {
+    upsertScheduledJobRecord({
+      jobId: BUILT_IN_STORY_TOP_JOB_ID,
+      name: 'Stale Story Top job',
+      type: 'cron',
+      cronExpression: '0 10 * * *',
+      timeZone: 'Europe/Rome',
+      action: { kind: 'health-check', projectId: 'legacy-project' },
+      enabled: false,
+      createdAt: '2026-05-01T00:00:00.000Z',
+      createdBy: 'web',
+      intentSummary: 'stale intent',
+      departmentWorkspaceUri: 'file:///tmp/stale',
+      lastRunAt: '2026-05-11T10:00:00.000Z',
+      lastRunResult: 'failed',
+      lastRunError: 'previous failure',
+    });
+
+    initializeScheduler();
+    const job = listScheduledJobs().find((candidate) => candidate.jobId === BUILT_IN_STORY_TOP_JOB_ID);
+
+    expect(job).toEqual(expect.objectContaining({
+      jobId: BUILT_IN_STORY_TOP_JOB_ID,
+      name: 'Platform Engineering Story Top 3 · 09:00',
+      cronExpression: '0 10 * * *',
+      timeZone: 'Europe/Rome',
+      enabled: false,
+      lastRunAt: '2026-05-11T10:00:00.000Z',
+      lastRunResult: 'failed',
+      lastRunError: 'previous failure',
+      createdBy: 'api',
+      intentSummary: 'Daily platform engineering Top 3 story candidate extraction',
+    }));
+    expect(job?.action).toEqual(expect.objectContaining({ kind: 'dispatch-prompt' }));
+  });
+
+  it('blocks built-in scheduled jobs from the core delete path', () => {
+    initializeScheduler();
+
+    expect(deleteScheduledJob(BUILT_IN_STORY_TOP_JOB_ID)).toBe(false);
+    expect(listScheduledJobs().some((job) => job.jobId === BUILT_IN_STORY_TOP_JOB_ID)).toBe(true);
   });
 
   it('normalizes create-project jobs to file URIs', () => {

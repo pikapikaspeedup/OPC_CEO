@@ -24,7 +24,7 @@ import { createRun, getRun, updateRun } from './run-registry';
 import { appendRunHistoryEntry } from './run-history';
 import { readRunHistory } from './run-history';
 import { scanArtifactManifest, writeEnvelopeFile } from './run-artifacts';
-import { finalizeWorkflowRun, prepareWorkflowRuntimeContext } from './workflow-runtime-hooks';
+import { clearPreparedContextCache, finalizeWorkflowRun, prepareWorkflowRuntimeContext } from './workflow-runtime-hooks';
 import {
   applyBeforeRunMemoryHooks,
   type BackendRunConfig,
@@ -174,7 +174,8 @@ function joinResolutionReasons(...parts: Array<string | undefined>): string | un
 
 function resolvePromptAssetContent(ref: string): string {
   const normalizedRef = ref.startsWith('/') ? ref : `/${ref}`;
-  const content = AssetLoader.resolveWorkflowContent(normalizedRef);
+  // 注入 prompt 时剥掉 frontmatter（trigger / runtimeProfile 等运维元数据，对 LLM 是噪声）
+  const content = AssetLoader.resolveWorkflowContent(normalizedRef, { stripFrontmatter: true });
   return content === normalizedRef ? ref : content;
 }
 
@@ -183,6 +184,7 @@ function buildPromptExecutionPrompt(
   executionTarget: PromptExecutionTarget,
   artifactDir: string,
   artifactAbsDir: string,
+  injectedWorkflowRefs: string[] = [],
 ): string {
   const sections: string[] = [
     '[Prompt Mode Execution]',
@@ -196,10 +198,19 @@ function buildPromptExecutionPrompt(
   ];
 
   if (executionTarget.promptAssetRefs?.length) {
+    // skipWorkflowInline：若 capability-pack 已经注入了同一份 workflow 全文（matchedWorkflowRefs），
+    // 这里只放引用指针，不再重复内嵌 workflow MD 全文（消除双重注入）
+    const injectedSet = new Set(injectedWorkflowRefs.map(r => r.startsWith('/') ? r : `/${r}`));
     sections.push('', 'Playbook context');
     for (const ref of executionTarget.promptAssetRefs) {
-      sections.push(`### Playbook: ${ref}`);
-      sections.push(resolvePromptAssetContent(ref));
+      const normalizedRef = ref.startsWith('/') ? ref : `/${ref}`;
+      if (injectedSet.has(normalizedRef)) {
+        sections.push(`### Playbook: ${ref}`);
+        sections.push(`(see workflow content already provided above in Department Workflows section: ${normalizedRef})`);
+      } else {
+        sections.push(`### Playbook: ${ref}`);
+        sections.push(resolvePromptAssetContent(ref));
+      }
     }
   }
 
@@ -335,13 +346,18 @@ async function finalizePromptRun(runId: string, result: TaskResult, workflowOutp
       artifactAbsDir,
     },
   });
-  const finalizedResult = await finalizeWorkflowRun(
-    run.resolvedWorkflowRef,
-    run.workspace.replace(/^file:\/\//, ''),
-    artifactAbsDir,
-    result,
-    { workflowOutputText },
-  );
+  let finalizedResult: TaskResult;
+  try {
+    finalizedResult = await finalizeWorkflowRun(
+      run.resolvedWorkflowRef,
+      run.workspace.replace(/^file:\/\//, ''),
+      artifactAbsDir,
+      result,
+      { workflowOutputText },
+    );
+  } finally {
+    clearPreparedContextCache(runId);
+  }
   appendRunHistoryEntry({
     runId,
     provider: run.provider,
@@ -477,6 +493,7 @@ export async function executePrompt(
     executionContext.resolvedWorkflowRef,
     workspacePath,
     artifactAbsDir,
+    run.runId,
   );
   appendRunHistoryEntry({
     runId: run.runId,
@@ -510,12 +527,29 @@ export async function executePrompt(
 
   const composedPrompt = applyProviderExecutionContext(
     [
-      buildPromptExecutionPrompt(prompt, executionTarget, artifactDir, artifactAbsDir),
+      buildPromptExecutionPrompt(
+        prompt,
+        executionTarget,
+        artifactDir,
+        artifactAbsDir,
+        executionContext.promptResolution?.matchedWorkflowRefs ?? [],
+      ),
       preparedWorkflowContext.promptAppendix,
       retrievedKnowledgeSection,
     ].filter(Boolean).join('\n\n'),
     executionContext,
   );
+
+  // 装配可见性：把最终发给 LLM 的 prompt 写到 _internal/ 子目录
+  // 注意：写到 _internal/ 而非 artifactAbsDir 根，避免被 run-artifacts.ts 扫描器吸入 deliverables
+  try {
+    const composedPromptDir = path.join(artifactAbsDir, '_internal');
+    fs.mkdirSync(composedPromptDir, { recursive: true });
+    fs.writeFileSync(path.join(composedPromptDir, 'composed-prompt.txt'), composedPrompt, 'utf-8');
+  } catch {
+    // 写盘失败不影响主流程
+  }
+
   ensureBuiltInAgentBackends();
 
   try {
@@ -558,7 +592,7 @@ export async function executePrompt(
       runId: run.runId,
       activeRoleId: PROMPT_ROLE_ID,
       backendConfig,
-      bindConversationHandleForProviders: ['antigravity'],
+      bindConversationHandleForProviders: [provider],
       onCompleted: async (event) => {
         await finalizePromptRun(run.runId, event.result, event.finalText);
       },
@@ -566,6 +600,7 @@ export async function executePrompt(
 
     return { runId: run.runId };
   } catch (err: unknown) {
+    clearPreparedContextCache(run.runId);
     const currentRun = getRun(run.runId);
     if (!currentRun || TERMINAL_STATUSES.has(currentRun.status)) {
       throw err;
@@ -590,6 +625,7 @@ export async function cancelPromptRun(runId: string): Promise<void> {
   }
 
   updateRun(runId, { status: 'cancelled' });
+  clearPreparedContextCache(runId);
 }
 
 function extractPromptRunEvaluationResponse(

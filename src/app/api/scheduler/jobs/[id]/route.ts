@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { deleteScheduledJob, getScheduledJob, updateScheduledJob } from '@/lib/agents/scheduler';
+import { deleteScheduledJob, getScheduledJob, isProtectedBuiltInScheduledJob, updateScheduledJob } from '@/lib/agents/scheduler';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -38,8 +38,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       return NextResponse.json({ error: `Scheduled job not found: ${id}` }, { status: 404 });
     }
     return NextResponse.json(job);
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 400 });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Invalid scheduled job update' },
+      { status: 400 },
+    );
   }
 }
 
@@ -49,6 +52,17 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   }
 
   const { id } = await params;
+  // 内置 builtin 任务不允许删除（删了下次 ensure 也会重建，提前拦截给出友好提示）
+  if (isProtectedBuiltInScheduledJob(id)) {
+    return NextResponse.json(
+      {
+        code: 'BUILTIN_JOB_PROTECTED',
+        error: 'Built-in scheduled job cannot be deleted. Use enabled=false to disable it instead.',
+        jobId: id,
+      },
+      { status: 403 },
+    );
+  }
   const deleted = deleteScheduledJob(id);
   if (!deleted) {
     return NextResponse.json({ error: `Scheduled job not found: ${id}` }, { status: 404 });

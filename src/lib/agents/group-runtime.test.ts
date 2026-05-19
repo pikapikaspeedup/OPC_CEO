@@ -554,7 +554,7 @@ describe('group-runtime characterization', () => {
       },
     }));
     expect(mockCreateRun.mock.calls[0]?.[0]?.pipelineStageId).toBeUndefined();
-    expect(mockResolveWorkflowContent).toHaveBeenCalledWith('/dev-worker');
+    expect(mockResolveWorkflowContent).toHaveBeenCalledWith('/dev-worker', { stripFrontmatter: true });
     expect(antigravityExecutor.executeTask).toHaveBeenCalledWith(expect.objectContaining({
       workspace: tempWorkspace,
       prompt: expect.stringContaining('resolved:/dev-worker\n\n修复登录接口'),
@@ -726,6 +726,8 @@ describe('group-runtime characterization', () => {
 
     expect(runState.provider).toBe('claude-api');
     expect(runState.resolutionReason).toContain('Capability-aware routing moved artifact-heavy work from "native-codex" to "claude-api"');
+    expect(runState.activeConversationId).toBe('claude-api-session');
+    expect(runState.childConversationId).toBe('claude-api-session');
     expect(seenConfigs[0]).toEqual(expect.objectContaining({
       model: 'claude-sonnet-4-20250514',
       resolution: expect.objectContaining({
@@ -1021,9 +1023,10 @@ describe('group-runtime characterization', () => {
     }));
     expect(mockGrpc.startCascade).not.toHaveBeenCalled();
     expect(mockCancelCascadeBestEffort).toHaveBeenCalledWith(
+      'codex',
       'cascade-old',
-      { port: 1, csrf: 'csrf' },
-      'api-key',
+      { port: 0, csrf: '' },
+      '',
       'run-1',
     );
     expect(runState.status).toBe('completed');

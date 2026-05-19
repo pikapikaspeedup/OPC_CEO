@@ -359,31 +359,19 @@ async function prepareStoryTopCandidatesContext(
   workspacePath: string,
   artifactAbsDir: string,
 ): Promise<string> {
+  // Contract 真理源：playbook MD（platform_engineering_story_candidates.md）已涵盖
+  // 工作边界 / 输出要求 / 严格约束 / 最终回复 / JSON schema 等所有约束。
+  // 用户在 workflow 编辑器里改 contract，无需发版改代码。
+  // 这里只追加运行时绝对路径上下文（workflow MD 里只能写相对路径，无法预知 absolute path）。
   const userStoryRoot = path.join(workspacePath, 'User Story');
+  const artifactPath = path.join(artifactAbsDir, STORY_TOP_CANDIDATE_ARTIFACT);
   return [
-    '## Story Candidate Extraction Contract',
-    `- Read real files under: ${userStoryRoot}`,
-    '- Inspect every `User Story/**/*.md` file directly in the workspace.',
-    '- Find unsupported stories from lines that start with `- [不支持]`.',
-    '- Select exactly the global Top 3 most worthwhile candidates to propose next.',
-    `- Write a strict JSON array to: ${path.join(artifactAbsDir, STORY_TOP_CANDIDATE_ARTIFACT)}`,
-    '- Do not modify repository files outside the artifact directory.',
-    '- Do not summarize by file; each JSON item must represent one story-level candidate.',
-    '',
-    '### Required JSON schema',
-    '[{',
-    '  "storyKey": "stable key if you can derive one",',
-    '  "sourcePath": "User Story/.../file.md",',
-    '  "storyText": "原始故事文本",',
-    '  "title": "面向 CEO 的改进标题",',
-    '  "summary": "候选摘要",',
-    '  "expectedOutcome": "落地后的业务结果",',
-    '  "severity": "low|medium|high|critical",',
-    '  "rationale": "为什么进入 Top 3",',
-    '  "affectedAreas": ["frontend" | "api" | "runtime" | "scheduler" | "provider" | "knowledge" | "approval" | "database" | "docs"]',
-    '}]',
-    '',
-    '- Return the same JSON in your final answer as a fenced ```json block after writing the file.',
+    '## Story Top 3 — Runtime Context',
+    `- Workspace root: ${workspacePath}`,
+    `- User Story directory (read .md files here): ${userStoryRoot}`,
+    `- Artifact directory: ${artifactAbsDir}`,
+    `- Write story-top-candidates.json to: ${artifactPath}`,
+    '- All other constraints (work boundaries, schema, severity values, affectedAreas enum) are defined in the playbook above; follow them strictly.',
   ].join('\n');
 }
 
@@ -903,27 +891,60 @@ async function finalizeAiBigEventRun(
   };
 }
 
+// Process-level cache for prepared workflow runtime context.
+// Key: `${runId}:${runtimeProfile}` — within a single run, multiple compose calls
+// (e.g. review-loop multi-round, multi-role) share the same prepared context,
+// avoiding redundant python spawn / fetch / knowledge access.
+const preparedContextCache = new Map<string, WorkflowRuntimePreparation>();
+
+export function clearPreparedContextCache(runId?: string): void {
+  if (!runId) {
+    preparedContextCache.clear();
+    return;
+  }
+  for (const key of preparedContextCache.keys()) {
+    if (key.startsWith(`${runId}:`)) preparedContextCache.delete(key);
+  }
+}
+
 export async function prepareWorkflowRuntimeContext(
   resolvedWorkflowRef: string | undefined,
   workspacePath: string,
   artifactAbsDir: string,
+  runId?: string,
 ): Promise<WorkflowRuntimePreparation> {
   const manifest = resolveWorkflowRuntimeManifest(resolvedWorkflowRef);
 
+  // Cache key only effective when both runId and runtimeProfile are present.
+  // Uncacheable cases (default / no runId) fall through to original behavior.
+  const cacheKey = runId && manifest.runtimeProfile
+    ? `${runId}:${manifest.runtimeProfile}`
+    : null;
+  if (cacheKey && preparedContextCache.has(cacheKey)) {
+    return preparedContextCache.get(cacheKey)!;
+  }
+
+  let result: WorkflowRuntimePreparation;
   switch (manifest.runtimeProfile) {
     case 'daily-digest':
-      return Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
+      result = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
         ? { promptAppendix: await prepareAiDigestContext(manifest, workspacePath, artifactAbsDir) }
         : { promptAppendix: '' };
+      break;
     case 'daily-events':
-      return Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
+      result = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
         ? { promptAppendix: await prepareAiBigEventContext(manifest, workspacePath, artifactAbsDir) }
         : { promptAppendix: '' };
+      break;
     case 'story-top-candidates':
-      return { promptAppendix: await prepareStoryTopCandidatesContext(workspacePath, artifactAbsDir) };
+      result = { promptAppendix: await prepareStoryTopCandidatesContext(workspacePath, artifactAbsDir) };
+      break;
     default:
-      return { promptAppendix: '' };
+      result = { promptAppendix: '' };
   }
+
+  if (cacheKey) preparedContextCache.set(cacheKey, result);
+  return result;
 }
 
 export async function finalizeWorkflowRun(

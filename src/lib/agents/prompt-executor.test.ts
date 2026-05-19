@@ -483,6 +483,8 @@ describe('prompt-executor', () => {
 
     expect(runState.provider).toBe('claude-api');
     expect(runState.resolutionReason).toContain('Capability-aware routing moved artifact-heavy work from "native-codex" to "claude-api"');
+    expect(runState.activeConversationId).toBe('claude-api-session');
+    expect(runState.childConversationId).toBe('claude-api-session');
     expect(seenConfigs[0]).toEqual(expect.objectContaining({
       model: 'claude-sonnet-4-20250514',
       resolution: expect.objectContaining({

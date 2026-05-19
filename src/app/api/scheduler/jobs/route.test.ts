@@ -14,7 +14,7 @@ function makeRequest(body: Record<string, unknown>) {
 describe('POST /api/scheduler/jobs', () => {
   afterEach(() => {
     for (const job of listScheduledJobs()) {
-      deleteScheduledJob(job.jobId);
+      deleteScheduledJob(job.jobId, { allowBuiltIn: true });
     }
   });
 

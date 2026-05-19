@@ -157,6 +157,15 @@ const BUILT_IN_COMPANY_DAILY_LOOP_ID = 'builtin-company-daily-loop';
 const BUILT_IN_COMPANY_WEEKLY_REVIEW_ID = 'builtin-company-weekly-review';
 const BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID = 'builtin-platform-engineering-story-top-candidates';
 const BUILT_IN_LOOP_WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const PROTECTED_BUILT_IN_JOB_IDS = new Set([
+  BUILT_IN_COMPANY_DAILY_LOOP_ID,
+  BUILT_IN_COMPANY_WEEKLY_REVIEW_ID,
+  BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID,
+]);
+
+export function isProtectedBuiltInScheduledJob(jobId: string): boolean {
+  return PROTECTED_BUILT_IN_JOB_IDS.has(jobId);
+}
 
 function clampInteger(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -280,24 +289,51 @@ function ensureBuiltInCompanyLoopJobs(): void {
 
 function ensureBuiltInPlatformEngineeringStoryCandidateJob(): void {
   const now = new Date().toISOString();
-  const job = normalizeScheduledJobDefinition({
-    ...buildBuiltInPlatformEngineeringStoryCandidateJob(now),
-    ...(state.jobs.get(BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID) || {}),
-    ...buildBuiltInPlatformEngineeringStoryCandidateJob(now),
-    createdAt: state.jobs.get(BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID)?.createdAt || now,
+  const base = buildBuiltInPlatformEngineeringStoryCandidateJob(now);
+  const existing = state.jobs.get(BUILT_IN_PLATFORM_ENGINEERING_STORY_TOP_JOB_ID);
+
+  // 不存在 → 用默认值创建（保证不可删除：删了下次 ensure 会重建）
+  if (!existing) {
+    state.jobs.set(base.jobId, normalizeScheduledJobDefinition(base));
+    saveJobs();
+    return;
+  }
+
+  // 存在 → 系统字段强制对齐为默认值（jobId/name/type/action/intentSummary/departmentWorkspaceUri）
+  // 用户字段保留用户改动（cronExpression/timeZone/enabled）
+  // 修复了原 spread 顺序 bug（{ ...default, ...existing, ...default } 第二个 default 会 nuke 用户改动）
+  const merged = normalizeScheduledJobDefinition({
+    jobId: base.jobId,
+    name: base.name,
+    type: base.type,
+    action: base.action,
+    intentSummary: base.intentSummary,
+    departmentWorkspaceUri: base.departmentWorkspaceUri,
+    createdBy: base.createdBy,
+    createdAt: existing.createdAt,
+    ...(existing.lastRunAt ? { lastRunAt: existing.lastRunAt } : {}),
+    ...(existing.lastRunResult ? { lastRunResult: existing.lastRunResult } : {}),
+    ...(existing.lastRunError ? { lastRunError: existing.lastRunError } : {}),
+    // 用户可改字段（保留用户值）
+    cronExpression: existing.cronExpression ?? base.cronExpression,
+    timeZone: existing.timeZone ?? base.timeZone,
+    enabled: existing.enabled ?? base.enabled,
   });
-  const existing = state.jobs.get(job.jobId);
-  const changed = !existing
-    || existing.name !== job.name
-    || existing.type !== job.type
-    || existing.cronExpression !== job.cronExpression
-    || existing.timeZone !== job.timeZone
-    || existing.enabled !== job.enabled
-    || existing.intentSummary !== job.intentSummary
-    || existing.departmentWorkspaceUri !== job.departmentWorkspaceUri
-    || JSON.stringify(existing.action) !== JSON.stringify(job.action);
+
+  const changed = existing.name !== merged.name
+    || existing.type !== merged.type
+    || existing.cronExpression !== merged.cronExpression
+    || existing.timeZone !== merged.timeZone
+    || existing.enabled !== merged.enabled
+    || existing.intentSummary !== merged.intentSummary
+    || existing.departmentWorkspaceUri !== merged.departmentWorkspaceUri
+    || existing.createdBy !== merged.createdBy
+    || existing.lastRunAt !== merged.lastRunAt
+    || existing.lastRunResult !== merged.lastRunResult
+    || existing.lastRunError !== merged.lastRunError
+    || JSON.stringify(existing.action) !== JSON.stringify(merged.action);
   if (changed) {
-    state.jobs.set(job.jobId, job);
+    state.jobs.set(merged.jobId, merged);
     saveJobs();
   }
 }
@@ -1091,8 +1127,11 @@ export function updateScheduledJob(jobId: string, updates: Partial<Omit<Schedule
   return normalized;
 }
 
-export function deleteScheduledJob(jobId: string): boolean {
+export function deleteScheduledJob(jobId: string, options?: { allowBuiltIn?: boolean }): boolean {
   loadJobs(true);
+  if (!options?.allowBuiltIn && isProtectedBuiltInScheduledJob(jobId)) {
+    return false;
+  }
   const existing = state.jobs.get(jobId);
   const deleted = state.jobs.delete(jobId);
   if (deleted) {
