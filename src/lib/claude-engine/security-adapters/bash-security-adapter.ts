@@ -12,16 +12,8 @@ import {
 	configureSecurityContext,
 	commandMatchesRule,
 	isDangerousBashCommand,
-	DANGEROUS_BASH_PATTERNS,
-	checkSedConstraints,
-	checkPathConstraints,
-	checkPermissionMode,
-	checkCommandOperatorPermissions,
-	shouldUseSandbox,
 	splitCommand_DEPRECATED,
 	extractOutputRedirections,
-	checkSemantics,
-	parseCommandRaw,
 	type PermissionResult,
 } from "../security-core";
 

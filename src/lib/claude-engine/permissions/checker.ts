@@ -1,5 +1,5 @@
 import type { PermissionMode } from '../types/permissions';
-import { classifyToolForAutoMode } from '../security/auto-mode-classifier';
+import { classifyToolForAutoMode } from '../security-adapters/auto-mode-classifier';
 import { mcpToolMatchesRule, parseMcpToolName } from './mcp-matching';
 import type {
   PermissionBehavior,

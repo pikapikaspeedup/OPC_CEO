@@ -2,6 +2,10 @@
 
 **日期**: 2026-04-11
 
+> **⚠️ 2026-05-10 更新**：本文提到的 `src/lib/security/` 一层已被 Round-2 review 确认为 dead code（0 外部消费方），待删除。
+> 当前活跃的 Permission 实现链路是 `claude-engine/security-adapters/` → `security-core/` → `claude-engine/permissions/checker.ts`。
+> 详见 [Round-2 R3](./design/architecture-review-round2-2026-05-10.md#问题-r3src-lib-security-整个目录是死代码---p0)。
+
 ## 核心发现
 
 项目中有 **三层** Permission/Approval 系统，但 **都没有完整投入使用**：

@@ -6,7 +6,7 @@ import type { PermissionMode } from '../types/permissions';
 import type { DepartmentRequiredArtifact } from '../../organization/contracts';
 
 import type { ToolCallResult, ToolUseBlock } from './types';
-import { checkBashSecurity, isDangerousCommand, splitCompoundCommand } from '../security/bash-security-adapter';
+import { checkBashSecurity, isDangerousCommand, splitCompoundCommand } from '../security-adapters/bash-security-adapter';
 
 type UnknownTool = Tool<Record<string, unknown>, unknown>;
 

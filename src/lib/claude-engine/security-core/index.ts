@@ -1,5 +1,7 @@
 /**
  * @anthropic-claude/security-core
+ * Upstream-synced command security primitives.
+ * Keep local adaptations in ../security-adapters/* instead of editing this surface casually.
  * 
  * Complete bash security & permission engine extracted from claude-code.
  * Phase 1: 23 security validators for shell command injection detection.
