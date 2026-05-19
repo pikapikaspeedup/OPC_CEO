@@ -13,6 +13,9 @@ src-tauri/target/
 # OS files
 .DS_Store
 
+# Claude Code worktrees and local agent state
+.claude/
+
 # runtime data (conversations, workspaces, gRPC intercepts)
 # data/
 /.agents/reference
