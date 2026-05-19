@@ -10,6 +10,10 @@ import {
   readApiConversationSteps,
 } from '@/lib/api-provider-conversations';
 import {
+  getProviderSessionHandle,
+  type ProviderNeutralConversationRecord,
+} from '@/lib/conversation-runtime';
+import {
   buildStepsFromTranscriptMessages,
   readLocalProviderTranscriptMessages,
 } from '@/lib/run-conversation-transcript';
@@ -37,23 +41,29 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const conversationRecord = resolveConversationRecord(cascadeId);
     const localProvider = inferLocalProviderFromConversation(cascadeId, conversationRecord?.provider);
     if (localProvider) {
-      if (isApiConversationProvider(localProvider)) {
-        const sessionHandle = conversationRecord?.sessionHandle || cascadeId;
-        const apiSteps = await readApiConversationSteps(sessionHandle);
-        if (apiSteps.length > 0 || localProvider !== 'native-codex') {
-          return NextResponse.json({ cascadeId, steps: apiSteps });
-        }
-      }
-
       const conversationId = conversationRecord?.id || cascadeId;
       const localSteps = readLocalProviderConversationSteps(conversationId);
       if (localSteps.length > 0) {
         return NextResponse.json({ cascadeId, steps: localSteps });
       }
 
-      const sessionHandle = conversationRecord?.sessionHandle || cascadeId;
+      if (isApiConversationProvider(localProvider)) {
+        const sessionHandle = getProviderSessionHandle(
+          conversationRecord as ProviderNeutralConversationRecord | null,
+          localProvider,
+        ) || conversationRecord?.sessionHandle || cascadeId;
+        const apiSteps = await readApiConversationSteps(sessionHandle);
+        if (apiSteps.length > 0 || localProvider !== 'native-codex') {
+          return NextResponse.json({ cascadeId, steps: apiSteps });
+        }
+      }
+
+      const sessionHandle = getProviderSessionHandle(
+        conversationRecord as ProviderNeutralConversationRecord | null,
+        localProvider,
+      ) || conversationRecord?.sessionHandle || cascadeId;
       const backingRun = findRunRecordByConversationRef({
-        sessionHandles: [sessionHandle],
+        sessionHandles: [sessionHandle, cascadeId].filter(Boolean),
         conversationIds: [sessionHandle, conversationId],
       });
       const transcript = readLocalProviderTranscriptMessages(localProvider, sessionHandle, backingRun);
@@ -61,27 +71,31 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       return NextResponse.json({ cascadeId, steps: transcriptSteps });
     }
 
+    const runtimeCascadeId = getProviderSessionHandle(
+      conversationRecord as ProviderNeutralConversationRecord | null,
+      'antigravity',
+    ) || (conversationRecord?.provider === 'antigravity' ? conversationRecord.sessionHandle : undefined) || cascadeId;
     const conns = await getAllConnections();
-    log.info({ cascadeId: cascadeId.slice(0,8), serverCount: conns.length }, 'Steps request');
+    log.info({ cascadeId: runtimeCascadeId.slice(0,8), serverCount: conns.length }, 'Steps request');
     let checkpointData: { steps?: unknown[] } | null = null;
     for (const conn of conns) {
       try {
-        await grpc.loadTrajectory(conn.port, conn.csrf, cascadeId);
-        const data = await grpc.getTrajectorySteps(conn.port, conn.csrf, conn.apiKey, cascadeId);
+        await grpc.loadTrajectory(conn.port, conn.csrf, runtimeCascadeId);
+        const data = await grpc.getTrajectorySteps(conn.port, conn.csrf, conn.apiKey, runtimeCascadeId);
         if (data?.steps?.length) {
-          log.info({ cascadeId: cascadeId.slice(0,8), port: conn.port, steps: data.steps.length }, 'Steps found');
+          log.info({ cascadeId: runtimeCascadeId.slice(0,8), port: conn.port, steps: data.steps.length }, 'Steps found');
           checkpointData = data;
           break;
         } else {
-          log.warn({ cascadeId: cascadeId.slice(0,8), port: conn.port, dataKeys: data ? Object.keys(data) : 'null' }, 'No steps from server');
+          log.warn({ cascadeId: runtimeCascadeId.slice(0,8), port: conn.port, dataKeys: data ? Object.keys(data) : 'null' }, 'No steps from server');
         }
       } catch (innerErr: unknown) {
-        log.warn({ cascadeId: cascadeId.slice(0,8), port: conn.port, err: getErrorMessage(innerErr) }, 'Server attempt failed');
+        log.warn({ cascadeId: runtimeCascadeId.slice(0,8), port: conn.port, err: getErrorMessage(innerErr) }, 'Server attempt failed');
       }
     }
 
     if (!checkpointData) {
-      log.error({ cascadeId: cascadeId.slice(0,8), serversChecked: conns.length, ports: conns.map(c => c.port) }, 'Conversation not found on any server');
+      log.error({ cascadeId: runtimeCascadeId.slice(0,8), serversChecked: conns.length, ports: conns.map(c => c.port) }, 'Conversation not found on any server');
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
     return NextResponse.json(checkpointData);

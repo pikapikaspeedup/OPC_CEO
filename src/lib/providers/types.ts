@@ -200,7 +200,7 @@ export function isTaskExecutorId(value: string | null | undefined): value is Tas
 
 export function coerceConfigProviderId(
   value: string | null | undefined,
-  fallback: AIProviderId = 'antigravity',
+  fallback: AIProviderId = 'claude-api',
 ): AIProviderId {
   if (isAIProviderId(value)) {
     return value;

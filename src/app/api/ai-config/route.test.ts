@@ -56,7 +56,10 @@ describe('PUT /api/ai-config', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual(expect.objectContaining({
       error: expect.stringContaining('defaultProvider'),
-      issues: [{ path: 'defaultProvider', provider: 'openai-api' }],
+      issues: expect.arrayContaining([
+        { path: 'defaultProvider', provider: 'openai-api' },
+        { path: 'layers.management', provider: 'openai-api' },
+      ]),
     }));
     expect(vi.mocked(saveAIConfig)).not.toHaveBeenCalled();
   });

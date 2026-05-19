@@ -8,7 +8,7 @@
  * 4. Handle supersession: new session records previous handle
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockGetRun,
@@ -29,7 +29,7 @@ vi.mock('./memory-hooks', () => ({
 
 import { createRunSessionHooks } from './run-session-hooks';
 import type { AgentRunState, SessionProvenance } from '../agents/group-types';
-import type { StartedAgentEvent, CompletedAgentEvent } from './types';
+import type { StartedAgentEvent } from './types';
 
 function makeRunState(overrides: Partial<AgentRunState> = {}): AgentRunState {
   return {

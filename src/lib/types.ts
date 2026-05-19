@@ -44,6 +44,9 @@ export interface Conversation {
   workspace: string;
   mtime: number;
   steps: number;
+  provider?: string;
+  sourceKind?: string;
+  isLocalOnly?: boolean;
 }
 
 export interface Server {
@@ -164,6 +167,16 @@ export interface DepartmentDirectoryEntry {
   primaryWorkspaceUri: string;
   workspaceName: string;
   config: DepartmentConfig;
+}
+
+export type DepartmentRuleSource = 'department' | 'legacy-agents';
+
+export interface DepartmentRule {
+  name: string;
+  content: string;
+  source: DepartmentRuleSource;
+  editable: boolean;
+  path: string;
 }
 
 /** V6: Token quota for a department */
@@ -690,7 +703,7 @@ export interface DepartmentManagementOverviewFE extends ManagementOverviewFE {
   throughput30d: number;
 }
 
-export type EvolutionProposalKindFE = 'workflow' | 'skill';
+export type EvolutionProposalKindFE = 'sop' | 'workflow' | 'skill' | 'script' | 'rule';
 export type EvolutionProposalStatusFE =
   | 'draft'
   | 'evaluated'
@@ -699,11 +712,13 @@ export type EvolutionProposalStatusFE =
   | 'rejected';
 
 export interface EvolutionProposalEvidenceFE {
-  source: 'knowledge' | 'repeated-runs';
+  source: 'knowledge' | 'memory-candidate' | 'run-capsules' | 'repeated-runs';
   label: string;
   detail: string;
   workspaceUri?: string;
   knowledgeId?: string;
+  candidateIds?: string[];
+  capsuleIds?: string[];
   runIds?: string[];
   count?: number;
 }

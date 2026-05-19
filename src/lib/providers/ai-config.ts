@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../logger';
+import { DEFAULT_PROVIDER_PROFILES } from './provider-registry';
 import { coerceConfigProviderId, isAIProviderId } from './types';
 import type {
   AIProviderId,
@@ -31,45 +32,20 @@ import type {
 const log = createLogger('AIConfig');
 
 // ---------------------------------------------------------------------------
-// Default configuration (Antigravity-only, as current baseline)
+// Default configuration (Claude Engine mainline, Antigravity optional)
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CONFIG: AIProviderConfig = {
-  defaultProvider: 'antigravity',
+  defaultProvider: 'claude-api',
   defaultModel: undefined,
   layers: {
-    executive: { provider: 'antigravity' },
-    management: { provider: 'antigravity' },
-    execution: { provider: 'antigravity' },
-    utility: { provider: 'antigravity' },
+    executive: { provider: 'claude-api' },
+    management: { provider: 'claude-api' },
+    execution: { provider: 'claude-api' },
+    utility: { provider: 'claude-api' },
   },
   scenes: {},
-  providerProfiles: {
-    antigravity: { transport: 'native', authMode: 'runtime' },
-    'native-codex': {
-      transport: 'pi-ai',
-      authMode: 'codex-oauth',
-      supportsImageGeneration: true,
-      enableImageGeneration: true,
-      imageGenerationModel: 'gpt-5.5',
-    },
-    'claude-api': { transport: 'pi-ai', authMode: 'api-key' },
-    'openai-api': {
-      transport: 'pi-ai',
-      authMode: 'api-key',
-      supportsImageGeneration: true,
-      enableImageGeneration: true,
-      imageGenerationModel: 'gpt-image-1',
-    },
-    'gemini-api': { transport: 'pi-ai', authMode: 'api-key' },
-    'grok-api': { transport: 'pi-ai', authMode: 'api-key' },
-    custom: {
-      transport: 'pi-ai',
-      authMode: 'proxy',
-      supportsImageGeneration: true,
-      enableImageGeneration: false,
-    },
-  },
+  providerProfiles: DEFAULT_PROVIDER_PROFILES,
 };
 
 // ---------------------------------------------------------------------------
@@ -179,6 +155,7 @@ function shouldUseBuildDefaultConfig(): boolean {
 
 function sanitizeLayerConfigs(
   raw?: Partial<AIProviderConfig>['layers'],
+  fallbackProvider?: AIProviderId,
 ): AIProviderConfig['layers'] {
   if (!raw) {
     return undefined;
@@ -189,7 +166,10 @@ function sanitizeLayerConfigs(
     if (!config) continue;
     next[layer] = {
       ...config,
-      provider: coerceConfigProviderId(config.provider, DEFAULT_CONFIG.layers?.[layer]?.provider ?? DEFAULT_CONFIG.defaultProvider),
+      provider: coerceConfigProviderId(
+        config.provider,
+        fallbackProvider ?? DEFAULT_CONFIG.layers?.[layer]?.provider ?? DEFAULT_CONFIG.defaultProvider,
+      ),
     };
   }
   return next;
@@ -197,6 +177,7 @@ function sanitizeLayerConfigs(
 
 function sanitizeSceneConfigs(
   raw?: Partial<AIProviderConfig>['scenes'],
+  fallbackProvider?: AIProviderId,
 ): AIProviderConfig['scenes'] {
   if (!raw) {
     return undefined;
@@ -207,7 +188,7 @@ function sanitizeSceneConfigs(
     if (!config) continue;
     next[sceneId] = {
       ...config,
-      provider: coerceConfigProviderId(config.provider, DEFAULT_CONFIG.defaultProvider),
+      provider: coerceConfigProviderId(config.provider, fallbackProvider ?? DEFAULT_CONFIG.defaultProvider),
     };
   }
   return next;
@@ -248,15 +229,22 @@ function normalizeProviderTransport(
 
 export function normalizeAIConfig(raw?: Partial<AIProviderConfig>): AIProviderConfig {
   const customProviderState = materializeCustomProviderState(raw);
-  const layers = sanitizeLayerConfigs(raw?.layers);
-  const scenes = sanitizeSceneConfigs(raw?.scenes);
+  const normalizedDefaultProvider = coerceConfigProviderId(raw?.defaultProvider, DEFAULT_CONFIG.defaultProvider);
+  const defaultLayers: NonNullable<AIProviderConfig['layers']> = {
+    executive: { provider: normalizedDefaultProvider },
+    management: { provider: normalizedDefaultProvider },
+    execution: { provider: normalizedDefaultProvider },
+    utility: { provider: normalizedDefaultProvider },
+  };
+  const layers = sanitizeLayerConfigs(raw?.layers, normalizedDefaultProvider);
+  const scenes = sanitizeSceneConfigs(raw?.scenes, normalizedDefaultProvider);
   const providerProfiles = sanitizeProviderProfiles(raw?.providerProfiles as Partial<Record<string, ProviderTransportProfile>> | undefined);
   const normalized = {
     ...DEFAULT_CONFIG,
     ...raw,
-    defaultProvider: coerceConfigProviderId(raw?.defaultProvider, DEFAULT_CONFIG.defaultProvider),
+    defaultProvider: normalizedDefaultProvider,
     layers: {
-      ...(DEFAULT_CONFIG.layers ?? {}),
+      ...defaultLayers,
       ...(layers ?? {}),
     },
     scenes: {

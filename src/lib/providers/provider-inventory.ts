@@ -3,13 +3,9 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import type { ProviderInventory } from './provider-availability';
+import { STORED_API_KEY_IDS, type StoredApiKeyId } from './provider-registry';
 
-export type StoredApiKeys = {
-  anthropic?: string;
-  openai?: string;
-  gemini?: string;
-  grok?: string;
-};
+export type StoredApiKeys = Partial<Record<StoredApiKeyId, string>>;
 
 export function getApiKeysPath(): string {
   return path.join(process.env.HOME ?? '~', '.gemini', 'antigravity', 'api-keys.json');
@@ -62,11 +58,12 @@ export function getProviderInventory(): ProviderInventory {
   const claudeStatePath = path.join(process.env.HOME ?? '~', '.claude.json');
   const claudeInstall = resolveClaudeCodeInstall();
 
+  const storedKeyInventory = Object.fromEntries(
+    STORED_API_KEY_IDS.map((keyId) => [keyId, { set: Boolean(keys[keyId]) }]),
+  ) as Pick<ProviderInventory, StoredApiKeyId>;
+
   return {
-    anthropic: { set: Boolean(keys.anthropic) },
-    openai: { set: Boolean(keys.openai) },
-    gemini: { set: Boolean(keys.gemini) },
-    grok: { set: Boolean(keys.grok) },
+    ...storedKeyInventory,
     providers: {
       codex: {
         installed: commandExists('codex'),

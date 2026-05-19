@@ -1,8 +1,10 @@
 import { TERMINAL_STATUSES } from '../agents/group-types';
 import type { SessionProvenance } from '../agents/group-types';
+import { buildLegacyConversationHandleBinding } from '../agents/session-handle';
 import { getRun, updateRun } from '../agents/run-registry';
 import { appendRunHistoryEntry } from '../agents/run-history';
 import type { AgentBackendId } from '../providers';
+import { isExecutionToolId } from '../providers/types';
 import { applyAfterRunMemoryHooks } from './memory-hooks';
 import type { BackendSessionConsumerHooks } from './session-consumer';
 import type {
@@ -74,10 +76,7 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
           sessionProvenance: provenance,
           ...(options.activeRoleId ? { activeRoleId: options.activeRoleId } : {}),
           ...(bindHandleProviders.has(event.providerId)
-            ? {
-                childConversationId: event.handle,
-                activeConversationId: event.handle,
-              }
+            ? buildLegacyConversationHandleBinding(event.handle)
             : {}),
         });
       }
@@ -94,6 +93,19 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
           workspacePath: existingRun?.workspace || options.backendConfig?.workspacePath,
         },
       });
+
+      if (!isExecutionToolId(event.providerId) && options.backendConfig?.prompt?.trim()) {
+        appendRunHistoryEntry({
+          runId: options.runId,
+          provider: event.providerId,
+          sessionHandle: event.handle,
+          eventType: 'conversation.message.user',
+          details: {
+            content: options.backendConfig.prompt,
+            source: 'session.started',
+          },
+        });
+      }
 
       await options.onStarted?.(event);
     },
@@ -151,7 +163,7 @@ export function createRunSessionHooks(options: CreateRunSessionHooksOptions): Ba
         },
       });
 
-      if (event.providerId === 'antigravity' && event.finalText?.trim()) {
+      if (!isExecutionToolId(event.providerId) && event.finalText?.trim()) {
         appendRunHistoryEntry({
           runId: options.runId,
           provider: event.providerId,

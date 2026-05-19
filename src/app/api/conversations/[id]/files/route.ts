@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getOwnerConnection, resolveConversationRecord } from '@/lib/bridge/gateway';
 import { inferLocalProviderFromConversation } from '@/lib/local-provider-conversations';
+import {
+  getProviderSessionHandle,
+  type ProviderNeutralConversationRecord,
+} from '@/lib/conversation-runtime';
 import { createLogger } from '@/lib/logger';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -17,9 +21,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const maxResults = 25;
   const conversationRecord = resolveConversationRecord(id);
   const localProvider = inferLocalProviderFromConversation(id, conversationRecord?.provider);
-  const conn = localProvider ? null : await getOwnerConnection(id);
+  const runtimeConversationId = getProviderSessionHandle(
+    conversationRecord as ProviderNeutralConversationRecord | null,
+    'antigravity',
+  ) || (conversationRecord?.provider === 'antigravity' ? conversationRecord.sessionHandle : undefined) || id;
+  const conn = localProvider ? null : await getOwnerConnection(runtimeConversationId);
   const backingRun = findRunRecordByConversationRef({
-    sessionHandles: [id, conversationRecord?.sessionHandle].filter(Boolean) as string[],
+    sessionHandles: [id, runtimeConversationId, conversationRecord?.sessionHandle].filter(Boolean) as string[],
     conversationIds: [id, conversationRecord?.id].filter(Boolean) as string[],
   });
 

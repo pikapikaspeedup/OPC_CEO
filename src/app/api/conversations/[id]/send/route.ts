@@ -8,16 +8,25 @@ import {
   grpc,
   resolveConversationRecord,
   updateLocalConversation,
+  getLanguageServer,
+  getApiKey,
+  preRegisterOwner,
 } from '@/lib/bridge/gateway';
 import { getExecutor } from '@/lib/providers';
 import { createLogger } from '@/lib/logger';
 import {
   appendLocalProviderConversationTurn,
+  getLocalProviderTitle,
   inferLocalProviderFromConversation,
 } from '@/lib/local-provider-conversations';
 import {
+  getProviderSessionHandle,
+  resolveConversationProviderForTurn,
+  updateProviderSessionState,
+  type ProviderNeutralConversationRecord,
+} from '@/lib/conversation-runtime';
+import {
   isApiConversationProvider,
-  readApiConversationSteps,
   runApiConversationTurn,
 } from '@/lib/api-provider-conversations';
 import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
@@ -27,15 +36,6 @@ import {
 } from '@/server/shared/proxy';
 
 const log = createLogger('SendMsg');
-const PROVIDER_TITLES: Record<string, string> = {
-  codex: 'Codex',
-  'native-codex': 'Native Codex',
-  'claude-api': 'Claude API',
-  'openai-api': 'OpenAI API',
-  'gemini-api': 'Gemini API',
-  'grok-api': 'Grok API',
-  custom: 'Custom API',
-};
 
 export const dynamic = 'force-dynamic';
 
@@ -52,6 +52,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const body = await req.json() as {
     text?: string;
     model?: string;
+    provider?: string;
     agenticMode?: boolean;
     attachments?: { items?: Array<Record<string, unknown>> };
   };
@@ -70,17 +71,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   text = ""; // Clear text so grpc.ts doesn't duplicate
 
   const targetConv = resolveConversationRecord(cascadeId);
-  const localProvider = inferLocalProviderFromConversation(cascadeId, targetConv?.provider);
+  const backingRun = findRunRecordByConversationRef({
+    sessionHandles: [cascadeId, targetConv?.sessionHandle].filter(Boolean) as string[],
+    conversationIds: [cascadeId, targetConv?.id].filter(Boolean) as string[],
+  });
+  const localWorkspace = targetConv?.workspace?.replace(/^file:\/\//, '')
+    || backingRun?.workspace.replace(/^file:\/\//, '')
+    || process.cwd();
+  const conversationId = targetConv?.id || cascadeId;
+  const targetProvider = resolveConversationProviderForTurn({
+    requestedProvider: body.provider,
+    workspacePath: localWorkspace,
+    fallbackProvider: targetConv?.provider ?? null,
+  });
+  const localProvider = inferLocalProviderFromConversation(
+    targetProvider ? '' : cascadeId,
+    targetProvider ?? targetConv?.provider,
+  );
   if (localProvider) {
-    const backingRun = findRunRecordByConversationRef({
-      sessionHandles: [cascadeId, targetConv?.sessionHandle].filter(Boolean) as string[],
-      conversationIds: [cascadeId, targetConv?.id].filter(Boolean) as string[],
-    });
-    const localWorkspace = targetConv?.workspace?.replace(/^file:\/\//, '')
-      || backingRun?.workspace.replace(/^file:\/\//, '')
-      || process.cwd();
-    const sessionHandle = targetConv?.sessionHandle || backingRun?.sessionProvenance?.handle || '';
-    const conversationId = targetConv?.id || cascadeId;
+    const providerSessionHandle = getProviderSessionHandle(
+      targetConv as ProviderNeutralConversationRecord | null,
+      localProvider,
+    ) || backingRun?.sessionProvenance?.handle || '';
 
     log.info({ cascadeId, provider: localProvider, workspace: localWorkspace }, 'Routing to local provider conversation');
 
@@ -92,14 +104,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           localWorkspace,
           originalText,
           model,
-          sessionHandle || undefined,
-          cascadeId,
+          providerSessionHandle || undefined,
+          conversationId,
         );
       } else {
         const executor = getExecutor(localProvider);
-        if (sessionHandle) {
+        if (providerSessionHandle) {
           try {
-            result = await executor.appendMessage(sessionHandle, {
+            result = await executor.appendMessage(providerSessionHandle, {
               prompt: originalText,
               workspace: localWorkspace,
               model,
@@ -127,14 +139,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         return NextResponse.json({ error: failureMessage }, { status: 502 });
       }
 
-      const steps = isApiConversationProvider(localProvider)
-        ? await readApiConversationSteps(result.handle)
-        : appendLocalProviderConversationTurn(conversationId, originalText, result.content || '');
+      const steps = appendLocalProviderConversationTurn(conversationId, originalText, result.content || '');
+      const providerSessions = updateProviderSessionState(
+        targetConv as ProviderNeutralConversationRecord | null,
+        localProvider,
+        result.handle,
+        steps.length,
+      );
       if (targetConv) {
         updateLocalConversation(targetConv.id, {
           provider: localProvider,
           sessionHandle: result.handle,
           stepCount: steps.length,
+          providerSessions,
         });
       } else {
         const workspaceUri = backingRun?.workspace || `file://${localWorkspace}`;
@@ -142,11 +159,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         addLocalConversation(
           conversationId,
           workspaceUri,
-          `${PROVIDER_TITLES[localProvider] || localProvider}: ${workspaceName}`,
+          `${getLocalProviderTitle(localProvider)}: ${workspaceName}`,
           {
             provider: localProvider,
             sessionHandle: result.handle,
             stepCount: steps.length,
+            providerSessions,
           },
         );
       }
@@ -158,10 +176,57 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
   }
 
-  const conn = await getOwnerConnection(cascadeId);
+  let antigravityCascadeId = targetProvider === 'antigravity'
+    ? getProviderSessionHandle(targetConv as ProviderNeutralConversationRecord | null, 'antigravity')
+      || (targetConv?.provider === 'antigravity' ? targetConv.sessionHandle : undefined)
+      || (!targetConv ? cascadeId : undefined)
+    : cascadeId;
+
+  if (!antigravityCascadeId && targetProvider === 'antigravity' && targetConv) {
+    const apiKey = getApiKey();
+    if (!apiKey) return NextResponse.json({ error: 'No API key' }, { status: 503 });
+    const workspaceUri = targetConv.workspace || `file://${localWorkspace}`;
+    const srv = await getLanguageServer(workspaceUri);
+    if (!srv) {
+      return NextResponse.json({
+        error: 'workspace_not_running',
+        message: 'Workspace is not running. Please open it in Antigravity first.',
+        workspace: workspaceUri,
+      }, { status: 503 });
+    }
+
+    const workspacePath = workspaceUri.replace(/^file:\/\//, '');
+    await grpc.addTrackedWorkspace(srv.port, srv.csrf, workspacePath);
+    const data = await grpc.startCascade(srv.port, srv.csrf, apiKey, workspaceUri);
+    antigravityCascadeId = data.cascadeId;
+    if (!antigravityCascadeId) {
+      return NextResponse.json({ error: 'Antigravity did not return a cascade id' }, { status: 500 });
+    }
+    preRegisterOwner(antigravityCascadeId, {
+      port: srv.port,
+      csrf: srv.csrf,
+      apiKey,
+      stepCount: 0,
+      workspace: workspaceUri,
+    });
+    const providerSessions = updateProviderSessionState(
+      targetConv as ProviderNeutralConversationRecord,
+      'antigravity',
+      antigravityCascadeId,
+      0,
+    );
+    updateLocalConversation(targetConv.id, {
+      provider: 'antigravity',
+      sessionHandle: antigravityCascadeId,
+      providerSessions,
+    });
+  }
+
+  const runtimeCascadeId = antigravityCascadeId || cascadeId;
+  const conn = await getOwnerConnection(runtimeCascadeId);
   if (!conn) {
-    log.error({ cascadeId, ownerMapSize: convOwnerMap.size }, 'No server available — possibly a routing issue for new conversation');
-    return NextResponse.json({ error: 'No server available', cascadeId }, { status: 503 });
+    log.error({ cascadeId: runtimeCascadeId, ownerMapSize: convOwnerMap.size }, 'No server available — possibly a routing issue for new conversation');
+    return NextResponse.json({ error: 'No server available', cascadeId: runtimeCascadeId }, { status: 503 });
   }
 
   const workspacePath = conn.workspace?.replace(/^file:\/\//, '') || process.cwd();
@@ -193,42 +258,42 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     attachments.items.push({ text: originalText.substring(lastIndex) });
   }
 
-  log.info({ cascadeId, ownerMapHas: convOwnerMap.has(cascadeId), ownerMapAgeMs: Date.now() - ownerMapAge, mode: agenticMode ? 'planning' : 'fast', port: conn.port, workspace: conn.workspace }, 'Send message');
+  log.info({ cascadeId: runtimeCascadeId, ownerMapHas: convOwnerMap.has(runtimeCascadeId), ownerMapAgeMs: Date.now() - ownerMapAge, mode: agenticMode ? 'planning' : 'fast', port: conn.port, workspace: conn.workspace }, 'Send message');
 
-  if (!convOwnerMap.has(cascadeId) || Date.now() - ownerMapAge > 30_000) {
+  if (!convOwnerMap.has(runtimeCascadeId) || Date.now() - ownerMapAge > 30_000) {
     await refreshOwnerMap();
-    log.debug({ cascadeId, ownerMapHas: convOwnerMap.has(cascadeId) }, 'OwnerMap refreshed');
+    log.debug({ cascadeId: runtimeCascadeId, ownerMapHas: convOwnerMap.has(runtimeCascadeId) }, 'OwnerMap refreshed');
   }
 
   log.debug({ port: conn.port, model: model || 'default', itemCount: attachments?.items?.length }, 'Routing to server');
   try {
     // We pass `text=""` because we packed all text and file mentions into attachments.items
-    const data = await grpc.sendMessage(conn.port, conn.csrf, conn.apiKey, cascadeId, text, model, agenticMode, attachments);
+    const data = await grpc.sendMessage(conn.port, conn.csrf, conn.apiKey, runtimeCascadeId, text, model, agenticMode, attachments);
     // Check for gRPC-level errors in the response
     if (data?.error) {
-      log.warn({ cascadeId, error: data.error, port: conn.port }, 'gRPC response contains error');
+      log.warn({ cascadeId: runtimeCascadeId, error: data.error, port: conn.port }, 'gRPC response contains error');
       // Retry once on "agent state not found" — cascade may need a LoadTrajectory warm-up
       if (typeof data.error?.message === 'string' && data.error.message.includes('agent state') && data.error.message.includes('not found')) {
-        log.info({ cascadeId, port: conn.port }, 'Agent state not found — attempting LoadTrajectory warm-up and retry');
+        log.info({ cascadeId: runtimeCascadeId, port: conn.port }, 'Agent state not found — attempting LoadTrajectory warm-up and retry');
         try {
-          await grpc.loadTrajectory(conn.port, conn.csrf, cascadeId);
+          await grpc.loadTrajectory(conn.port, conn.csrf, runtimeCascadeId);
           await new Promise(r => setTimeout(r, 500));
-          const retryData = await grpc.sendMessage(conn.port, conn.csrf, conn.apiKey, cascadeId, text, model, agenticMode, attachments);
+          const retryData = await grpc.sendMessage(conn.port, conn.csrf, conn.apiKey, runtimeCascadeId, text, model, agenticMode, attachments);
           if (retryData?.error) {
-            log.error({ cascadeId, error: retryData.error, port: conn.port }, 'Retry also failed');
+            log.error({ cascadeId: runtimeCascadeId, error: retryData.error, port: conn.port }, 'Retry also failed');
             return NextResponse.json({ error: retryData.error.message || 'Send failed after retry' }, { status: 500 });
           }
-          log.info({ cascadeId }, 'Retry succeeded after LoadTrajectory warm-up');
+          log.info({ cascadeId: runtimeCascadeId }, 'Retry succeeded after LoadTrajectory warm-up');
           return NextResponse.json({ ok: true, data: retryData });
         } catch (retryErr: unknown) {
-          log.error({ err: getErrorMessage(retryErr), cascadeId }, 'Retry send failed');
+          log.error({ err: getErrorMessage(retryErr), cascadeId: runtimeCascadeId }, 'Retry send failed');
           return NextResponse.json({ error: getErrorMessage(retryErr) }, { status: 500 });
         }
       }
     }
     return NextResponse.json({ ok: true, data });
   } catch (error: unknown) {
-    log.error({ err: getErrorMessage(error), cascadeId }, 'Send message failed');
+    log.error({ err: getErrorMessage(error), cascadeId: runtimeCascadeId }, 'Send message failed');
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
+import { PROVIDER_LABELS } from './providers/provider-registry';
 import type { Step } from './types';
 
 export type LocalProviderId =
@@ -23,6 +24,16 @@ const LOCAL_PROVIDER_IDS: LocalProviderId[] = [
   'grok-api',
   'custom',
 ];
+
+const LOCAL_PROVIDER_TITLES: Record<LocalProviderId, string> = {
+  codex: 'Codex',
+  'native-codex': 'Native Codex',
+  'claude-api': PROVIDER_LABELS['claude-api'],
+  'openai-api': PROVIDER_LABELS['openai-api'],
+  'gemini-api': PROVIDER_LABELS['gemini-api'],
+  'grok-api': PROVIDER_LABELS['grok-api'],
+  custom: 'Custom API',
+};
 
 const CONVERSATIONS_DIR = path.join(os.homedir(), '.gemini', 'antigravity', 'conversations');
 
@@ -118,6 +129,10 @@ export function inferLocalProviderFromConversation(id: string, provider?: string
     }
   }
   return null;
+}
+
+export function getLocalProviderTitle(provider: LocalProviderId): string {
+  return LOCAL_PROVIDER_TITLES[provider];
 }
 
 function getTranscriptPath(conversationId: string): string {

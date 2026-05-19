@@ -14,10 +14,15 @@ const { findRunRecordByConversationRefMock } = vi.hoisted(() => ({
 vi.mock('@/lib/bridge/gateway', () => ({
   addLocalConversation: vi.fn(),
   getOwnerConnection: vi.fn(),
+  getLanguageServer: vi.fn(),
+  getApiKey: vi.fn(() => 'ag-key'),
+  preRegisterOwner: vi.fn(),
   refreshOwnerMap: vi.fn(async () => {}),
   convOwnerMap: new Map(),
   ownerMapAge: 0,
   grpc: {
+    addTrackedWorkspace: vi.fn(async () => ({})),
+    startCascade: vi.fn(async () => ({ cascadeId: 'cascade-1' })),
     sendMessage: sendMessageMock,
     loadTrajectory: vi.fn(async () => ({})),
   },
@@ -29,11 +34,30 @@ vi.mock('@/lib/providers', () => ({
   getExecutor: vi.fn(),
 }));
 
+vi.mock('@/lib/providers/ai-config', () => ({
+  resolveProvider: vi.fn(() => ({ provider: 'native-codex' })),
+}));
+
 vi.mock('@/lib/local-provider-conversations', () => ({
   appendLocalProviderConversationTurn: vi.fn(() => [
     { type: 'CORTEX_STEP_TYPE_USER_INPUT' },
     { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' },
   ]),
+  getLocalProviderTitle: vi.fn((provider: string) => (
+    provider === 'codex'
+      ? 'Codex'
+      : provider === 'native-codex'
+        ? 'Native Codex'
+        : provider === 'claude-api'
+          ? 'Claude API'
+          : provider === 'openai-api'
+            ? 'OpenAI API'
+            : provider === 'gemini-api'
+              ? 'Gemini API'
+              : provider === 'grok-api'
+                ? 'Grok API'
+                : 'Custom API'
+  )),
   inferLocalProviderFromConversation: vi.fn(() => 'native-codex'),
 }));
 
@@ -70,6 +94,7 @@ import {
   updateLocalConversation,
 } from '@/lib/bridge/gateway';
 import { getExecutor } from '@/lib/providers';
+import { resolveProvider } from '@/lib/providers/ai-config';
 import {
   appendLocalProviderConversationTurn,
   inferLocalProviderFromConversation,
@@ -105,6 +130,8 @@ describe('POST /api/conversations/[id]/send', () => {
     vi.mocked(runApiConversationTurn).mockReset();
     vi.mocked(readApiConversationSteps).mockReset();
     vi.mocked(findRunRecordByConversationRef).mockReset();
+    vi.mocked(resolveProvider).mockReset();
+    vi.mocked(resolveProvider).mockReturnValue({ provider: 'native-codex' } as never);
     sendMessageMock.mockReset();
   });
 
@@ -147,12 +174,23 @@ describe('POST /api/conversations/[id]/send', () => {
       undefined,
       'local-native-codex-1',
     );
-    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('native-codex-session-1');
-    expect(vi.mocked(appendLocalProviderConversationTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(readApiConversationSteps)).not.toHaveBeenCalled();
+    expect(vi.mocked(appendLocalProviderConversationTurn)).toHaveBeenCalledWith(
+      'local-native-codex-1',
+      'hello native codex',
+      'native response',
+    );
     expect(vi.mocked(updateLocalConversation)).toHaveBeenCalledWith('local-native-codex-1', {
       provider: 'native-codex',
       sessionHandle: 'native-codex-session-1',
       stepCount: 2,
+      providerSessions: expect.objectContaining({
+        'native-codex': expect.objectContaining({
+          provider: 'native-codex',
+          sessionHandle: 'native-codex-session-1',
+          stepCount: 2,
+        }),
+      }),
     });
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
@@ -186,8 +224,12 @@ describe('POST /api/conversations/[id]/send', () => {
       'native-codex-session-1',
       'native-codex-session-1',
     );
-    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('native-codex-session-1');
-    expect(vi.mocked(appendLocalProviderConversationTurn)).not.toHaveBeenCalled();
+    expect(vi.mocked(readApiConversationSteps)).not.toHaveBeenCalled();
+    expect(vi.mocked(appendLocalProviderConversationTurn)).toHaveBeenCalledWith(
+      'native-codex-session-1',
+      'continue native codex',
+      'continued response',
+    );
     expect(vi.mocked(addLocalConversation)).toHaveBeenCalledWith(
       'native-codex-session-1',
       'file:///tmp/native-codex',
@@ -196,6 +238,11 @@ describe('POST /api/conversations/[id]/send', () => {
         provider: 'native-codex',
         sessionHandle: 'native-codex-session-1',
         stepCount: 2,
+        providerSessions: expect.objectContaining({
+          'native-codex': expect.objectContaining({
+            sessionHandle: 'native-codex-session-1',
+          }),
+        }),
       }),
     );
   });
@@ -266,8 +313,60 @@ describe('POST /api/conversations/[id]/send', () => {
       provider: 'claude-api',
       sessionHandle: 'claude-api-session-1',
       stepCount: 2,
+      providerSessions: expect.objectContaining({
+        'claude-api': expect.objectContaining({
+          provider: 'claude-api',
+          sessionHandle: 'claude-api-session-1',
+          stepCount: 2,
+        }),
+      }),
     });
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('routes the next turn through the currently configured provider instead of the conversation provider', async () => {
+    vi.mocked(resolveProvider).mockReturnValue({ provider: 'claude-api' } as never);
+    vi.mocked(resolveConversationRecord).mockReturnValue({
+      id: 'conversation-1',
+      title: 'Provider-neutral CEO thread',
+      workspace: 'file:///tmp/provider-neutral',
+      stepCount: 2,
+      provider: 'native-codex',
+      sessionHandle: 'native-codex-session-1',
+      providerSessions: {
+        'native-codex': {
+          provider: 'native-codex',
+          sessionHandle: 'native-codex-session-1',
+          updatedAt: '2026-05-18T00:00:00.000Z',
+          stepCount: 2,
+        },
+      },
+    } as never);
+    vi.mocked(inferLocalProviderFromConversation).mockReturnValue('claude-api');
+    vi.mocked(runApiConversationTurn).mockResolvedValue({
+      handle: 'claude-api-session-1',
+      content: 'switched response',
+    });
+
+    const res = await POST(makeRequest({ text: 'switch now' }), params('conversation-1'));
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(runApiConversationTurn)).toHaveBeenCalledWith(
+      'claude-api',
+      '/tmp/provider-neutral',
+      'switch now',
+      undefined,
+      undefined,
+      'conversation-1',
+    );
+    expect(vi.mocked(updateLocalConversation)).toHaveBeenCalledWith('conversation-1', expect.objectContaining({
+      provider: 'claude-api',
+      sessionHandle: 'claude-api-session-1',
+      providerSessions: expect.objectContaining({
+        'native-codex': expect.objectContaining({ sessionHandle: 'native-codex-session-1' }),
+        'claude-api': expect.objectContaining({ sessionHandle: 'claude-api-session-1' }),
+      }),
+    }));
   });
 
   it('keeps Antigravity conversations on the original gRPC send path', async () => {

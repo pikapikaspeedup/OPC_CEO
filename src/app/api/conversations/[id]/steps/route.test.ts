@@ -51,7 +51,7 @@ vi.mock('@/lib/logger', () => ({
   }),
 }));
 
-import { resolveConversationRecord } from '@/lib/bridge/gateway';
+import { getAllConnections, grpc, resolveConversationRecord } from '@/lib/bridge/gateway';
 import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
 import {
   inferLocalProviderFromConversation,
@@ -74,16 +74,33 @@ function params(id: string) {
 describe('GET /api/conversations/[id]/steps', () => {
   beforeEach(() => {
     vi.mocked(resolveConversationRecord).mockReset();
+    vi.mocked(getAllConnections).mockReset();
+    vi.mocked(getAllConnections).mockResolvedValue([]);
+    vi.mocked(grpc.loadTrajectory).mockClear();
+    vi.mocked(grpc.getTrajectorySteps).mockClear();
     vi.mocked(findRunRecordByConversationRef).mockReset();
     vi.mocked(inferLocalProviderFromConversation).mockReset();
-    vi.mocked(readLocalProviderConversationSteps).mockClear();
+    vi.mocked(readLocalProviderConversationSteps).mockReset();
+    vi.mocked(readLocalProviderConversationSteps).mockReturnValue([
+      {
+        type: 'CORTEX_STEP_TYPE_USER_INPUT',
+        status: 'CORTEX_STEP_STATUS_DONE',
+        userInput: { items: [{ text: 'hello' }] },
+      },
+      {
+        type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+        status: 'CORTEX_STEP_STATUS_DONE',
+        plannerResponse: { response: 'world' },
+      },
+    ] as never);
     vi.mocked(isApiConversationProvider).mockClear();
-    vi.mocked(readApiConversationSteps).mockClear();
+    vi.mocked(readApiConversationSteps).mockReset();
+    vi.mocked(readApiConversationSteps).mockResolvedValue([]);
     vi.mocked(buildStepsFromTranscriptMessages).mockClear();
     vi.mocked(readLocalProviderTranscriptMessages).mockReset();
   });
 
-  it('returns API transcript steps for native-codex conversations when a session handle exists', async () => {
+  it('returns canonical transcript steps before provider session steps', async () => {
     vi.mocked(resolveConversationRecord).mockReturnValue({
       id: 'local-native-codex-1',
       provider: 'native-codex',
@@ -105,8 +122,8 @@ describe('GET /api/conversations/[id]/steps', () => {
         expect.objectContaining({ type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' }),
       ]),
     });
-    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('native-codex-session-1');
-    expect(vi.mocked(readLocalProviderConversationSteps)).not.toHaveBeenCalled();
+    expect(vi.mocked(readLocalProviderConversationSteps)).toHaveBeenCalledWith('local-native-codex-1');
+    expect(vi.mocked(readApiConversationSteps)).not.toHaveBeenCalled();
   });
 
   it('falls back to transcript reconstruction for legacy native-codex handles with no API transcript', async () => {
@@ -148,6 +165,7 @@ describe('GET /api/conversations/[id]/steps', () => {
       sessionHandle: 'claude-api-session-1',
     } as never);
     vi.mocked(inferLocalProviderFromConversation).mockReturnValue('claude-api');
+    vi.mocked(readLocalProviderConversationSteps).mockReturnValue([]);
     vi.mocked(readApiConversationSteps).mockResolvedValue([
       { type: 'CORTEX_STEP_TYPE_USER_INPUT' },
       { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' },
@@ -164,5 +182,67 @@ describe('GET /api/conversations/[id]/steps', () => {
       ]),
     });
     expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('claude-api-session-1');
+  });
+
+  it('reads API-backed steps from the provider session map for provider-neutral conversations', async () => {
+    vi.mocked(resolveConversationRecord).mockReturnValue({
+      id: 'conversation-1',
+      provider: 'claude-api',
+      sessionHandle: 'native-codex-session-1',
+      providerSessions: {
+        'claude-api': {
+          provider: 'claude-api',
+          sessionHandle: 'claude-api-session-1',
+          updatedAt: '2026-05-18T00:00:00.000Z',
+          stepCount: 2,
+        },
+      },
+    } as never);
+    vi.mocked(inferLocalProviderFromConversation).mockReturnValue('claude-api');
+    vi.mocked(readLocalProviderConversationSteps).mockReturnValue([]);
+    vi.mocked(readApiConversationSteps).mockResolvedValue([
+      { type: 'CORTEX_STEP_TYPE_USER_INPUT' },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' },
+    ] as never);
+
+    const res = await GET(new Request('http://localhost/api/conversations/conversation-1/steps'), params('conversation-1'));
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(readLocalProviderConversationSteps)).toHaveBeenCalledWith('conversation-1');
+    expect(vi.mocked(readApiConversationSteps)).toHaveBeenCalledWith('claude-api-session-1');
+  });
+
+  it('reads Antigravity steps through the provider runtime handle', async () => {
+    vi.mocked(resolveConversationRecord).mockReturnValue({
+      id: 'conversation-1',
+      provider: 'antigravity',
+      sessionHandle: 'ag-cascade-old',
+      providerSessions: {
+        antigravity: {
+          provider: 'antigravity',
+          sessionHandle: 'ag-cascade-1',
+          updatedAt: '2026-05-18T00:00:00.000Z',
+          stepCount: 2,
+        },
+      },
+    } as never);
+    vi.mocked(inferLocalProviderFromConversation).mockReturnValue(null);
+    vi.mocked(getAllConnections).mockResolvedValue([
+      {
+        port: 9211,
+        csrf: 'csrf-token',
+        apiKey: 'ag-key',
+        workspace: 'file:///tmp/workspace',
+      },
+    ] as never);
+    vi.mocked(grpc.getTrajectorySteps).mockResolvedValue({
+      steps: [{ type: 'CORTEX_STEP_TYPE_USER_INPUT' }],
+    } as never);
+
+    const res = await GET(new Request('http://localhost/api/conversations/conversation-1/steps'), params('conversation-1'));
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(grpc.loadTrajectory)).toHaveBeenCalledWith(9211, 'csrf-token', 'ag-cascade-1');
+    expect(vi.mocked(grpc.getTrajectorySteps)).toHaveBeenCalledWith(9211, 'csrf-token', 'ag-key', 'ag-cascade-1');
   });
 });

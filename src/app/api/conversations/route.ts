@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { paginateArray, parsePaginationSearchParams } from '@/lib/pagination';
 import { listConversationProjections } from '@/lib/storage/gateway-db';
+import { buildProviderNeutralConversationId } from '@/lib/conversation-runtime';
 import {
   proxyToControlPlane,
   proxyToRuntime,
@@ -13,15 +14,6 @@ export const dynamic = 'force-dynamic';
 
 const log = createLogger('NewConv');
 const CEO_WORKSPACE_URI = 'file:///Users/darrel/.gemini/antigravity/ceo-workspace';
-const PROVIDER_TITLES: Record<string, string> = {
-  codex: 'Codex',
-  'native-codex': 'Native Codex',
-  'claude-api': 'Claude API',
-  'openai-api': 'OpenAI API',
-  'gemini-api': 'Gemini API',
-  'grok-api': 'Grok API',
-  custom: 'Custom API',
-};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -56,6 +48,11 @@ export async function GET(req: Request) {
           ? new Date(conversation.updatedAt).getTime()
           : 0),
     steps: conversation.stepCount || 0,
+    provider: conversation.provider ?? (
+      conversation.sourceKind?.startsWith('antigravity') ? 'antigravity' : undefined
+    ),
+    sourceKind: conversation.sourceKind,
+    isLocalOnly: conversation.isLocalOnly,
   }));
 
   return NextResponse.json({
@@ -73,7 +70,7 @@ export async function POST(req: Request) {
   const gateway = await import('@/lib/bridge/gateway');
   const { resolveProvider } = await import('@/lib/providers');
   const {
-    buildLocalProviderConversationId,
+    getLocalProviderTitle,
     isSupportedLocalProvider,
   } = await import('@/lib/local-provider-conversations');
   const path = await import('path');
@@ -169,15 +166,16 @@ export async function POST(req: Request) {
   const providerInfo = resolveProvider('execution', workspacePath);
 
   if (isSupportedLocalProvider(providerInfo.provider)) {
-    const cascadeId = buildLocalProviderConversationId(providerInfo.provider);
+    const cascadeId = buildProviderNeutralConversationId();
     const wsName = wsUri.split('/').pop() || 'conversation';
     const title = wsUri === CEO_WORKSPACE_URI
       ? 'CEO Office'
-      : `${PROVIDER_TITLES[providerInfo.provider] || providerInfo.provider}: ${wsName}`;
+      : `${getLocalProviderTitle(providerInfo.provider)}: ${wsName}`;
 
     addLocalConversation(cascadeId, wsUri, title, {
       provider: providerInfo.provider,
       sessionHandle: '',
+      providerSessions: {},
     });
     log.info({ cascadeId, provider: providerInfo.provider, workspacePath }, 'Created local provider conversation without IDE');
     return NextResponse.json({ cascadeId, state: 'idle', provider: providerInfo.provider });

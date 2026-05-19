@@ -26,7 +26,21 @@ vi.mock('@/lib/providers', () => ({
 }));
 
 vi.mock('@/lib/local-provider-conversations', () => ({
-  buildLocalProviderConversationId: vi.fn(() => 'local-native-codex-123'),
+  getLocalProviderTitle: vi.fn((provider: string) => (
+    provider === 'codex'
+      ? 'Codex'
+      : provider === 'native-codex'
+        ? 'Native Codex'
+        : provider === 'claude-api'
+          ? 'Claude API'
+          : provider === 'openai-api'
+            ? 'OpenAI API'
+            : provider === 'gemini-api'
+              ? 'Gemini API'
+              : provider === 'grok-api'
+                ? 'Grok API'
+                : 'Custom API'
+  )),
   isSupportedLocalProvider: (provider: string | null | undefined) => (
     provider === 'codex'
     || provider === 'native-codex'
@@ -54,7 +68,6 @@ vi.mock('@/lib/storage/gateway-db', () => ({
 import { addLocalConversation, getLanguageServer } from '@/lib/bridge/gateway';
 import { listConversationProjections } from '@/lib/storage/gateway-db';
 import { resolveProvider } from '@/lib/providers';
-import { buildLocalProviderConversationId } from '@/lib/local-provider-conversations';
 import { GET, POST } from './route';
 
 function makeRequest(workspace: string) {
@@ -101,6 +114,9 @@ describe('POST /api/conversations', () => {
           workspace: 'file:///tmp/workspace',
           mtime: 123456,
           steps: 12,
+          provider: 'antigravity',
+          sourceKind: 'antigravity-live',
+          isLocalOnly: false,
         },
       ],
       page: 1,
@@ -113,23 +129,24 @@ describe('POST /api/conversations', () => {
 
   it('creates local native-codex conversations without requiring IDE routing', async () => {
     vi.mocked(resolveProvider).mockReturnValue({ provider: 'native-codex' } as never);
-    vi.mocked(buildLocalProviderConversationId).mockReturnValue('local-native-codex-123');
 
     const res = await POST(makeRequest('file:///tmp/ceo-workspace'));
+    const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      cascadeId: 'local-native-codex-123',
+    expect(body).toEqual({
+      cascadeId: expect.stringMatching(/^conversation-/),
       state: 'idle',
       provider: 'native-codex',
     });
     expect(vi.mocked(addLocalConversation)).toHaveBeenCalledWith(
-      'local-native-codex-123',
+      body.cascadeId,
       'file:///tmp/ceo-workspace',
       'Native Codex: ceo-workspace',
       expect.objectContaining({
         provider: 'native-codex',
         sessionHandle: '',
+        providerSessions: {},
       }),
     );
     expect(vi.mocked(getLanguageServer)).not.toHaveBeenCalled();
@@ -137,22 +154,23 @@ describe('POST /api/conversations', () => {
 
   it('creates local API-backed conversations without requiring IDE routing', async () => {
     vi.mocked(resolveProvider).mockReturnValue({ provider: 'claude-api' } as never);
-    vi.mocked(buildLocalProviderConversationId).mockReturnValue('local-claude-api-123');
 
     const res = await POST(makeRequest('file:///tmp/api-workspace'));
+    const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      cascadeId: 'local-claude-api-123',
+    expect(body).toEqual({
+      cascadeId: expect.stringMatching(/^conversation-/),
       state: 'idle',
       provider: 'claude-api',
     });
     expect(vi.mocked(addLocalConversation)).toHaveBeenCalledWith(
-      'local-claude-api-123',
+      body.cascadeId,
       'file:///tmp/api-workspace',
       'Claude API: api-workspace',
       expect.objectContaining({
         provider: 'claude-api',
+        providerSessions: {},
       }),
     );
     expect(vi.mocked(getLanguageServer)).not.toHaveBeenCalled();

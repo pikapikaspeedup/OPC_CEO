@@ -8,6 +8,7 @@ import type {
   JournalEntryFE, CheckpointFE,
   DepartmentConfig,
   DepartmentDirectoryEntry,
+  DepartmentRule,
   DailyDigestFE,
   DecisionItemViewFE,
   Deliverable,
@@ -28,7 +29,6 @@ import type {
   CompanyLoopRunKindFE,
   CompanyLoopRunStatusFE,
   CompanyOperatingDayFE,
-  GrowthObservationFE,
   GrowthProposalFE,
   GrowthProposalKindFE,
   GrowthProposalRiskFE,
@@ -420,6 +420,24 @@ export const api = {
     fetchJson<{ ok: boolean }>(`/api/departments/sync?workspace=${encodeURIComponent(workspaceUri)}&target=${encodeURIComponent(target)}`, {
       method: 'POST',
     }),
+  getDepartmentRules: (workspaceUri: string) =>
+    fetchJson<{ workspace: string; rules: DepartmentRule[] }>(
+      `/api/departments/rules?workspace=${encodeURIComponent(workspaceUri)}`,
+    ),
+  updateDepartmentRule: (workspaceUri: string, name: string, content: string) =>
+    fetchJson<{ ok: boolean; rule: DepartmentRule }>(
+      `/api/departments/rules?workspace=${encodeURIComponent(workspaceUri)}&name=${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    ),
+  deleteDepartmentRule: (workspaceUri: string, name: string) =>
+    fetchJson<{ ok: boolean; name: string }>(
+      `/api/departments/rules?workspace=${encodeURIComponent(workspaceUri)}&name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    ),
   getDepartmentMemory: (workspaceUri: string, scope: 'department' | 'organization' = 'department') =>
     fetchJson<{ scope: string; workspace?: string; memory?: Record<string, string>; content?: string }>(
       `/api/departments/memory?workspace=${encodeURIComponent(workspaceUri)}&scope=${scope}`,
@@ -799,49 +817,6 @@ export const api = {
     const qs = search.toString();
     return fetchPaginatedJson<GrowthProposalFE>(`/api/company/growth/proposals${qs ? `?${qs}` : ''}`);
   },
-  generateCompanyGrowthProposals: (payload?: { workspaceUri?: string; limit?: number }) =>
-    fetchJson<{ proposals: GrowthProposalFE[]; decision?: BudgetGateDecisionFE; ledger?: BudgetLedgerEntryFE }>('/api/company/growth/proposals/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload || {}),
-    }),
-  companyGrowthProposal: (id: string) =>
-    fetchJson<GrowthProposalFE>(`/api/company/growth/proposals/${encodeURIComponent(id)}`),
-  evaluateCompanyGrowthProposal: (id: string) =>
-    fetchJson<{ proposal: GrowthProposalFE; decision?: BudgetGateDecisionFE; ledger?: BudgetLedgerEntryFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/evaluate`, {
-      method: 'POST',
-    }),
-  approveCompanyGrowthProposal: (id: string) =>
-    fetchJson<{ proposal: GrowthProposalFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/approve`, {
-      method: 'POST',
-    }),
-  rejectCompanyGrowthProposal: (id: string, reason?: string) =>
-    fetchJson<{ proposal: GrowthProposalFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
-    }),
-  dryRunCompanyGrowthProposal: (id: string) =>
-    fetchJson<{ proposal: GrowthProposalFE; dryRun?: { status?: string; reasons?: string[] } }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/dry-run`, {
-      method: 'POST',
-    }),
-  publishCompanyGrowthProposal: (id: string) =>
-    fetchJson<{ proposal: GrowthProposalFE }>(`/api/company/growth/proposals/${encodeURIComponent(id)}/publish`, {
-      method: 'POST',
-    }),
-  companyGrowthObservations: (params?: { proposalId?: string; limit?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.proposalId) search.set('proposalId', params.proposalId);
-    if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
-    const qs = search.toString();
-    return fetchJson<{ observations: GrowthObservationFE[] }>(`/api/company/growth/observations${qs ? `?${qs}` : ''}`);
-  },
-  observeCompanyGrowthProposal: (proposalId: string) =>
-    fetchJson<{ observation: GrowthObservationFE }>('/api/company/growth/observations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proposalId }),
-    }),
   companyLoopPolicies: (params?: {
     scope?: CompanyLoopPolicyFE['scope'];
     scopeId?: string;
@@ -1470,7 +1445,7 @@ export const api = {
     fetchJson<{ request: ApprovalRequestFE }>(`/api/approval/${encodeURIComponent(id)}`)
       .then((response) => response.request),
 
-  evolutionProposals: (params?: { workspaceUri?: string; kind?: 'workflow' | 'skill'; status?: string }) => {
+  evolutionProposals: (params?: { workspaceUri?: string; kind?: EvolutionProposalFE['kind']; status?: string }) => {
     const sp = new URLSearchParams();
     if (params?.workspaceUri) sp.set('workspace', params.workspaceUri);
     if (params?.kind) sp.set('kind', params.kind);

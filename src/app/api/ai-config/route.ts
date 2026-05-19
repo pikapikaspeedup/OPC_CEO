@@ -1,24 +1,17 @@
-import {
-  handleAIConfigGet,
-  handleAIConfigPut,
-} from '@/server/control-plane/routes/settings';
-import {
-  proxyToControlPlane,
-  shouldProxyControlPlaneRequest,
-} from '@/server/shared/proxy';
+import { runControlPlaneRoute } from '@/server/shared/proxy';
 
 const DEFAULT_REQUEST = new Request('http://localhost/api/ai-config');
 
 export async function GET(req: Request = DEFAULT_REQUEST) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleAIConfigGet();
+  return runControlPlaneRoute(req, async () => {
+    const { handleAIConfigGet } = await import('@/server/control-plane/routes/settings');
+    return handleAIConfigGet();
+  })
 }
 
 export async function PUT(request: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(request);
-  }
-  return handleAIConfigPut(request);
+  return runControlPlaneRoute(request, async () => {
+    const { handleAIConfigPut } = await import('@/server/control-plane/routes/settings');
+    return handleAIConfigPut(request);
+  })
 }

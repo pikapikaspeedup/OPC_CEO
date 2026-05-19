@@ -14,6 +14,7 @@ import { appendRunHistoryEntry } from '../agents/run-history';
 import {
   discoverLanguageServers,
   getApiKey,
+  getOwnerConnection,
   grpc,
   preRegisterOwner,
 } from '../bridge/gateway';
@@ -26,6 +27,23 @@ import type {
 } from './types';
 
 const log = createLogger('AntigravityExecutor');
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAlreadyTrackedWorkspaceError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return message.includes('already') && message.includes('track');
+}
+
+async function resolveOwnerConnection(handle: string) {
+  const owner = await getOwnerConnection(handle);
+  if (!owner) {
+    throw new Error(`No owning language server found for cascade ${handle}`);
+  }
+  return owner;
+}
 
 // ---------------------------------------------------------------------------
 // AntigravityExecutor
@@ -65,8 +83,11 @@ export class AntigravityExecutor implements TaskExecutor {
     log.info({ runId: shortRunId, roleId: opts.roleId, port: server.port }, 'Starting child conversation');
     try {
       await grpc.addTrackedWorkspace(server.port, server.csrf, opts.workspace);
-    } catch (e: any) {
-      log.warn({ runId: shortRunId, err: e.message }, 'AddTrackedWorkspace failed (may already be tracked)');
+    } catch (error: unknown) {
+      if (!isAlreadyTrackedWorkspaceError(error)) {
+        throw error;
+      }
+      log.debug({ runId: shortRunId, err: getErrorMessage(error) }, 'Workspace already tracked');
     }
 
     // 3. Start cascade
@@ -138,17 +159,10 @@ export class AntigravityExecutor implements TaskExecutor {
    * Used for nudge/revise operations.
    */
   async appendMessage(handle: string, opts: AppendMessageOptions): Promise<TaskExecutionResult> {
-    const servers = await discoverLanguageServers();
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error('No API key available');
-
-    // Find the server that owns this cascade
-    // For now, try the first server (single-server setup)
-    const server = servers[0];
-    if (!server) throw new Error('No language server available');
+    const owner = await resolveOwnerConnection(handle);
 
     await grpc.sendMessage(
-      server.port, server.csrf, apiKey, handle,
+      owner.port, owner.csrf, owner.apiKey, handle,
       opts.prompt, opts.model || 'MODEL_PLACEHOLDER_M26',
     );
     if (opts.runId) {
@@ -174,17 +188,14 @@ export class AntigravityExecutor implements TaskExecutor {
    * Cancel an in-progress conversation.
    */
   async cancel(handle: string): Promise<void> {
-    const servers = await discoverLanguageServers();
-    const apiKey = getApiKey();
-    if (!apiKey) return;
-
-    const server = servers[0];
-    if (!server) return;
+    const owner = await resolveOwnerConnection(handle);
 
     try {
-      await grpc.cancelCascade(server.port, server.csrf, apiKey, handle);
-    } catch (err: any) {
-      log.warn({ cascadeId: handle.slice(0, 8), err: err.message }, 'Cancel cascade failed');
+      await grpc.cancelCascade(owner.port, owner.csrf, owner.apiKey, handle);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      log.warn({ cascadeId: handle.slice(0, 8), err: message }, 'Cancel cascade failed');
+      throw new Error(`Failed to cancel Antigravity cascade ${handle}: ${message}`);
     }
   }
 

@@ -36,21 +36,21 @@ describe('AI Config — resolveProvider', () => {
 
   // --- Default config ---
 
-  it('returns antigravity by default when no config exists', () => {
+  it('returns claude-api by default when no config exists', () => {
     const result = resolveProvider('execution');
-    expect(result.provider).toBe('antigravity');
+    expect(result.provider).toBe('claude-api');
     expect(result.source).toBe('layer');
   });
 
-  it('returns antigravity for supervisor scene (default)', () => {
+  it('returns claude-api for supervisor scene (default)', () => {
     const result = resolveProvider('supervisor');
-    expect(result.provider).toBe('antigravity');
+    expect(result.provider).toBe('claude-api');
     expect(result.source).toBe('layer'); // maps to 'management' layer
   });
 
-  it('returns antigravity for utility layer (default)', () => {
+  it('returns claude-api for utility layer (default)', () => {
     const result = resolveProvider('code-summary');
-    expect(result.provider).toBe('antigravity');
+    expect(result.provider).toBe('claude-api');
     expect(result.source).toBe('layer'); // maps to 'utility' layer
   });
 
@@ -181,7 +181,7 @@ describe('AI Config — loadAIConfig', () => {
   it('returns default config when no file exists', () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     const config = loadAIConfig();
-    expect(config.defaultProvider).toBe('antigravity');
+    expect(config.defaultProvider).toBe('claude-api');
     expect(config.providerProfiles?.['native-codex']?.supportsImageGeneration).toBe(true);
     expect(config.providerProfiles?.['native-codex']?.imageGenerationModel).toBe('gpt-5.5');
   });

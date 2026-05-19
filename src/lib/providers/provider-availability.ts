@@ -1,4 +1,12 @@
 import type { AIProviderConfig, AIProviderId } from './types';
+import {
+  PROVIDER_LABELS,
+  PROVIDER_OPTIONS,
+  PROVIDER_REGISTRY,
+  type StoredApiKeyId,
+} from './provider-registry';
+
+export { PROVIDER_OPTIONS, PROVIDER_LABELS } from './provider-registry';
 
 export type ProviderOption = {
   value: AIProviderId;
@@ -10,30 +18,14 @@ export type SelectableProviderOption = ProviderOption & {
 };
 
 export type ProviderInventory = {
-  anthropic: { set: boolean };
-  openai: { set: boolean };
-  gemini: { set: boolean };
-  grok: { set: boolean };
+  [key in StoredApiKeyId]: { set: boolean };
+} & {
   providers: {
     codex: { installed: boolean };
     nativeCodex: { installed: boolean; loggedIn: boolean; authFilePath: string | null };
     claudeCode: { installed: boolean; loginDetected: boolean; command: string | null; installSource: string | null };
   };
 };
-
-export const PROVIDER_OPTIONS: ProviderOption[] = [
-  { value: 'antigravity', label: 'Antigravity (Native)' },
-  { value: 'native-codex', label: 'Codex Native (OAuth)' },
-  { value: 'claude-api', label: 'Claude API' },
-  { value: 'openai-api', label: 'OpenAI API' },
-  { value: 'gemini-api', label: 'Gemini API' },
-  { value: 'grok-api', label: 'Grok API' },
-  { value: 'custom', label: 'OpenAI Compatible / Custom' },
-];
-
-export const PROVIDER_LABELS = Object.fromEntries(
-  PROVIDER_OPTIONS.map((option) => [option.value, option.label]),
-) as Record<AIProviderId, string>;
 
 export type ProviderValidationIssue = {
   path: string;
@@ -62,23 +54,16 @@ export function isProviderTechnicallyAvailable(
   inventory: ProviderInventory | null | undefined,
   customProvider?: AIProviderConfig['customProvider'],
 ): boolean {
-  switch (providerId) {
-    case 'antigravity':
+  const provider = PROVIDER_REGISTRY[providerId];
+  switch (provider.availability) {
+    case 'always':
       return true;
-    case 'native-codex':
+    case 'oauth':
       return Boolean(inventory?.providers.nativeCodex.loggedIn);
-    case 'claude-api':
-      return Boolean(inventory?.anthropic.set);
-    case 'openai-api':
-      return Boolean(inventory?.openai.set);
-    case 'gemini-api':
-      return Boolean(inventory?.gemini.set);
-    case 'grok-api':
-      return Boolean(inventory?.grok.set);
     case 'custom':
       return isCustomProviderConfigured(customProvider);
-    default:
-      return false;
+    case 'api-key':
+      return Boolean(provider.storedApiKeyId && inventory?.[provider.storedApiKeyId].set);
   }
 }
 

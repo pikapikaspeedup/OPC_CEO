@@ -3,10 +3,11 @@ import path from 'path';
 import Database from 'better-sqlite3';
 
 import { GATEWAY_HOME } from '../agents/gateway-home';
+import { getGatewayServerRole } from '../gateway-role';
 import type { ProjectDefinition } from '../agents/project-types';
 import type { AgentRunState, ArtifactRef, RunStatus } from '../agents/group-types';
+import { resolvePrimaryConversationId } from '../agents/session-handle';
 import type { ScheduledJob } from '../agents/scheduler-types';
-import type { LocalProviderId } from '../local-provider-conversations';
 import type { Deliverable } from '../types';
 
 export interface LocalConversationRecord {
@@ -15,8 +16,14 @@ export interface LocalConversationRecord {
   workspace: string;
   stepCount: number;
   createdAt?: string;
-  provider?: LocalProviderId;
+  provider?: string;
   sessionHandle?: string;
+  providerSessions?: Record<string, {
+    provider: string;
+    sessionHandle: string;
+    updatedAt: string;
+    stepCount?: number;
+  }>;
 }
 
 export interface ConversationProjectionRecord extends LocalConversationRecord {
@@ -77,7 +84,17 @@ export interface DbPaginationWindow {
 
 const globalForGatewayDb = globalThis as unknown as {
   __AG_GATEWAY_DB__?: Database.Database;
+  __AG_GATEWAY_DB_MODE__?: 'readonly' | 'readwrite';
 };
+
+function resolveGatewayDbMode(env: NodeJS.ProcessEnv = process.env): 'readonly' | 'readwrite' {
+  const explicit = env.AG_STORAGE_MODE?.trim().toLowerCase();
+  if (explicit === 'readonly' || explicit === 'readwrite') {
+    return explicit;
+  }
+  const role = getGatewayServerRole(env);
+  return role === 'api' || role === 'all' ? 'readwrite' : 'readonly';
+}
 
 function hasColumn(db: Database.Database, table: string, column: string): boolean {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -724,17 +741,38 @@ function initSchema(db: Database.Database): void {
 }
 
 export function getGatewayDb(): Database.Database {
-  if (globalForGatewayDb.__AG_GATEWAY_DB__) {
+  const mode = resolveGatewayDbMode();
+  if (globalForGatewayDb.__AG_GATEWAY_DB__ && globalForGatewayDb.__AG_GATEWAY_DB_MODE__ === mode) {
     return globalForGatewayDb.__AG_GATEWAY_DB__;
+  }
+
+  if (globalForGatewayDb.__AG_GATEWAY_DB__) {
+    try {
+      globalForGatewayDb.__AG_GATEWAY_DB__.close();
+    } catch {
+      // Ignore stale handle close errors during hot reload / tests.
+    }
+    globalForGatewayDb.__AG_GATEWAY_DB__ = undefined;
+    globalForGatewayDb.__AG_GATEWAY_DB_MODE__ = undefined;
   }
 
   if (!existsSync(GATEWAY_HOME)) {
     mkdirSync(GATEWAY_HOME, { recursive: true });
   }
 
-  const db = new Database(DB_FILE);
-  initSchema(db);
+  if (mode === 'readonly' && !existsSync(DB_FILE)) {
+    throw new Error('Gateway storage is unavailable in read-only mode before a writable backend initializes it.');
+  }
+
+  const db = mode === 'readonly'
+    ? new Database(DB_FILE, { readonly: true, fileMustExist: true })
+    : new Database(DB_FILE);
+
+  if (mode === 'readwrite') {
+    initSchema(db);
+  }
   globalForGatewayDb.__AG_GATEWAY_DB__ = db;
+  globalForGatewayDb.__AG_GATEWAY_DB_MODE__ = mode;
   return db;
 }
 
@@ -796,120 +834,123 @@ export function getProjectRecord(projectId: string): ProjectDefinition | null {
 export function upsertRunRecord(run: AgentRunState): void {
   const db = getGatewayDb();
   const updatedAt = run.finishedAt || run.startedAt || new Date().toISOString();
-  db.prepare(`
-    INSERT INTO runs(
-      run_id, project_id, workspace, stage_id, pipeline_stage_id, pipeline_stage_index,
-      status, provider, executor_kind, created_at, started_at, finished_at,
-      updated_at, session_handle, child_conversation_id, review_outcome, scheduler_job_id, payload_json
-    )
-    VALUES (
-      @run_id, @project_id, @workspace, @stage_id, @pipeline_stage_id, @pipeline_stage_index,
-      @status, @provider, @executor_kind, @created_at, @started_at, @finished_at,
-      @updated_at, @session_handle, @child_conversation_id, @review_outcome, @scheduler_job_id, @payload_json
-    )
-    ON CONFLICT(run_id) DO UPDATE SET
-      project_id = excluded.project_id,
-      workspace = excluded.workspace,
-      stage_id = excluded.stage_id,
-      pipeline_stage_id = excluded.pipeline_stage_id,
-      pipeline_stage_index = excluded.pipeline_stage_index,
-      status = excluded.status,
-      provider = excluded.provider,
-      executor_kind = excluded.executor_kind,
-      created_at = excluded.created_at,
-      started_at = excluded.started_at,
-      finished_at = excluded.finished_at,
-      updated_at = excluded.updated_at,
-      session_handle = excluded.session_handle,
-      child_conversation_id = excluded.child_conversation_id,
-      review_outcome = excluded.review_outcome,
-      scheduler_job_id = excluded.scheduler_job_id,
-      payload_json = excluded.payload_json
-  `).run({
-    run_id: run.runId,
-    project_id: run.projectId || null,
-    workspace: run.workspace,
-    stage_id: run.stageId,
-    pipeline_stage_id: run.pipelineStageId || null,
-    pipeline_stage_index: run.pipelineStageIndex ?? null,
-    status: run.status,
-    provider: run.provider || null,
-    executor_kind: run.executorKind || null,
-    created_at: run.createdAt,
-    started_at: run.startedAt || null,
-    finished_at: run.finishedAt || null,
-    updated_at: updatedAt,
-    session_handle: run.sessionProvenance?.handle || null,
-    child_conversation_id: run.childConversationId || null,
-    review_outcome: run.reviewOutcome || null,
-    scheduler_job_id: run.triggerContext?.schedulerJobId || null,
-    payload_json: JSON.stringify(run),
-  });
+  db.transaction((nextRun: AgentRunState, nextUpdatedAt: string) => {
+    db.prepare(`
+      INSERT INTO runs(
+        run_id, project_id, workspace, stage_id, pipeline_stage_id, pipeline_stage_index,
+        status, provider, executor_kind, created_at, started_at, finished_at,
+        updated_at, session_handle, child_conversation_id, review_outcome, scheduler_job_id, payload_json
+      )
+      VALUES (
+        @run_id, @project_id, @workspace, @stage_id, @pipeline_stage_id, @pipeline_stage_index,
+        @status, @provider, @executor_kind, @created_at, @started_at, @finished_at,
+        @updated_at, @session_handle, @child_conversation_id, @review_outcome, @scheduler_job_id, @payload_json
+      )
+      ON CONFLICT(run_id) DO UPDATE SET
+        project_id = excluded.project_id,
+        workspace = excluded.workspace,
+        stage_id = excluded.stage_id,
+        pipeline_stage_id = excluded.pipeline_stage_id,
+        pipeline_stage_index = excluded.pipeline_stage_index,
+        status = excluded.status,
+        provider = excluded.provider,
+        executor_kind = excluded.executor_kind,
+        created_at = excluded.created_at,
+        started_at = excluded.started_at,
+        finished_at = excluded.finished_at,
+        updated_at = excluded.updated_at,
+        session_handle = excluded.session_handle,
+        child_conversation_id = excluded.child_conversation_id,
+        review_outcome = excluded.review_outcome,
+        scheduler_job_id = excluded.scheduler_job_id,
+        payload_json = excluded.payload_json
+    `).run({
+      run_id: nextRun.runId,
+      project_id: nextRun.projectId || null,
+      workspace: nextRun.workspace,
+      stage_id: nextRun.stageId,
+      pipeline_stage_id: nextRun.pipelineStageId || null,
+      pipeline_stage_index: nextRun.pipelineStageIndex ?? null,
+      status: nextRun.status,
+      provider: nextRun.provider || null,
+      executor_kind: nextRun.executorKind || null,
+      created_at: nextRun.createdAt,
+      started_at: nextRun.startedAt || null,
+      finished_at: nextRun.finishedAt || null,
+      updated_at: nextUpdatedAt,
+      session_handle: nextRun.sessionProvenance?.handle || null,
+      child_conversation_id: nextRun.childConversationId || null,
+      review_outcome: nextRun.reviewOutcome || null,
+      scheduler_job_id: nextRun.triggerContext?.schedulerJobId || null,
+      payload_json: JSON.stringify(nextRun),
+    });
 
-  const linkInsert = db.prepare(`
-    INSERT OR REPLACE INTO run_conversation_links(link_id, run_id, conversation_id, session_handle, relation_kind, role_id, created_at)
-    VALUES (@link_id, @run_id, @conversation_id, @session_handle, @relation_kind, @role_id, @created_at)
-  `);
-  const clearLinks = db.prepare(`DELETE FROM run_conversation_links WHERE run_id = ?`);
-  clearLinks.run(run.runId);
+    const linkInsert = db.prepare(`
+      INSERT OR REPLACE INTO run_conversation_links(link_id, run_id, conversation_id, session_handle, relation_kind, role_id, created_at)
+      VALUES (@link_id, @run_id, @conversation_id, @session_handle, @relation_kind, @role_id, @created_at)
+    `);
+    const clearLinks = db.prepare(`DELETE FROM run_conversation_links WHERE run_id = ?`);
+    clearLinks.run(nextRun.runId);
 
-  const createdAt = run.createdAt;
-  const sessionHandle = run.sessionProvenance?.handle || null;
-  const addLink = (input: {
-    conversationId?: string | null;
-    sessionHandle?: string | null;
-    relationKind: string;
-    roleId?: string | null;
-  }) => {
-    if (!input.conversationId && !input.sessionHandle) {
-      return;
+    const createdAt = nextRun.createdAt;
+    const sessionHandle = nextRun.sessionProvenance?.handle || null;
+    const primaryConversationId = resolvePrimaryConversationId(nextRun) || null;
+    const addLink = (input: {
+      conversationId?: string | null;
+      sessionHandle?: string | null;
+      relationKind: string;
+      roleId?: string | null;
+    }) => {
+      if (!input.conversationId && !input.sessionHandle) {
+        return;
+      }
+      const linkId = [
+        nextRun.runId,
+        input.relationKind,
+        input.roleId || '',
+        input.conversationId || '',
+        input.sessionHandle || '',
+      ].join(':');
+      linkInsert.run({
+        link_id: linkId,
+        run_id: nextRun.runId,
+        conversation_id: input.conversationId || null,
+        session_handle: input.sessionHandle || null,
+        relation_kind: input.relationKind,
+        role_id: input.roleId || null,
+        created_at: createdAt,
+      });
+    };
+
+    addLink({ conversationId: primaryConversationId, sessionHandle, relationKind: 'primary' });
+    addLink({ conversationId: nextRun.childConversationId || null, sessionHandle, relationKind: 'child' });
+    addLink({ sessionHandle, relationKind: 'session-handle' });
+    if (nextRun.supervisorConversationId) {
+      addLink({ conversationId: nextRun.supervisorConversationId, sessionHandle, relationKind: 'supervisor' });
     }
-    const linkId = [
-      run.runId,
-      input.relationKind,
-      input.roleId || '',
-      input.conversationId || '',
-      input.sessionHandle || '',
-    ].join(':');
-    linkInsert.run({
-      link_id: linkId,
-      run_id: run.runId,
-      conversation_id: input.conversationId || null,
-      session_handle: input.sessionHandle || null,
-      relation_kind: input.relationKind,
-      role_id: input.roleId || null,
-      created_at: createdAt,
-    });
-  };
+    for (const role of nextRun.roles || []) {
+      addLink({
+        conversationId: role.childConversationId || null,
+        sessionHandle,
+        relationKind: 'role',
+        roleId: role.roleId,
+      });
+    }
 
-  addLink({ conversationId: run.activeConversationId || null, sessionHandle, relationKind: 'primary' });
-  addLink({ conversationId: run.childConversationId || null, sessionHandle, relationKind: 'child' });
-  addLink({ sessionHandle, relationKind: 'session-handle' });
-  if (run.supervisorConversationId) {
-    addLink({ conversationId: run.supervisorConversationId, sessionHandle, relationKind: 'supervisor' });
-  }
-  for (const role of run.roles || []) {
-    addLink({
-      conversationId: role.childConversationId || null,
-      sessionHandle,
-      relationKind: 'role',
-      roleId: role.roleId,
-    });
-  }
-
-  db.prepare(`DELETE FROM conversation_visibility WHERE hidden_reason = 'run-link'`).run();
-  db.prepare(`
-    INSERT OR REPLACE INTO conversation_visibility(conversation_id, is_hidden, hidden_reason, source_run_id, updated_at)
-    SELECT
-      conversation_id,
-      1,
-      'run-link',
-      MIN(run_id),
-      ?
-    FROM run_conversation_links
-    WHERE relation_kind IN ('child', 'role') AND conversation_id IS NOT NULL
-    GROUP BY conversation_id
-  `).run(new Date().toISOString());
+    db.prepare(`DELETE FROM conversation_visibility WHERE hidden_reason = 'run-link'`).run();
+    db.prepare(`
+      INSERT OR REPLACE INTO conversation_visibility(conversation_id, is_hidden, hidden_reason, source_run_id, updated_at)
+      SELECT
+        conversation_id,
+        1,
+        'run-link',
+        MIN(run_id),
+        ?
+      FROM run_conversation_links
+      WHERE relation_kind IN ('child', 'role') AND conversation_id IS NOT NULL
+      GROUP BY conversation_id
+    `).run(new Date().toISOString());
+  })(run, updatedAt);
 }
 
 export function listRunRecords(): AgentRunState[] {
@@ -1164,6 +1205,7 @@ function normalizeConversationProjectionInput(
     primaryRunId: input.primaryRunId !== undefined ? input.primaryRunId : existing?.primaryRunId,
     isLocalOnly: input.isLocalOnly ?? existing?.isLocalOnly ?? false,
     mtimeMs: input.mtimeMs ?? existing?.mtimeMs,
+    providerSessions: input.providerSessions ?? existing?.providerSessions,
   };
 }
 
@@ -1236,37 +1278,40 @@ export function upsertConversationProjection(
 
 export function upsertConversationRecord(record: LocalConversationRecord): void {
   const db = getGatewayDb();
-  db.prepare(`
-    INSERT INTO conversation_sessions(conversation_id, workspace, title, step_count, created_at, payload_json)
-    VALUES (@conversation_id, @workspace, @title, @step_count, @created_at, @payload_json)
-    ON CONFLICT(conversation_id) DO UPDATE SET
-      workspace = excluded.workspace,
-      title = excluded.title,
-      step_count = excluded.step_count,
-      created_at = excluded.created_at,
-      payload_json = excluded.payload_json
-  `).run({
-    conversation_id: record.id,
-    workspace: record.workspace || null,
-    title: record.title,
-    step_count: record.stepCount,
-    created_at: record.createdAt || null,
-    payload_json: JSON.stringify(record),
-  });
+  db.transaction((nextRecord: LocalConversationRecord) => {
+    db.prepare(`
+      INSERT INTO conversation_sessions(conversation_id, workspace, title, step_count, created_at, payload_json)
+      VALUES (@conversation_id, @workspace, @title, @step_count, @created_at, @payload_json)
+      ON CONFLICT(conversation_id) DO UPDATE SET
+        workspace = excluded.workspace,
+        title = excluded.title,
+        step_count = excluded.step_count,
+        created_at = excluded.created_at,
+        payload_json = excluded.payload_json
+    `).run({
+      conversation_id: nextRecord.id,
+      workspace: nextRecord.workspace || null,
+      title: nextRecord.title,
+      step_count: nextRecord.stepCount,
+      created_at: nextRecord.createdAt || null,
+      payload_json: JSON.stringify(nextRecord),
+    });
 
-  upsertConversationProjection({
-    id: record.id,
-    title: record.title,
-    workspace: record.workspace,
-    stepCount: record.stepCount,
-    createdAt: record.createdAt,
-    provider: record.provider,
-    sessionHandle: record.sessionHandle,
-    updatedAt: new Date().toISOString(),
-    lastActivityAt: record.createdAt || new Date().toISOString(),
-    sourceKind: record.provider ? 'local-provider' : 'local-cache',
-    isLocalOnly: Boolean(record.provider),
-  });
+    upsertConversationProjection({
+      id: nextRecord.id,
+      title: nextRecord.title,
+      workspace: nextRecord.workspace,
+      stepCount: nextRecord.stepCount,
+      createdAt: nextRecord.createdAt,
+      provider: nextRecord.provider,
+      sessionHandle: nextRecord.sessionHandle,
+      providerSessions: nextRecord.providerSessions,
+      updatedAt: new Date().toISOString(),
+      lastActivityAt: nextRecord.createdAt || new Date().toISOString(),
+      sourceKind: nextRecord.provider ? 'local-provider' : 'local-cache',
+      isLocalOnly: Boolean(nextRecord.provider),
+    });
+  })(record);
 }
 
 export function listConversationRecords(): LocalConversationRecord[] {
@@ -1278,6 +1323,7 @@ export function listConversationRecords(): LocalConversationRecord[] {
     createdAt: record.createdAt,
     provider: record.provider,
     sessionHandle: record.sessionHandle,
+    providerSessions: record.providerSessions,
   }));
 }
 
@@ -1292,6 +1338,7 @@ export function getConversationRecordById(conversationId: string): LocalConversa
     createdAt: record.createdAt,
     provider: record.provider,
     sessionHandle: record.sessionHandle,
+    providerSessions: record.providerSessions,
   };
 }
 
@@ -1315,6 +1362,7 @@ export function findConversationRecordBySessionHandle(sessionHandle: string): Lo
     createdAt: parsed.createdAt,
     provider: parsed.provider,
     sessionHandle: parsed.sessionHandle,
+    providerSessions: parsed.providerSessions,
   };
 }
 

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tempGatewayHome = path.join('/tmp', `ag-gateway-db-${process.pid}-${Date.now()}`);
 let previousGatewayHome: string | undefined;
+let previousRole: string | undefined;
+let previousStorageMode: string | undefined;
 
 async function loadModule() {
   return import('./gateway-db');
@@ -12,20 +14,34 @@ async function loadModule() {
 describe('gateway-db conversation projections', () => {
   beforeEach(() => {
     previousGatewayHome = process.env.AG_GATEWAY_HOME;
+    previousRole = process.env.AG_ROLE;
+    previousStorageMode = process.env.AG_STORAGE_MODE;
     process.env.AG_GATEWAY_HOME = tempGatewayHome;
     delete (globalThis as { __AG_GATEWAY_DB__?: unknown }).__AG_GATEWAY_DB__;
+    delete (globalThis as { __AG_GATEWAY_DB_MODE__?: unknown }).__AG_GATEWAY_DB_MODE__;
     vi.resetModules();
     fs.rmSync(tempGatewayHome, { recursive: true, force: true });
   });
 
   afterEach(() => {
     delete (globalThis as { __AG_GATEWAY_DB__?: unknown }).__AG_GATEWAY_DB__;
+    delete (globalThis as { __AG_GATEWAY_DB_MODE__?: unknown }).__AG_GATEWAY_DB_MODE__;
     vi.resetModules();
     fs.rmSync(tempGatewayHome, { recursive: true, force: true });
     if (previousGatewayHome === undefined) {
       delete process.env.AG_GATEWAY_HOME;
     } else {
       process.env.AG_GATEWAY_HOME = previousGatewayHome;
+    }
+    if (previousRole === undefined) {
+      delete process.env.AG_ROLE;
+    } else {
+      process.env.AG_ROLE = previousRole;
+    }
+    if (previousStorageMode === undefined) {
+      delete process.env.AG_STORAGE_MODE;
+    } else {
+      process.env.AG_STORAGE_MODE = previousStorageMode;
     }
   });
 
@@ -101,6 +117,43 @@ describe('gateway-db conversation projections', () => {
       'cascade-1',
       'cascade-hidden',
     ]);
+  });
+
+  it('persists provider runtime sessions in conversation projections', async () => {
+    const db = await loadModule();
+
+    db.upsertConversationRecord({
+      id: 'conversation-1',
+      title: 'Provider Neutral Conversation',
+      workspace: 'file:///tmp/workspace',
+      stepCount: 2,
+      createdAt: '2026-05-18T10:00:00.000Z',
+      provider: 'claude-api',
+      sessionHandle: 'claude-api-session-1',
+      providerSessions: {
+        'native-codex': {
+          provider: 'native-codex',
+          sessionHandle: 'native-codex-session-1',
+          updatedAt: '2026-05-18T10:00:00.000Z',
+          stepCount: 2,
+        },
+        'claude-api': {
+          provider: 'claude-api',
+          sessionHandle: 'claude-api-session-1',
+          updatedAt: '2026-05-18T10:01:00.000Z',
+          stepCount: 2,
+        },
+      },
+    });
+
+    expect(db.getConversationRecordById('conversation-1')?.providerSessions).toEqual(expect.objectContaining({
+      'native-codex': expect.objectContaining({ sessionHandle: 'native-codex-session-1' }),
+      'claude-api': expect.objectContaining({ sessionHandle: 'claude-api-session-1' }),
+    }));
+    expect(db.listConversationProjections({ workspace: 'file:///tmp/workspace' })[0]?.providerSessions).toEqual(expect.objectContaining({
+      'native-codex': expect.objectContaining({ sessionHandle: 'native-codex-session-1' }),
+      'claude-api': expect.objectContaining({ sessionHandle: 'claude-api-session-1' }),
+    }));
   });
 
   it('counts and paginates filtered run records from SQLite', async () => {
@@ -219,5 +272,36 @@ describe('gateway-db conversation projections', () => {
     db.deleteScheduledJobRecord('job-1');
 
     expect(db.listScheduledJobRecords()).toEqual([]);
+  });
+
+  it('opens storage read-only in web role after a writable backend initializes it', async () => {
+    process.env.AG_ROLE = 'api';
+    const writableDb = await loadModule();
+    writableDb.upsertConversationProjection({
+      id: 'conv-1',
+      title: 'Writable Seed',
+      workspace: 'file:///tmp/workspace',
+      stepCount: 1,
+      updatedAt: '2026-04-20T10:00:00.000Z',
+      sourceKind: 'local-cache',
+      isLocalOnly: false,
+    });
+
+    delete (globalThis as { __AG_GATEWAY_DB__?: unknown }).__AG_GATEWAY_DB__;
+    delete (globalThis as { __AG_GATEWAY_DB_MODE__?: unknown }).__AG_GATEWAY_DB_MODE__;
+    vi.resetModules();
+
+    process.env.AG_ROLE = 'web';
+    const readonlyDb = await loadModule();
+    expect(readonlyDb.listConversationProjections({ includeHidden: true }).map((row) => row.id)).toEqual(['conv-1']);
+    expect(() => readonlyDb.upsertConversationProjection({
+      id: 'conv-2',
+      title: 'Should Fail',
+      workspace: 'file:///tmp/workspace',
+      stepCount: 1,
+      updatedAt: '2026-04-20T10:01:00.000Z',
+      sourceKind: 'local-cache',
+      isLocalOnly: false,
+    })).toThrow();
   });
 });
