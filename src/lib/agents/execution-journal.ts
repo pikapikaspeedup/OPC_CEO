@@ -1,9 +1,9 @@
 /**
  * Execution Journal — V5.2a
  *
- * Records every control-flow decision made during pipeline execution:
- * node activations, condition evaluations, branch selections,
- * loop iterations and checkpoint creations.
+ * Records node/condition execution facts during pipeline execution:
+ * node activations, node completions, node failures,
+ * and condition evaluations.
  *
  * Persistence: one JSONL file per project under
  *   ~/.gemini/antigravity/gateway/projects/{projectId}/journal.jsonl
@@ -24,13 +24,7 @@ export type JournalEventType =
   | 'node:activated'
   | 'node:completed'
   | 'node:failed'
-  | 'condition:evaluated'
-  | 'gate:decided'
-  | 'switch:routed'
-  | 'loop:iteration'
-  | 'loop:terminated'
-  | 'checkpoint:created'
-  | 'checkpoint:restored';
+  | 'condition:evaluated';
 
 export interface JournalEntry {
   /** Auto-generated entry ID */

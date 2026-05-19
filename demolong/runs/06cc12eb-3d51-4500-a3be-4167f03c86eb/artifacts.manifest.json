@@ -1,0 +1,19 @@
+{
+  "runId": "06cc12eb-3d51-4500-a3be-4167f03c86eb",
+  "executionTarget": {
+    "kind": "prompt",
+    "promptAssetRefs": [
+      "/platform_engineering_story_candidates"
+    ]
+  },
+  "items": [
+    {
+      "id": "f571e78a-a967-4cb1-9471-30d50115c361",
+      "kind": "prompt.story-top-candidates",
+      "title": "Story Top Candidates",
+      "path": "story-top-candidates.json",
+      "format": "json",
+      "sourceRunId": "06cc12eb-3d51-4500-a3be-4167f03c86eb"
+    }
+  ]
+}

@@ -1,3 +1,667 @@
+## 任务：Provider 无关会话机制优化
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-18
+
+### 本轮实施
+
+已完成：
+
+1. 将 Gateway 本地对话身份改为 provider-neutral：
+   - 新建本地会话使用稳定业务 ID `conversation-*`
+   - Provider runtime session handle 改为写入 `providerSessions[provider]`
+   - `provider` 字段只记录最近一次完成消息使用的 provider，不再作为会话身份
+2. 收口发送与切换 Provider 机制：
+   - `/api/conversations/:id/send` 每轮按请求 provider 或当前 execution provider 配置选择运行后端
+   - 切换 provider 后保留同一个业务 conversation id，并为新 provider 建立/复用独立 runtime session
+   - Canonical steps 写入业务 conversation id，`/steps` 优先读取业务 transcript
+3. 补齐控制链路的 runtime handle 解析：
+   - `cancel` 对 API-backed 请求按业务 conversation id 取消
+   - `revert` / `revert-preview` 同步处理业务 transcript 与 provider session transcript
+   - `steps` / `files` / `proceed` / `cancel` / `revert` 对 Antigravity provider-neutral conversation 使用 `providerSessions.antigravity.sessionHandle` 调 gRPC
+4. 文档同步：
+   - 更新 `ARCHITECTURE.md`
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+   - 新增 `docs/design/provider-neutral-conversations-2026-05-18.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/cancel/route.test.ts' 'src/app/api/conversations/[id]/revert/route.test.ts' src/lib/storage/gateway-db.test.ts src/lib/ceo-conversation-selection.test.ts
+```
+
+结果：7 个测试文件、29 个测试全部通过。
+
+```bash
+npx eslint src/lib/conversation-runtime.ts src/lib/storage/gateway-db.ts src/lib/storage/gateway-db.test.ts src/lib/bridge/statedb.ts src/app/api/conversations/route.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/cancel/route.ts' 'src/app/api/conversations/[id]/cancel/route.test.ts' 'src/app/api/conversations/[id]/revert/route.ts' 'src/app/api/conversations/[id]/revert/route.test.ts' 'src/app/api/conversations/[id]/revert-preview/route.ts' 'src/app/api/conversations/[id]/proceed/route.ts' 'src/app/api/conversations/[id]/files/route.ts' src/lib/types.ts
+```
+
+结果：0 errors。
+
+```bash
+git diff --check -- src/lib/conversation-runtime.ts src/lib/storage/gateway-db.ts src/lib/storage/gateway-db.test.ts src/lib/bridge/statedb.ts src/app/api/conversations/route.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.ts' 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/cancel/route.ts' 'src/app/api/conversations/[id]/cancel/route.test.ts' 'src/app/api/conversations/[id]/revert/route.ts' 'src/app/api/conversations/[id]/revert/route.test.ts' 'src/app/api/conversations/[id]/revert-preview/route.ts' 'src/app/api/conversations/[id]/proceed/route.ts' 'src/app/api/conversations/[id]/files/route.ts' src/lib/types.ts docs/guide/gateway-api.md docs/guide/cli-api-reference.md ARCHITECTURE.md docs/design/provider-neutral-conversations-2026-05-18.md
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮变更集中在 API / runtime conversation 机制，已由 TypeScript、route 单测、SQLite 持久化单测与 lint 覆盖；未启动页面浏览器验收。
+
+## 任务：CEO 对话 Provider 默认选择修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-18
+
+### 本轮实施
+
+已完成：
+
+1. 完成 Antigravity 强依赖盘点：
+   - 确认当前真实 `ai-config.json` 已是 `native-codex`
+   - 确认 CEO 对话误看成默认 Antigravity 的根因是自动复用最新 `antigravity-live` 历史线程，而不是 Provider 配置读取错误
+   - 研究记录写入 `docs/research/antigravity-provider-dependency-audit-2026-05-18.md`
+2. 修复 CEO 默认线程选择：
+   - 新增 `src/lib/ceo-conversation-selection.ts`
+   - CEO 入口读取当前 execution provider 后，只自动进入同 Provider 的 CEO 线程
+   - 非 Antigravity 配置下不再默认打开旧 Antigravity IDE live 线程；没有同 Provider 线程时停在欢迎态，下一条消息会创建当前配置 Provider 的新线程
+3. 增加回归测试：
+   - `src/lib/ceo-conversation-selection.test.ts` 覆盖旧 Antigravity 线程在前、本地 Provider 线程在后的选择逻辑
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/ceo-conversation-selection.test.ts src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts'
+```
+
+结果：3 个测试文件、12 个测试全部通过。
+
+```bash
+npx eslint src/app/page.tsx src/lib/ceo-conversation-selection.ts src/lib/ceo-conversation-selection.test.ts
+```
+
+结果：0 errors。
+
+真实状态验证：
+
+```bash
+sqlite3 "$HOME/.gemini/antigravity/gateway/storage.sqlite" "select conversation_id, coalesce(provider,''), source_kind, updated_at from conversations where workspace='file:///Users/darrel/.gemini/antigravity/ceo-workspace' order by datetime(coalesce(last_activity_at, updated_at, created_at, '1970-01-01T00:00:00.000Z')) desc limit 5;"
+```
+
+结果：当前最新 CEO 线程为 `local-native-codex-*`，旧 `antigravity-live` 线程仍在历史列表但不会在 `native-codex` 配置下被默认选中。
+
+## 任务：部门规则编辑入口运行时修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-14
+
+### 本轮实施
+
+已完成：
+
+1. 修复 split control-plane 路由遗漏：
+   - `/api/departments/rules` 现在已注册到 `src/server/control-plane/server.ts`
+   - `GET / PUT / DELETE` 均复用现有 departments rules handler
+2. 改善部门设置里的规则可发现性：
+   - `Prompt 预览` 区块增加 `编辑规则` 动作，可直接跳到 `规则` tab
+   - 规则加载失败时在预览区显示错误，不再误导为“当前没有本地规则”
+3. 增加回归测试：
+   - `src/app/api/departments/rules/route.test.ts` 覆盖 split control-plane route table 注册，防止真实运行时再次 404
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/app/api/departments/rules/route.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：2 个测试文件、6 个测试全部通过。
+
+```bash
+npx eslint src/server/control-plane/server.ts src/app/api/departments/rules/route.test.ts src/components/department-setup-dialog.tsx
+```
+
+结果：0 errors；`department-setup-dialog.tsx` 保留 2 个既有 `<img>` warning。
+
+真实 HTTP 验证：
+
+```bash
+GET http://localhost:3000/api/departments/rules?workspace=file:///Users/darrel/Documents/Antigravity-Mobility-CLI
+GET http://localhost:3101/api/departments/rules?workspace=file:///Users/darrel/Documents/Antigravity-Mobility-CLI
+```
+
+结果：两个端口均返回 `200 OK`，并列出 `.agents/rules/agent.md` 与 `.agents/rules/rules.md` legacy 规则。
+
+## 任务：部门 Prompt 配置旅程补齐
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-13
+
+### 本轮实施
+
+已完成：
+
+1. 补齐部门本地规则 API：
+   - 新增 `GET /api/departments/rules` 合并读取 `.department/rules/*.md` 与 legacy `.agents/rules/*.md`
+   - 新增 `PUT /api/departments/rules` 只写 `.department/rules/<name>.md`
+   - 新增 `DELETE /api/departments/rules` 只删除 `.department/rules`，legacy-only 规则保持只读
+2. 补齐部门设置可视化配置：
+   - `DepartmentSetupDialog` 增加 `规则` tab，可新增、编辑、删除部门主源规则
+   - legacy `.agents/rules` 规则可见，编辑时创建 `.department/rules` override
+   - `基本信息` tab 增加 `Prompt 预览`，展示当前草稿的 `Department Context` 与本地规则摘要
+3. 文档同步：
+   - 更新 `ARCHITECTURE.md` API 表
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/app/api/departments/route.test.ts src/app/api/departments/rules/route.test.ts
+```
+
+结果：2 个测试文件、8 个测试全部通过。
+
+```bash
+npx eslint src/server/control-plane/routes/departments.ts src/app/api/departments/rules/route.ts src/app/api/departments/rules/route.test.ts src/lib/api.ts src/lib/types.ts src/components/department-setup-dialog.tsx
+```
+
+结果：0 errors；`department-setup-dialog.tsx` 保留 2 个既有 `<img>` warning。
+
+## 任务：Prompt Composer 聚焦改造验收修复
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-12
+
+### 本轮实施
+
+已完成：
+
+1. 收口 workflow runtime context 缓存生命周期：
+   - prompt run 正常 finalize、启动失败、取消时都会清理对应 runId 的 prepared context cache
+   - 保留单 run 内多次 compose 共享上下文的简单机制，不新增独立调度或 PromptComposer 子系统
+2. 收口 builtin scheduler job 行为：
+   - Story Top builtin job ensure 保留用户可改字段 `cronExpression / timeZone / enabled`
+   - realign 时保留 `lastRunAt / lastRunResult / lastRunError`
+   - builtin job 删除保护下沉到 scheduler 核心删除路径，HTTP DELETE 复用同一判断并返回 `BUILTIN_JOB_PROTECTED`
+3. 修复相关回归测试：
+   - `group-runtime` workflow content 读取断言对齐 `stripFrontmatter: true`
+   - 新增 cache 清理、builtin job realign、builtin DELETE 保护测试
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npm run test -- src/lib/agents/workflow-runtime-hooks.test.ts src/lib/agents/scheduler.test.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/group-runtime.test.ts 'src/app/api/scheduler/jobs/[id]/route.test.ts' src/app/api/scheduler/jobs/route.test.ts
+```
+
+结果：6 个测试文件、50 个测试全部通过。
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/lib/agents/prompt-executor.ts src/lib/agents/scheduler.ts 'src/app/api/scheduler/jobs/[id]/route.ts' 'src/app/api/scheduler/jobs/[id]/route.test.ts' src/app/api/scheduler/jobs/route.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/scheduler.test.ts src/lib/agents/workflow-runtime-hooks.test.ts
+```
+
+## 任务：业务能力进化 Crystallizer 迁移到 evolution 主线
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. 将旧 Phase 5 Crystallizer 的业务能力进化口径迁入 `src/lib/evolution/*`：
+   - `EvolutionProposal.kind` 扩展为 `sop / workflow / skill / script / rule`
+   - `EvolutionProposal.evidence.source` 扩展为 `knowledge / memory-candidate / run-capsules / repeated-runs`
+   - `generateEvolutionProposals()` 现在可从 `MemoryCandidate`、`KnowledgeAsset`、`RunCapsule` 聚类和 repeated prompt runs 生成 proposal
+2. 发布路径补齐业务资产落点：
+   - `workflow` 发布到 canonical workflow
+   - `skill` 发布到 canonical skill
+   - `rule` 发布到 canonical rule
+   - `script` 发布到 canonical workflow script
+   - `sop` 发布为 active `KnowledgeAsset(pattern)`
+3. 保持边界清晰：
+   - `/api/evolution/proposals/*` 是业务能力进化主线
+   - `/api/company/growth/*` 继续只是历史 GET / POST 410 兼容层
+   - `self-improvement-*` 仍只负责软件自身改进，不替代业务能力进化
+4. 文档同步：
+   - 更新 `ARCHITECTURE.md`
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+   - 更新 `docs/guide/agent-user-guide.md`
+   - 更新相关 design / project follow-up 文档
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/evolution/__tests__/generator.test.ts src/lib/evolution/__tests__/evaluator.test.ts src/lib/evolution/__tests__/publisher.test.ts src/app/api/evolution/proposals/route.test.ts src/app/api/evolution/proposals/generate/route.test.ts 'src/app/api/evolution/proposals/[id]/publish/route.test.ts' src/lib/company-kernel/memory-promotion.test.ts
+```
+
+结果：7 个测试文件、15 个测试全部通过。
+
+```bash
+npx eslint src/lib/evolution/contracts.ts src/lib/evolution/generator.ts src/lib/evolution/publisher.ts src/lib/evolution/__tests__/generator.test.ts src/lib/evolution/__tests__/publisher.test.ts src/app/api/evolution/proposals/route.ts src/lib/types.ts src/lib/api.ts
+```
+
+## 任务：架构收敛第七轮（growth write bypass final trim）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+> **复核补充**：本轮已清零旧 `growth-*` 写旁路，但不代表业务能力进化由 `self-improvement-*` 替代。业务能力进化由 `src/lib/evolution/*` 与 `/api/evolution/proposals/*` 承载；旧 `growth-*` 的 Phase 5 Crystallizer 能力已在后续任务迁入 `evolution/*`，不恢复为混名主线。详见 `docs/design/business-evolution-growth-impact-check-2026-05-10.md`。
+
+### 本轮实施
+
+已完成：
+
+1. 清零退役 growth 的残余写旁路：
+   - 删除 `src/lib/company-kernel/growth-evaluator.ts`
+   - 删除 `src/lib/company-kernel/growth-observer.ts`
+   - 删除 `src/lib/company-kernel/growth-publisher.ts`
+   - `src/lib/approval/dispatcher.ts` 不再动态执行旧 `publish-growth-proposal` / `reject-growth-proposal` callback，只记录 retired warning
+2. 收窄历史兼容读面：
+   - 新增 `src/lib/company-kernel/growth-observation-store.ts`，只保留 observations 历史读取
+   - `src/lib/company-kernel/growth-proposal-store.ts` 只保留 `count/get/list`，删除 `upsert/patch/findByTarget`
+   - `/api/company/growth/observations` 的 `POST` 统一返回 `410 Gone`，不再本地 observe 或回写 proposal 状态
+3. 测试 fixture 去生产写入口：
+   - 相关测试改为直接 seed 历史 SQLite fixture，不再依赖 `growthStore.upsertGrowthProposal()`
+4. 文档同步：
+   - 更新 `docs/design/architecture-review-2026-05-09.md`
+   - 更新 `docs/project/architecture-review-2026-05-09-followup.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/app/api/company/operating-kernel.route.test.ts src/lib/company-kernel/ceo-decision-control.test.ts
+```
+
+结果：2 个测试文件、8 个测试全部通过。
+
+```bash
+npx eslint src/lib/approval/dispatcher.ts src/lib/company-kernel/growth-proposal-store.ts src/lib/company-kernel/growth-observation-store.ts src/lib/company-kernel/index.ts src/app/api/company/growth/observations/route.ts src/app/api/company/operating-kernel.route.test.ts src/lib/company-kernel/ceo-decision-control.test.ts
+```
+
+## 任务：架构收敛第六轮（growth retired surface removal）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. 删除退役 growth 的前端写入口：
+   - 删除 `src/components/growth-proposal-detail-drawer.tsx`
+   - `src/app/page.tsx` 不再打开 growth proposal drawer
+   - `src/components/knowledge-panel.tsx` 不再展示 growth proposal board，也不再提供 generate/evaluate/approve/reject/publish/observe 按钮
+   - `src/components/ceo-office-cockpit.tsx` 不再加载或展示 growth proposal 卡片
+2. 收口内部 API 包装面：
+   - `src/lib/api.ts` 删除 growth 写接口和无 caller 的 detail/observation wrappers
+   - 保留 `companyGrowthProposals()` 作为历史只读查询能力
+3. 文档同步：
+   - 更新 `docs/design/architecture-review-2026-05-09.md`
+   - 更新 `docs/design/growth-self-improvement-convergence-2026-05-09.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/app/api/company/operating-kernel.route.test.ts
+```
+
+结果：1 个测试文件、6 个测试全部通过。
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/app/page.tsx src/components/ceo-office-cockpit.tsx src/components/knowledge-panel.tsx src/lib/api.ts
+```
+
+## 任务：架构收敛第五轮（growth legacy dead path trim）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. 删除已无主链 caller 的 growth 自动化旧代码：
+   - 删除 `src/lib/company-kernel/crystallizer.ts`
+   - 删除 `src/lib/company-kernel/growth-approval.ts`
+   - 删除 `src/lib/company-kernel/growth-script-dry-run.ts`
+2. 收口 company-kernel 导出面：
+   - `src/lib/company-kernel/index.ts` 不再导出已删除的 growth 自动化入口
+3. 删除只为旧 growth 自动化保活的测试：
+   - `src/lib/company-kernel/operating-kernel.test.ts` 去掉 growth proposal 生成 / dry-run / publish 相关 characterization tests
+4. 文档同步：
+   - 更新 `docs/design/growth-self-improvement-convergence-2026-05-09.md`
+   - 更新 `docs/design/architecture-review-2026-05-09.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/company-kernel/operating-kernel.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/operating-kernel.route.test.ts src/server/control-plane/server.test.ts
+```
+
+结果：5 个测试文件、23 个测试全部通过。
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/lib/company-kernel/index.ts src/lib/company-kernel/operating-kernel.test.ts
+```
+
+## 任务：架构收敛第四轮（可观测性 correlationId 基线）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. 建立统一 request correlation 上下文：
+   - 新增 `src/lib/request-context.ts`
+   - `server.ts` 与 `src/server/shared/http-server.ts` 现在都会为每个 HTTP 请求注入或复用 `x-ag-correlation-id`
+   - 转成内部 `Request` 前会把同一 header 写回请求对象，保证 route handler / proxy / logger 看到的是同一个 id
+2. 日志自动带 correlation 维度：
+   - `src/lib/logger.ts` 通过 `AsyncLocalStorage` 自动追加 `correlationId`
+   - 同时补充 `processRole`；bridge worker 会额外带 `processTag`
+3. split-mode proxy 透传链路收口：
+   - `src/server/shared/proxy.ts` 代理到 control-plane/runtime 时会透传 `x-ag-correlation-id`
+   - `src/server/runtime/bridge-worker-process.ts` 启动子进程时显式注入 `AG_PROCESS_ROLE=bridge-worker`
+4. 文档同步：
+   - 更新 `docs/design/architecture-review-2026-05-09.md`
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+   - 更新 `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/server/shared/http-server.test.ts src/server/runtime/bridge-worker-process.test.ts src/server/control-plane/server.test.ts src/app/api/ai-config/route.test.ts src/app/api/agent-runs/route.test.ts src/app/api/company/operating-kernel.route.test.ts
+```
+
+结果：6 个测试文件、29 个测试全部通过。
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/lib/request-context.ts src/lib/logger.ts src/server/shared/http-server.ts src/server/shared/http-server.test.ts src/server/shared/proxy.ts server.ts src/server/runtime/bridge-worker-process.ts src/server/runtime/bridge-worker-process.test.ts
+```
+
+## 任务：架构收敛第三轮（死依赖清理）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. 删除仓库级死依赖：
+   - `package.json` / `package-lock.json` 移除 `phaser`
+   - `package.json` / `package-lock.json` 移除 `@types/lodash-es`
+2. 删除失效类型桩：
+   - 删除 `src/lib/claude-engine/security-core/lodash-es.d.ts`
+   - 复核后确认当前真实源码没有 `lodash-es` runtime import；仅 `pathValidationUtils.ts.full` 保留上游快照引用，不参与编译
+3. 文档同步：
+   - 更新 `docs/design/architecture-review-2026-05-09.md`
+   - 更新 `docs/project/architecture-review-2026-05-09-followup.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+rg -n '"phaser"|@types/lodash-es|lodash-es' package.json package-lock.json src -g '!node_modules'
+```
+
+结果：`phaser` 与 `@types/lodash-es` 已从依赖清单移除；`lodash-es` 只剩 `pathValidationUtils.ts.full` 的上游快照引用，不参与编译。
+
+# 任务：架构收敛第二轮（单写者存储、growth 只读化、route 动态桥接）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. `growth-*` 退成只读兼容层：
+   - `src/lib/company-kernel/company-loop-executor.ts` 不再自动生成 growth proposal。
+   - `src/lib/company-kernel/ceo-decision-control.ts` 不再把 growth proposal 放进 CEO 决策队列。
+   - `POST /api/company/growth/proposals/generate|:id/evaluate|approve|reject|dry-run|publish` 与 `POST /api/company/growth/observations` 统一返回 `410 Gone`。
+   - 历史 `GET /api/company/growth/proposals*` 与 `GET /api/company/growth/observations` 继续保留。
+2. Runtime logging 边界真正落代码：
+   - `src/lib/agents/execution-journal.ts` 只保留 `node:*` 与 `condition:evaluated`。
+   - gate 批准路径不再写 `gate:decided` journal，`ops-audit` 成为唯一 gate 审计写点。
+3. Route 动态桥接收口：
+   - `src/server/shared/proxy.ts` 新增 `runControlPlaneRoute()`、`runRuntimeRoute()`、`runControlPlaneThenRuntimeRoute()`。
+   - `src/app/api` 下原先直连 `@/server/*` 的 30 个薄 wrapper route 改为 shared helper + 动态 import，本地执行时才加载 server handler。
+   - `src/app/api` 对 `@/server/(?!shared/proxy)` 的静态 route import 已清零。
+4. Storage 单写者模式默认化：
+   - `src/lib/storage/gateway-db.ts` 新增 `AG_STORAGE_MODE=readonly|readwrite`。
+   - 默认只有 `AG_ROLE=api|all` 以 `readwrite` 打开 SQLite；`web` 与其它拆分角色默认只读。
+   - 若未来要让 `runtime/control-plane/scheduler` 单独写库，必须显式 `AG_STORAGE_MODE=readwrite`。
+5. Security 命名收口：
+   - `src/lib/claude-engine/security/` 更名为 `src/lib/claude-engine/security-adapters/`。
+   - `security-core/index.ts` 明确标注 upstream-synced，本地适配统一落在 `security-adapters/*`。
+6. 会话句柄外层残留继续收口：
+   - `src/app/api/agent-runs/[id]/conversation/route.ts`、`src/app/api/projects/[id]/resume/route.ts` 与 `agent-run` / `stage-detail` 相关 UI 改成优先走 `sessionProvenance.handle` 和 conversation resolver。
+   - `src/lib/company-kernel/working-checkpoint.ts` 的会话 checkpoint 改为只记录 `sessionHandle` / `backendId`。
+7. 文档同步：
+   - 更新 `ARCHITECTURE.md`
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+   - 更新 `docs/guide/agent-user-guide.md`
+   - 更新 `docs/design/growth-self-improvement-convergence-2026-05-09.md`
+   - 更新 `docs/design/runtime-logging-boundaries-2026-05-09.md`
+   - 更新 `docs/project/architecture-review-2026-05-09-followup.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/storage/gateway-db.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/app/api/company/operating-kernel.route.test.ts src/app/api/ai-config/route.test.ts src/app/api/agent-runs/route.test.ts src/app/api/me/route.test.ts src/app/api/models/route.test.ts src/app/api/workspaces/import/route.test.ts src/app/api/departments/route.test.ts src/app/api/ceo/profile/route.test.ts src/app/api/ceo/profile/feedback/route.test.ts src/app/api/ceo/routine/route.test.ts src/lib/claude-engine/security-adapters/__tests__/bash-security-adapter.test.ts src/lib/claude-engine/security-adapters/__tests__/auto-mode-classifier.test.ts
+```
+
+结果：15 个测试文件、118 个测试全部通过。
+
+# 任务：收口 Run Session Handle 主链，降低会话字段散落读写
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-10
+
+### 本轮实施
+
+已完成：
+
+1. 新增 `src/lib/agents/session-handle.ts`
+   - 集中维护 `resolveRunSessionHandle()`、`buildLegacyConversationHandleBinding()`、`resolvePrimaryConversationId()`、`collectRunChildConversationIds()`。
+   - `sessionProvenance.handle` 现在是运行时权威会话句柄读源；`childConversationId` / `activeConversationId` 只保留兼容镜像语义。
+2. Runtime / backend / storage 主链切到共享 helper：
+   - `src/lib/agents/group-runtime.ts` 删除内联 `resolveSessionHandle()`，角色执行、nudge、cancel attach 等路径改走共享 helper。
+   - `src/lib/backends/run-session-hooks.ts` 统一通过 helper 写兼容镜像，不再手写 `childConversationId` / `activeConversationId`。
+   - `src/lib/agents/runtime-helpers.ts`、`src/lib/agents/supervisor.ts`、`src/lib/agents/run-registry.ts`、`src/lib/storage/gateway-db.ts` 的会话句柄解析与 run-linked conversation 收集统一改走共享 helper。
+3. 类型边界与单测补齐：
+   - `src/lib/agents/group-types.ts` 为 `childConversationId` / `activeConversationId` 增加 `@deprecated` 注记。
+   - 新增 `src/lib/agents/session-handle.test.ts`，覆盖 provenance-first、legacy binding、primary conversation fallback、child conversation 去重等关键语义。
+4. 文档同步：
+   - 更新 `docs/project/architecture-review-2026-05-09-followup.md`，将 `Issue 2` 从“未改动”更新为“部分缓解”，并明确剩余 API / UI 收口范围。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/agents/session-handle.test.ts src/lib/backends/session-provenance.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts
+```
+
+结果：4 个测试文件、39 个测试全部通过。
+
+```bash
+npx eslint --rule '@typescript-eslint/no-explicit-any: off' src/lib/agents/session-handle.ts src/lib/agents/session-handle.test.ts src/lib/agents/group-runtime.ts src/lib/agents/runtime-helpers.ts src/lib/agents/supervisor.ts src/lib/agents/run-registry.ts src/lib/backends/run-session-hooks.ts src/lib/storage/gateway-db.ts src/lib/agents/group-types.ts
+```
+
+# 任务：架构 review 跟进收口（清理 Antigravity 冷路径与 Provider Registry）
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-09
+
+### 本轮实施
+
+已完成：
+
+1. 清理已失效的 Antigravity 冷路径与死代码：
+   - 删除 `src/lib/company-kernel/self-improvement-execution.ts` 与对应测试，保留 `self-improvement-codex-execution.ts` 为唯一实现。
+   - `src/lib/agents/llm-oneshot.ts` 改为只支持 API-backed provider，移除 Antigravity gRPC polling fallback。
+2. 先收口一层 SQLite 多步写回一致性：
+   - `src/lib/storage/gateway-db.ts` 的 `upsertRunRecord()` 与 `upsertConversationRecord()` 改为事务化，避免单次写入过程里出现半成品 `runs / run_conversation_links / conversation_visibility / projection` 状态。
+3. 收口 Antigravity 兼容 executor / owner 路由：
+   - `src/lib/providers/antigravity-executor.ts` 的 `appendMessage()` / `cancel()` 改为按 conversation owner 路由，不再硬取 `servers[0]`。
+   - `cancel()` 不再静默吞错；`addTrackedWorkspace()` 仅放过“already tracked”类错误，其他错误上抛。
+4. Bridge / agents 边界继续去 Antigravity 污染：
+   - `src/lib/agents/runtime-helpers.ts` 的 `cancelCascadeBestEffort()` 只在 `provider === "antigravity"` 时执行。
+   - `src/lib/agents/watch-conversation.ts` 明确标为 Antigravity-only。
+   - `src/lib/bridge/worker-entry.ts` 去掉对 `agents/gateway-home` 的反向依赖；初始化上提到 `src/server/runtime/bridge-worker-process.ts`。
+5. Provider metadata 建立单一 registry：
+   - 新增 `src/lib/providers/provider-registry.ts`，统一维护 provider label、默认 profile、可用性类型、stored API key 映射。
+   - `src/lib/providers/provider-availability.ts`、`src/lib/providers/provider-inventory.ts`、`src/lib/providers/ai-config.ts` 改为从 registry 派生，不再各自维护同一份 provider 元数据。
+   - `src/lib/local-provider-conversations.ts` 增加共享 provider title helper，`/api/conversations` 与 `/api/conversations/[id]/send` 不再重复维护本地 provider 标题表。
+6. 兼容保留链路补充 sunset / boundary 文档：
+   - `src/lib/company-kernel/crystallizer.ts` 的 `generateGrowthProposals()` 增加 deprecation warning，明确 growth proposal 是 legacy 兼容路径。
+   - 新增 `docs/design/growth-self-improvement-convergence-2026-05-09.md`，明确 `self-improvement-*` 是唯一新主线。
+   - 新增 `docs/design/runtime-logging-boundaries-2026-05-09.md`，先裁定 `run-history / execution-journal / ops-audit` 的职责边界。
+7. Architecture review 跟进清单落地：
+   - 新增 `docs/project/architecture-review-2026-05-09-followup.md`，逐条标记 14 个问题的“已确认 / 已修复 / 本轮未改”状态，避免把整改进展写回原始快照。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/storage/gateway-db.test.ts src/lib/company-kernel/operating-kernel.test.ts src/app/api/company/operating-kernel.route.test.ts src/lib/company-kernel/company-loop.test.ts src/lib/providers/antigravity-executor.test.ts src/server/runtime/bridge-worker-process.test.ts src/app/api/ai-config/route.test.ts src/lib/provider-image-generation.test.ts src/lib/providers/ai-config.test.ts src/lib/providers/provider-availability.test.ts src/lib/providers/providers.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts 'src/app/api/knowledge/[id]/summary/route.test.ts' 'src/app/api/conversations/route.test.ts' 'src/app/api/conversations/[id]/send/route.test.ts'
+```
+
+结果：16 个测试文件、113 个测试全部通过。
+
+# 任务：将 Antigravity 从默认原生主链路降级为平级可选 Provider
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-09
+
+### 本轮实施
+
+已完成：
+
+1. 组织级 Provider 默认值切换：
+   - `src/lib/providers/ai-config.ts` 默认 `defaultProvider` 与四个 AI layer 默认值统一改为 `claude-api`。
+   - `src/lib/providers/types.ts` 的配置 fallback 不再默认回落到 `antigravity`。
+   - `normalizeAIConfig()` 改为：未显式填写的 `layers.*` / `scenes.*` 按当前 `defaultProvider` 归一化，避免保存配置时隐式继承旧的 Antigravity 默认值。
+2. Department run / Prompt run 主链去掉 Antigravity 特权绑定：
+   - `src/lib/agents/group-runtime.ts`、`src/lib/agents/prompt-executor.ts` 现在会为当前 backend 写回统一的 `sessionProvenance.handle`、`childConversationId`、`activeConversationId`，不再只对 `antigravity` 绑定主会话句柄。
+   - `src/lib/backends/run-session-hooks.ts` 补齐 AI provider 的 user / assistant transcript run-history 写回，便于非 Antigravity 路径也能做 evaluate / 回放。
+3. Supervisor 与会话复用改成 capability 驱动：
+   - `src/lib/agents/supervisor.ts` 改为 provider-neutral 周期巡检：优先读 backend diagnostics，必要时回退 run history，并通过统一 evaluate session 生成 supervisor review。
+   - `src/lib/agents/group-runtime.ts` 的 shared conversation reuse、delivery/review supervisor 启动都改为 backend capability 判断，不再写死 `provider === 'antigravity'`。
+4. 干预恢复主链去掉 native runtime 硬依赖：
+   - `restart_role`、review-loop resume、author recovery 只在 provider 真的是 `antigravity` 时才解析 native runtime；其它 provider 走统一 backend session 主链，不再为了恢复执行去强依赖 language server。
+5. 文档同步：
+   - 更新 `ARCHITECTURE.md`
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+   - 更新 `docs/guide/agent-user-guide.md`
+   - 更新 `docs/design/antigravity-demotion-evaluation.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+```bash
+npx vitest run src/lib/providers/ai-config.test.ts src/lib/backends/session-provenance.test.ts src/lib/agents/group-runtime.test.ts src/lib/agents/group-runtime.multi-role.test.ts src/lib/agents/prompt-executor.test.ts 'src/app/api/conversations/route.test.ts' 'src/app/api/conversations/[id]/send/route.test.ts'
+```
+
+结果：7 个测试文件、67 个测试全部通过。
+
+```bash
+npx vitest run src/lib/providers/provider-availability.test.ts src/app/api/ai-config/route.test.ts src/lib/backends/builtin-backends.test.ts
+```
+
+结果：4 个测试文件、47 个测试全部通过。
+
 # 任务：删除 legacy CEO command API，收口 CEO 自然语言入口到 Conversation
 
 **状态**: ✅ 已完成

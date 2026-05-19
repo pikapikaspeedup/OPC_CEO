@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
+import { CORRELATION_ID_HEADER, resolveCorrelationId, runWithRequestContext } from '@/lib/request-context';
 
 export interface RouteDefinition {
   method?: string;
@@ -13,6 +14,7 @@ function hasRequestBody(method?: string): boolean {
 async function toFetchRequest(
   req: IncomingMessage,
   origin: string,
+  correlationId: string,
 ): Promise<Request> {
   const url = new URL(req.url || '/', origin);
   const chunks: Buffer[] = [];
@@ -23,9 +25,12 @@ async function toFetchRequest(
     }
   }
 
+  const headers = new Headers(req.headers as HeadersInit);
+  headers.set(CORRELATION_ID_HEADER, correlationId);
+
   return new Request(url, {
     method: req.method,
-    headers: req.headers as HeadersInit,
+    headers,
     body: chunks.length > 0 ? Buffer.concat(chunks) : undefined,
   });
 }
@@ -95,43 +100,52 @@ export function startRouteServer(options: {
   routes: RouteDefinition[];
 }): Server {
   const hostname = options.hostname || '0.0.0.0';
-  const server = createServer(async (req, res) => {
-    try {
-      const request = await toFetchRequest(req, `http://${hostname}:${options.port}`);
-      const pathname = new URL(request.url).pathname;
-      const routes = options.routes.filter((candidate) => {
-        if (candidate.method && candidate.method !== request.method) {
-          return false;
-        }
-        return candidate.pattern.test(pathname);
-      });
+  const server = createServer((req, res) => {
+    const correlationId = resolveCorrelationId(req.headers);
 
-      if (!routes.length) {
-        await writeFetchResponse(res, notFoundResponse());
-        return;
-      }
+    void runWithRequestContext(correlationId, async () => {
+      try {
+        res.setHeader(CORRELATION_ID_HEADER, correlationId);
 
-      let methodNotAllowed: Response | null = null;
-      for (const route of routes) {
-        const match = pathname.match(route.pattern);
-        if (!match) {
-          continue;
-        }
+        const request = await toFetchRequest(req, `http://${hostname}:${options.port}`, correlationId);
+        const pathname = new URL(request.url).pathname;
+        const routes = options.routes.filter((candidate) => {
+          if (candidate.method && candidate.method !== request.method) {
+            return false;
+          }
+          return candidate.pattern.test(pathname);
+        });
 
-        const response = await route.handler(request, match);
-        if (response.status !== 405) {
-          await writeFetchResponse(res, response);
+        if (!routes.length) {
+          await writeFetchResponse(res, notFoundResponse());
           return;
         }
 
-        methodNotAllowed = methodNotAllowed || response;
-      }
+        let methodNotAllowed: Response | null = null;
+        for (const route of routes) {
+          const match = pathname.match(route.pattern);
+          if (!match) {
+            continue;
+          }
 
-      await writeFetchResponse(res, methodNotAllowed || notFoundResponse());
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      await writeFetchResponse(res, jsonResponse({ error: message }, { status: 500 }));
-    }
+          const response = await route.handler(request, match);
+          if (response.status !== 405) {
+            await writeFetchResponse(res, response);
+            return;
+          }
+
+          methodNotAllowed = methodNotAllowed || response;
+        }
+
+        await writeFetchResponse(res, methodNotAllowed || notFoundResponse());
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!res.headersSent) {
+          res.setHeader(CORRELATION_ID_HEADER, correlationId);
+        }
+        await writeFetchResponse(res, jsonResponse({ error: message }, { status: 500 }));
+      }
+    });
   });
 
   server.listen(options.port, hostname);

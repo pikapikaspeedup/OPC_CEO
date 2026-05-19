@@ -19,7 +19,7 @@ export interface AppUrlState {
   decisionTarget: DecisionTarget | null;
 }
 
-const VALID_SECTIONS = new Set<AppUrlSection>(['conversations', 'projects', 'knowledge', 'operations', 'ceo']);
+const VALID_SECTIONS = new Set<AppUrlSection>(['conversations', 'projects', 'knowledge', 'evolution', 'operations', 'ceo']);
 const VALID_SETTINGS_TABS = new Set<AppUrlSettingsTab>(['profile', 'provider', 'api-keys', 'scenes', 'autonomy', 'mcp', 'messaging']);
 
 function cleanParam(value: string | null): string | null {

@@ -22,6 +22,7 @@ import { getProject, updatePipelineStage, updatePipelineStageByStageId } from '.
 import { emitProjectEvent } from './project-events';
 import { createLogger } from '../logger';
 import { appendRunHistoryEntry } from './run-history';
+import { collectRunChildConversationIds } from './session-handle';
 import { listRunRecords, syncRunArtifactsToDeliverables, upsertRunRecord } from '../storage/gateway-db';
 import { observeRunCapsuleForAgenda } from '../company-kernel/operating-integration';
 import { observeRunFailureForPlatformEngineering } from '../company-kernel/platform-engineering-observer';
@@ -618,16 +619,8 @@ export function getChildConversationIds(): Set<string> {
   ensureRunRegistryInitialized();
   const ids = new Set<string>();
   for (const run of runs.values()) {
-    if (run.childConversationId) {
-      ids.add(run.childConversationId);
-    }
-    // V1.5+: multi-role runs have child IDs in role progress
-    if (run.roles) {
-      for (const role of run.roles) {
-        if (role.childConversationId) {
-          ids.add(role.childConversationId);
-        }
-      }
+    for (const conversationId of collectRunChildConversationIds(run)) {
+      ids.add(conversationId);
     }
   }
   return ids;

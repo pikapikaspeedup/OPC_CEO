@@ -315,7 +315,7 @@ function RunItem({
             compact ? 'text-[10px]' : 'text-[11px]'
           )}>
             ID: {run.runId.slice(0, 8)}
-            {run.childConversationId && ` • Child: ${run.childConversationId.slice(0, 8)}`}
+            {(run.sessionProvenance?.handle || run.childConversationId) && ` • Session: ${(run.sessionProvenance?.handle || run.childConversationId)!.slice(0, 8)}`}
           </div>
 
           {(isStaleActive || canRestartRole || canRetry) && onIntervene && (

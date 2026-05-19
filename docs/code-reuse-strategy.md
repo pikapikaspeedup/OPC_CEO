@@ -3,6 +3,11 @@
 **日期**: 2026-04-11
 **状态**: ✅ Phase 1 已实施（安全模块提取完成）
 
+> **⚠️ 2026-05-10 更新**：本文中提到的 `src/lib/security/` 已被 Round-2 review 标记为 dead code（0 外部消费方）。
+> 当前活跃的安全栈是 `src/lib/claude-engine/security-adapters/` → `security-core/`。
+> 详见 [Round-2 R3](./design/architecture-review-round2-2026-05-10.md#问题-r3src-lib-security-整个目录是死代码---p0)。
+> 本文以下涉及 `src/lib/security/*` 的论述仅作历史参考。
+
 ---
 
 ## 一、现状诊断：重写 vs 复用

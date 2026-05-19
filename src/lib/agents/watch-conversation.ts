@@ -1,6 +1,9 @@
 /**
  * V2.5.1 Multi-Agent System — Conversation Watcher
  *
+ * Antigravity-only bridge adapter. API-backed backends use AgentSession
+ * consumers instead of this direct gRPC step stream.
+ *
  * Watches a child conversation's step stream using the gRPC streaming API.
  * Uses the shared step-merger for delta merge.
  *

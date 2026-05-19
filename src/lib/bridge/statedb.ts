@@ -74,6 +74,7 @@ export function ensureConversationRecordForSession(input: {
   workspace: string;
   title: string;
   provider?: LocalConversationRecord['provider'];
+  providerSessions?: LocalConversationRecord['providerSessions'];
   stepCount?: number;
 }): ConversationInfo {
   const existing = findConversationRecordBySessionHandle(input.sessionHandle);
@@ -87,6 +88,10 @@ export function ensureConversationRecordForSession(input: {
       workspace: input.workspace || existing.workspace,
       provider: input.provider || existing.provider,
       sessionHandle: input.sessionHandle,
+      providerSessions: {
+        ...(existing.providerSessions ?? {}),
+        ...(input.providerSessions ?? {}),
+      },
       stepCount: Math.max(existing.stepCount || 0, nextStepCount),
     };
     upsertConversationRecord(next);
@@ -101,6 +106,7 @@ export function ensureConversationRecordForSession(input: {
     createdAt: new Date().toISOString(),
     provider: input.provider,
     sessionHandle: input.sessionHandle,
+    providerSessions: input.providerSessions,
   };
   upsertConversationRecord(created);
   return created;
@@ -155,12 +161,18 @@ export function getWorkspaces(): Array<{ type: 'folder' | 'workspace'; uri: stri
   const raw = queryDb("SELECT value FROM ItemTable WHERE key='history.recentlyOpenedPathsList';");
   if (!raw) return [];
   try {
-    const data = JSON.parse(raw);
-    return (data.entries || []).map((e: any) => {
-      if (e.folderUri) return { type: 'folder' as const, uri: e.folderUri };
-      if (e.workspace) return { type: 'workspace' as const, uri: e.workspace.configPath };
+    type WorkspaceEntry = { type: 'folder' | 'workspace'; uri: string };
+    const data = JSON.parse(raw) as {
+      entries?: Array<{
+        folderUri?: string;
+        workspace?: { configPath?: string };
+      }>;
+    };
+    return (data.entries || []).map((e): WorkspaceEntry | null => {
+      if (e.folderUri) return { type: 'folder', uri: e.folderUri };
+      if (e.workspace?.configPath) return { type: 'workspace', uri: e.workspace.configPath };
       return null;
-    }).filter(Boolean);
+    }).filter((entry): entry is WorkspaceEntry => entry !== null);
   } catch { return []; }
 }
 
@@ -183,5 +195,6 @@ export function getConversations(): ConversationInfo[] {
     createdAt: record.createdAt,
     provider: record.provider,
     sessionHandle: record.sessionHandle,
+    providerSessions: record.providerSessions,
   }));
 }

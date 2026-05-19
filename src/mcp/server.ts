@@ -254,7 +254,7 @@ server.registerTool(
 // V4.3 Operations & Observability Tools
 // ---------------------------------------------------------------------------
 
-const { analyzeProject, buildProjectGraph } = await import("../lib/agents/project-diagnostics.js");
+const { analyzeProject } = await import("../lib/agents/project-diagnostics.js");
 const { reconcileProject } = await import("../lib/agents/project-reconciler.js");
 const {
   createScheduledJob,
@@ -854,7 +854,6 @@ server.registerTool(
     try {
       const { getProject, updateProject } = await import("../lib/agents/project-registry.js");
       const { appendAuditEvent } = await import("../lib/agents/ops-audit.js");
-      const { appendJournalEntry } = await import("../lib/agents/execution-journal.js");
 
       const project = getProject(projectId);
       if (!project || !project.pipelineState) {
@@ -884,14 +883,6 @@ server.registerTool(
         stageId: nodeId,
         message: `Gate ${nodeId} ${decision}${reason ? `: ${reason}` : ''}`,
         meta: { decision, reason },
-      });
-
-      appendJournalEntry({
-        projectId,
-        nodeId,
-        nodeKind: 'stage',
-        eventType: 'gate:decided',
-        details: { decision, reason },
       });
 
       return { content: [{ type: "text", text: JSON.stringify({ success: true, nodeId, decision }) }] };
@@ -1003,7 +994,7 @@ server.registerTool(
     inputSchema: z.object({
       projectId: z.string().describe("Project ID"),
       nodeId: z.string().optional().describe("Filter by node ID"),
-      type: z.string().optional().describe("Filter by event type (e.g. gate:decided, loop:iteration, switch:routed)"),
+      type: z.string().optional().describe("Filter by event type (e.g. node:activated, node:completed, condition:evaluated)"),
       limit: z.number().int().min(1).max(1000).default(50).describe("Maximum entries to return"),
     }),
     annotations: {

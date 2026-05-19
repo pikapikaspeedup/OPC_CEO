@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  *
  * Query params:
  *   nodeId  — filter by node ID
- *   type    — filter by event type (e.g. 'gate:decided', 'loop:iteration')
+ *   type    — filter by event type (e.g. 'node:activated', 'condition:evaluated')
  *   limit   — legacy alias for pageSize
  */
 export async function GET(

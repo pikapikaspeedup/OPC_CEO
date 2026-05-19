@@ -452,6 +452,7 @@ describe('GET /api/agent-runs', () => {
             workspacePath: '/tmp/workspace',
             recordedAt: '2026-04-20T10:00:00.000Z',
           },
+          activeConversationId: 'session-1',
         },
       ],
       page: 1,

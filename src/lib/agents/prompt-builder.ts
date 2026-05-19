@@ -63,7 +63,7 @@ export function buildRoleSwitchPrompt(
     `You are now continuing as: ${role.id}`,
     `This is revision round ${round}. The reviewer found issues in your previous output.`,
     '',
-    AssetLoader.resolveWorkflowContent(role.workflow),
+    AssetLoader.resolveWorkflowContent(role.workflow, { stripFrontmatter: true }),
     '',
     'Canonical upstream inputs',
     ...inputArtifactLines,
@@ -102,7 +102,7 @@ export function buildRolePrompt(
   const outputAbsDir = path.join(artifactAbsDir, outputDir);
   const reviewAbsDir = path.join(artifactAbsDir, 'review');
 
-  const workflowContent = AssetLoader.resolveWorkflowContent(role.workflow);
+  const workflowContent = AssetLoader.resolveWorkflowContent(role.workflow, { stripFrontmatter: true });
   const sharedIntro = [
     workflowContent,
     '',
@@ -197,7 +197,7 @@ export function buildDeliveryPrompt(
 
   if (hasWorkPackage) {
     return [
-      AssetLoader.resolveWorkflowContent(role.workflow),
+      AssetLoader.resolveWorkflowContent(role.workflow, { stripFrontmatter: true }),
       '',
       'Stage context',
       `- Task envelope: ${taskEnvelopePath}`,
@@ -225,7 +225,7 @@ export function buildDeliveryPrompt(
   }
 
   return [
-    AssetLoader.resolveWorkflowContent(role.workflow),
+    AssetLoader.resolveWorkflowContent(role.workflow, { stripFrontmatter: true }),
     '',
     'Stage context',
     `- Task envelope: ${taskEnvelopePath}`,

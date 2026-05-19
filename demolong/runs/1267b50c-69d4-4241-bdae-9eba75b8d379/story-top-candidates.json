@@ -1,0 +1,35 @@
+[
+  {
+    "storyKey": "ceo-office-agenda-auto-close-loop",
+    "sourcePath": "User Story/CEO Office/CEO 办公室.md",
+    "storyText": "作为 CEO，我不能让已派发 agenda 根据 run 终态自动闭环标记为完成。",
+    "title": "系统改进：让 CEO Agenda 与执行终态自动闭环",
+    "summary": "当前 CEO 派发出去的 agenda 不能随着 run 的完成、失败或取消自动收口，导致管理层需要人工追踪事项是否真正落地。补齐这条闭环能把“决策→执行→结果”串成可运营主链。",
+    "expectedOutcome": "CEO 决策队列会自动反映事项已完成、失败待处理或需复盘，减少人工对账，提升公司循环与管理动作的真实可执行性。",
+    "severity": "critical",
+    "rationale": "这是 CEO Office 主路径中的核心治理缺口，直接影响管理动作是否能形成端到端闭环；相比纯展示或筛选能力，它更能减少人工步骤并提升系统可信度。",
+    "affectedAreas": ["frontend", "api", "runtime", "approval"]
+  },
+  {
+    "storyKey": "projects-department-object-workbench",
+    "sourcePath": "User Story/Projects/项目工作台.md",
+    "storyText": "作为用户，我希望点击部门节点后进入完整部门工作台，查看部门概览、项目列表、workspace 绑定、上下文文档、执行策略、Provider、预算和 OKR。",
+    "title": "系统改进：在 Projects 内补齐完整部门工作台",
+    "summary": "当前 Projects 里部门只是弱入口，无法承载部门对象的完整治理与执行配置，导致部门、workspace 和执行策略管理割裂。补齐部门工作台能打通项目管理与组织配置主链。",
+    "expectedOutcome": "用户可以在 Projects 内直接完成部门级治理、执行空间绑定和策略配置，减少跨页面跳转，让部门成为真正的一等运行对象。",
+    "severity": "high",
+    "rationale": "部门是 Projects 与 CEO 调度的关键中枢，缺少完整部门工作台会持续放大组织配置碎片化问题；该能力能显著改善核心工作流的可用性与一致性。",
+    "affectedAreas": ["frontend", "api", "runtime", "docs"]
+  },
+  {
+    "storyKey": "settings-profile-preferences-affect-runtime",
+    "sourcePath": "User Story/Settings/个人偏好.md",
+    "storyText": "作为用户，我希望汇报详略能被 CEO 命令、项目执行、日报和 review 真实消费，以便保存后的偏好影响 AI 行为。",
+    "title": "系统改进：让个人偏好真实进入 CEO 命令与执行主链",
+    "summary": "当前个人偏好更多是被保存而不是被执行系统真实消费，导致用户设置协作方式后，CEO 命令、项目执行、日报和 review 仍可能表现不一致。补齐偏好到运行时的注入链路，才能把 Settings 从静态表单变成行为控制面。",
+    "expectedOutcome": "用户保存的汇报风格会稳定影响 AI 的实际输出与治理行为，形成“设置即生效”的一致体验，并降低反复口头纠偏成本。",
+    "severity": "high",
+    "rationale": "这是 Settings 主路径里最能提升真实可用性的缺口之一；它直接决定用户配置是否有业务价值，也能带动后续风险偏好、评审偏好等设置进入统一运行时治理。",
+    "affectedAreas": ["frontend", "runtime", "provider", "docs"]
+  }
+]

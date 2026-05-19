@@ -1,5 +1,4 @@
 import { createLogger } from '../logger';
-import { initializeGatewayHome } from '../agents/gateway-home';
 import { startConversationProjectionWorker, stopConversationProjectionWorker } from './conversation-importer';
 import { pathToFileURL } from 'url';
 
@@ -24,7 +23,6 @@ async function maybeStartTunnel(port: number): Promise<void> {
 }
 
 export async function startBridgeWorker(port: number): Promise<void> {
-  initializeGatewayHome({ syncAssets: true });
   startConversationProjectionWorker();
   await maybeStartTunnel(port);
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 
+import { CORRELATION_ID_HEADER } from '@/lib/request-context';
 import {
   jsonResponse,
   methodNotAllowedResponse,
@@ -75,5 +76,45 @@ describe('startRouteServer', () => {
     expect(response.status).toBe(405);
     expect(response.headers.get('allow')).toBe('GET');
     await expect(response.json()).resolves.toEqual({ error: 'Method not allowed' });
+  });
+
+  it('generates a correlation id for incoming requests and exposes it to handlers', async () => {
+    const baseUrl = await listenForTest([
+      {
+        pattern: /^\/api\/health$/,
+        handler: async (req) => jsonResponse({
+          correlationId: req.headers.get(CORRELATION_ID_HEADER),
+        }),
+      },
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/health`);
+    const body = await response.json() as { correlationId?: string };
+
+    expect(response.status).toBe(200);
+    expect(body.correlationId).toBeTruthy();
+    expect(response.headers.get(CORRELATION_ID_HEADER)).toBe(body.correlationId);
+  });
+
+  it('preserves a caller-provided correlation id', async () => {
+    const baseUrl = await listenForTest([
+      {
+        pattern: /^\/api\/health$/,
+        handler: async (req) => jsonResponse({
+          correlationId: req.headers.get(CORRELATION_ID_HEADER),
+        }),
+      },
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/health`, {
+      headers: {
+        [CORRELATION_ID_HEADER]: 'corr-test-123',
+      },
+    });
+    const body = await response.json() as { correlationId?: string };
+
+    expect(response.status).toBe(200);
+    expect(body.correlationId).toBe('corr-test-123');
+    expect(response.headers.get(CORRELATION_ID_HEADER)).toBe('corr-test-123');
   });
 });

@@ -1,14 +1,10 @@
-import { handleCEOProfileFeedbackPost } from '@/server/control-plane/routes/ceo';
-import {
-  proxyToControlPlane,
-  shouldProxyControlPlaneRequest,
-} from '@/server/shared/proxy';
+import { runControlPlaneRoute } from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleCEOProfileFeedbackPost(req);
+  return runControlPlaneRoute(req, async () => {
+    const { handleCEOProfileFeedbackPost } = await import('@/server/control-plane/routes/ceo');
+    return handleCEOProfileFeedbackPost(req);
+  })
 }

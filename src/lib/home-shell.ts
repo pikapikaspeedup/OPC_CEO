@@ -5,6 +5,7 @@ export type AppShellSection =
   | 'projects'
   | 'conversations'
   | 'knowledge'
+  | 'evolution'
   | 'operations';
 
 export type AppShellUtilityPanel = 'settings' | null;
@@ -81,6 +82,13 @@ export function getSidebarLoadPlan(section: AppShellSection): SidebarLoadPlan {
         runtimeStatus: false,
         operationsAssets: false,
       };
+    case 'evolution':
+      return {
+        conversations: false,
+        knowledge: false,
+        runtimeStatus: false,
+        operationsAssets: false,
+      };
     default:
       return {
         conversations: true,
@@ -99,6 +107,7 @@ export function getSidebarPollMs(section: AppShellSection): number {
     case 'operations':
     case 'projects':
     case 'knowledge':
+    case 'evolution':
       return 60_000;
     default:
       return 8_000;

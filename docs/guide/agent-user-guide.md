@@ -127,7 +127,7 @@ npm run desktop:dev  # 打开 Tauri 桌面壳，加载本机 3000
 | `OperatingAgendaItem` | CEO 可处理的经营议程，带推荐动作、优先级和预算状态 |
 | `OperatingBudgetPolicy` | 组织/部门/scheduler/growth 的预算、并发和失败预算策略 |
 | `CircuitBreaker` | 失败或风险过高时阻止继续 dispatch 的熔断器 |
-| `GrowthProposal` | 从真实 run、知识和候选记忆沉淀出的 SOP / workflow / skill / script / rule 提案 |
+| `EvolutionProposal` | 从真实 run、知识和候选记忆沉淀出的 SOP / workflow / skill / script / rule 业务能力提案 |
 | `CompanyLoopPolicy` | 控制 daily/weekly/growth/risk loop 的节奏、Top-N、dispatch cap 和通知渠道 |
 | `CompanyLoopRun` / `CompanyLoopDigest` | 公司循环执行记录与 CEO 可读摘要 |
 | `DecisionTarget` / `DecisionItemView` | CEO 决策控制面的统一读模型，每项决策必须落到明确业务对象 |
@@ -153,16 +153,16 @@ Company Kernel 约束：
 3. 只有显式 promote 后才会写入结构化 `KnowledgeAsset`。
 4. 这层不改变 Antigravity IDE / Language Server / Provider 启动逻辑。
 5. Signal / Agenda 只做观察、排序和推荐，不会无限自循环。
-6. Agenda dispatch、scheduler dispatch、manual CEO / `agent-runs` dispatch、growth generate/evaluate 都先过 budget gate 和 circuit breaker；手动任务不消耗 autonomous dispatch quota，但会记录 token/runtime ledger。
+6. Agenda dispatch、scheduler dispatch、manual CEO / `agent-runs` dispatch 都先过 budget gate 和 circuit breaker；手动任务不消耗 autonomous dispatch quota，但会记录 token/runtime ledger。
 7. Budget reservation 会绑定到创建出来的 `runId`，run 到达终态后统一 commit / release，避免 reserved 和 committed 重复计数；缺少 target workspace 的 agenda 不会预占预算。
 8. Approval lifecycle 会进入经营信号：提交审批、批准、拒绝、反馈都会成为可解释的 agenda 来源；`ApprovalRequest.target` 必填，不能创建无业务对象归属的审批。
 9. Run terminal failure 会更新 department、scheduler-job、provider、workflow 熔断器；`recoverAt` 到期后 open breaker 会进入 `half-open` 探测态，成功终态会 reset 对应 breaker。
 10. `cooldownMinutesByKind` 会按 ledger `operationKind` 生效，冷却未结束的动作会被 gate 拦截并可写入 `skipped`。
-11. GrowthProposal 高风险发布默认必须人工 approve；script proposal 还必须先通过 dry-run，公开 publish API 不接受 force 绕过。
+11. EvolutionProposal 发布必须先创建 `proposal_publish` 审批；审批通过后才会写 canonical workflow / skill / rule / workflow script 或 SOP knowledge。
 12. 三次以上同类成功 RunCapsule 可生成 workflow proposal；重复脚本化任务和重复规则约束可生成 script / rule proposal。
-13. Published workflow/skill proposal 会进入 Prompt Mode 执行解析，下一次相似任务可自动注入 canonical workflow/skill。
+13. Published workflow/skill EvolutionProposal 会进入 Prompt Mode 执行解析，下一次相似任务可自动注入 canonical workflow/skill。
 14. Knowledge 页面提供候选记忆详情态和增长提案入口，支持 refresh、promote、reject、generate、evaluate、approve、dry-run、publish、observe，不做高频轮询。
-15. 候选记忆详情可以直接触发 GrowthProposal 生成；KnowledgeAsset 详情会展示 linked GrowthProposal，避免增长提案和来源证据脱节。
+15. 候选记忆、KnowledgeAsset、RunCapsule 和 repeated prompt runs 是 EvolutionProposal 的生成来源，避免业务能力提案和来源证据脱节。
 16. Company Loop 只处理 Top-N agenda，默认每轮最多 autonomous dispatch 1 个；`approve` 不会被自动批准，高风险 dispatch 只进 digest / approval。
 17. Scheduler 内置 company daily/weekly loop 使用 cron job，不创建 5 秒 interval，不启动第二套 worker；平台工程部还会自动确保一个每日 `09:00` 的 `dispatch-prompt` 内置任务，用真实 `User Story/**/*.md` 直接提炼全局 Top 3 待立项故事候选。
 18. CEO 决策队列只消费 `/api/company/ceo/decisions` 返回的 `DecisionItemView[]`，只展示系统改进、Growth 与 Project stage gate 这三类正式业务决策；点击后按 `DecisionTarget` 进入对应业务详情。Decision deep link 使用紧凑 token，例如 `?decision=si~<proposalId>`；ApprovalPanel 只保留通用审批收件箱，不再承担正式决策控制面。
@@ -273,14 +273,15 @@ GET  /api/company/budget/ledger
 GET  /api/company/circuit-breakers
 POST /api/company/circuit-breakers/:id/reset
 GET  /api/company/growth/proposals
-POST /api/company/growth/proposals/generate
-POST /api/company/growth/proposals/:id/evaluate
-POST /api/company/growth/proposals/:id/approve
-POST /api/company/growth/proposals/:id/reject
-POST /api/company/growth/proposals/:id/dry-run
-POST /api/company/growth/proposals/:id/publish
+GET  /api/company/growth/proposals/:id
 GET  /api/company/growth/observations
-POST /api/company/growth/observations
+POST /api/company/growth/proposals/generate        # legacy read-only, returns 410
+POST /api/company/growth/proposals/:id/evaluate   # legacy read-only, returns 410
+POST /api/company/growth/proposals/:id/approve    # legacy read-only, returns 410
+POST /api/company/growth/proposals/:id/reject     # legacy read-only, returns 410
+POST /api/company/growth/proposals/:id/dry-run    # legacy read-only, returns 410
+POST /api/company/growth/proposals/:id/publish    # legacy read-only, returns 410
+POST /api/company/growth/observations             # legacy read-only, returns 410
 GET  /api/company/loops/policies
 GET  /api/company/loops/policies/:id
 PUT  /api/company/loops/policies/:id
@@ -314,9 +315,9 @@ POST /api/company/self-improvement/proposals/:id/observe
 7. 用 `OperatingSignal` 看系统观察到了什么，用 `OperatingAgendaItem` 看 CEO 当前应该处理什么。
 8. 用 `dispatch-check` 解释“为什么这个任务不能跑”，不要绕开 budget / circuit breaker。
 9. Scheduler 手动触发或到点触发如果被 budget / circuit 拦截，会返回 `skipped` 并写 ledger，不会创建 run。
-10. 用 `GrowthProposal` 审核自增长候选；generate/evaluate 也会写 budget ledger。
-11. `publish` 才会写 canonical workflow/skill/rule、workflow script 或 SOP knowledge；workflow/skill 发布后会参与后续 Prompt Mode 解析。
-12. 在 Settings `Autonomy 预算` 调整组织默认策略、部门默认预算和 loop policy，不要直接改库；该页保存后会影响 budget gate、cooldown、Company Loop cadence/timezone/enabled、通知通道和 GrowthProposal 审批阈值。
+10. 用 `EvolutionProposal` 审核业务能力进化候选；历史 `GrowthProposal` 只用于旧数据查询。
+11. `publish` 审批通过后才会写 canonical workflow/skill/rule、workflow script 或 SOP knowledge；workflow/skill 发布后会参与后续 Prompt Mode 解析。
+12. 在 Settings `Autonomy 预算` 调整组织默认策略、部门默认预算和 loop policy，不要直接改库；该页保存后会影响 budget gate、cooldown、Company Loop cadence/timezone/enabled 和通知通道。
 13. 用 `CompanyLoopRun` 追踪 daily/weekly/growth/risk loop 的 selected、dispatch、skipped、ledger 和 digest；`metadata.skippedAgenda` 是解释 skipped 原因的结构化来源，不要用新增后台轮询替代 loop run。
 14. 用 `SystemImprovementProposal` 管理系统自我改进，protected core 涉及 scheduler、provider、approval、database、runtime、company API 时必须走 approval 和测试证据；high/critical proposal 不能只靠 passed test evidence 进入 `ready-to-merge`。
 
@@ -351,23 +352,24 @@ POST /api/company/self-improvement/proposals/:id/observe
 | `budgetDecisionId` | 最近一次 budget gate 结果 |
 | `blockedReason` | 被预算或熔断拦截时的解释 |
 
-`GrowthProposal` 关键字段：
+`EvolutionProposal` 关键字段：
 
 | 字段 | 说明 |
 |------|------|
 | `kind` | `sop` / `workflow` / `skill` / `script` / `rule` |
-| `risk` | `low` / `medium` / `high`；高风险默认必须 approve |
-| `sourceRunIds` | 真实 run 证据 |
+| `status` | `draft` / `evaluated` / `pending-approval` / `published` / `rejected` |
+| `evidence` | 来源可为 `knowledge` / `memory-candidate` / `run-capsules` / `repeated-runs` |
 | `sourceKnowledgeIds` | 已晋升知识证据 |
 | `evaluation` | 评估结论与原因 |
-| `publishedAssetRef` | 发布后关联的 canonical asset 或 knowledge asset |
+| `publishedArtifactPath` | 发布后关联的 canonical asset、workflow script 或 `knowledge:<id>` |
 
-GrowthProposal 生成口径：
+EvolutionProposal 生成口径：
 
-1. 三次以上同类成功 RunCapsule 可以生成 `workflow` proposal。
-2. 两次同类成功、单次稳定 reusable steps，或 promoted `pattern/lesson` KnowledgeAsset 更偏向 SOP proposal。
-3. 高风险 proposal 先进入 `approval-required`，不直接 publish。
-4. 发布后用 observation 记录命中率、成功率、token saving 和回归信号。
+1. `MemoryCandidate(kind=workflow-proposal|skill-proposal|pattern|lesson)` 可以生成 workflow / skill / SOP proposal。
+2. `KnowledgeAsset(category=workflow-proposal|skill-proposal|pattern|lesson)` 可以生成 workflow / skill / SOP proposal。
+3. 两次以上同类成功 RunCapsule 可以生成 SOP；三次以上更偏向 workflow；包含自动化或约束信号时可生成 script / rule。
+4. Repeated prompt runs 仍可生成 workflow proposal。
+5. workflow/skill 发布后用 rollout observe 记录命中率、成功率、token saving 和回归信号。
 
 `CompanyLoopRun` 关键字段：
 
@@ -636,7 +638,7 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 
 ```json
 {
-  "defaultProvider": "antigravity",
+  "defaultProvider": "claude-api",
   "activeCustomProviderId": "baogaoai-glm",
   "customProviders": [
     {
@@ -676,6 +678,7 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 6. 模型目录优先来自 `pi-ai registry`、`custom /v1/models` 或运行时发现，无法发现时才回退到手动模型。
 7. 遗留 `codex / claude-code` 配置值会在保存和加载时自动归一为 `native-codex`；CLI coder 不再属于组织级 Provider 配置。
 8. Claude Engine 的 `coding / full` toolset 会自动挂载统一的 `ExecutionTool`；它对上只暴露“列出 / 调用执行工具”，单轮与多轮差异由底层 executor 自己处理。
+9. 未显式填写的 `layers.*` / `scenes.*` 会在服务端按当前 `defaultProvider` 归一化；如果默认 provider 不可用，错误响应里可能同时列出继承它的 layer 路径。
 
 ### 8.2 Settings 模型选择器
 
@@ -787,6 +790,7 @@ CEO Office 首页的例行任务来自 `GET /api/ceo/routine` 的结构化 `acti
 | 环境变量 | 说明 |
 |------|------|
 | `AG_ALLOW_BUILD_HOME_CONFIG=1` | 允许 `next build` 静态收集阶段读取真实 HOME 下的 AI Provider 配置。默认不读取，使用内置 default config。 |
+| `AG_STORAGE_MODE=readonly\|readwrite` | 显式覆盖 Gateway SQLite 打开模式。默认只有 `AG_ROLE=api|all` 可写；`web` 与其它拆分角色默认只读。 |
 
 ---
 

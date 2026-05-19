@@ -12,29 +12,22 @@
  * Body (POST): CreateApprovalInput
  */
 
-import {
-  handleApprovalCreatePost,
-  handleApprovalListGet,
-} from '@/server/control-plane/routes/approval';
-import {
-  proxyToControlPlane,
-  shouldProxyControlPlaneRequest,
-} from '@/server/shared/proxy';
+import { runControlPlaneRoute } from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/approval
 export async function GET(req: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleApprovalListGet(req);
+  return runControlPlaneRoute(req, async () => {
+    const { handleApprovalListGet } = await import('@/server/control-plane/routes/approval');
+    return handleApprovalListGet(req);
+  })
 }
 
 // POST /api/approval
 export async function POST(req: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleApprovalCreatePost(req);
+  return runControlPlaneRoute(req, async () => {
+    const { handleApprovalCreatePost } = await import('@/server/control-plane/routes/approval');
+    return handleApprovalCreatePost(req);
+  })
 }

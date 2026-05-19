@@ -1,0 +1,35 @@
+{
+  "executionTarget": {
+    "kind": "prompt",
+    "promptAssetRefs": [
+      "/platform_engineering_story_candidates"
+    ]
+  },
+  "runId": "c2d17c51-da3e-44dd-af9c-5779cd16188f",
+  "status": "completed",
+  "summary": "平台工程候选改进 Top 3 已刷新，共 3 条。",
+  "outputArtifacts": [
+    {
+      "id": "415c378a-9f56-4ba7-92c9-4c7da97016b4",
+      "kind": "prompt.story-top-candidates",
+      "title": "Story Top Candidates",
+      "path": "story-top-candidates.json",
+      "format": "json",
+      "sourceRunId": "c2d17c51-da3e-44dd-af9c-5779cd16188f"
+    }
+  ],
+  "risks": [],
+  "nextAction": "Prompt run completed",
+  "promptResolution": {
+    "mode": "workflow",
+    "requestedWorkflowRefs": [
+      "/platform_engineering_story_candidates"
+    ],
+    "requestedSkillHints": [],
+    "matchedWorkflowRefs": [
+      "/platform_engineering_story_candidates"
+    ],
+    "matchedSkillRefs": [],
+    "resolutionReason": "Prompt Mode received explicit workflow refs (platform_engineering_story_candidates); provider should prefer them."
+  }
+}

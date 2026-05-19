@@ -46,6 +46,9 @@ import {
   handleDepartmentsMemoryPost,
   handleDepartmentsPut,
   handleDepartmentsQuotaGet,
+  handleDepartmentsRulesDelete,
+  handleDepartmentsRulesGet,
+  handleDepartmentsRulesPut,
   handleDepartmentsSyncPost,
 } from '@/server/control-plane/routes/departments';
 import {
@@ -452,6 +455,21 @@ export function createControlPlaneRoutes(options: { includeHealth?: boolean } = 
             return handleDepartmentsMemoryPost(req);
           }
           return methodNotAllowedResponse(['GET', 'POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments\/rules$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleDepartmentsRulesGet(req);
+          }
+          if (req.method === 'PUT') {
+            return handleDepartmentsRulesPut(req);
+          }
+          if (req.method === 'DELETE') {
+            return handleDepartmentsRulesDelete(req);
+          }
+          return methodNotAllowedResponse(['GET', 'PUT', 'DELETE']);
         },
       },
       {

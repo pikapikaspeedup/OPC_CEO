@@ -1,6 +1,25 @@
 import pino from 'pino';
+import { getCorrelationId } from './request-context';
 
 const level = process.env.LOG_LEVEL || 'info';
+
+function getLogContextBindings(): Record<string, string> {
+  const bindings: Record<string, string> = {};
+  const correlationId = getCorrelationId();
+  if (correlationId) {
+    bindings.correlationId = correlationId;
+  }
+
+  const processRole = process.env.AG_PROCESS_ROLE?.trim() || process.env.AG_ROLE?.trim();
+  if (processRole) {
+    bindings.processRole = processRole;
+  }
+  if (processRole === 'bridge-worker') {
+    bindings.processTag = `[bridge-worker pid=${process.pid}]`;
+  }
+
+  return bindings;
+}
 
 function getTargets(filename: string): pino.TransportTargetOptions[] {
   return [
@@ -28,9 +47,9 @@ function getTargets(filename: string): pino.TransportTargetOptions[] {
   ];
 }
 
-const sysLogger = pino({ level: 'debug' }, pino.transport({ targets: getTargets('system') }));
-const convLogger = pino({ level: 'debug' }, pino.transport({ targets: getTargets('conversation') }));
-const wsLogger = pino({ level: 'debug' }, pino.transport({ targets: getTargets('workspace') }));
+const sysLogger = pino({ level: 'debug', mixin: getLogContextBindings }, pino.transport({ targets: getTargets('system') }));
+const convLogger = pino({ level: 'debug', mixin: getLogContextBindings }, pino.transport({ targets: getTargets('conversation') }));
+const wsLogger = pino({ level: 'debug', mixin: getLogContextBindings }, pino.transport({ targets: getTargets('workspace') }));
 
 /**
  * Create a child logger with a module name.

@@ -1,17 +1,31 @@
 /**
  * Supervisor Loop — AI-powered run monitoring.
  *
- * Extracted from group-runtime.ts for maintainability.
- * Creates a separate conversation to periodically review the active agent's progress
- * and detect stuck/looping behavior.
+ * Provider-neutral periodic monitor that reviews a run's recent steps and
+ * detects stuck/looping behavior without assuming Antigravity gRPC.
  */
 
-import { grpc } from '../bridge/gateway';
 import { getRun, updateRun } from './run-registry';
 import { TERMINAL_STATUSES } from './group-types';
 import type { SupervisorReview, SupervisorDecision, SupervisorSummary } from './group-types';
+import { resolveRunSessionHandle } from './session-handle';
 import { createLogger } from '../logger';
 import { resolveProvider } from '../providers';
+import type { ProviderId } from '../providers';
+import {
+  applyBeforeRunMemoryHooks,
+  consumeAgentSession,
+  ensureBuiltInAgentBackends,
+  getAgentBackend,
+  getBackendDiagnosticsExtension,
+  getBackendSessionMetadataExtension,
+  registerAgentSession,
+  type BackendRunConfig,
+  type CancelledAgentEvent,
+  type CompletedAgentEvent,
+  type FailedAgentEvent,
+} from '../backends';
+import { readRunHistory } from './run-history';
 
 const log = createLogger('Supervisor');
 
@@ -60,26 +74,168 @@ export function summarizeStepForSupervisor(step: any): string {
   }
 }
 
+function historyFallbackSteps(runId: string): unknown[] {
+  return readRunHistory(runId)
+    .filter((entry) => entry.eventType === 'conversation.message.user' || entry.eventType === 'conversation.message.assistant')
+    .slice(-24)
+    .map((entry) => entry.eventType === 'conversation.message.user'
+      ? {
+          type: 'CORTEX_STEP_TYPE_USER_INPUT',
+          userInput: {
+            items: [{ text: typeof entry.details.content === 'string' ? entry.details.content : '' }],
+            media: [],
+          },
+        }
+      : {
+          type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+          plannerResponse: {
+            response: typeof entry.details.content === 'string' ? entry.details.content : '',
+          },
+        });
+}
+
+async function readRecentSupervisorSteps(
+  runId: string,
+  handle: string,
+  provider: ProviderId,
+): Promise<unknown[]> {
+  ensureBuiltInAgentBackends();
+  const backend = getAgentBackend(provider);
+  const diagnostics = getBackendDiagnosticsExtension(backend);
+  if (!diagnostics) {
+    return historyFallbackSteps(runId);
+  }
+
+  try {
+    const steps = await diagnostics.getRecentSteps(handle);
+    return steps.length > 0 ? steps : historyFallbackSteps(runId);
+  } catch {
+    return historyFallbackSteps(runId);
+  }
+}
+
+function extractSupervisorResponse(
+  completed: CompletedAgentEvent | null,
+  failed: FailedAgentEvent | null,
+  cancelled: CancelledAgentEvent | null,
+): string {
+  if (failed) return failed.error.message;
+  if (cancelled) return cancelled.reason || 'Supervisor evaluation cancelled.';
+  if (completed?.finalText?.trim()) return completed.finalText;
+
+  const rawSteps = completed?.rawSteps as Array<Record<string, any>> | undefined;
+  if (!rawSteps?.length) return '';
+  for (let index = rawSteps.length - 1; index >= 0; index--) {
+    const step = rawSteps[index];
+    const planner = step?.plannerResponse || step?.response || {};
+    const text = planner.modifiedResponse || planner.response || '';
+    if (text) {
+      return text;
+    }
+  }
+  return '';
+}
+
+async function runSupervisorAssessment(options: {
+  runId: string;
+  workspacePath: string;
+  handle: string;
+  diagnosticsProvider: ProviderId;
+  prompt: string;
+}): Promise<SupervisorDecision | null> {
+  ensureBuiltInAgentBackends();
+  const configuredSupervisorProvider = resolveProvider('supervisor', options.workspacePath).provider as ProviderId;
+  const evalProvider = configuredSupervisorProvider === 'antigravity' && options.diagnosticsProvider !== 'antigravity'
+    ? options.diagnosticsProvider
+    : configuredSupervisorProvider;
+  const evalBackend = getAgentBackend(evalProvider);
+  const evalRunId = `supervisor-${options.runId}-${Date.now()}`;
+  const evalConfig = await applyBeforeRunMemoryHooks(evalProvider, {
+    runId: evalRunId,
+    workspacePath: options.workspacePath,
+    prompt: options.prompt,
+    model: SUPERVISOR_MODEL,
+    parentConversationId: options.handle,
+    executionTarget: { kind: 'prompt' },
+    metadata: {
+      stageId: 'supervisor-review',
+      roleId: 'supervisor-review',
+      executorKind: 'prompt',
+    },
+    timeoutMs: 90_000,
+  } as BackendRunConfig);
+
+  const evalSession = await evalBackend.start(evalConfig);
+  registerAgentSession(evalSession);
+
+  let completed: CompletedAgentEvent | null = null;
+  let failed: FailedAgentEvent | null = null;
+  let cancelled: CancelledAgentEvent | null = null;
+
+  await consumeAgentSession(evalRunId, evalSession, {
+    onStarted: async (event) => {
+      updateRun(options.runId, { supervisorConversationId: event.handle });
+
+      const metadataWriter = getBackendSessionMetadataExtension(evalBackend);
+      if (!metadataWriter) {
+        return;
+      }
+
+      await metadataWriter.annotateSession(event.handle, {
+        'antigravity.task.type': 'supervisor-review',
+        'antigravity.task.runId': options.runId,
+        'antigravity.task.hidden': 'true',
+      });
+    },
+    onCompleted: (event) => {
+      completed = event;
+    },
+    onFailed: (event) => {
+      failed = event;
+    },
+    onCancelled: (event) => {
+      cancelled = event;
+    },
+  });
+
+  const responseText = extractSupervisorResponse(completed, failed, cancelled);
+  if (!responseText.trim()) {
+    return null;
+  }
+
+  try {
+    const jsonMatch = responseText.match(/\{[\s\S]*?\}/);
+    const decision = jsonMatch
+      ? JSON.parse(jsonMatch[0]) as SupervisorDecision
+      : { status: 'HEALTHY' as const, analysis: responseText.slice(0, 200) };
+    if (!['HEALTHY', 'STUCK', 'LOOPING', 'DONE'].includes(decision.status)) {
+      decision.status = 'HEALTHY';
+    }
+    return decision;
+  } catch {
+    return { status: 'HEALTHY' as const, analysis: `(Parse failed) ${responseText.slice(0, 200)}` };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Supervisor Loop
 // ---------------------------------------------------------------------------
 
 export async function startSupervisorLoop(
   runId: string,
-  cascadeId: string,
+  initialHandle: string,
   goal: string,
-  apiKey: string,
-  server: { port: number; csrf: string },
-  wsUri: string,
+  _apiKey?: string,
+  _server?: { port: number; csrf: string },
+  _wsUri?: string,
 ) {
+  void _apiKey;
+  void _server;
+  void _wsUri;
+
   const MAX_REVIEWS = 10;
   const REVIEW_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
-  const POLL_INTERVAL_MS = 5_000;
-  const POLL_TIMEOUT_MS = 90_000; // max wait per review round
   const STUCK_CANCEL_THRESHOLD = 3; // consecutive STUCK rounds before suggesting cancel
-
-  // Create a single supervisor conversation for all review rounds
-  let supervisorCascadeId: string | undefined;
 
   // Track previous review state for comparison
   let prevStepCount = 0;
@@ -104,24 +260,29 @@ export async function startSupervisorLoop(
     if (!run || TERMINAL_STATUSES.has(run.status)) {
       break;
     }
-    if (!run.liveState) continue;
 
-    // Dynamically track the current active conversation
-    const currentCascadeId = run.activeConversationId || cascadeId;
+    const workspacePath = run.workspace.replace(/^file:\/\//, '');
+    const currentHandle = resolveRunSessionHandle(run) || initialHandle;
+    const diagnosticsProvider = (run.sessionProvenance?.backendId || run.provider) as ProviderId | undefined;
+    if (!currentHandle || !diagnosticsProvider) {
+      continue;
+    }
 
     try {
-      // 1. Collect context: fetch recent steps of the currently active agent
-      const resp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, currentCascadeId);
-      const allSteps = (resp?.steps || []).filter((s: any) => s != null);
+      const allSteps = (await readRecentSupervisorSteps(runId, currentHandle, diagnosticsProvider)).filter((step: unknown) => step != null);
 
       const recentSteps = allSteps.slice(-8).map(summarizeStepForSupervisor);
       const recentStepsText = recentSteps.join('\n') || 'No recent actions.';
 
       const currentStepCount = allSteps.length;
-      const currentLastStepType = run.liveState.lastStepType || 'None';
-      const staleTimeMs = run.liveState.staleSince
+      const currentLastStepType = run.liveState?.lastStepType
+        || (typeof (allSteps[allSteps.length - 1] as any)?.type === 'string'
+          ? String((allSteps[allSteps.length - 1] as any).type).replace('CORTEX_STEP_TYPE_', '')
+          : 'None');
+      const staleTimeMs = run.liveState?.staleSince
         ? Date.now() - new Date(run.liveState.staleSince).getTime()
         : 0;
+      const cascadeStatus = run.liveState?.cascadeStatus || 'unknown';
 
       const deltaSteps = currentStepCount - prevStepCount;
       const comparisonText = i === 1
@@ -139,7 +300,7 @@ Task Goal: ${goal}
 
 Current State: 
 - Active Role: ${activeRoleId}
-- Cascade Status: ${run.liveState.cascadeStatus}
+- Cascade Status: ${cascadeStatus}
 - Total steps executed: ${currentStepCount}
 - Last activity type: ${currentLastStepType}
 - Time since last step: ${Math.round(staleTimeMs / 1000)}s
@@ -153,70 +314,16 @@ ${recentStepsText}
 Is the agent making meaningful progress toward the goal, stuck, looping, or done?
 Reply with ONLY a JSON object: {"status": "HEALTHY|STUCK|LOOPING|DONE", "analysis": "brief reason"}`;
 
-      // 3. Create or reuse the supervisor conversation
-      if (!supervisorCascadeId) {
-        const startResult = await grpc.startCascade(server.port, server.csrf, apiKey, wsUri);
-        supervisorCascadeId = startResult?.cascadeId;
-        if (!supervisorCascadeId) {
-          log.warn({ runId: runId.slice(0, 8), round: i }, 'Supervisor review: startCascade returned no cascadeId');
-          continue;
-        }
-        await grpc.updateConversationAnnotations(server.port, server.csrf, apiKey, supervisorCascadeId, {
-          'antigravity.task.hidden': 'true',
-          'antigravity.task.type': 'supervisor-review',
-          'antigravity.task.runId': runId,
-        });
-      }
-
-      await grpc.sendMessage(
-        server.port, server.csrf, apiKey, supervisorCascadeId,
-        reviewPrompt, SUPERVISOR_MODEL,
-        false,
-        undefined,
-        'ARTIFACT_REVIEW_MODE_TURBO',
-      );
-
-      // 4. Poll for the model's response
-      const pollStart = Date.now();
-      let responseText = '';
-      const preStepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, supervisorCascadeId);
-      const preStepCount = (preStepsResp?.steps || []).filter((s: any) => s != null).length;
-
-      while (Date.now() - pollStart < POLL_TIMEOUT_MS) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-
-        const stepsResp = await grpc.getTrajectorySteps(server.port, server.csrf, apiKey, supervisorCascadeId);
-        const steps = (stepsResp?.steps || []).filter((s: any) => s != null);
-
-        for (let j = steps.length - 1; j >= preStepCount; j--) {
-          const step = steps[j];
-          if (step?.type === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
-            const planner = step.plannerResponse || step.response || {};
-            const text = planner.modifiedResponse || planner.response || '';
-            if (text) {
-              responseText = text;
-              break;
-            }
-          }
-        }
-        if (responseText) break;
-      }
-
-      if (!responseText) {
+      const decision = await runSupervisorAssessment({
+        runId,
+        workspacePath,
+        handle: currentHandle,
+        diagnosticsProvider,
+        prompt: reviewPrompt,
+      });
+      if (!decision) {
         log.warn({ runId: runId.slice(0, 8), round: i }, 'Supervisor review: no response within timeout');
         continue;
-      }
-
-      // 5. Parse JSON from the model response
-      let decision: SupervisorDecision;
-      try {
-        const jsonMatch = responseText.match(/\{[\s\S]*?\}/);
-        decision = jsonMatch ? JSON.parse(jsonMatch[0]) : { status: 'HEALTHY', analysis: responseText.slice(0, 200) };
-        if (!['HEALTHY', 'STUCK', 'LOOPING', 'DONE'].includes(decision.status)) {
-          decision.status = 'HEALTHY';
-        }
-      } catch {
-        decision = { status: 'HEALTHY', analysis: `(Parse failed) ${responseText.slice(0, 200)}` };
       }
 
       prevStepCount = currentStepCount;

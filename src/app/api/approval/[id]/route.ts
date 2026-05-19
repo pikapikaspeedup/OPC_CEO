@@ -8,14 +8,7 @@
  *   { action: 'approved' | 'rejected' | 'feedback', message: string }
  */
 
-import {
-  handleApprovalDetailGet,
-  handleApprovalDetailPatch,
-} from '@/server/control-plane/routes/approval';
-import {
-  proxyToControlPlane,
-  shouldProxyControlPlaneRequest,
-} from '@/server/shared/proxy';
+import { runControlPlaneRoute } from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,17 +19,17 @@ interface RouteParams {
 // GET /api/approval/[id]
 export async function GET(req: Request, { params }: RouteParams) {
   const { id } = await params;
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleApprovalDetailGet(id);
+  return runControlPlaneRoute(req, async () => {
+    const { handleApprovalDetailGet } = await import('@/server/control-plane/routes/approval');
+    return handleApprovalDetailGet(id);
+  })
 }
 
 // PATCH /api/approval/[id]
 export async function PATCH(req: Request, { params }: RouteParams) {
   const { id } = await params;
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleApprovalDetailPatch(req, id);
+  return runControlPlaneRoute(req, async () => {
+    const { handleApprovalDetailPatch } = await import('@/server/control-plane/routes/approval');
+    return handleApprovalDetailPatch(req, id);
+  })
 }

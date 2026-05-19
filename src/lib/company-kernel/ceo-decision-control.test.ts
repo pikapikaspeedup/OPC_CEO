@@ -1,7 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { GrowthProposal } from './contracts';
 
 let tempHome: string;
 let previousHome: string | undefined;
@@ -18,8 +21,33 @@ async function loadModules() {
     approvalStore: await import('../approval/request-store'),
     decisions: await import('./ceo-decision-control'),
     selfImprovementStore: await import('./self-improvement-store'),
-    growthStore: await import('./growth-proposal-store'),
+    gatewayDb: await import('../storage/gateway-db'),
   };
+}
+
+function seedGrowthProposal(db: Database.Database, proposal: GrowthProposal): void {
+  db.prepare(`
+    INSERT INTO growth_proposals(
+      proposal_id, kind, status, risk, score, workspace, target_name, target_ref,
+      created_at, updated_at, payload_json
+    )
+    VALUES (
+      @proposal_id, @kind, @status, @risk, @score, @workspace, @target_name, @target_ref,
+      @created_at, @updated_at, @payload_json
+    )
+  `).run({
+    proposal_id: proposal.id,
+    kind: proposal.kind,
+    status: proposal.status,
+    risk: proposal.risk,
+    score: proposal.score,
+    workspace: proposal.workspaceUri || null,
+    target_name: proposal.targetName,
+    target_ref: proposal.targetRef,
+    created_at: proposal.createdAt,
+    updated_at: proposal.updatedAt,
+    payload_json: JSON.stringify(proposal),
+  });
 }
 
 describe('ceo decision control', () => {
@@ -41,8 +69,8 @@ describe('ceo decision control', () => {
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it('returns business targets for system improvement and growth approvals', async () => {
-    const { approvalStore, decisions, growthStore, selfImprovementStore } = await loadModules();
+  it('returns only system improvement approvals in the CEO queue', async () => {
+    const { approvalStore, decisions, gatewayDb, selfImprovementStore } = await loadModules();
     const systemRequest = approvalStore.createApprovalRequest({
       type: 'other',
       target: { kind: 'system-improvement-proposal', proposalId: 'proposal-1' },
@@ -85,7 +113,7 @@ describe('ceo decision control', () => {
       description: 'Need approval',
       urgency: 'high',
     });
-    growthStore.upsertGrowthProposal({
+    seedGrowthProposal(gatewayDb.getGatewayDb(), {
       id: 'growth-1',
       kind: 'workflow',
       status: 'approval-required',
@@ -118,8 +146,8 @@ describe('ceo decision control', () => {
     const items = await decisions.listCEODecisionItems();
     expect(items.map(item => item.target)).toEqual(expect.arrayContaining([
       { kind: 'system-improvement-proposal', proposalId: 'proposal-1' },
-      { kind: 'growth-proposal', proposalId: 'growth-1' },
     ]));
+    expect(items.every(item => item.target.kind !== 'growth-proposal')).toBe(true);
     expect(items.every(item => item.target.kind !== 'project')).toBe(true);
     expect(items.every(item => item.target.kind !== 'run')).toBe(true);
     expect(items.every(item => item.currentOwner === 'ceo')).toBe(true);

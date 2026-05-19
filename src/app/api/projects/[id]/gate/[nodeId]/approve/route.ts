@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getProject, updateProject } from '@/lib/agents/project-registry';
 import { appendAuditEvent } from '@/lib/agents/ops-audit';
-import { appendJournalEntry } from '@/lib/agents/execution-journal';
 import {
   proxyToControlPlane,
   shouldProxyControlPlaneRequest,
@@ -77,15 +76,6 @@ export async function POST(
     stageId: nodeId,
     message: `Gate '${nodeId}' ${action}ed${reason ? `: ${reason}` : ''}`,
     meta: { approvedBy, reason },
-  });
-
-  // Journal
-  appendJournalEntry({
-    projectId: id,
-    nodeId,
-    nodeKind: 'gate',
-    eventType: 'gate:decided',
-    details: { action, approvedBy, reason },
   });
 
   return NextResponse.json({

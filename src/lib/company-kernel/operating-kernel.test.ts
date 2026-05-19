@@ -4,12 +4,9 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
-  GrowthProposal,
-  MemoryCandidate,
   OperatingAgendaItem,
   RunCapsule,
 } from './contracts';
-import type { KnowledgeAsset } from '../knowledge/contracts';
 
 let tempHome: string;
 let previousHome: string | undefined;
@@ -24,12 +21,6 @@ async function loadModules() {
 	    budgetLedgerStore: await import('./budget-ledger-store'),
 	    budgetPolicy: await import('./budget-policy'),
 	    circuitBreaker: await import('./circuit-breaker'),
-	    crystallizer: await import('./crystallizer'),
-    growthEvaluator: await import('./growth-evaluator'),
-    growthObserver: await import('./growth-observer'),
-    growthPublisher: await import('./growth-publisher'),
-    growthScriptDryRun: await import('./growth-script-dry-run'),
-    growthStore: await import('./growth-proposal-store'),
     knowledgeStore: await import('../knowledge/store'),
 	    memoryCandidateStore: await import('./memory-candidate-store'),
 	    operatingDay: await import('./operating-day'),
@@ -96,38 +87,6 @@ function makeAgendaItem(overrides: Partial<OperatingAgendaItem> = {}): Operating
     updatedAt: '2026-04-25T10:00:00.000Z',
     ...overrides,
   };
-}
-
-function makeMemoryCandidate(overrides: Partial<MemoryCandidate> = {}): MemoryCandidate {
-  const candidate: MemoryCandidate = {
-    id: overrides.id || 'candidate-pattern',
-    workspaceUri: overrides.workspaceUri || 'file:///tmp/workspace',
-    sourceRunId: overrides.sourceRunId || 'run-candidate',
-    sourceCapsuleId: overrides.sourceCapsuleId || 'capsule-candidate',
-    kind: overrides.kind || 'pattern',
-    title: overrides.title || 'Review memory candidate: weekly report pattern',
-    content: overrides.content || 'Use this stable pattern when preparing weekly operating reports.',
-    evidenceRefs: overrides.evidenceRefs || [],
-    volatility: overrides.volatility || 'stable',
-    score: overrides.score || {
-      total: 76,
-      evidence: 80,
-      reuse: 75,
-      specificity: 70,
-      stability: 80,
-      novelty: 60,
-      risk: 15,
-    },
-    reasons: overrides.reasons || ['Repeated reporting structure is stable.'],
-    conflicts: overrides.conflicts || [],
-    status: overrides.status || 'pending-review',
-    createdAt: overrides.createdAt || '2026-04-25T10:00:00.000Z',
-    updatedAt: overrides.updatedAt || '2026-04-25T10:00:00.000Z',
-  };
-  if (overrides.promotedKnowledgeId) candidate.promotedKnowledgeId = overrides.promotedKnowledgeId;
-  if (overrides.rejectedReason) candidate.rejectedReason = overrides.rejectedReason;
-  if (overrides.metadata) candidate.metadata = overrides.metadata;
-  return candidate;
 }
 
 describe('company operating kernel phase 3-5', () => {
@@ -392,136 +351,4 @@ describe('company operating kernel phase 3-5', () => {
     expect(modules.agendaStore.listOperatingAgendaItems({ limit: 10 }).some((item) => item.title.includes('rejected'))).toBe(true);
   });
 
-  it('generates, evaluates, publishes, and observes growth proposals', async () => {
-    const modules = await loadModules();
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-a' }));
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-b' }));
-
-    const generated = modules.crystallizer.generateGrowthProposals({ limit: 5 });
-    expect(generated.length).toBeGreaterThan(0);
-    const proposal = generated[0] as GrowthProposal;
-    expect(proposal.kind).toBe('sop');
-
-    const evaluated = modules.growthEvaluator.evaluateGrowthProposal(proposal.id);
-    expect(evaluated?.evaluation).toBeDefined();
-
-    const published = modules.growthPublisher.publishGrowthProposal(proposal.id, { force: true });
-    expect(published?.publishedAssetRef).toMatch(/^knowledge:/);
-
-    const observation = modules.growthObserver.observeGrowthProposal(published as GrowthProposal);
-    expect(observation.proposalId).toBe(proposal.id);
-    expect(modules.growthStore.getGrowthProposal(proposal.id)?.status).toBe('observing');
-  });
-
-  it('generates workflow proposals from three repeated successful run capsules', async () => {
-    const modules = await loadModules();
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-wf-a' }));
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-wf-b' }));
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-wf-c' }));
-
-    const generated = modules.crystallizer.generateGrowthProposals({ limit: 5 });
-
-    expect(generated[0]?.kind).toBe('workflow');
-    expect(generated[0]?.sourceRunIds).toHaveLength(3);
-    expect(generated[0]?.content).toContain('## Procedure');
-  });
-
-  it('generates SOP growth proposals from pattern memory candidates', async () => {
-    const modules = await loadModules();
-    modules.memoryCandidateStore.upsertMemoryCandidate(makeMemoryCandidate());
-
-    const generated = modules.crystallizer.generateGrowthProposals({ limit: 5 });
-    const proposal = generated.find((item) => item.sourceCandidateIds.includes('candidate-pattern'));
-
-    expect(proposal?.kind).toBe('sop');
-    expect(proposal?.content).toContain('## Steps');
-  });
-
-  it('generates SOP growth proposals from promoted pattern knowledge assets', async () => {
-    const modules = await loadModules();
-    const asset: KnowledgeAsset = {
-      id: 'knowledge-pattern-growth',
-      scope: 'department',
-      workspaceUri: 'file:///tmp/workspace',
-      category: 'pattern',
-      title: 'Weekly operating review pattern',
-      content: 'Use the same review sequence for weekly operating reports.',
-      source: {
-        type: 'run',
-        runId: 'run-knowledge-pattern',
-      },
-      confidence: 0.86,
-      tags: ['weekly-review', 'operating-report'],
-      status: 'active',
-      evidence: {
-        refs: [{
-          id: 'knowledge-pattern-evidence',
-          type: 'result-envelope',
-          label: 'Verified report output',
-          runId: 'run-knowledge-pattern',
-          artifactPath: 'result-envelope.json',
-          createdAt: '2026-04-25T10:00:00.000Z',
-        }],
-        strength: 86,
-        verifiedAt: '2026-04-25T10:00:00.000Z',
-      },
-      promotion: {
-        level: 'l3-process',
-        volatility: 'stable',
-        qualityScore: 86,
-        sourceCandidateId: 'candidate-knowledge-pattern',
-        sourceCapsuleIds: ['capsule-knowledge-pattern'],
-        promotedBy: 'manual',
-        promotedAt: '2026-04-25T10:00:00.000Z',
-      },
-      createdAt: '2026-04-25T10:00:00.000Z',
-      updatedAt: '2026-04-25T10:00:00.000Z',
-    };
-    modules.knowledgeStore.upsertKnowledgeAsset(asset);
-
-    const generated = modules.crystallizer.generateGrowthProposals({ limit: 5 });
-    const proposal = generated.find((item) => item.sourceKnowledgeIds.includes(asset.id));
-
-    expect(proposal?.kind).toBe('sop');
-    expect(proposal?.sourceCandidateIds).toContain('candidate-knowledge-pattern');
-    expect(proposal?.sourceCapsuleIds).toContain('capsule-knowledge-pattern');
-    expect(proposal?.evidenceRefs).toHaveLength(1);
-  });
-
-  it('generates script and rule proposals from repeated capsules and requires script dry-run before publish', async () => {
-    const modules = await loadModules();
-    const capsuleOverrides = {
-      reusableSteps: [
-        'Run the automation script with DRY_RUN first, then upload the approved report.',
-      ],
-      decisions: [
-        'Must require approval before publishing automation changes.',
-      ],
-      outputArtifacts: [{
-        id: 'script-ev',
-        type: 'file' as const,
-        label: 'Automation script',
-        filePath: 'scripts/digest-report.sh',
-        createdAt: '2026-04-25T10:01:00.000Z',
-      }],
-    };
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-script-a', ...capsuleOverrides }));
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-script-b', ...capsuleOverrides }));
-    modules.runCapsuleStore.upsertRunCapsule(makeCapsule({ runId: 'run-script-c', ...capsuleOverrides }));
-
-    const generated = modules.crystallizer.generateGrowthProposals({ limit: 10 });
-    const script = generated.find((proposal) => proposal.kind === 'script');
-    const rule = generated.find((proposal) => proposal.kind === 'rule');
-
-    expect(script).toBeDefined();
-    expect(rule).toBeDefined();
-    expect(script?.risk).toBe('high');
-    expect(script?.content).toContain('DRY_RUN');
-    expect(() => modules.growthPublisher.publishGrowthProposal(script!.id, { force: true })).toThrow(/dry-run/);
-
-    modules.growthScriptDryRun.runGrowthProposalScriptDryRun(script!.id);
-    modules.growthEvaluator.approveGrowthProposal(script!.id);
-    const published = modules.growthPublisher.publishGrowthProposal(script!.id);
-    expect(published?.publishedAssetRef).toContain('workflow-scripts');
-  });
 });

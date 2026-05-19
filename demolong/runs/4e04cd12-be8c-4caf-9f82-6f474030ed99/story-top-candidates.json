@@ -1,0 +1,35 @@
+[
+  {
+    "storyKey": "projects-department-object-workbench",
+    "sourcePath": "User Story/Projects/项目工作台.md",
+    "storyText": "作为用户，我希望点击部门节点后进入完整部门工作台，查看部门概览、项目列表、workspace 绑定、上下文文档、执行策略、Provider、预算和 OKR。",
+    "title": "部门工作台补全为一等治理对象",
+    "summary": "当前部门在 Projects/CEO Office 中仍不是完整的一等对象，用户无法在主工作流里直接查看和治理 workspace 绑定、执行策略、Provider、预算与上下文。补齐后可把“部门”真正变成组织执行与治理的主入口。",
+    "expectedOutcome": "用户可在主路径内直接完成部门级配置与治理，减少跨页面跳转和配置断层，并让项目派发、上下文注入与预算控制形成一致闭环。",
+    "severity": "critical",
+    "rationale": "这是组织治理与执行路由的核心缺口，直接影响部门建模、workspace 绑定、Provider/预算策略落地，以及 CEO/Projects 主路径的可用性，优先级高于纯体验优化。",
+    "affectedAreas": ["frontend", "api", "runtime", "docs"]
+  },
+  {
+    "storyKey": "settings-personal-preferences-actually-drive-runtime",
+    "sourcePath": "User Story/Settings/个人偏好.md",
+    "storyText": "作为用户，我希望风险容忍度能影响任务派发、预算阈值、审批策略和风险提示，以便系统按我的风险偏好运行。",
+    "title": "让个人偏好真正进入派发与治理主链",
+    "summary": "当前个人偏好更多停留在保存层，尚未真实影响任务派发、预算与审批策略。把风险偏好接入运行时决策后，才能让偏好从“表单配置”变成系统行为约束。",
+    "expectedOutcome": "系统能基于用户风险偏好动态调整派发、预算门禁、审批与提醒强度，提升治理策略与管理习惯的一致性。",
+    "severity": "high",
+    "rationale": "这是 Settings 到 runtime/approval 的关键闭环，能把已有偏好数据转化为真实治理价值，显著提升主路径可用性和产品可信度。",
+    "affectedAreas": ["frontend", "api", "runtime", "approval", "docs"]
+  },
+  {
+    "storyKey": "knowledge-governance-unified-proposal-center",
+    "sourcePath": "User Story/Knowledge/知识库.md",
+    "storyText": "作为用户，我希望在统一提案中心同时治理 Company Growth Proposal 和 Evolution Proposal，以便不用跨页面处理相近事项。",
+    "title": "统一 Knowledge 治理提案中心",
+    "summary": "当前 Growth Proposal 与 Evolution Proposal 分散在不同页面和流程中，治理动作被迫跨 Knowledge 与 CEO 视图切换。统一提案中心可把知识沉淀后的进化治理集中到一条主线。",
+    "expectedOutcome": "用户可以在单一治理工作台内完成提案浏览、评估、审批与发布跟踪，减少上下文切换并提升知识进化闭环效率。",
+    "severity": "high",
+    "rationale": "这条能力直接打通 Knowledge→Proposal→Publish→Observe 的产品闭环，影响 CEO/Knowledge 主路径和平台进化效率，且比单点列表增强更具全局价值。",
+    "affectedAreas": ["frontend", "api", "runtime", "knowledge", "approval", "docs"]
+  }
+]

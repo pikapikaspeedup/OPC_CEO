@@ -7,6 +7,7 @@ import type {
 } from '../organization/contracts';
 import type { AIProviderId } from '../providers/types';
 import type { PromptModeResolution } from './group-types';
+import { AssetLoader } from './asset-loader';
 import {
   getCanonicalSkill,
   getCanonicalWorkflow,
@@ -297,7 +298,9 @@ function formatWorkflowSection(workflows: CanonicalWorkflow[]): string[] {
 
   const lines = ['## Department Workflows', '', '优先使用下面这些 workflow / playbook：'];
   for (const workflow of workflows) {
-    lines.push('', `### ${workflow.name}`, (workflow.content || '').trim());
+    // 注入 prompt 时剥掉 frontmatter，避免 trigger / runtimeProfile 等运维元数据噪声
+    const body = AssetLoader.stripFrontmatter((workflow.content || '').trim());
+    lines.push('', `### ${workflow.name}`, body);
   }
   return lines;
 }

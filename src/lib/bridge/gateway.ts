@@ -4,7 +4,7 @@
  */
 import path from 'path';
 import { randomBytes } from 'crypto';
-import { mkdirSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
 import { homedir } from 'os';
 
 import { discoverLanguageServers, getLanguageServer } from './discovery';
@@ -137,7 +137,9 @@ export async function getOwnerConnection(cascadeId: string) {
 
 /** Refresh the owner map from all servers */
 export async function refreshOwnerMap() {
+  const previousOwnerMap = new Map(convOwnerMap);
   const conns = await getAllConnections();
+  const failedPorts = new Set<number>();
   const serverWorkspaceMap = new Map<number, string>();
   const servers = await discoverLanguageServers();
   for (const conn of conns) {
@@ -194,6 +196,7 @@ export async function refreshOwnerMap() {
         }
       }
     } catch (e: any) {
+      failedPorts.add(conn.port);
       log.warn({ port: conn.port, err: e.message }, 'Failed to get trajectories');
     }
   }
@@ -224,12 +227,30 @@ export async function refreshOwnerMap() {
     }
   }
 
-  ownerMapAge = Date.now();
+  let preservedOwnerCount = 0;
+  if (failedPorts.size > 0) {
+    for (const [id, owner] of previousOwnerMap.entries()) {
+      if (failedPorts.has(owner.port) && !convOwnerMap.has(id)) {
+        convOwnerMap.set(id, owner);
+        preservedOwnerCount += 1;
+      }
+    }
+  }
+
+  if (failedPorts.size === 0) {
+    ownerMapAge = Date.now();
+  }
   pruneConversationOwnerCacheRecords();
   for (const [id, owner] of convOwnerMap.entries()) {
     persistOwnerCache(id, owner, 90_000);
   }
-  log.info({ total: convOwnerMap.size, preRegPending: preRegisteredOwners.size }, 'OwnerMap rebuilt');
+  log.info({
+    total: convOwnerMap.size,
+    preRegPending: preRegisteredOwners.size,
+    failedPorts: Array.from(failedPorts),
+    preservedOwnerCount,
+    partialRefresh: failedPorts.size > 0,
+  }, 'OwnerMap rebuilt');
 
   for (const id of allIds) {
     const matched = wsMatched.get(id);

@@ -1,0 +1,19 @@
+{
+  "status": "completed",
+  "summary": "平台工程候选改进 Top 3 已刷新，共 3 条。",
+  "changedFiles": [
+    "demolong/runs/c2d17c51-da3e-44dd-af9c-5779cd16188f/story-top-candidates.json"
+  ],
+  "promptResolution": {
+    "mode": "workflow",
+    "requestedWorkflowRefs": [
+      "/platform_engineering_story_candidates"
+    ],
+    "requestedSkillHints": [],
+    "matchedWorkflowRefs": [
+      "/platform_engineering_story_candidates"
+    ],
+    "matchedSkillRefs": [],
+    "resolutionReason": "Prompt Mode received explicit workflow refs (platform_engineering_story_candidates); provider should prefer them."
+  }
+}

@@ -18,6 +18,7 @@ import {
   Zap,
   RotateCw,
   RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -132,6 +133,8 @@ export default function AgentRunDetail({
   const [tab, setTab] = useState<'result' | 'files' | 'review' | 'envelope' | 'trace' | 'chat'>('result');
   const [interveneLoading, setInterveneLoading] = useState(false);
   const [interveneError, setInterveneError] = useState<string | null>(null);
+  const [crystallizeBusy, setCrystallizeBusy] = useState(false);
+  const [crystallizeMessage, setCrystallizeMessage] = useState<string | null>(null);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const [showConversationPanel, setShowConversationPanel] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(false);
@@ -223,6 +226,26 @@ export default function AgentRunDetail({
     setInterveneLoading(false);
   };
 
+  const handleProposeCrystallize = async () => {
+    if (!run.runId) return;
+    setCrystallizeBusy(true);
+    setCrystallizeMessage(null);
+    try {
+      const payload: { workspaceUri?: string } = {};
+      if (run.workspace) payload.workspaceUri = run.workspace;
+      const result = await api.generateEvolutionProposals(payload);
+      const generated = result.proposals?.length || 0;
+      setCrystallizeMessage(generated > 0
+        ? `已生成 ${generated} 条提议，去 Evolution 页面查看`
+        : '当前 run 暂无可结晶信号（可能已沉淀过、或证据不足）');
+    } catch (e: unknown) {
+      setCrystallizeMessage(e instanceof Error ? `失败: ${e.message}` : '生成失败');
+    }
+    setCrystallizeBusy(false);
+  };
+
+  const canCrystallize = run.status === 'completed';
+
   const handleToggleConversationPanel = async () => {
     if (!showConversationPanel) {
       const needsFreshLoad = conversationRunId !== run.runId || !conversationData;
@@ -252,13 +275,6 @@ export default function AgentRunDetail({
 
   const resolveConversationTarget = async (): Promise<{ id: string; title: string } | null> => {
     if (!run) return null;
-    if (run.childConversationId) {
-      return {
-        id: run.childConversationId,
-        title: run.prompt,
-      };
-    }
-
     const data = conversationRunId === run.runId && conversationData
       ? conversationData
       : await api.agentRunConversation(run.runId);
@@ -415,6 +431,18 @@ export default function AgentRunDetail({
                 {t('agent.evaluate', { defaultValue: 'AI Diagnose' })}
               </Button>
             )}
+            {canCrystallize && (
+              <Button
+                variant="outline"
+                className="h-11 rounded-[18px] border-sky-400/18 bg-sky-400/10 text-sky-100 hover:border-sky-400/30 hover:bg-sky-400/14 hover:text-white disabled:opacity-50"
+                onClick={() => void handleProposeCrystallize()}
+                disabled={crystallizeBusy}
+                title="把这个 run 沉淀为 SOP / Workflow / Skill / Script / Rule"
+              >
+                {crystallizeBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                提议结晶
+              </Button>
+            )}
             {hasConversationLink && onOpenConversation && !executiveMode && (
               <Button
                 variant="outline"
@@ -463,6 +491,13 @@ export default function AgentRunDetail({
         {interveneError && (
           <div className="rounded-[20px] border border-red-400/18 bg-red-400/10 px-4 py-3 text-sm leading-7 text-red-100">
             {interveneError}
+          </div>
+        )}
+
+        {crystallizeMessage && (
+          <div className="rounded-[20px] border border-sky-400/18 bg-sky-400/10 px-4 py-3 text-sm leading-7 text-sky-100">
+            <Sparkles className="mr-2 inline h-4 w-4" />
+            {crystallizeMessage}
           </div>
         )}
 

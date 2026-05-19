@@ -212,8 +212,13 @@ export class AssetLoader {
    * Resolve a workflow path (e.g. "/dev-worker") to its markdown content.
    * Looks in ASSETS_DIR/workflows/{name}.md.
    * Returns the file content or the original path string if not found.
+   *
+   * @param workflowPath - workflow ref (e.g. "/dev-worker")
+   * @param options.stripFrontmatter - if true, strip YAML frontmatter (lines between leading `---` ... `---`).
+   *                                   Default false to preserve original behavior for canonical API and editing flows.
+   *                                   Pass true at prompt injection sites to avoid leaking runtime metadata to LLM.
    */
-  static resolveWorkflowContent(workflowPath: string): string {
+  static resolveWorkflowContent(workflowPath: string, options?: { stripFrontmatter?: boolean }): string {
     if (!workflowPath.startsWith('/')) return workflowPath;
     const name = workflowPath.slice(1); // strip leading /
     const mdPath = path.join(ASSETS_DIR, 'workflows', `${name}.md`);
@@ -221,12 +226,29 @@ export class AssetLoader {
       if (fs.existsSync(mdPath)) {
         const content = fs.readFileSync(mdPath, 'utf-8');
         log.debug({ workflow: name, length: content.length }, 'Workflow content resolved');
-        return content;
+        return options?.stripFrontmatter ? AssetLoader.stripFrontmatter(content) : content;
       }
     } catch (err: any) {
       log.warn({ workflow: name, err: err.message }, 'Failed to read workflow file');
     }
     return workflowPath;
+  }
+
+  /**
+   * Strip a leading YAML frontmatter block from markdown content.
+   * Frontmatter is the form:
+   *   ---
+   *   key: value
+   *   ---
+   *   <body>
+   * If no frontmatter is present, returns content unchanged.
+   */
+  static stripFrontmatter(content: string): string {
+    if (!content.startsWith('---')) return content;
+    // Find the closing --- on its own line
+    const match = content.match(/^---\n[\s\S]*?\n---\n?/);
+    if (!match) return content;
+    return content.slice(match[0].length).replace(/^\n+/, '');
   }
 
   /**

@@ -1,9 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { RunCapsule } from '@/lib/company-kernel/contracts';
+import type { GrowthProposal, RunCapsule } from '@/lib/company-kernel/contracts';
 
 let tempHome: string;
 let previousHome: string | undefined;
@@ -21,7 +22,7 @@ async function loadModules() {
     growthGenerateRoute: await import('./growth/proposals/generate/route'),
     growthEvaluateRoute: await import('./growth/proposals/[id]/evaluate/route'),
     growthListRoute: await import('./growth/proposals/route'),
-    growthStore: await import('@/lib/company-kernel/growth-proposal-store'),
+    gatewayDb: await import('@/lib/storage/gateway-db'),
     operatingDayRoute: await import('./operating-day/route'),
     signalsRoute: await import('./signals/route'),
     agendaStore: await import('@/lib/company-kernel/agenda-store'),
@@ -58,6 +59,31 @@ function makeCapsule(): RunCapsule {
     createdAt: '2026-04-25T10:00:00.000Z',
     updatedAt: '2026-04-25T10:01:00.000Z',
   };
+}
+
+function seedGrowthProposal(db: Database.Database, proposal: GrowthProposal): void {
+  db.prepare(`
+    INSERT INTO growth_proposals(
+      proposal_id, kind, status, risk, score, workspace, target_name, target_ref,
+      created_at, updated_at, payload_json
+    )
+    VALUES (
+      @proposal_id, @kind, @status, @risk, @score, @workspace, @target_name, @target_ref,
+      @created_at, @updated_at, @payload_json
+    )
+  `).run({
+    proposal_id: proposal.id,
+    kind: proposal.kind,
+    status: proposal.status,
+    risk: proposal.risk,
+    score: proposal.score,
+    workspace: proposal.workspaceUri || null,
+    target_name: proposal.targetName,
+    target_ref: proposal.targetRef,
+    created_at: proposal.createdAt,
+    updated_at: proposal.updatedAt,
+    payload_json: JSON.stringify(proposal),
+  });
 }
 
 describe('/api/company operating kernel routes', () => {
@@ -111,20 +137,37 @@ describe('/api/company operating kernel routes', () => {
     expect((await dayRes.json()).agenda).toHaveLength(1);
   }, 15_000);
 
-  it('generates and lists growth proposals through API routes', async () => {
+  it('keeps growth proposal APIs read-only while still listing legacy proposals', async () => {
     const modules = await loadModules();
-    modules.integration.observeRunCapsuleForAgenda(makeCapsule());
-    const capsuleStore = await import('@/lib/company-kernel/run-capsule-store');
-    capsuleStore.upsertRunCapsule(makeCapsule());
-    capsuleStore.upsertRunCapsule({ ...makeCapsule(), runId: 'api-run-2', capsuleId: 'capsule-api-run-2' });
+    seedGrowthProposal(modules.gatewayDb.getGatewayDb(), {
+      id: 'growth-legacy-1',
+      kind: 'workflow',
+      status: 'draft',
+      risk: 'medium',
+      score: 75,
+      workspaceUri: 'file:///tmp/workspace',
+      title: 'Legacy growth proposal',
+      summary: 'Historical growth proposal.',
+      targetName: 'legacy-growth-proposal',
+      targetRef: 'workflow:/legacy-growth-proposal',
+      content: '# Legacy Growth Proposal',
+      sourceRunIds: [],
+      sourceCapsuleIds: [],
+      sourceKnowledgeIds: [],
+      sourceCandidateIds: [],
+      evidenceRefs: [],
+      createdAt: '2026-04-26T00:00:00.000Z',
+      updatedAt: '2026-04-26T00:00:00.000Z',
+    });
 
     const generateRes = await modules.growthGenerateRoute.POST(new Request('http://localhost/api/company/growth/proposals/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ limit: 5 }),
     }));
-    expect(generateRes.status).toBe(201);
-    expect((await generateRes.json()).proposals.length).toBeGreaterThan(0);
+    const generateBody = await generateRes.json();
+    expect(generateRes.status).toBe(410);
+    expect(generateBody.legacyMode).toBe('read-only');
 
     const listRes = await modules.growthListRoute.GET(new Request('http://localhost/api/company/growth/proposals?pageSize=5'));
     expect(listRes.status).toBe(200);
@@ -160,18 +203,8 @@ describe('/api/company operating kernel routes', () => {
     expect(modules.budgetLedgerStore.countBudgetLedgerEntries({ agendaItemId: item.id })).toBe(0);
   });
 
-  it('blocks growth proposal generation through the budget gate', async () => {
+  it('returns 410 for legacy growth generation even when old automation inputs are provided', async () => {
     const modules = await loadModules();
-    modules.budgetPolicy.upsertBudgetPolicy({
-      ...modules.budgetPolicy.buildDefaultBudgetPolicy({
-        scope: 'growth-proposal',
-        scopeId: 'global',
-      }),
-      maxTokens: 10,
-      maxMinutes: 1,
-      maxDispatches: 1,
-    });
-
     const generateRes = await modules.growthGenerateRoute.POST(new Request('http://localhost/api/company/growth/proposals/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -179,14 +212,14 @@ describe('/api/company operating kernel routes', () => {
     }));
     const body = await generateRes.json();
 
-    expect(generateRes.status).toBe(409);
-    expect(body.proposals).toEqual([]);
-    expect(body.ledger.decision).toBe('blocked');
+    expect(generateRes.status).toBe(410);
+    expect(body.legacyMode).toBe('read-only');
+    expect(body.replacement).toContain('/api/company/self-improvement/proposals');
   });
 
-  it('creates an approval request when evaluating a high-risk growth proposal', async () => {
+  it('returns 410 when mutating a legacy growth proposal', async () => {
     const modules = await loadModules();
-    modules.growthStore.upsertGrowthProposal({
+    seedGrowthProposal(modules.gatewayDb.getGatewayDb(), {
       id: 'growth-high-risk-route',
       kind: 'workflow',
       status: 'draft',
@@ -214,9 +247,8 @@ describe('/api/company operating kernel routes', () => {
     });
     const body = await evaluateRes.json();
 
-    expect(evaluateRes.status).toBe(200);
-    expect(body.proposal.status).toBe('approval-required');
-    expect(body.proposal.approvalRequestId).toBeTruthy();
+    expect(evaluateRes.status).toBe(410);
+    expect(body.legacyMode).toBe('read-only');
   });
 
   it('proxies new company routes from web role to control-plane', async () => {

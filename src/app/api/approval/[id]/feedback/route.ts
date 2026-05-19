@@ -15,11 +15,7 @@
  * - Request must be in 'pending' or 'feedback' status
  */
 
-import { handleApprovalFeedback } from '@/server/control-plane/routes/approval';
-import {
-  proxyToControlPlane,
-  shouldProxyControlPlaneRequest,
-} from '@/server/shared/proxy';
+import { runControlPlaneRoute } from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,16 +26,16 @@ interface RouteParams {
 // Both GET and POST use the same logic
 export async function GET(req: Request, ctx: RouteParams) {
   const { id } = await ctx.params;
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleApprovalFeedback(req, id);
+  return runControlPlaneRoute(req, async () => {
+    const { handleApprovalFeedback } = await import('@/server/control-plane/routes/approval');
+    return handleApprovalFeedback(req, id);
+  })
 }
 
 export async function POST(req: Request, ctx: RouteParams) {
   const { id } = await ctx.params;
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleApprovalFeedback(req, id);
+  return runControlPlaneRoute(req, async () => {
+    const { handleApprovalFeedback } = await import('@/server/control-plane/routes/approval');
+    return handleApprovalFeedback(req, id);
+  });
 }

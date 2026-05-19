@@ -6,12 +6,15 @@
  */
 
 import { grpc } from '../bridge/gateway';
+import { summarizeFailureText } from '../project-utils';
+import { isAuthoritativeSessionHandle } from './session-handle';
 import { getRun, updateRun } from './run-registry';
 import { getCopiedArtifactPath } from './prompt-builder';
 import type {
   AgentRunState, TaskResult, TaskEnvelope,
   RoleInputReadAudit, RoleReadEvidence, InputArtifactReadAuditEntry,
 } from './group-types';
+import type { ProviderId } from '../providers';
 import { createLogger } from '../logger';
 import * as path from 'path';
 
@@ -22,7 +25,7 @@ const log = createLogger('Runtime');
 // ---------------------------------------------------------------------------
 
 export function isAuthoritativeConversation(run: AgentRunState | null, conversationId: string): run is AgentRunState {
-  return !!run && (!run.activeConversationId || run.activeConversationId === conversationId);
+  return !!run && isAuthoritativeSessionHandle(run, conversationId);
 }
 
 // ---------------------------------------------------------------------------
@@ -30,12 +33,13 @@ export function isAuthoritativeConversation(run: AgentRunState | null, conversat
 // ---------------------------------------------------------------------------
 
 export async function cancelCascadeBestEffort(
+  provider: ProviderId | undefined,
   cascadeId: string | undefined,
   conn: { port: number; csrf: string },
   apiKey: string,
   shortRunId: string,
 ): Promise<void> {
-  if (!cascadeId) return;
+  if (provider !== 'antigravity' || !cascadeId) return;
   try {
     await grpc.cancelCascade(conn.port, conn.csrf, apiKey, cascadeId);
   } catch (err: any) {
@@ -47,18 +51,7 @@ export async function cancelCascadeBestEffort(
 // Failure helpers
 // ---------------------------------------------------------------------------
 
-export function summarizeFailureText(text?: string): string | undefined {
-  if (!text) return undefined;
-  const firstMeaningfulLine = text
-    .split('\n')
-    .map(line => line.trim().replace(/^#+\s*/, ''))
-    .find(line => line.length > 0);
-
-  if (!firstMeaningfulLine) return undefined;
-  return firstMeaningfulLine.length > 240
-    ? `${firstMeaningfulLine.slice(0, 237)}...`
-    : firstMeaningfulLine;
-}
+export { summarizeFailureText };
 
 export function getFailureReason(result: TaskResult): string | undefined {
   return result.blockers[0] || summarizeFailureText(result.summary);
@@ -100,7 +93,7 @@ export function getCanonicalTaskEnvelope(runId: string, fallback?: TaskEnvelope)
 // Path normalization & evidence
 // ---------------------------------------------------------------------------
 
-export function normalizeComparablePath(value: string | undefined): string {
+function normalizeComparablePath(value: string | undefined): string {
   if (!value) return '';
   let normalized = value.trim();
   if (normalized.startsWith('file://')) {
@@ -114,12 +107,12 @@ export function normalizeComparablePath(value: string | undefined): string {
   return path.normalize(normalized).replace(/\\/g, '/');
 }
 
-export function includesPathCandidate(haystack: string, candidate: string): boolean {
+function includesPathCandidate(haystack: string, candidate: string): boolean {
   if (!haystack || !candidate) return false;
   return haystack.replace(/\\/g, '/').includes(candidate.replace(/\\/g, '/'));
 }
 
-export function extractStepReadEvidence(steps: any[]): RoleReadEvidence[] {
+function extractStepReadEvidence(steps: any[]): RoleReadEvidence[] {
   const evidence: RoleReadEvidence[] = [];
 
   steps.forEach((step, stepIndex) => {
@@ -138,7 +131,7 @@ export function extractStepReadEvidence(steps: any[]): RoleReadEvidence[] {
   return evidence;
 }
 
-export function filterEvidenceByCandidates(evidence: RoleReadEvidence[], candidates: string[]): RoleReadEvidence[] {
+function filterEvidenceByCandidates(evidence: RoleReadEvidence[], candidates: string[]): RoleReadEvidence[] {
   const normalizedCandidates = candidates
     .map(candidate => normalizeComparablePath(candidate))
     .filter(Boolean);
@@ -152,7 +145,7 @@ export function filterEvidenceByCandidates(evidence: RoleReadEvidence[], candida
   });
 }
 
-export function dedupeStringList(values: string[]): string[] {
+function dedupeStringList(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 

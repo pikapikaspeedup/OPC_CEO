@@ -25,6 +25,7 @@ import {
   Plus,
   Power,
   Server as ServerIcon,
+  Sparkles,
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -287,6 +288,10 @@ export default function Sidebar({
       eyebrow: 'Artifacts',
       title: t('shell.knowledge'),
     },
+    evolution: {
+      eyebrow: 'Business Evolution',
+      title: '业务进化',
+    },
     operations: {
       eyebrow: 'System Ops',
       title: 'Operations',
@@ -312,6 +317,12 @@ export default function Sidebar({
       title: 'Knowledge',
       meta: <span>知识库工作面</span>,
       icon: <BookOpen className="h-4 w-4" />,
+    },
+    {
+      section: 'evolution',
+      title: 'Evolution',
+      meta: <span>SOP / Workflow / Skill / Script / Rule</span>,
+      icon: <Sparkles className="h-4 w-4" />,
     },
     {
       section: 'operations',

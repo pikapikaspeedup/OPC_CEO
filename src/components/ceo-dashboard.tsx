@@ -451,6 +451,45 @@ export default function CEODashboard({
           </button>
         </div>
 
+        {/* Crystallization progress strip */}
+        {!evolutionLoading && evolutionProposals.length > 0 && (() => {
+          const counts = {
+            draft: evolutionProposals.filter((p) => p.status === 'draft').length,
+            evaluated: evolutionProposals.filter((p) => p.status === 'evaluated').length,
+            pending: evolutionProposals.filter((p) => p.status === 'pending-approval').length,
+            published: evolutionProposals.filter((p) => p.status === 'published').length,
+            rejected: evolutionProposals.filter((p) => p.status === 'rejected').length,
+          };
+          const totalActive = counts.draft + counts.evaluated + counts.pending;
+          return (
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded-full border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2.5 py-1 text-[var(--app-text-soft)]">
+                Total <span className="ml-1 font-mono text-[var(--app-text)]">{evolutionProposals.length}</span>
+              </span>
+              <span className="rounded-full border border-sky-400/20 bg-sky-500/10 px-2.5 py-1 text-sky-200">
+                Active <span className="ml-1 font-mono">{totalActive}</span>
+              </span>
+              <span className="rounded-full border border-[var(--app-border-soft)] bg-[var(--app-raised)] px-2.5 py-1 text-[var(--app-text-soft)]">
+                Draft <span className="ml-1 font-mono">{counts.draft}</span>
+              </span>
+              <span className="rounded-full border border-blue-400/20 bg-blue-500/10 px-2.5 py-1 text-blue-200">
+                Evaluated <span className="ml-1 font-mono">{counts.evaluated}</span>
+              </span>
+              <span className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-1 text-amber-200">
+                Pending <span className="ml-1 font-mono">{counts.pending}</span>
+              </span>
+              <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-emerald-200">
+                Published <span className="ml-1 font-mono">{counts.published}</span>
+              </span>
+              {counts.rejected > 0 && (
+                <span className="rounded-full border border-red-400/20 bg-red-500/10 px-2.5 py-1 text-red-200">
+                  Rejected <span className="ml-1 font-mono">{counts.rejected}</span>
+                </span>
+              )}
+            </div>
+          );
+        })()}
+
         {evolutionLoading ? (
           <div className="text-xs text-[var(--app-text-soft)]">Loading evolution proposals…</div>
         ) : evolutionProposals.length > 0 ? (

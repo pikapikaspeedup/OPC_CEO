@@ -26,6 +26,7 @@ import {
   shouldStartSchedulerServices,
 } from './src/lib/gateway-role';
 import { createLogger } from './src/lib/logger';
+import { CORRELATION_ID_HEADER, resolveCorrelationId, runWithRequestContext } from './src/lib/request-context';
 import { launchBridgeWorkerProcess } from './src/server/runtime/bridge-worker-process';
 
 const log = createLogger('Server');
@@ -258,20 +259,33 @@ async function startWebServer(options: { enableBackgroundServices: boolean }): P
   await app.prepare();
 
   const server = createServer((req, res) => {
-    const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    }
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
+    const correlationId = resolveCorrelationId(req.headers);
 
-    const parsedUrl = parse(req.url || '', true);
-    handle(req, res, parsedUrl);
+    void runWithRequestContext(correlationId, async () => {
+      const origin = req.headers.origin;
+      res.setHeader(CORRELATION_ID_HEADER, correlationId);
+
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', `Content-Type, Authorization, ${CORRELATION_ID_HEADER}`);
+        res.setHeader('Access-Control-Expose-Headers', CORRELATION_ID_HEADER);
+      }
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      const parsedUrl = parse(req.url || '', true);
+      await handle(req, res, parsedUrl);
+    }).catch((error: unknown) => {
+      if (res.headersSent) return;
+      const message = error instanceof Error ? error.message : String(error);
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: message }));
+    });
   });
 
   const wss = new WebSocketServer({ noServer: true });

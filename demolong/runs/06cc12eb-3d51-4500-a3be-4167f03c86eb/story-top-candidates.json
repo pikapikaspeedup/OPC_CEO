@@ -1,0 +1,35 @@
+[
+  {
+    "storyKey": "ceo-department-creation-and-full-config-workbench",
+    "sourcePath": "User Story/CEO Office/CEO 办公室.md",
+    "storyText": "作为 CEO，我希望在新建部门流程中连续完成部门名称、类型、职责、skills、Provider、预算、OKR、上下文文档和默认执行目录配置，而不是只补少量基础字段。",
+    "title": "系统改进：补齐 CEO 端部门创建与完整配置工作台",
+    "summary": "当前部门治理仍依赖从已有文件夹导入和分散补配置，CEO 无法一次性完成部门对象、执行目录、上下文、Provider 与预算的完整建模，直接阻塞组织搭建与后续派发质量。",
+    "expectedOutcome": "落地后 CEO 可以从 0 到 1 完成部门创建和治理建模，减少人工跳转与配置缺口，提升 Projects、调度和执行主链的可用性。",
+    "severity": "critical",
+    "rationale": "这是组织治理的基础设施缺口，直接影响部门对象是否能被正确创建、配置和用于后续项目派发、预算治理与上下文注入，属于核心工作流前置瓶颈。",
+    "affectedAreas": ["frontend", "api", "runtime", "database"]
+  },
+  {
+    "storyKey": "projects-pipeline-draft-save-conversion-closure",
+    "sourcePath": "User Story/Projects/项目工作台.md",
+    "storyText": "作为用户，我不能在 Projects 页面真正完成 pipeline 与 graphPipeline 格式转换保存；当前转换入口缺少完整转换输入和落库闭环。",
+    "title": "系统改进：打通 Projects 中 AI 生成 Pipeline 的保存闭环",
+    "summary": "当前 Projects 已能生成和预览 Pipeline 草稿，但无法真正完成 graphPipeline 到正式模板的转换与保存，导致用户停留在半成品阶段，无法把生成结果投入真实执行。",
+    "expectedOutcome": "落地后用户可在 Projects 内直接完成 Pipeline 生成、转换、保存与后续派发，真正形成从目标到执行模板的闭环。",
+    "severity": "critical",
+    "rationale": "这条缺口位于 Projects 主路径核心链路，直接阻断 AI 生成模板价值兑现；一旦补齐，会显著减少手工模板制作并提升项目启动效率。",
+    "affectedAreas": ["frontend", "api", "runtime", "database"]
+  },
+  {
+    "storyKey": "knowledge-governance-unified-growth-evolution-center",
+    "sourcePath": "User Story/Knowledge/知识库.md",
+    "storyText": "作为用户，我希望在统一提案中心同时治理 Company Growth Proposal 和 Evolution Proposal，以便不用跨页面处理相近事项。",
+    "title": "系统改进：建设 Knowledge 统一提案治理中心",
+    "summary": "当前 Growth Proposal 与 Evolution Proposal 分散在不同页面和治理路径中，用户需要跨 Knowledge 与 CEO 视图切换，治理链路割裂，难以形成统一的知识进化运营面。",
+    "expectedOutcome": "落地后用户可在一个治理中心集中查看、处理和对比两类提案，提升知识进化效率，减少跨页面切换与流程割裂。",
+    "severity": "high",
+    "rationale": "这条故事直接打通 Knowledge 主路径与业务能力进化闭环，能把相近治理动作收敛为统一工作台，显著提升可用性和治理效率。",
+    "affectedAreas": ["frontend", "api", "knowledge", "docs"]
+  }
+]

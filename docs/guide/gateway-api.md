@@ -83,6 +83,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 > - `control-plane` 负责：`/api/approval*`、`/api/ai-config`、`/api/provider-model-catalog`、`/api/provider-image-generation`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
 > - `runtime` 负责：`/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation send/steps/cancel、run stream/intervene 等运行时接口
 > - `api` 组合服务允许同一路径按 method 分流；例如 `GET /api/conversations` 归 control-plane，`POST /api/conversations` 归 runtime，路由器会在 405 后继续匹配后续同路径 route。
+> - 所有 HTTP 响应会带 `x-ag-correlation-id`，split-mode proxy 会透传同一个值，便于跨 `web -> api/control-plane/runtime` 串日志排障。
 
 ### `GET /api/conversations` — 列出所有对话
 
@@ -116,7 +117,10 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
       "title": "Documenting External APIs",
       "workspace": "file:///Applications/Antigravity.app/Contents/Resources/app",
       "mtime": 1773872543459.765,
-      "steps": 515
+      "steps": 515,
+      "provider": "native-codex",
+      "sourceKind": "local-provider",
+      "isLocalOnly": true
     }
   ],
   "page": 1,
@@ -128,11 +132,14 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | `string` | 对话唯一 UUID（即 `cascadeId`） |
+| `id` | `string` | 业务 conversation id；Gateway 本地会话为 `conversation-*`，Antigravity live 会话为真实 cascade id |
 | `title` | `string` | 对话标题（由 AI 自动生成的摘要；无标题时为 `Conversation {id前8位}`） |
 | `workspace` | `string` | 所属工作空间的 `file://` URI |
 | `mtime` | `number` | 最后修改时间戳（毫秒级 Unix epoch） |
 | `steps` | `number` | 总步骤数（含 user/AI/tool 等所有类型） |
+| `provider` | `string` | 最近一次完成消息所使用的 provider；Antigravity live projection 会返回 `antigravity` |
+| `sourceKind` | `string` | projection 来源，例如 `local-provider` / `antigravity-live` |
+| `isLocalOnly` | `boolean` | 是否只存在于 Gateway 本地 conversation 存储 |
 
 ---
 
@@ -164,7 +171,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 ```json
 {
-  "cascadeId": "local-native-codex-7f8498a5-a7a9-4aec-9d3d-167ecffccdc2",
+  "cascadeId": "conversation-7f8498a5-a7a9-4aec-9d3d-167ecffccdc2",
   "state": "idle",
   "provider": "native-codex"
 }
@@ -172,7 +179,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `cascadeId` | `string` | 新建对话的 UUID，后续所有操作需用此 ID |
+| `cascadeId` | `string` | 新建对话的业务 id；Gateway 本地会话为 `conversation-*`，Antigravity 会话为真实 cascade id。字段名保留为 `cascadeId` 以兼容旧客户端 |
 
 **错误响应**:
 
@@ -189,8 +196,9 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 ```
 1. resolveProvider('execution', workspacePath)
 2. 若 provider ∈ {`native-codex`, `claude-api`, `openai-api`, `gemini-api`, `grok-api`, `custom`}
-   ├─ 直接创建 `local-*` conversation
-   └─ 写入 SQLite / 本地缓存
+   ├─ 直接创建 provider-neutral `conversation-*`
+   ├─ 后续每轮 send 重新解析当前 provider
+   └─ provider runtime handle 写入 `providerSessions`
 3. 若 provider = `antigravity`
    ├─ getLanguageServer(wsUri) → 找专属 server
    ├─ grpc.addTrackedWorkspace(...)
@@ -218,6 +226,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 |------|------|------|------|
 | `text` | `string` | ✅ | 用户消息文本。支持 `@[path/to/file]` 语法引用文件（见下方说明） |
 | `model` | `string` | 否 | 模型 ID（见模型速查表）。不传使用默认 |
+| `provider` | `string` | 否 | 覆盖本轮使用的 provider；不传时按当前 execution provider 配置解析 |
 | `agenticMode` | `boolean` | 否 | 是否启用 Agentic 模式（默认 `true`）。`false` 时使用 fast 模式 |
 | `attachments` | `object` | 否 | 附件对象，包含 `items` 数组。用于传递文件引用等结构化附件 |
 
@@ -266,7 +275,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 **功能**: 获取对话的完整步骤列表。
 
 - Antigravity conversation：从 checkpoint / gRPC 拉取
-- Gateway 本地 conversation：从 Gateway 管理的本地 transcript / provider transcript store 回放
+- Gateway 本地 conversation：优先从 provider-neutral 业务 transcript 回放；没有本地 transcript 时再回退到对应 provider session 的 transcript store
 
 **URL 参数**: `:id` = `cascadeId`
 
@@ -368,7 +377,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 
 - Antigravity conversation：调用 gRPC `cancelCascade`
 - Gateway 本地 conversation：
-  - 若当前有进行中的 API-backed 请求：尝试中断
+  - 若当前有进行中的 API-backed 请求：按业务 conversation id 尝试中断
   - 若当前没有活动请求：返回 `not_running`
 
 **Request Body**: 无需 Body。
@@ -424,7 +433,7 @@ Gateway 本地 conversation 的典型返回可能是：
 **功能**: 回退对话到指定步骤索引处。
 
 - Antigravity conversation：通过 gRPC 回退
-- Gateway 本地 conversation：直接截断本地 transcript / transcript store
+- Gateway 本地 conversation：截断 provider-neutral 业务 transcript；API-backed provider 也同步截断对应 provider session transcript
 
 **Request Body**:
 
@@ -1176,13 +1185,13 @@ Web 首页展示原则：
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `workspace` | `string` | 否。按部门过滤 |
-| `kind` | `string` | 否。`workflow` / `skill` |
+| `kind` | `string` | 否。`sop` / `workflow` / `skill` / `script` / `rule` |
 | `status` | `string` | 否。`draft` / `evaluated` / `pending-approval` / `published` / `rejected` |
 | `observe` | `boolean` | 否。默认 `true`，published proposal 会附带 rollout 观察 |
 
 ### `POST /api/evolution/proposals/generate` — Generate Proposals
 
-**功能**: 从 knowledge proposal signals 与 repeated prompt runs 生成 proposals。
+**功能**: 从 MemoryCandidate、KnowledgeAsset、RunCapsule 聚类与 repeated prompt runs 生成业务能力 evolution proposals。
 
 **Request Body**:
 
@@ -1201,7 +1210,7 @@ Web 首页展示原则：
 
 ### `POST /api/evolution/proposals/:id/publish` — Request Publish Approval
 
-**功能**: 为 proposal 创建发布审批，请求通过后由 approval callback 真正发布 workflow/skill。
+**功能**: 为 proposal 创建发布审批，请求通过后由 approval callback 真正发布 workflow/skill/rule/workflow script，或将 SOP 发布为 active KnowledgeAsset。
 
 ### `POST /api/evolution/proposals/:id/observe` — Refresh Rollout Observe
 
@@ -1235,7 +1244,7 @@ Web 首页展示原则：
       "id": "approval-123",
       "type": "proposal_publish",
       "workspace": "file:///tmp/research",
-      "target": { "kind": "growth-proposal", "proposalId": "growth-proposal-123" },
+      "target": { "kind": "knowledge", "knowledgeId": "workflow:/weekly-research-digest" },
       "title": "发布提案",
       "description": "需要 CEO 审批",
       "urgency": "normal",
@@ -1406,6 +1415,52 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 ```json
 { "ok": true, "syncPending": true }
 ```
+
+### `GET /api/departments/rules` — 读取部门本地规则
+
+**功能**: 读取会进入 Department Local Rules 的有效规则。返回值会合并 `workspace/.department/rules/*.md` 与 legacy `workspace/.agents/rules/*.md`；同名时 `.department/rules` 优先，`department-identity` 保留名不会作为本地规则返回。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
+
+**Response** `200 OK`:
+```json
+{
+  "workspace": "file:///Users/me/repo",
+  "rules": [
+    {
+      "name": "engineering-principles",
+      "content": "# Engineering Principles\n",
+      "source": "department",
+      "editable": true,
+      "path": "/Users/me/repo/.department/rules/engineering-principles.md"
+    }
+  ]
+}
+```
+
+### `PUT /api/departments/rules` — 写入部门本地规则
+
+**功能**: 创建或更新 `workspace/.department/rules/<name>.md`。不会改写 `.agents/rules`。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
+| `name` | `string` | 必填。规则名，只允许字母、数字、`_`、`-`，不能使用 `department-identity` |
+
+**Request Body**:
+```json
+{ "content": "# Engineering Principles\n" }
+```
+
+### `DELETE /api/departments/rules` — 删除部门本地规则
+
+**功能**: 只删除 `.department/rules/<name>.md`。legacy `.agents/rules` 是只读来源；如果只存在 legacy 规则，删除会返回 `409`。
 
 ### `POST /api/departments/sync` — 同步部门状态
 
@@ -1656,7 +1711,7 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `GET /api/company/budget/ledger`
 
-分页读取预算流水。支持 `scope`、`scopeId`、`policyId`、`decision`、`agendaItemId`、`runId`、`schedulerJobId`、`proposalId` 过滤。`decision` 包括 `reserved`、`committed`、`released`、`blocked`、`skipped`；`skipped` 表示调度被 budget/circuit gate 明确拦截，未创建 run；growth generate/evaluate 也会写入 `growth-proposal` scope ledger。
+分页读取预算流水。支持 `scope`、`scopeId`、`policyId`、`decision`、`agendaItemId`、`runId`、`schedulerJobId`、`proposalId` 过滤。`decision` 包括 `reserved`、`committed`、`released`、`blocked`、`skipped`；`skipped` 表示调度被 budget/circuit gate 明确拦截，未创建 run。历史 `growth-proposal` scope ledger 仍可读取，但新的 growth generate/evaluate 写流已退役。
 
 ### `GET /api/company/circuit-breakers` / `POST /api/company/circuit-breakers/:id/reset`
 
@@ -1664,11 +1719,11 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `GET /api/company/growth/proposals`
 
-分页读取 GrowthProposal。支持 `workspaceUri`、`kind`、`status`、`risk`、`minScore` 过滤。`kind` 为 `sop` / `workflow` / `skill` / `script` / `rule`。
+分页读取历史 GrowthProposal。支持 `workspaceUri`、`kind`、`status`、`risk`、`minScore` 过滤。`kind` 为 `sop` / `workflow` / `skill` / `script` / `rule`。该接口现在只负责 legacy 查询，不再代表当前业务能力进化或系统改进主线。
 
 ### `POST /api/company/growth/proposals/generate`
 
-经过 budget gate 后，从 RunCapsule、已晋升知识和 workflow/skill memory candidate 生成增长提案。三次以上同类成功 RunCapsule 会生成 `workflow` proposal；两次同类成功或单次稳定 reusable steps 会优先生成 SOP proposal；重复出现的脚本化任务和规则约束会额外生成 `script` / `rule` proposal。
+Legacy 兼容接口，当前固定返回 `410 Gone`。新的业务能力进化提案走 `POST /api/evolution/proposals/generate`；软件自身改进提案走 `POST /api/company/self-improvement/proposals/generate`。
 
 ```json
 { "workspaceUri": "file:///tmp/workspace", "limit": 20 }
@@ -1676,15 +1731,15 @@ Company Kernel 负责把 run 执行事实沉淀成可审计的公司记忆候选
 
 ### `GET /api/company/growth/proposals/:id`
 
-读取单个增长提案。
+读取单个历史增长提案。
 
 ### `POST /api/company/growth/proposals/:id/evaluate|approve|reject|dry-run|publish`
 
-评估、批准、拒绝、dry-run 或发布增长提案。`evaluate` 会经过 budget gate；高风险提案会创建带 `target: { kind: "growth-proposal" }` 的 approval request；`script` proposal 必须先通过 `dry-run` 静态 sandbox 检查；公开 `publish` 不接受 `force` 绕过审批或 dry-run，只有满足约束后才会写入 canonical workflow/skill/rule、workflow script 或 SOP knowledge asset。已发布的 workflow/skill proposal 会参与后续 Prompt Mode 执行解析。
+Legacy 兼容接口，当前统一返回 `410 Gone`。growth proposal 的评估、审批、dry-run、发布主线已经退役；新的业务能力进化走 `evolution/*`，软件自身改进走 `self-improvement-*`。
 
 ### `GET|POST /api/company/growth/observations`
 
-读取或执行增长提案发布后的观察。只有 `published` / `observing` proposal 可以观察；观察结果包含命中 run、成功率、估算 token saving 和 regression signals。`POST` body:
+`GET` 仍可读取历史增长提案观察记录。`POST` 现在返回 `410 Gone`，不再为 growth proposal 启动新的 observation 流程。`POST` 旧 body 形状如下：
 
 ```json
 { "proposalId": "growth-proposal-..." }
@@ -2524,7 +2579,7 @@ ws.on('message', (data) => {
 **Response** `200 OK`:
 ```json
 {
-  "defaultProvider": "antigravity",
+  "defaultProvider": "claude-api",
   "activeCustomProviderId": "baogaoai-glm",
   "customProviders": [
     {
@@ -2539,10 +2594,10 @@ ws.on('message', (data) => {
     "native-codex": { "transport": "pi-ai", "authMode": "codex-oauth" }
   },
   "layers": {
-    "executive": { "provider": "antigravity" },
-    "management": { "provider": "antigravity" },
-    "execution": { "provider": "antigravity" },
-    "utility": { "provider": "antigravity" }
+    "executive": { "provider": "claude-api" },
+    "management": { "provider": "claude-api" },
+    "execution": { "provider": "claude-api" },
+    "utility": { "provider": "claude-api" }
   },
   "scenes": {}
 }
@@ -2555,6 +2610,8 @@ ws.on('message', (data) => {
 > 2026-04-16 起，未配置 Provider 不再允许通过 Settings 被选中；即便绕过前端直接调用本接口，也会被服务端拒绝。
 >
 > 2026-04-30 起，遗留的 `codex / claude-code` 配置值会在服务端自动归一为 `native-codex`；CLI coder 不再属于组织级 Provider 配置平面。
+>
+> 2026-05-09 起，未显式填写的 `layers.*` / `scenes.*` 会在服务端按当前 `defaultProvider` 归一化；因此如果 `defaultProvider` 本身不可用，错误列表里可能同时出现继承它的 layer 路径。
 
 **Request Body**:
 ```json
@@ -2608,7 +2665,8 @@ ws.on('message', (data) => {
 {
   "error": "Provider \"OpenAI API\" at \"defaultProvider\" is not configured and cannot be selected",
   "issues": [
-    { "path": "defaultProvider", "provider": "openai-api" }
+    { "path": "defaultProvider", "provider": "openai-api" },
+    { "path": "layers.management", "provider": "openai-api" }
   ]
 }
 ```

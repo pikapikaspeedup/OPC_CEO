@@ -20,13 +20,10 @@ import type {
   SessionProvenance,
   TaskResult,
 } from '@/lib/agents/group-types';
+import { resolveRunSessionHandle } from '@/lib/agents/session-handle';
 import {
-  proxyToControlPlane,
-  proxyToRuntime,
-  shouldProxyControlPlaneRequest,
-  shouldProxyRuntimeRequest,
-} from '@/server/shared/proxy';
-import { handleRuntimeAgentRunDispatch } from '@/server/runtime/agent-runs-dispatch';
+  runControlPlaneThenRuntimeRoute,
+  } from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,6 +110,7 @@ function toRunListItem(
 ): AgentRunState & {
   executionProfileSummary?: ReturnType<typeof summarizeExecutionProfile>;
 } {
+  const activeSessionHandle = resolveRunSessionHandle(run);
   return {
     runId: run.runId,
     stageId: run.pipelineStageId || run.stageId,
@@ -122,8 +120,6 @@ function toRunListItem(
     createdAt: run.createdAt,
     ...(run.projectId ? { projectId: run.projectId } : {}),
     ...(run.parentConversationId ? { parentConversationId: run.parentConversationId } : {}),
-    ...(run.childConversationId ? { childConversationId: run.childConversationId } : {}),
-    ...(run.activeConversationId ? { activeConversationId: run.activeConversationId } : {}),
     ...(run.activeRoleId ? { activeRoleId: run.activeRoleId } : {}),
     ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
@@ -149,6 +145,7 @@ function toRunListItem(
     ...(run.pipelineStageId ? { pipelineStageId: run.pipelineStageId } : {}),
     ...(run.pipelineStageIndex !== undefined ? { pipelineStageIndex: run.pipelineStageIndex } : {}),
     ...(toListSessionProvenance(run.sessionProvenance) ? { sessionProvenance: toListSessionProvenance(run.sessionProvenance) } : {}),
+    ...(activeSessionHandle ? { activeConversationId: activeSessionHandle } : {}),
     ...(run.provider ? { provider: run.provider } : {}),
     ...(run.resolvedWorkflowRef ? { resolvedWorkflowRef: run.resolvedWorkflowRef } : {}),
     ...(run.reportedEventDate ? { reportedEventDate: run.reportedEventDate } : {}),
@@ -160,15 +157,14 @@ function toRunListItem(
 
 // POST /api/agent-runs — dispatch a new run
 export async function POST(req: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-
-  if (shouldProxyRuntimeRequest()) {
-    return proxyToRuntime(req, '/internal/runtime/agent-runs');
-  }
-
-  const response = await handleRuntimeAgentRunDispatch(req);
+  const response = await runControlPlaneThenRuntimeRoute(
+    req,
+    async () => {
+      const { handleRuntimeAgentRunDispatch } = await import('@/server/runtime/agent-runs-dispatch');
+      return handleRuntimeAgentRunDispatch(req);
+    },
+    { runtimePathOverride: '/internal/runtime/agent-runs' },
+  );
   if (!response.ok) {
     let message = 'Dispatch failed';
     try {

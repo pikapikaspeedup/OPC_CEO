@@ -1,0 +1,10 @@
+{
+  "goal": "从 User Story 中提炼当前全局 Top 3 的待立项候选，写出结构化候选 JSON。",
+  "executionTarget": {
+    "kind": "prompt",
+    "promptAssetRefs": [
+      "/platform_engineering_story_candidates"
+    ]
+  },
+  "runId": "c2d17c51-da3e-44dd-af9c-5779cd16188f"
+}

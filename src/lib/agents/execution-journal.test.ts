@@ -97,7 +97,7 @@ describe('appendJournalEntry', () => {
       projectId: 'p-1',
       nodeId: 'b',
       nodeKind: 'gate',
-      eventType: 'gate:decided',
+      eventType: 'node:failed',
       details: {},
     });
 
@@ -129,7 +129,7 @@ describe('queryJournal', () => {
 
   it('filters by nodeId', () => {
     appendJournalEntry({ projectId: 'p-1', nodeId: 'a', nodeKind: 'stage', eventType: 'node:activated', details: {} });
-    appendJournalEntry({ projectId: 'p-1', nodeId: 'b', nodeKind: 'gate', eventType: 'gate:decided', details: {} });
+    appendJournalEntry({ projectId: 'p-1', nodeId: 'b', nodeKind: 'gate', eventType: 'node:failed', details: {} });
     appendJournalEntry({ projectId: 'p-1', nodeId: 'a', nodeKind: 'stage', eventType: 'node:completed', details: {} });
 
     const entries = queryJournal('p-1', { nodeId: 'a' });
@@ -191,50 +191,8 @@ describe('getNodeJournal', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// control-flow event types
-// ---------------------------------------------------------------------------
-
-describe('control-flow event types', () => {
-  it('records checkpoint:created event', () => {
-    appendJournalEntry({
-      projectId: 'p-1',
-      nodeId: 'loop-start',
-      nodeKind: 'loop-start',
-      eventType: 'checkpoint:created',
-      details: { checkpointId: 'cp-1', iterationIndex: 2 },
-    });
-
-    const entries = queryJournal('p-1', { eventType: 'checkpoint:created' });
-    expect(entries).toHaveLength(1);
-    expect(entries[0].details.checkpointId).toBe('cp-1');
-  });
-
-  it('records loop:iteration event', () => {
-    appendJournalEntry({
-      projectId: 'p-1',
-      nodeId: 'loop-end',
-      nodeKind: 'loop-end',
-      eventType: 'loop:iteration',
-      details: { iteration: 3, maxIterations: 5, terminationMet: false },
-    });
-
-    const entries = queryJournal('p-1', { eventType: 'loop:iteration' });
-    expect(entries).toHaveLength(1);
-    expect(entries[0].details.iteration).toBe(3);
-  });
-
-  it('records gate:decided event', () => {
-    appendJournalEntry({
-      projectId: 'p-1',
-      nodeId: 'security-gate',
-      nodeKind: 'gate',
-      eventType: 'gate:decided',
-      details: { action: 'approve', approvedBy: 'admin', reason: 'Looks good' },
-    });
-
-    const entries = queryJournal('p-1', { eventType: 'gate:decided' });
-    expect(entries).toHaveLength(1);
-    expect(entries[0].details.action).toBe('approve');
-  });
-});
+// Note: `control-flow event types` test block (covering checkpoint:created /
+// loop:iteration / gate:decided) was removed in Round-2 R1 cleanup
+// (2026-05-10). These event types were dropped from JournalEventType when
+// Issue 6 收回 journal 主线 to node/condition only; ops-audit now owns the
+// gate/switch/loop/checkpoint side. See docs/design/runtime-logging-boundaries-2026-05-09.md.

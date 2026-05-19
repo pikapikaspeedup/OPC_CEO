@@ -172,11 +172,6 @@ export default function StageDetailPanel({
 
   const handleOpenRunConversation = async () => {
     if (!run || !onOpenConversation) return;
-    if (run.childConversationId) {
-      onOpenConversation(run.childConversationId, stageTitle);
-      return;
-    }
-
     const data = await api.agentRunConversation(run.runId);
     if (data.kind === 'conversation') {
       onOpenConversation(data.conversationId, stageTitle);

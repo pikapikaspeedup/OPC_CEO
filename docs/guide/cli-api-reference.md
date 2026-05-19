@@ -18,6 +18,7 @@ The API runs on port 3000 by default.
 > - `control-plane`: `/api/approval*`、`/api/ai-config`、`/api/provider-model-catalog`、`/api/provider-image-generation`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
 > - `runtime`: `/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation / run runtime 主链
 > - `api` 组合服务支持同一路径按 method 分流；`GET /api/conversations` 与 `POST /api/conversations` 不会因前序 route 返回 405 而互相截断。
+> - 所有 HTTP 响应会回 `x-ag-correlation-id`；split-mode proxy 会保持同一个值，便于 CLI 报错后回查后端日志。
 
 ## API Endpoints
 
@@ -25,7 +26,7 @@ The API runs on port 3000 by default.
 
 - `POST /api/conversations`
   - 当 workspace provider 为 `antigravity` 时，创建真实 Cascade conversation，仍依赖 language_server。
-  - 当 workspace 命中 Gateway 本地会话轨道时，创建 Gateway 本地 conversation，不依赖 IDE。当前轨道包括：
+  - 当 workspace 命中 Gateway 本地会话轨道时，创建 provider-neutral `conversation-*`，不依赖 IDE。当前轨道包括：
     - `native-codex`
     - `claude-api`
     - `openai-api`
@@ -35,16 +36,16 @@ The API runs on port 3000 by default.
   - `codex / claude-code` 不属于这里的 provider 列表；它们在 Claude Engine 内作为 `ExecutionTool` 被调用。
 - `POST /api/conversations/:id/send`
   - `antigravity` conversation 仍走 gRPC send。
-  - Gateway 本地 conversation 走本地 provider transcript store，并把 transcript 写回本地 steps。
+  - Gateway 本地 conversation 每轮按请求 `provider` 或当前 execution provider 配置选择运行后端；provider runtime handle 保存在 `providerSessions`，业务 transcript 写回 provider-neutral steps。
   - Gateway 本地执行路径返回 `status=failed` 时，接口返回 `502 { "error": "..." }`；Native Codex 默认 90s 超时，可通过 `NATIVE_CODEX_TIMEOUT_MS` 调整。
 - `GET /api/conversations/:id/steps`
-  - 对 Gateway 本地 conversation，返回标准化的 CORTEX transcript step（例如 `CORTEX_STEP_TYPE_USER_INPUT`、`CORTEX_STEP_TYPE_PLANNER_RESPONSE`），可直接被前端聊天面板渲染。
+  - 对 Gateway 本地 conversation，优先返回 provider-neutral 业务 transcript step；没有业务 transcript 时再回退到对应 provider session transcript。
 - `POST /api/conversations/:id/cancel`
   - Antigravity conversation 走 gRPC cancel。
-  - Gateway 本地 conversation 若没有活动请求，会返回 `status = not_running`，不再错误回退到 IDE 路径。
+  - Gateway 本地 API-backed conversation 按业务 conversation id 取消活动请求；若没有活动请求，返回 `status = not_running`。
 - `POST /api/conversations/:id/revert` / `GET /api/conversations/:id/revert-preview`
-  - Antigravity conversation 走 gRPC。
-  - Gateway 本地 conversation 直接对本地 transcript / transcript store 做 preview 与截断。
+  - Antigravity conversation 通过 `providerSessions.antigravity` 里的 runtime cascade 走 gRPC。
+  - Gateway 本地 conversation 直接对 provider-neutral 业务 transcript 做 preview 与截断；API-backed provider 也同步处理对应 provider session transcript。
 - `GET /api/conversations/:id/files`
   - 现在会优先使用 conversation record / backing run 的 workspace，不再只依赖 gRPC owner。
 
@@ -319,7 +320,7 @@ The API runs on port 3000 by default.
 
 ### 2.1 Company Kernel
 
-Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI 可以读取 RunCapsule / MemoryCandidate，也可以读取经营信号、议程、预算 gate、熔断器和 GrowthProposal。分离部署时这些接口由 web 代理到 `api/control-plane` 服务。
+Company Kernel 是 run 执行后的学习、经营与历史兼容收口层。CLI 可以读取 RunCapsule / MemoryCandidate，也可以读取经营信号、议程、预算 gate、熔断器和历史 GrowthProposal；新的业务能力进化 proposal 走 `/api/evolution/*`。分离部署时这些接口由 web 代理到 `api/control-plane` 服务。
 
 #### List Run Capsules
 - **URL:** `GET /api/company/run-capsules`
@@ -385,20 +386,20 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `GET /api/company/circuit-breakers`
 - **URL:** `POST /api/company/circuit-breakers/:id/reset`
 - **Note:** 默认策略 ID（如 `budget:organization:default:day`、`budget:department:default:day`）首次 `GET` 时会自动创建，Settings 不再因为默认预算未落库而出现 404。
-- **Note:** ledger `decision` can be `reserved`, `committed`, `released`, `blocked`, or `skipped`; scheduler budget/circuit blocks use `skipped` and do not create runs. Growth proposal generate/evaluate also writes `growth-proposal` scope ledger entries.
+- **Note:** ledger `decision` can be `reserved`, `committed`, `released`, `blocked`, or `skipped`; scheduler budget/circuit blocks use `skipped` and do not create runs. Existing `growth-proposal` scope ledger entries are historical compatibility data.
 - **Note:** real terminal run failures update department, scheduler-job, provider, and workflow circuit breakers; successful terminal runs reset the matching breakers.
 
 #### Growth Proposals
 - **URL:** `GET /api/company/growth/proposals`
-- **URL:** `POST /api/company/growth/proposals/generate`
 - **URL:** `GET /api/company/growth/proposals/:id`
+- **URL:** `POST /api/company/growth/proposals/generate`
 - **URL:** `POST /api/company/growth/proposals/:id/evaluate`
 - **URL:** `POST /api/company/growth/proposals/:id/approve`
 - **URL:** `POST /api/company/growth/proposals/:id/reject`
 - **URL:** `POST /api/company/growth/proposals/:id/dry-run`
 - **URL:** `POST /api/company/growth/proposals/:id/publish`
 - **URL:** `GET|POST /api/company/growth/observations`
-- **Note:** proposal `kind` can be `sop`, `workflow`, `skill`, `script`, or `rule`. Generate/evaluate is budgeted. Public publish no longer accepts force mode; high-risk proposals require approval requests with `target: { kind: "growth-proposal" }`, and `script` proposals additionally require a passed dry-run. Published workflow/skill proposals can be injected into later Prompt Mode execution resolution. Three or more repeated successful RunCapsules can generate a `workflow` proposal; repeated automation/script signals can generate `script`, and repeated operating constraints can generate `rule`.
+- **Note:** `GET` 仍保留为历史 growth proposal / observation 查询。所有 `POST` 现在都是 legacy read-only compatibility，统一返回 `410 Gone`；新的业务能力进化请使用 `/api/evolution/*`，软件自身改进请使用 `self-improvement-*`。
 
 #### Company Loops
 
@@ -709,6 +710,23 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **Note:** 该接口现在只保存 `.department/config.json`，不会再隐式同步所有 IDE mirror。响应会返回 `{ ok: true, syncPending: true }`。
 - **Split mode owner:** `control-plane`
 
+#### Read Department Rules
+- **URL:** `GET /api/departments/rules?workspace=<file_uri>`
+- **Description:** 合并读取 `.department/rules/*.md` 与 legacy `.agents/rules/*.md`；同名时 `.department/rules` 优先。
+- **Response:** `200 OK` `{ workspace, rules }`，rule 包含 `name/content/source/editable/path`。
+- **Split mode owner:** `control-plane`
+
+#### Update Department Rule
+- **URL:** `PUT /api/departments/rules?workspace=<file_uri>&name=<rule_name>`
+- **Request Body:** `{ "content": "..." }`
+- **Description:** 只写入 `.department/rules/<rule_name>.md`，不会改写 `.agents/rules`。
+- **Split mode owner:** `control-plane`
+
+#### Delete Department Rule
+- **URL:** `DELETE /api/departments/rules?workspace=<file_uri>&name=<rule_name>`
+- **Description:** 只删除 `.department/rules/<rule_name>.md`；legacy-only 规则返回 `409`。
+- **Split mode owner:** `control-plane`
+
 #### Sync Department State
 - **URL:** `POST /api/departments/sync?workspace=<file_uri>&target=<all|antigravity|codex|claude-code|cursor>`
 - **Description:** 显式同步部门配置到对应 IDE mirror。
@@ -781,12 +799,13 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 - **URL:** `GET /api/evolution/proposals`
 - **Description:** 返回 evolution proposals，支持：
   - `workspace`
-  - `kind`
+  - `kind` (`sop` / `workflow` / `skill` / `script` / `rule`)
   - `status`
   - `observe`
 
 #### Generate Evolution Proposals
 - **URL:** `POST /api/evolution/proposals/generate`
+- **Description:** 从 MemoryCandidate、KnowledgeAsset、RunCapsule 聚类与 repeated prompt runs 生成业务能力 evolution proposals。
 - **Request Body (JSON):**
   - `workspaceUri` (String, optional): 按部门范围生成
   - `limit` (Number, optional): 本次最大生成数
@@ -799,7 +818,7 @@ Company Kernel 是 run 执行后的学习、经营与自增长收口层。CLI �
 
 #### Request Evolution Publish
 - **URL:** `POST /api/evolution/proposals/:id/publish`
-- **Description:** 创建发布审批，请求通过后由 approval callback 真正发布 workflow/skill。
+- **Description:** 创建发布审批，请求通过后由 approval callback 真正发布 workflow/skill/rule/workflow script，或将 SOP 发布为 active KnowledgeAsset。
 
 #### Refresh Evolution Observe
 - **URL:** `POST /api/evolution/proposals/:id/observe`
@@ -1036,12 +1055,16 @@ curl -sX PUT http://localhost:3000/api/ai-config \
       }
     },
     "layers": {
-      "executive": { "provider": "antigravity" },
+      "executive": { "provider": "claude-api" },
       "management": { "provider": "claude-api" },
       "execution": { "provider": "native-codex" },
-      "utility": { "provider": "antigravity" }
+      "utility": { "provider": "claude-api" }
     }
   }'
+
+# Note:
+# 未显式填写的 layers/scenes 会在服务端按当前 defaultProvider 归一化；
+# 如果 defaultProvider 自身不可用，错误响应里可能同时列出继承它的 layers.*。
 
 # Force-refresh a provider model catalog
 curl -sX POST http://localhost:3000/api/provider-model-catalog \

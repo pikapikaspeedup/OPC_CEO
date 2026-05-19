@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 
 import { createRun } from '../agents/run-registry';
 import { listOperatingAgendaItems, updateOperatingAgendaStatus } from './agenda-store';
-import { attachRunToBudgetReservation, recordBudgetForOperation, reserveBudgetForAgendaItem } from './budget-gate';
+import { attachRunToBudgetReservation, reserveBudgetForAgendaItem } from './budget-gate';
 import { buildCompanyLoopDigest } from './company-loop-digest';
 import { getOrCreateCompanyLoopPolicy, getCompanyLoopPolicy } from './company-loop-policy';
 import {
@@ -12,7 +12,6 @@ import {
 } from './company-loop-run-store';
 import { notifyCompanyLoopDigest } from './company-loop-notifier';
 import { selectCompanyLoopAgenda } from './company-loop-selector';
-import { generateGrowthProposals } from './crystallizer';
 import type {
   BudgetLedgerEntry,
   CompanyLoopPolicy,
@@ -160,30 +159,9 @@ function maybeGenerateGrowthProposals(input: {
 } {
   if (!input.policy.growthReviewEnabled) return { proposals: [] };
   if (input.kind !== 'growth-review' && input.kind !== 'weekly-review') return { proposals: [] };
-
-  const budget = recordBudgetForOperation({
-    scope: 'growth-proposal',
-    scopeId: input.policy.scopeId || 'global',
-    estimatedCost: { tokens: 2_250, minutes: 1 },
-    dispatches: 1,
-    reason: 'Company loop growth proposal review',
-    operationKind: 'growth.generate',
-    blockedDecision: 'skipped',
-  });
-  if (!budget.decision.allowed) {
-    return {
-      proposals: [],
-      ledger: budget.ledger,
-      skippedReason: budget.decision.reasons.join('; ') || 'growth-budget-blocked',
-    };
-  }
-
   return {
-    proposals: generateGrowthProposals({
-      ...(input.policy.scope === 'department' && input.policy.scopeId ? { workspaceUri: input.policy.scopeId } : {}),
-      limit: 3,
-    }),
-    ledger: budget.ledger,
+    proposals: [],
+    skippedReason: 'growth-pipeline-retired',
   };
 }
 

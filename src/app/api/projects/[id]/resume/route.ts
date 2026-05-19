@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getProject, getFirstActionableStage, incrementStageAttempts, updatePipelineStage, updatePipelineStageByStageId } from '@/lib/agents/project-registry';
 import { getRun, recoverInterruptedRun, updateRun } from '@/lib/agents/run-registry';
+import { resolveRunSessionHandle } from '@/lib/agents/session-handle';
 import { cancelRun, interveneRun, InterventionConflictError } from '@/lib/agents/group-runtime';
 import {
   cancelSystemImprovementCodexRun,
@@ -279,7 +280,7 @@ export async function POST(
           stageTitle: effectiveStage.title || effectiveStage.stageId,
           runId: existingRun.runId,
           branchIndex: effectiveBranchIndex,
-          activeConversationId: existingRun.activeConversationId,
+          activeConversationId: resolveRunSessionHandle(existingRun),
           message: 'Recovered from existing artifacts',
         });
       }
@@ -323,7 +324,7 @@ export async function POST(
         stageTitle: effectiveStage.title || effectiveStage.stageId,
         runId: existingRun.runId,
         branchIndex: effectiveBranchIndex,
-        activeConversationId: existingRun.activeConversationId,
+        activeConversationId: resolveRunSessionHandle(existingRun),
       });
     }
 
@@ -360,7 +361,7 @@ export async function POST(
         stageTitle: effectiveStage.title || effectiveStage.stageId,
         runId: existingRun.runId,
         branchIndex: effectiveBranchIndex,
-        activeConversationId: existingRun.activeConversationId,
+        activeConversationId: resolveRunSessionHandle(existingRun),
       });
     }
 
@@ -389,7 +390,7 @@ export async function POST(
       stageTitle: effectiveStage.title || effectiveStage.stageId,
       runId: existingRun.runId,
       branchIndex: effectiveBranchIndex,
-      activeConversationId: existingRun.activeConversationId,
+      activeConversationId: resolveRunSessionHandle(existingRun),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

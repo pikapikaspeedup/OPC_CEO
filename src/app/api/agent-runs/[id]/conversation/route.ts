@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import type { AgentRunState } from '@/lib/agents/group-types';
+import { resolvePrimaryConversationId, resolveRunSessionHandle } from '@/lib/agents/session-handle';
 import { ensureConversationRecordForSession } from '@/lib/bridge/gateway';
 import { isSupportedLocalProvider } from '@/lib/local-provider-conversations';
 import {
@@ -51,16 +52,20 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: `Run not found: ${id}` }, { status: 404 });
   }
 
-  if (run.childConversationId) {
+  const directConversationId = (run.sessionProvenance?.backendId || run.provider) === 'antigravity'
+    ? resolvePrimaryConversationId(run)
+    : undefined;
+
+  if (directConversationId) {
     return NextResponse.json({
       kind: 'conversation',
       provider: run.provider,
-      conversationId: run.childConversationId,
+      conversationId: directConversationId,
       title: run.prompt,
     });
   }
 
-  const handle = run.sessionProvenance?.handle;
+  const handle = resolveRunSessionHandle(run);
   const localProvider = isSupportedLocalProvider(run.provider) ? run.provider : null;
   if (handle && localProvider) {
     const messages = readLocalProviderTranscriptMessages(localProvider, handle, run);

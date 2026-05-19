@@ -1,7 +1,6 @@
 import { listProjects } from '../agents/project-registry';
 import type { DecisionItemPriority, DecisionItemTone, DecisionItemView, DecisionTarget } from '../decision-control';
-import type { GrowthProposal, SystemImprovementProposalView } from './contracts';
-import { listGrowthProposals } from './growth-proposal-store';
+import type { SystemImprovementProposalView } from './contracts';
 import { buildSystemImprovementProposalViews } from './self-improvement-control-state';
 import { listSystemImprovementProposals } from './self-improvement-store';
 
@@ -51,25 +50,6 @@ function buildSystemImprovementDecision(proposal: SystemImprovementProposalView)
   };
 }
 
-function buildGrowthDecision(proposal: GrowthProposal): DecisionItemView | null {
-  if (proposal.status !== 'approval-required') return null;
-  if (!proposal.approvalRequestId) return null;
-  return {
-    id: `growth:${proposal.id}`,
-    title: proposal.title,
-    source: `增长提案 · ${proposal.kind}`,
-    status: '待 CEO 审批',
-    detail: proposal.summary,
-    priority: riskPriority(proposal.risk),
-    tone: riskTone(proposal.risk),
-    currentOwner: 'ceo',
-    nextAction: 'approve-entry',
-    target: { kind: 'growth-proposal', proposalId: proposal.id },
-    createdAt: proposal.createdAt,
-    updatedAt: proposal.updatedAt,
-  };
-}
-
 export async function listCEODecisionItems(limit = 50): Promise<DecisionItemView[]> {
   const items: DecisionItemView[] = [];
   const seen = new Set<string>();
@@ -79,11 +59,6 @@ export async function listCEODecisionItems(limit = 50): Promise<DecisionItemView
   );
   for (const proposal of systemImprovementViews) {
     const item = buildSystemImprovementDecision(proposal);
-    if (item) addUnique(items, seen, item);
-  }
-
-  for (const proposal of listGrowthProposals({ limit: Math.max(limit, 100) })) {
-    const item = buildGrowthDecision(proposal);
     if (item) addUnique(items, seen, item);
   }
 

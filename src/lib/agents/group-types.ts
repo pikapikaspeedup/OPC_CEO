@@ -354,7 +354,9 @@ export interface AgentRunState {
   stageId: string;
   workspace: string;
   parentConversationId?: string;
+  /** @deprecated Use sessionProvenance.handle as the authoritative run session handle. */
   childConversationId?: string;
+  /** @deprecated Use sessionProvenance.handle as the authoritative run session handle. */
   activeConversationId?: string;
   activeRoleId?: string;
   status: RunStatus;

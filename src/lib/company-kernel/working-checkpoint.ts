@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 
 import type { AgentRunState } from '../agents/group-types';
 import { TERMINAL_STATUSES } from '../agents/group-types';
+import { resolveRunSessionHandle } from '../agents/session-handle';
 import { buildArtifactEvidenceRefs, buildEvidenceRef, buildRunEvidenceRef, dedupeEvidenceRefs } from './evidence';
 import type { EvidenceRef, WorkingCheckpoint, WorkingCheckpointKind } from './contracts';
 
@@ -76,7 +77,8 @@ export function buildCheckpointsForRun(run: AgentRunState): WorkingCheckpoint[] 
     }));
   }
 
-  if (run.childConversationId || run.activeConversationId || run.sessionProvenance?.handle) {
+  const sessionHandle = resolveRunSessionHandle(run);
+  if (sessionHandle) {
     const occurredAt = run.sessionProvenance?.recordedAt || run.startedAt || run.createdAt;
     checkpoints.push(buildWorkingCheckpoint({
       runId: run.runId,
@@ -85,9 +87,7 @@ export function buildCheckpointsForRun(run: AgentRunState): WorkingCheckpoint[] 
       occurredAt,
       evidenceRefs: [runRef],
       metadata: {
-        childConversationId: run.childConversationId,
-        activeConversationId: run.activeConversationId,
-        sessionHandle: run.sessionProvenance?.handle,
+        sessionHandle,
         backendId: run.sessionProvenance?.backendId,
       },
     }));
@@ -185,4 +185,3 @@ export function mergeCheckpoints(
   return Array.from(map.values())
     .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime());
 }
-
