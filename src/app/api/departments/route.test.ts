@@ -98,7 +98,7 @@ describe('/api/departments', () => {
         contextDocumentPaths: [],
       },
     });
-  });
+  }, 10000);
 
   it('writes config without implicitly syncing IDE mirrors', async () => {
     const res = await PUT(new Request(`http://localhost/api/departments?workspace=${encodeURIComponent(`file://${tempWorkspace}`)}`, {

@@ -20,6 +20,7 @@ import {
 import type {
   DepartmentConfig,
   DepartmentOKR,
+  DepartmentRule,
   DepartmentRoster,
   DepartmentWorkspaceBinding,
   DepartmentWorkspaceRole,
@@ -152,6 +153,75 @@ function formatSkillRefs(skillRefs?: string[]): string {
   return (skillRefs ?? []).join(', ');
 }
 
+const DEPARTMENT_RULE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+const RESERVED_DEPARTMENT_RULE_NAMES = new Set(['department-identity']);
+
+type DepartmentRuleDraft = {
+  name: string;
+  content: string;
+  isNew: boolean;
+  source?: DepartmentRule['source'];
+};
+
+function validateDepartmentRuleName(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed || !DEPARTMENT_RULE_NAME_RE.test(trimmed) || trimmed.length > 120) {
+    return '规则名称只能使用字母、数字、下划线和中划线，且必须以字母或数字开头。';
+  }
+  if (RESERVED_DEPARTMENT_RULE_NAMES.has(trimmed)) {
+    return 'department-identity 是系统保留规则名。';
+  }
+  return null;
+}
+
+function buildDepartmentContextPreview(input: {
+  name: string;
+  workspaceName: string;
+  description: string;
+  skills: DepartmentConfig['skills'];
+  templateIds: string[];
+  provider?: DepartmentConfig['provider'];
+}): string {
+  const deptName = input.name.trim() || input.workspaceName;
+  const sections = [
+    '---',
+    'name: department-identity',
+    'description: 本部门/工作区的人设与基础属性',
+    'trigger: always_on',
+    '---',
+    '',
+    '# Department Context',
+    '',
+    `你是 **${deptName}**。`,
+  ];
+
+  if (input.description.trim()) {
+    sections.push('', '## Department Mission', '', input.description.trim());
+  }
+
+  const skills = input.skills.filter((skill) => skill.name.trim());
+  if (skills.length > 0) {
+    sections.push('', '## Core Skills');
+    for (const skill of skills) {
+      const workflowRef = normalizeWorkflowRef(skill.workflowRef);
+      sections.push(`- ${skill.name.trim()}${workflowRef ? ` -> workflow:${workflowRef}` : ''}`);
+    }
+  }
+
+  if (input.templateIds.length > 0) {
+    sections.push('', '## Allowed Templates');
+    for (const templateId of input.templateIds) {
+      sections.push(`- ${templateId}`);
+    }
+  }
+
+  if (input.provider) {
+    sections.push('', `## Preferred Provider\n- ${input.provider}`);
+  }
+
+  return sections.join('\n');
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function DepartmentSetupDialog({
@@ -195,6 +265,12 @@ export default function DepartmentSetupDialog({
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [canonicalWorkflows, setCanonicalWorkflows] = useState<Workflow[]>([]);
   const [canonicalSkills, setCanonicalSkills] = useState<Skill[]>([]);
+  const [departmentRules, setDepartmentRules] = useState<DepartmentRule[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const [ruleDraft, setRuleDraft] = useState<DepartmentRuleDraft | null>(null);
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState('basic');
   const workflowOptions = useMemo(
     () => canonicalWorkflows.map(workflow => ({
       value: `/${workflow.name}`,
@@ -233,6 +309,21 @@ export default function DepartmentSetupDialog({
     () => contextDocumentText.split('\n').map((entry) => entry.trim()).filter(Boolean).length,
     [contextDocumentText],
   );
+  const departmentContextPreview = useMemo(
+    () => buildDepartmentContextPreview({
+      name,
+      workspaceName,
+      description,
+      skills,
+      templateIds: selectedTemplateIds,
+      provider,
+    }),
+    [description, name, provider, selectedTemplateIds, skills, workspaceName],
+  );
+  const departmentRulePreviewSummary = useMemo(
+    () => departmentRules.map((rule) => `${rule.name} (${rule.source === 'department' ? '.department/rules' : '.agents/rules'})`),
+    [departmentRules],
+  );
 
   // ── Derived: all roleIds from selected templates ────────────────────────
 
@@ -269,6 +360,9 @@ export default function DepartmentSetupDialog({
       setWorkspaceImportPath('');
       setContextDocumentText(getDepartmentContextDocumentPaths(initialConfig).join('\n'));
       setWorkspaceActionError(null);
+      setRulesError(null);
+      setRuleDraft(null);
+      setActiveTab('basic');
     }
   }, [open, initialConfig, workspaceName, workspaceUri]);
 
@@ -286,6 +380,37 @@ export default function DepartmentSetupDialog({
         .finally(() => setTemplatesLoading(false));
     }
   }, [canonicalSkills.length, canonicalWorkflows.length, open, templates.length]);
+
+  // ── Load department rules ───────────────────────────────────────────
+
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+    setRulesLoading(true);
+    setRulesError(null);
+    api.getDepartmentRules(workspaceUri)
+      .then((result) => {
+        if (!cancelled) {
+          setDepartmentRules(result.rules);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDepartmentRules([]);
+          setRulesError(error instanceof Error ? error.message : '加载部门规则失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRulesLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, workspaceUri]);
 
   // ── Template toggle ────────────────────────────────────────────────
 
@@ -419,6 +544,82 @@ export default function DepartmentSetupDialog({
 
   function removeSkill(index: number) {
     setSkills(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function refreshDepartmentRules() {
+    setRulesLoading(true);
+    setRulesError(null);
+    try {
+      const result = await api.getDepartmentRules(workspaceUri);
+      setDepartmentRules(result.rules);
+    } catch (error) {
+      setRulesError(error instanceof Error ? error.message : '加载部门规则失败');
+    } finally {
+      setRulesLoading(false);
+    }
+  }
+
+  function startNewDepartmentRule() {
+    setRulesError(null);
+    setRuleDraft({
+      name: '',
+      content: '# New Department Rule\n\n',
+      isNew: true,
+      source: 'department',
+    });
+  }
+
+  function startEditDepartmentRule(rule: DepartmentRule) {
+    setRulesError(null);
+    setRuleDraft({
+      name: rule.name,
+      content: rule.content,
+      isNew: false,
+      source: rule.source,
+    });
+  }
+
+  async function saveDepartmentRuleDraft() {
+    if (!ruleDraft) return;
+    const name = ruleDraft.name.trim();
+    const validationError = validateDepartmentRuleName(name);
+    if (validationError) {
+      setRulesError(validationError);
+      return;
+    }
+    if (!ruleDraft.content.trim()) {
+      setRulesError('规则内容不能为空。');
+      return;
+    }
+
+    setRuleSaving(true);
+    setRulesError(null);
+    try {
+      await api.updateDepartmentRule(workspaceUri, name, ruleDraft.content);
+      setRuleDraft(null);
+      await refreshDepartmentRules();
+    } catch (error) {
+      setRulesError(error instanceof Error ? error.message : '保存部门规则失败');
+    } finally {
+      setRuleSaving(false);
+    }
+  }
+
+  async function deleteDepartmentRule(rule: DepartmentRule) {
+    if (rule.source !== 'department') return;
+    setRuleSaving(true);
+    setRulesError(null);
+    try {
+      await api.deleteDepartmentRule(workspaceUri, rule.name);
+      if (ruleDraft?.name === rule.name) {
+        setRuleDraft(null);
+      }
+      await refreshDepartmentRules();
+    } catch (error) {
+      setRulesError(error instanceof Error ? error.message : '删除部门规则失败');
+    } finally {
+      setRuleSaving(false);
+    }
   }
 
   function getWorkspaceDisplayName(targetUri: string) {
@@ -611,9 +812,12 @@ export default function DepartmentSetupDialog({
           </DialogHeader>
         </div>
 
-        <Tabs defaultValue="basic" className="px-6 flex flex-col min-h-0 flex-1">
-          <TabsList className="w-full shrink-0">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="px-6 flex flex-col min-h-0 flex-1">
+          <TabsList className="w-full h-auto shrink-0 flex-wrap justify-start rounded-lg">
             <TabsTrigger value="basic" className="text-xs">基本信息</TabsTrigger>
+            <TabsTrigger value="rules" className="text-xs">
+              规则{departmentRules.length > 0 && ` (${departmentRules.length})`}
+            </TabsTrigger>
             <TabsTrigger value="workspaces" className="text-xs">
               工作区 ({boundWorkspaceCount})
             </TabsTrigger>
@@ -765,6 +969,147 @@ export default function DepartmentSetupDialog({
               <p className="text-xs text-muted-foreground">
                 设置为 0 表示不限制。超出配额后将触发审批。
               </p>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-foreground">Prompt 预览</div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setActiveTab('rules')}>
+                    编辑规则
+                  </Button>
+                  <div className="text-[11px] text-muted-foreground">Department Context</div>
+                </div>
+              </div>
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-border/50 bg-background px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                {departmentContextPreview}
+              </pre>
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-foreground">Department Local Rules</div>
+                {rulesError ? (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                    {rulesError}
+                  </div>
+                ) : departmentRulePreviewSummary.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {departmentRulePreviewSummary.map((entry) => (
+                      <span key={entry} className="rounded-full border border-border/60 bg-background px-2 py-1 text-[11px] text-muted-foreground">
+                        {entry}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-muted-foreground">当前没有本地规则。</div>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* ── Rules Tab ─────────────────────────────────────────────── */}
+          <TabsContent value="rules" className="space-y-4 pt-4 pb-2 overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-muted-foreground">
+                `.department/rules` 是可编辑主源，`.agents/rules` 作为 legacy 只读来源展示。
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={startNewDepartmentRule}>
+                + 新增规则
+              </Button>
+            </div>
+
+            {rulesError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                {rulesError}
+              </div>
+            ) : null}
+
+            {ruleDraft ? (
+              <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-foreground">规则名称</label>
+                    <Input
+                      value={ruleDraft.name}
+                      onChange={(event) => setRuleDraft({ ...ruleDraft, name: event.target.value })}
+                      disabled={!ruleDraft.isNew}
+                      placeholder="engineering-principles"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-foreground">保存目标</label>
+                    <div className="flex h-8 items-center rounded-md border border-border/60 bg-background px-3 text-[11px] text-muted-foreground">
+                      .department/rules
+                    </div>
+                  </div>
+                </div>
+                {ruleDraft.source === 'legacy-agents' ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                    保存后会创建同名部门规则覆盖 legacy 规则，不会改写 `.agents/rules`。
+                  </div>
+                ) : null}
+                <Textarea
+                  value={ruleDraft.content}
+                  onChange={(event) => setRuleDraft({ ...ruleDraft, content: event.target.value })}
+                  className="min-h-[180px] font-mono text-xs leading-5"
+                />
+                <div className="flex justify-end gap-2">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setRuleDraft(null)} disabled={ruleSaving}>
+                    取消
+                  </Button>
+                  <Button type="button" size="sm" onClick={() => void saveDepartmentRuleDraft()} disabled={ruleSaving}>
+                    {ruleSaving ? '保存中…' : '保存规则'}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="space-y-3">
+              {rulesLoading ? (
+                <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+                  加载规则中…
+                </div>
+              ) : departmentRules.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+                  暂无部门本地规则。
+                </div>
+              ) : (
+                departmentRules.map((rule) => (
+                  <div key={`${rule.source}:${rule.name}`} className="rounded-lg border border-border/60 bg-muted/20 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-foreground">{rule.name}</span>
+                          <span className="rounded-full border border-border/60 bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                            {rule.source === 'department' ? '.department/rules' : '.agents/rules'}
+                          </span>
+                          {!rule.editable ? (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800">
+                              只读 legacy
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 line-clamp-3 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">
+                          {rule.content.trim() || '(empty)'}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Button type="button" size="sm" variant="outline" onClick={() => startEditDepartmentRule(rule)}>
+                          编辑
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={!rule.editable || ruleSaving}
+                          onClick={() => void deleteDepartmentRule(rule)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </TabsContent>
 

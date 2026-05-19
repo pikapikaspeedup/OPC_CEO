@@ -1,31 +1,26 @@
-import {
-  handleDepartmentsGet,
-  handleDepartmentsListGet,
-  handleDepartmentsPut,
-} from '@/server/control-plane/routes/departments';
-import {
-  proxyToControlPlane,
-  shouldProxyControlPlaneRequest,
-} from '@/server/shared/proxy';
+import { runControlPlaneRoute } from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/departments?workspace=<encoded_uri>
 export async function GET(req: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  const url = new URL(req.url);
-  if (!url.searchParams.get('workspace')) {
-    return handleDepartmentsListGet();
-  }
-  return handleDepartmentsGet(req);
+  return runControlPlaneRoute(req, async () => {
+    const {
+      handleDepartmentsGet,
+      handleDepartmentsListGet,
+    } = await import('@/server/control-plane/routes/departments');
+    const url = new URL(req.url);
+    if (!url.searchParams.get('workspace')) {
+      return handleDepartmentsListGet();
+    }
+    return handleDepartmentsGet(req);
+  });
 }
 
 // PUT /api/departments?workspace=<encoded_uri>
 export async function PUT(req: Request) {
-  if (shouldProxyControlPlaneRequest()) {
-    return proxyToControlPlane(req);
-  }
-  return handleDepartmentsPut(req);
+  return runControlPlaneRoute(req, async () => {
+    const { handleDepartmentsPut } = await import('@/server/control-plane/routes/departments');
+    return handleDepartmentsPut(req);
+  });
 }

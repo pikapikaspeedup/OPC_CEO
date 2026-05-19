@@ -17,7 +17,7 @@ import {
 import { getJournalEntriesForDate, getProjectsByWorkspace, templateSummary } from '@/lib/agents/digest-helpers';
 import { getQuotaSummary } from '@/lib/approval/token-quota';
 import { getKnownWorkspace, listKnownWorkspaces } from '@/lib/workspace-catalog';
-import type { DepartmentConfig, DepartmentDirectoryEntry } from '@/lib/types';
+import type { DepartmentConfig, DepartmentDirectoryEntry, DepartmentRule, DepartmentRuleSource } from '@/lib/types';
 
 function json(body: unknown, init?: ResponseInit): Response {
   return Response.json(body, init);
@@ -56,6 +56,59 @@ function getDateRange(baseDate: string, period: string): string[] {
 
 const VALID_MEMORY_CATEGORIES: MemoryCategory[] = ['knowledge', 'decisions', 'patterns'];
 const VALID_SYNC_TARGETS: IDETarget[] = ['antigravity', 'codex', 'claude-code', 'cursor'];
+const DEPARTMENT_RULE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+const RESERVED_DEPARTMENT_RULE_NAMES = new Set(['department-identity']);
+
+function validateDepartmentRuleName(name: string | null): string | Response {
+  const trimmed = name?.trim() || '';
+  if (!trimmed || !DEPARTMENT_RULE_NAME_RE.test(trimmed) || trimmed.length > 120) {
+    return json({ error: 'Invalid rule name' }, { status: 400 });
+  }
+  if (RESERVED_DEPARTMENT_RULE_NAMES.has(trimmed)) {
+    return json({ error: 'Reserved rule name' }, { status: 400 });
+  }
+  return trimmed;
+}
+
+function readDepartmentRuleFiles(
+  workspacePath: string,
+  dirName: '.department/rules' | '.agents/rules',
+  source: DepartmentRuleSource,
+): DepartmentRule[] {
+  const dir = path.join(workspacePath, dirName);
+  if (!fs.existsSync(dir)) return [];
+
+  return fs.readdirSync(dir)
+    .filter((file) => file.endsWith('.md'))
+    .sort((a, b) => a.localeCompare(b))
+    .map((file): DepartmentRule | null => {
+      const name = file.replace(/\.md$/i, '');
+      if (RESERVED_DEPARTMENT_RULE_NAMES.has(name)) return null;
+      if (!DEPARTMENT_RULE_NAME_RE.test(name) || name.length > 120) return null;
+      const filePath = path.join(dir, file);
+      return {
+        name,
+        content: fs.readFileSync(filePath, 'utf-8'),
+        source,
+        editable: source === 'department',
+        path: filePath,
+      };
+    })
+    .filter((rule): rule is DepartmentRule => Boolean(rule));
+}
+
+function listEffectiveDepartmentRules(workspacePath: string): DepartmentRule[] {
+  const byName = new Map<string, DepartmentRule>();
+  for (const rule of readDepartmentRuleFiles(workspacePath, '.department/rules', 'department')) {
+    byName.set(rule.name, rule);
+  }
+  for (const rule of readDepartmentRuleFiles(workspacePath, '.agents/rules', 'legacy-agents')) {
+    if (!byName.has(rule.name)) {
+      byName.set(rule.name, rule);
+    }
+  }
+  return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
 
 function loadConfiguredDepartmentForWorkspace(workspace: KnownWorkspace): DepartmentConfig | null {
   const configPath = path.join(workspace.path, '.department', 'config.json');
@@ -144,6 +197,78 @@ export async function handleDepartmentsPut(req: Request): Promise<Response> {
   }
 
   return json({ ok: true, syncPending: true });
+}
+
+export async function handleDepartmentsRulesGet(req: Request): Promise<Response> {
+  const workspace = resolveKnownWorkspace(req);
+  if (workspace instanceof Response) {
+    return workspace;
+  }
+
+  return json({
+    workspace: workspace.uri,
+    rules: listEffectiveDepartmentRules(workspace.path),
+  });
+}
+
+export async function handleDepartmentsRulesPut(req: Request): Promise<Response> {
+  const workspace = resolveKnownWorkspace(req);
+  if (workspace instanceof Response) {
+    return workspace;
+  }
+
+  const url = new URL(req.url);
+  const ruleName = validateDepartmentRuleName(url.searchParams.get('name'));
+  if (ruleName instanceof Response) {
+    return ruleName;
+  }
+
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body.content !== 'string') {
+    return json({ error: 'content is required (string)' }, { status: 400 });
+  }
+
+  const rulesDir = path.join(workspace.path, '.department', 'rules');
+  fs.mkdirSync(rulesDir, { recursive: true });
+  const filePath = path.join(rulesDir, `${ruleName}.md`);
+  fs.writeFileSync(filePath, body.content, 'utf-8');
+  const rule: DepartmentRule = {
+    name: ruleName,
+    content: body.content,
+    source: 'department',
+    editable: true,
+    path: filePath,
+  };
+
+  return json({
+    ok: true,
+    rule,
+  });
+}
+
+export async function handleDepartmentsRulesDelete(req: Request): Promise<Response> {
+  const workspace = resolveKnownWorkspace(req);
+  if (workspace instanceof Response) {
+    return workspace;
+  }
+
+  const url = new URL(req.url);
+  const ruleName = validateDepartmentRuleName(url.searchParams.get('name'));
+  if (ruleName instanceof Response) {
+    return ruleName;
+  }
+
+  const filePath = path.join(workspace.path, '.department', 'rules', `${ruleName}.md`);
+  if (!fs.existsSync(filePath)) {
+    const legacyPath = path.join(workspace.path, '.agents', 'rules', `${ruleName}.md`);
+    if (fs.existsSync(legacyPath)) {
+      return json({ error: 'Legacy rule is read-only. Create a department override before deleting.' }, { status: 409 });
+    }
+    return json({ error: 'Rule not found' }, { status: 404 });
+  }
+
+  fs.unlinkSync(filePath);
+  return json({ ok: true, name: ruleName });
 }
 
 export async function handleDepartmentsDigestGet(req: Request): Promise<Response> {
