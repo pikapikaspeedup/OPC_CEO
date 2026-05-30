@@ -19,12 +19,6 @@ export type {
   CompanyLoopRunStatus,
   DepartmentOperatingStateSummary,
   EstimatedOperatingCost,
-  GrowthObservation,
-  GrowthProposal,
-  GrowthProposalEvaluation,
-  GrowthProposalKind,
-  GrowthProposalRisk,
-  GrowthProposalStatus,
   KnowledgeEvidence,
   KnowledgePromotionLevel,
   KnowledgePromotionMetadata,
@@ -95,7 +89,6 @@ export {
 } from './budget-policy';
 export {
   getOrganizationAutonomyPolicy,
-  growthProposalRequiresApproval,
 } from './autonomy-policy';
 export {
   commitBudgetForRun,
@@ -128,12 +121,6 @@ export {
   resetCircuitBreaker,
   upsertCircuitBreaker,
 } from './circuit-breaker';
-export { listGrowthObservations } from './growth-observation-store';
-export {
-  countGrowthProposals,
-  getGrowthProposal,
-  listGrowthProposals,
-} from './growth-proposal-store';
 export { getCompanyOperatingDay } from './operating-day';
 export {
   buildDefaultCompanyLoopPolicy,
