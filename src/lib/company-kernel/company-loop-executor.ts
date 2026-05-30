@@ -149,22 +149,6 @@ function dispatchAgendaFromLoop(input: {
   };
 }
 
-function maybeGenerateGrowthProposals(input: {
-  policy: CompanyLoopPolicy;
-  kind: CompanyLoopRunKind;
-}): {
-  proposals: GrowthProposal[];
-  ledger?: BudgetLedgerEntry;
-  skippedReason?: string;
-} {
-  if (!input.policy.growthReviewEnabled) return { proposals: [] };
-  if (input.kind !== 'growth-review' && input.kind !== 'weekly-review') return { proposals: [] };
-  return {
-    proposals: [],
-    skippedReason: 'growth-pipeline-retired',
-  };
-}
-
 function serializeSkippedAgenda(entries: Array<{ item: OperatingAgendaItem; reason: string }>): Array<Record<string, unknown>> {
   return entries.map((entry) => ({
     id: entry.item.id,
@@ -237,40 +221,17 @@ export function runCompanyLoop(input: RunCompanyLoopInput = {}): RunCompanyLoopR
       }
     }
 
-    const growth = maybeGenerateGrowthProposals({ policy, kind });
-    if (growth.ledger) budgetLedger.push(growth.ledger);
-    if (growth.skippedReason) {
-      skipped.push({
-        item: {
-          id: `growth-review:${started.id}`,
-          signalIds: [],
-          title: 'Growth proposal review',
-          recommendedAction: 'observe',
-          priority: 'p2',
-          score: 0,
-          status: 'blocked',
-          reason: growth.skippedReason,
-          evidenceRefs: [],
-          estimatedCost: { tokens: 0, minutes: 0 },
-          createdAt: started.startedAt,
-          updatedAt: started.startedAt,
-        },
-        reason: growth.skippedReason,
-      });
-    }
-
     const completedRun: CompanyLoopRun = {
       ...started,
       status: 'completed',
       selectedAgendaIds: selection.selected.map((item) => item.id),
       dispatchedRunIds,
-      generatedProposalIds: growth.proposals.map((proposal) => proposal.id),
+      generatedProposalIds: [],
       budgetLedgerIds: budgetLedger.map((entry) => entry.id),
       summary: [
         `Selected ${selection.selected.length} agenda items.`,
         `Dispatched ${dispatchedRunIds.length}.`,
         `Skipped ${skipped.length}.`,
-        growth.proposals.length > 0 ? `Generated ${growth.proposals.length} proposals.` : '',
       ].filter(Boolean).join(' '),
       finishedAt: new Date().toISOString(),
       metadata: {
@@ -286,7 +247,7 @@ export function runCompanyLoop(input: RunCompanyLoopInput = {}): RunCompanyLoopR
       selectedAgenda: selection.selected,
       skipped,
       budgetLedger,
-      generatedProposals: growth.proposals,
+      generatedProposals: [],
     });
     const storedDigest = upsertCompanyLoopDigest(digest);
     const notificationIds = notifyCompanyLoopDigest({
@@ -308,7 +269,7 @@ export function runCompanyLoop(input: RunCompanyLoopInput = {}): RunCompanyLoopR
       selectedAgenda: selection.selected,
       skipped,
       budgetLedger,
-      generatedProposals: growth.proposals,
+      generatedProposals: [],
     };
   } catch (err) {
     const failedRun = upsertCompanyLoopRun({

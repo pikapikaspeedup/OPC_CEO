@@ -1017,10 +1017,16 @@ export default function Home() {
   }, [currentUrlState, urlStateReady]);
 
   const isRunning = isActive;
-  const workspaceOptions = buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces);
-  const departmentWorkspaces = workspaceOptions
-    .filter(workspace => !workspace.hidden)
-    .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running }));
+  const workspaceOptions = useMemo(
+    () => buildWorkspaceOptions(agentServers, agentWorkspacesRaw, hiddenWorkspaces),
+    [agentServers, agentWorkspacesRaw, hiddenWorkspaces],
+  );
+  const departmentWorkspaces = useMemo(
+    () => workspaceOptions
+      .filter(workspace => !workspace.hidden)
+      .map(workspace => ({ uri: workspace.uri, name: workspace.name, running: workspace.running })),
+    [workspaceOptions],
+  );
 
   const handleCreateKnowledge = useCallback(async () => {
     const defaultWorkspace = departmentWorkspaces[0];

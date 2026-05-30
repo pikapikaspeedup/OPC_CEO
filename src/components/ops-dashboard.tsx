@@ -563,6 +563,13 @@ export default function OpsDashboard({
   const deepWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const exitEvidenceRef = useRef<HTMLDivElement | null>(null);
 
+  // Keep the latest workspaces in a ref so loadDashboard stays referentially
+  // stable; the effect re-fires only when the workspace SET (wsKey) changes,
+  // not on every parent re-render that hands us a fresh array reference.
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+  const wsKey = workspaces.map((workspace) => workspace.uri).join(',');
+
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
@@ -589,7 +596,7 @@ export default function OpsDashboard({
         api.auditEvents({ limit: 18 }).catch(() => [] as AuditEvent[]),
         api.mcp().catch(() => ({ servers: [] })),
         api.tunnelStatus().catch(() => null),
-        Promise.allSettled(workspaces.map((workspace) => api.getDepartmentQuota(workspace.uri))),
+        Promise.allSettled(workspacesRef.current.map((workspace) => api.getDepartmentQuota(workspace.uri))),
       ]);
 
       setOverview(nextOverview as ManagementOverviewFE | null);
@@ -610,7 +617,7 @@ export default function OpsDashboard({
     } finally {
       setLoading(false);
     }
-  }, [workspaces]);
+  }, []);
 
   useEffect(() => {
     void loadDashboard();
@@ -618,7 +625,7 @@ export default function OpsDashboard({
       void loadDashboard();
     }, 30_000);
     return () => window.clearInterval(interval);
-  }, [loadDashboard, refreshSignal]);
+  }, [loadDashboard, refreshSignal, wsKey]);
 
   useEffect(() => {
     setAssetTab(requestedTab);
