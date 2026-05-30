@@ -30,10 +30,6 @@ function resolveGatewayHome(): string {
 
 export const GATEWAY_HOME = resolveGatewayHome();
 
-// Hidden-workspaces list — still JSON-persisted. Project/run/conversation/job
-// registries now live in storage.sqlite.
-export const HIDDEN_WS_FILE = path.join(GATEWAY_HOME, 'hidden_workspaces.json');
-
 // Global assets directory
 export const GLOBAL_ASSETS_DIR = path.join(GATEWAY_HOME, 'assets');
 export const GLOBAL_WORKFLOW_SCRIPTS_DIR = path.join(GLOBAL_ASSETS_DIR, 'workflow-scripts');
