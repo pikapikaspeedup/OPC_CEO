@@ -83,4 +83,14 @@ self-improvement-planner / observer  →  提案 → 评估 → release-gate
 
 ## 进度日志
 
-- 2026-05-30：Slice 1 完成并验证（company-loop 去 growth 噪声）。后续 Slice 2–5 待续。
+- 2026-05-30：Slice 1 完成并验证（company-loop 去 growth 噪声）。
+- 2026-05-30：**growth 子系统彻底移除完成**（提交 `ea86862` → `338158d` → `2b4da95`，已推送 `private/main`）：
+  - 后端：删 growth-proposal/observation stores、`/api/company/growth/*` 路由及 control-plane 注册、department-execution-resolver 的已发布 growth 资产注入。
+  - 类型：删 `GrowthProposal*`/`GrowthObservation*`（contracts + FE types.ts）、`growth-review` loopKind、`growth-proposal` budget scope、`growthReviewEnabled` 策略字段、autonomy growth 审批 helper、digest/result 的 growth 解耦。
+  - 前端：删 CEO 驾驶舱「Growth」按钮、设置里的「启用增长复盘」开关 + `growth.*` 冷却配置、ops-dashboard growth-review 文案、decision-control 的 growth-proposal 决策目标 + page 路由分支、`api.ts` companyGrowthProposals。
+  - 存储/其它：删 `growth_proposals`/`growth_observations` 建表 DDL、孤立的 `legacy-growth.ts`、approval dispatcher 的 growth 回调分支。
+  - 测试：清理 operating-kernel.route / company-loop / ceo-decision-control / department-execution-resolver / ceo-office-cockpit 中的 growth 用例。
+  - **安全确认**：growth 生成已退休、9 条提案全为 draft（注入只取 published/observing → 当前注入恒空、零行为影响）；tsc(src)=0、eslint 干净、所有受影响测试通过。
+  - **存量数据表未 drop**（保留 `growth_proposals` 9 行历史，仅停止建表）。
+- **待办：evolution 子系统下线**（更大：含主导航「进化」section + ceo-dashboard/knowledge-panel UI + `src/lib/evolution/` + `/api/evolution/*`）。
+- **附注（与本次无关的既有失败）**：`memory-promotion.test.ts`、`platform-engineering-codex-runner.test.ts`、`departments/content/route.test.ts` 在基线即失败（未改动 + 0 growth 引用），属会话前 WIP 问题。
