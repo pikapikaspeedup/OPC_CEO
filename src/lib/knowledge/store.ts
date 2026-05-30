@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 
@@ -344,13 +344,6 @@ export function deleteKnowledgeAsset(id: string): void {
   `).run(id);
 
   rmSync(path.join(KNOWLEDGE_DIR, id), { recursive: true, force: true });
-}
-
-export function listLegacyFilesystemKnowledgeIds(): string[] {
-  if (!existsSync(KNOWLEDGE_DIR)) return [];
-  return readdirSync(KNOWLEDGE_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
 }
 
 export function buildKnowledgeItemFromAsset(asset: KnowledgeAsset): {

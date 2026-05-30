@@ -33,7 +33,7 @@
 - company loop 的提案生成实际是空操作：`src/lib/company-kernel/company-loop-executor.ts:240` 只调用 `maybeGenerateGrowthProposals`，而该函数在 `:164` 直接返回 `skippedReason: 'growth-pipeline-retired'`。
 - **backends 层双路径**：`src/lib/backends/builtin-backends.ts:1059–1101` 中两个 `@deprecated "Compatibility/manual path only"` 的 `LegacyCodexManualBackend` / `LegacyClaudeCodeManualBackend` 仍在 `registerAgentBackend` 注册。
 - **类型层 deprecated 别名**：`src/lib/types.ts:486` / `:505`、`src/lib/providers/types.ts:150`。
-- **死代码常量**：`src/lib/agents/gateway-home.ts` 导出的 `PROJECTS_FILE` / `RUNS_FILE` / `CONVS_FILE` / `SCHEDULED_JOBS_FILE` 全库 **0 处引用**。
+- ~~**死代码常量**：`gateway-home.ts` 的 `PROJECTS_FILE`/`RUNS_FILE`/`CONVS_FILE`/`SCHEDULED_JOBS_FILE` 全库 0 处引用~~ —— **更正（2026-05-30 复核）**：该判断有误，原扫描漏了 `scripts/`。这 4 个常量**仍被 `scripts/migrate-storage-to-sqlite.ts`（一次性 JSON→sqlite 迁移工具）使用，并非死代码，已保留**。真正可删的遗留死代码经复核仅：`listLegacyFilesystemKnowledgeIds`（0 调用）+ `TemplateGroupSummary`/`TemplateGroupDetailFE`（0 引用的 deprecated 别名），已移除。
 - `src/lib/agents/group-runtime.ts` 头部注释保留 V1.5 / V2 / V2.5 多版本说明。
 
 **影响**：心智负担大、易误改死路径、数据库 schema 膨胀、新人难判断哪套是「现行」。

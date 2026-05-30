@@ -431,9 +431,6 @@ export interface TemplateStageSummaryFE {
   executionMode?: string;
 }
 
-/** @deprecated Use TemplateStageSummaryFE directly. */
-export type TemplateGroupSummary = TemplateStageSummaryFE;
-
 export interface TemplateSummaryFE {
   id: string;
   title: string;
@@ -469,9 +466,6 @@ export interface TemplateStageConfigFE {
     autoIncludeUpstreamSourceRuns?: boolean;
   };
 }
-
-/** @deprecated Use TemplateStageConfigFE. */
-export type TemplateGroupDetailFE = TemplateStageConfigFE;
 
 export interface TemplateNodeFE extends TemplateStageConfigFE {
   id: string;
@@ -769,67 +763,6 @@ export interface DepartmentManagementOverviewFE extends ManagementOverviewFE {
   workspaceUri: string;
   workflowHitRate: number;
   throughput30d: number;
-}
-
-export type EvolutionProposalKindFE = 'sop' | 'workflow' | 'skill' | 'script' | 'rule';
-export type EvolutionProposalStatusFE =
-  | 'draft'
-  | 'evaluated'
-  | 'pending-approval'
-  | 'published'
-  | 'rejected';
-
-export interface EvolutionProposalEvidenceFE {
-  source: 'knowledge' | 'memory-candidate' | 'run-capsules' | 'repeated-runs';
-  label: string;
-  detail: string;
-  workspaceUri?: string;
-  knowledgeId?: string;
-  candidateIds?: string[];
-  capsuleIds?: string[];
-  runIds?: string[];
-  count?: number;
-}
-
-export interface EvolutionProposalEvaluationFE {
-  evaluatedAt: string;
-  sampleSize: number;
-  matchedRunIds: string[];
-  successRate: number;
-  blockedRate: number;
-  recommendation: 'publish' | 'revise' | 'hold';
-  summary: string;
-}
-
-export interface EvolutionProposalRolloutFE {
-  observedAt: string;
-  hitCount: number;
-  matchedRunIds: string[];
-  successRate: number | null;
-  lastUsedAt?: string;
-  summary: string;
-}
-
-export interface EvolutionProposalFE {
-  id: string;
-  kind: EvolutionProposalKindFE;
-  status: EvolutionProposalStatusFE;
-  workspaceUri?: string;
-  title: string;
-  targetName: string;
-  targetRef: string;
-  rationale: string;
-  content: string;
-  sourceKnowledgeIds: string[];
-  evidence: EvolutionProposalEvidenceFE[];
-  evaluation?: EvolutionProposalEvaluationFE;
-  approvalRequestId?: string;
-  governanceNote?: string;
-  publishedAt?: string;
-  publishedArtifactPath?: string;
-  rollout?: EvolutionProposalRolloutFE;
-  createdAt: string;
-  updatedAt: string;
 }
 
 // ---------------------------------------------------------------------------

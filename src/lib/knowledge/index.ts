@@ -18,7 +18,6 @@ export {
   deleteKnowledgeAsset,
   getKnowledgeAsset,
   listKnowledgeAssets,
-  listLegacyFilesystemKnowledgeIds,
   listRecentKnowledgeAssets,
   recordKnowledgeAssetAccess,
   updateKnowledgeAssetArtifact,
