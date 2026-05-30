@@ -92,5 +92,8 @@ self-improvement-planner / observer  →  提案 → 评估 → release-gate
   - 测试：清理 operating-kernel.route / company-loop / ceo-decision-control / department-execution-resolver / ceo-office-cockpit 中的 growth 用例。
   - **安全确认**：growth 生成已退休、9 条提案全为 draft（注入只取 published/observing → 当前注入恒空、零行为影响）；tsc(src)=0、eslint 干净、所有受影响测试通过。
   - **存量数据表未 drop**（保留 `growth_proposals` 9 行历史，仅停止建表）。
-- **待办：evolution 子系统下线**（更大：含主导航「进化」section + ceo-dashboard/knowledge-panel UI + `src/lib/evolution/` + `/api/evolution/*`）。
-- **附注（与本次无关的既有失败）**：`memory-promotion.test.ts`、`platform-engineering-codex-runner.test.ts`、`departments/content/route.test.ts` 在基线即失败（未改动 + 0 growth 引用），属会话前 WIP 问题。
+- 2026-05-30：**evolution 子系统彻底移除完成**（提交 `31da526`，已推送 `private/main`，19 文件 / 2322 行删除）：
+  - 删 `src/lib/evolution/*`、`/api/evolution/*`、`evolution-workspace.tsx`、主导航「进化」section（sidebar + app-url-state + home-shell）、ceo-dashboard 的 Evolution Pipeline 面板、knowledge-panel 的关联提案区块、agent-run-detail 的「提议结晶」动作、`api.ts` evolution 客户端 + `EvolutionProposalFE` 类型、approval dispatcher 的 evolution 回调、`evolution_proposals` 建表 DDL，以及过时 evolution 测试。
+  - **安全确认**：`evolution_proposals` = 0 行、无自动生成、无 scheduler/loop 接线；tsc(src)=0、eslint 干净、全量套件无新增失败。
+- ✅ **目标达成：只保留单一架构**。growth + evolution 两代冗余子系统源码层面完全清除；**system-improvement 成为唯一的自我改进架构**（保留 39 条 signals），由「Platform Engineering Story Top 3 · 09:00」定时任务喂养。
+- **附注（与本次无关的既有失败）**：`memory-promotion.test.ts`(:185)、`platform-engineering-codex-runner.test.ts`、`departments/content/route.test.ts`(超时) 在基线即失败（未改动 + 无 growth/evolution 引用），属会话前 WIP 问题，建议单独排查。
