@@ -18,6 +18,9 @@ import {
   type ProviderInventory,
 } from '@/lib/providers/provider-availability';
 
+// Shared API-key connection-test status (ApiKeyCard + ProviderConfigTab inline credential test).
+export type ApiKeyTestStatus = 'idle' | 'testing' | 'ok' | 'invalid' | 'error';
+
 // ---------------------------------------------------------------------------
 // Provider model catalog (internal to ProviderModelInput)
 // ---------------------------------------------------------------------------
