@@ -164,6 +164,7 @@ export default function DepartmentDetailDrawer({
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <MetricPill label="类型" value={config.type || 'build'} />
                 <MetricPill label="Provider" value={config.provider || 'auto'} />
+                <MetricPill label="Runtime" value={config.runtimePolicy?.toolset || '默认'} />
                 <MetricPill label="技能" value={`${config.skills.length}`} />
                 <MetricPill label="Workflow Skill" value={`${workflowBoundSkillCount}`} />
                 <MetricPill label="模板" value={`${templateCount}`} />

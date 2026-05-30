@@ -22,7 +22,6 @@ import type {
   BackendRunError,
 } from './types';
 import { hasAgentBackend, registerAgentBackend } from './registry';
-import { registerDepartmentMemoryBridge } from '../agents/department-memory-bridge';
 
 const log = createLogger('BuiltinBackends');
 const MAX_ANTIGRAVITY_RECONNECT_ATTEMPTS = 30;
@@ -69,35 +68,62 @@ function truncateHistoryText(value: string, maxLength = 500): string {
   return `${normalized.slice(0, maxLength)}…`;
 }
 
-function summarizeAntigravityStep(step: any): Record<string, unknown> {
-  const text = [
-    step?.plannerResponse?.modifiedResponse,
-    step?.plannerResponse?.response,
-    step?.content?.text,
-    step?.errorMessage?.message,
-    step?.taskBoundary?.text,
-    step?.ephemeralMessage?.text,
-    step?.message?.text,
-  ].find((value) => typeof value === 'string' && value.trim().length > 0) as string | undefined;
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+}
 
-  const location = [
-    step?.absolutePath,
-    step?.path,
-    step?.uri,
-    step?.fileUri,
-    Array.isArray(step?.plannerResponse?.pathsToReview) ? step.plannerResponse.pathsToReview[0] : undefined,
-  ].find((value) => typeof value === 'string' && value.length > 0) as string | undefined;
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  const record = asRecord(error);
+  const message = record?.message;
+  return typeof message === 'string' ? message : undefined;
+}
 
-  const toolName = [
-    step?.toolCall?.toolName,
-    step?.toolName,
-    step?.tool,
-    step?.action,
-  ].find((value) => typeof value === 'string' && value.length > 0) as string | undefined;
+function firstString(values: unknown[], requireTrimmed = true): string | undefined {
+  return values.find((value): value is string => {
+    if (typeof value !== 'string') return false;
+    return requireTrimmed ? value.trim().length > 0 : value.length > 0;
+  });
+}
+
+function summarizeAntigravityStep(step: unknown): Record<string, unknown> {
+  const stepRecord = asRecord(step) ?? {};
+  const plannerResponse = asRecord(stepRecord.plannerResponse);
+  const content = asRecord(stepRecord.content);
+  const errorMessage = asRecord(stepRecord.errorMessage);
+  const taskBoundary = asRecord(stepRecord.taskBoundary);
+  const ephemeralMessage = asRecord(stepRecord.ephemeralMessage);
+  const message = asRecord(stepRecord.message);
+  const toolCall = asRecord(stepRecord.toolCall);
+  const plannerPathsToReview = plannerResponse?.pathsToReview;
+  const text = firstString([
+    plannerResponse?.modifiedResponse,
+    plannerResponse?.response,
+    content?.text,
+    errorMessage?.message,
+    taskBoundary?.text,
+    ephemeralMessage?.text,
+    message?.text,
+  ]);
+
+  const location = firstString([
+    stepRecord.absolutePath,
+    stepRecord.path,
+    stepRecord.uri,
+    stepRecord.fileUri,
+    Array.isArray(plannerPathsToReview) ? plannerPathsToReview[0] : undefined,
+  ], false);
+
+  const toolName = firstString([
+    toolCall?.toolName,
+    stepRecord.toolName,
+    stepRecord.tool,
+    stepRecord.action,
+  ], false);
 
   return {
-    type: step?.type,
-    status: step?.status,
+    type: stepRecord.type,
+    status: stepRecord.status,
     ...(text ? { text: truncateHistoryText(text) } : {}),
     ...(location ? { location } : {}),
     ...(toolName ? { toolName } : {}),
@@ -203,7 +229,7 @@ class LegacyCodexManualSession implements AgentSession {
 
   private async run(): Promise<void> {
     try {
-      // Build baseInstructions from memoryContext if available
+      // Build baseInstructions from explicit context if available.
       const memoryInstructions = formatMemoryContextForBaseInstructions(this.config.memoryContext);
 
       const result = await this.executor.executeTask({
@@ -235,10 +261,11 @@ class LegacyCodexManualSession implements AgentSession {
       });
       this.terminal = true;
       this.channel.close();
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (this.cancelled || this.terminal) {
         return;
       }
+      const message = getErrorMessage(err) || 'Codex execution failed';
       this.channel.push({
         kind: 'failed',
         runId: this.runId,
@@ -247,7 +274,7 @@ class LegacyCodexManualSession implements AgentSession {
         finishedAt: new Date().toISOString(),
         error: createBackendError({
           code: 'provider_failed',
-          message: err?.message || 'Codex execution failed',
+          message,
           retryable: true,
           source: 'provider',
         }),
@@ -283,8 +310,8 @@ class LegacyCodexManualSession implements AgentSession {
 
     try {
       await this.executor.cancel(this.handle);
-    } catch (err: any) {
-      log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Codex cancel raised an error');
+    } catch (err: unknown) {
+      log.warn({ runId: this.runId.slice(0, 8), err: getErrorMessage(err) }, 'Codex cancel raised an error');
     }
 
     this.channel.push({
@@ -426,8 +453,8 @@ class AntigravityAgentSession implements AgentSession {
   }
 
   private hasTerminalErrorSteps(steps: unknown[]): boolean {
-    return steps.some((step: any) => {
-      const stepType = step?.type;
+    return steps.some((step) => {
+      const stepType = asRecord(step)?.type;
       return typeof stepType === 'string'
         && (stepType.includes('ERROR') || stepType.includes('CANCELED'));
     });
@@ -436,16 +463,21 @@ class AntigravityAgentSession implements AgentSession {
   private extractErrorDetails(steps: unknown[]): string | undefined {
     const errorMessages: string[] = [];
     for (let i = steps.length - 1; i >= 0 && errorMessages.length < 3; i--) {
-      const step = steps[i] as any;
+      const step = asRecord(steps[i]);
       if (!step) continue;
-      const stepType = step.type as string | undefined;
+      const stepType = typeof step.type === 'string' ? step.type : undefined;
       if (!stepType) continue;
       if (stepType.includes('ERROR_MESSAGE') || stepType.includes('ERROR')) {
-        const text = step.errorMessage?.message
-          || step.content?.text
-          || step.plannerResponse?.modifiedResponse
-          || step.plannerResponse?.response;
-        if (text && typeof text === 'string') {
+        const errorMessage = asRecord(step.errorMessage);
+        const content = asRecord(step.content);
+        const plannerResponse = asRecord(step.plannerResponse);
+        const text = firstString([
+          errorMessage?.message,
+          content?.text,
+          plannerResponse?.modifiedResponse,
+          plannerResponse?.response,
+        ]);
+        if (text) {
           errorMessages.push(text.slice(0, 500));
         } else if (step.status && typeof step.status === 'string' && step.status.includes('ERROR')) {
           errorMessages.push(`Tool error at step ${i}: ${stepType} (${step.status})`);
@@ -456,7 +488,7 @@ class AntigravityAgentSession implements AgentSession {
   }
 
   private buildAntigravityResult(steps: unknown[]): TaskResult {
-    const result = compactCodingResult(steps as any[], this.artifactAbsDir, this.getResultRoleConfig());
+    const result = compactCodingResult(steps, this.artifactAbsDir, this.getResultRoleConfig());
 
     if (this.hasTerminalErrorSteps(steps) && result.status !== 'completed') {
       result.status = 'failed';
@@ -556,8 +588,8 @@ class AntigravityAgentSession implements AgentSession {
         for (const uri of reviewUris) {
           try {
             await grpc.proceedArtifact(conn.port, conn.csrf, conn.apiKey, this.handle, uri);
-          } catch (err: any) {
-            log.warn({ runId: this.runId.slice(0, 8), uri, err: err?.message }, 'Artifact auto-approve failed');
+          } catch (err: unknown) {
+            log.warn({ runId: this.runId.slice(0, 8), uri, err: getErrorMessage(err) }, 'Artifact auto-approve failed');
           }
         }
         step._autoApproved = true;
@@ -632,8 +664,8 @@ class AntigravityAgentSession implements AgentSession {
         const nextConn = await this.getConnection();
         this.abortWatch?.();
         this.startWatch(nextConn);
-      } catch (err: any) {
-        this.emitFailure(err?.message || fallbackMessage);
+      } catch (err: unknown) {
+        this.emitFailure(getErrorMessage(err) || fallbackMessage);
       }
     }, 3000);
   }
@@ -766,8 +798,8 @@ class AntigravityAgentSession implements AgentSession {
       if (conn.apiKey) {
         await grpc.cancelCascade(conn.port, conn.csrf, conn.apiKey, this.handle);
       }
-    } catch (err: any) {
-      log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Antigravity cancel raised an error');
+    } catch (err: unknown) {
+      log.warn({ runId: this.runId.slice(0, 8), err: getErrorMessage(err) }, 'Antigravity cancel raised an error');
     }
 
     this.channel.push({
@@ -935,8 +967,9 @@ class LegacyClaudeCodeManualSession implements AgentSession {
       });
       this.terminal = true;
       this.channel.close();
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (this.cancelled || this.terminal) return;
+      const message = getErrorMessage(err) || 'Claude Code execution failed';
 
       this.channel.push({
         kind: 'failed',
@@ -946,7 +979,7 @@ class LegacyClaudeCodeManualSession implements AgentSession {
         finishedAt: new Date().toISOString(),
         error: createBackendError({
           code: 'provider_failed',
-          message: err?.message || 'Claude Code execution failed',
+          message,
           retryable: true,
           source: 'provider',
         }),
@@ -979,8 +1012,8 @@ class LegacyClaudeCodeManualSession implements AgentSession {
 
     try {
       await this.executor.cancel(this.handle);
-    } catch (err: any) {
-      log.warn({ runId: this.runId.slice(0, 8), err: err?.message }, 'Claude Code cancel raised an error');
+    } catch (err: unknown) {
+      log.warn({ runId: this.runId.slice(0, 8), err: getErrorMessage(err) }, 'Claude Code cancel raised an error');
     }
 
     this.channel.push({
@@ -1093,12 +1126,10 @@ export function ensureBuiltInAgentBackends(): void {
     registerAgentBackend(customApiBackend);
   }
 
-  // Register memory hooks
-  registerDepartmentMemoryBridge();
 }
 
 // ---------------------------------------------------------------------------
-// Memory context → base instructions converter
+// Explicit context → base instructions converter
 // ---------------------------------------------------------------------------
 
 import type { MemoryContext } from './types';
@@ -1122,5 +1153,5 @@ function formatMemoryContextForBaseInstructions(
 
   if (parts.length === 0) return '';
 
-  return `\n<department-memory>\n${parts.join('\n\n')}\n</department-memory>`;
+  return `\n<explicit-context>\n${parts.join('\n\n')}\n</explicit-context>`;
 }

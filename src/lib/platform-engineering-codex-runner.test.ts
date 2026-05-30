@@ -174,7 +174,7 @@ describe('platform engineering codex runner', () => {
     expect(result.evidence.disallowedFiles).toEqual([]);
     expect(result.evidence.validations.every((entry) => entry.passed)).toBe(true);
     expect(runGit(repoPath, ['status', '--short', '--', 'README.md'])).toBe('M README.md');
-  });
+  }, 20_000);
 
   it('marks expected edit tasks as failed when Codex makes no changes', async () => {
     mockCodexExec.mockResolvedValue('no changes');

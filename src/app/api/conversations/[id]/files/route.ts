@@ -9,12 +9,20 @@ import { createLogger } from '@/lib/logger';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { findRunRecordByConversationRef } from '@/lib/storage/gateway-db';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 const execFileAsync = promisify(execFile);
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   const { id } = await params;
   const url = new URL(req.url);
   const q = url.searchParams.get('q') || '';

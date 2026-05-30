@@ -5,6 +5,43 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MemoryCandidate } from '@/lib/company-kernel/contracts';
 
+const {
+  proxyToControlPlaneMock,
+  shouldProxyControlPlaneRequestMock,
+} = vi.hoisted(() => ({
+  proxyToControlPlaneMock: vi.fn(async (req: Request) => {
+    const baseUrl = process.env.AG_CONTROL_PLANE_URL;
+    if (!baseUrl) {
+      throw new Error('AG_CONTROL_PLANE_URL is not configured');
+    }
+
+    const currentUrl = new URL(req.url);
+    const targetUrl = new URL(currentUrl.pathname, baseUrl);
+    targetUrl.search = currentUrl.search;
+    const body = req.method === 'GET' || req.method === 'HEAD'
+      ? undefined
+      : await req.blob();
+    const response = await fetch(targetUrl.toString(), {
+      method: req.method,
+      headers: req.headers,
+      body,
+      redirect: 'manual',
+    });
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }),
+  shouldProxyControlPlaneRequestMock: vi.fn(() => false),
+}));
+
+vi.mock('@/server/shared/proxy', () => ({
+  proxyToControlPlane: (...args: unknown[]) => proxyToControlPlaneMock(...args),
+  shouldProxyControlPlaneRequest: (...args: unknown[]) => shouldProxyControlPlaneRequestMock(...args),
+}));
+
 let tempHome: string;
 let previousHome: string | undefined;
 let previousGatewayHome: string | undefined;
@@ -69,6 +106,10 @@ describe('/api/company/memory-candidates', () => {
     previousControlPlaneUrl = process.env.AG_CONTROL_PLANE_URL;
     process.env.HOME = tempHome;
     process.env.AG_GATEWAY_HOME = path.join(tempHome, 'gateway-home');
+    process.env.AG_ROLE = 'api';
+    proxyToControlPlaneMock.mockClear();
+    shouldProxyControlPlaneRequestMock.mockReset();
+    shouldProxyControlPlaneRequestMock.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -165,6 +206,7 @@ describe('/api/company/memory-candidates', () => {
     const { listRoute } = await loadModules();
     process.env.AG_ROLE = 'web';
     process.env.AG_CONTROL_PLANE_URL = 'http://127.0.0.1:3101';
+    shouldProxyControlPlaneRequestMock.mockReturnValue(true);
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -173,6 +215,7 @@ describe('/api/company/memory-candidates', () => {
     const res = await listRoute.GET(new Request('http://localhost/api/company/memory-candidates?pageSize=1'));
 
     expect(res.status).toBe(200);
+    expect(proxyToControlPlaneMock).toHaveBeenCalledTimes(1);
     expect(String(fetchSpy.mock.calls[0][0])).toBe('http://127.0.0.1:3101/api/company/memory-candidates?pageSize=1');
   });
 });

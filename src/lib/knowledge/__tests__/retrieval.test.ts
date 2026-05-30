@@ -16,7 +16,13 @@ async function loadModules() {
   };
 }
 
-describe('knowledge retrieval', () => {
+const HOUR_MS = 60 * 60 * 1000;
+
+function recentIso(hoursAgo = 1): string {
+  return new Date(Date.now() - hoursAgo * HOUR_MS).toISOString();
+}
+
+describe('knowledge selection search', () => {
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'knowledge-retrieval-'));
     previousHome = process.env.HOME;
@@ -43,8 +49,8 @@ describe('knowledge retrieval', () => {
       title: 'Use Vitest for route tests',
       content: 'We decided to use Vitest for route-level tests and API smoke coverage.',
       source: { type: 'run', runId: 'run-1' },
-      createdAt: '2026-04-19T00:00:00.000Z',
-      updatedAt: '2026-04-19T01:00:00.000Z',
+      createdAt: recentIso(2),
+      updatedAt: recentIso(1),
       status: 'active',
       tags: ['workflow:/api_review', 'skill:testing'],
     });
@@ -56,12 +62,12 @@ describe('knowledge retrieval', () => {
       title: 'Use CSS variables in dashboard',
       content: 'Keep CSS variables centralized.',
       source: { type: 'run', runId: 'run-2' },
-      createdAt: '2026-04-19T00:00:00.000Z',
-      updatedAt: '2026-04-18T01:00:00.000Z',
+      createdAt: recentIso(3),
+      updatedAt: recentIso(2),
       status: 'active',
     });
 
-    const assets = retrieval.retrieveKnowledgeAssets({
+    const assets = retrieval.searchKnowledgeAssetsForSelection({
       workspaceUri: 'file:///tmp/workspace',
       promptText: '补 route tests，继续做 API smoke',
       workflowRef: '/api_review',
@@ -71,27 +77,6 @@ describe('knowledge retrieval', () => {
 
     expect(assets[0]?.id).toBe('asset-vitest');
     expect(assets).toHaveLength(1);
-  });
-
-  it('formats retrieved assets into a prompt section', async () => {
-    const { retrieval } = await loadModules();
-    const section = retrieval.formatKnowledgeAssetsForPrompt([
-      {
-        id: 'asset-1',
-        scope: 'department',
-        workspaceUri: 'file:///tmp/workspace',
-        category: 'decision',
-        title: 'Keep API routes thin',
-        content: 'Prefer moving logic into src/lib rather than bloating route.ts files.',
-        source: { type: 'run', runId: 'run-1' },
-        createdAt: '2026-04-19T00:00:00.000Z',
-        updatedAt: '2026-04-19T00:00:00.000Z',
-        status: 'active',
-      },
-    ]);
-
-    expect(section).toContain('## Retrieved Knowledge');
-    expect(section).toContain('Keep API routes thin');
   });
 
   it('skips stale assets when retrieving active knowledge', async () => {
@@ -110,7 +95,7 @@ describe('knowledge retrieval', () => {
       tags: ['workflow:/api_review'],
     });
 
-    const assets = retrieval.retrieveKnowledgeAssets({
+    const assets = retrieval.searchKnowledgeAssetsForSelection({
       workspaceUri: 'file:///tmp/workspace',
       promptText: '继续补 route tests',
       workflowRef: '/api_review',

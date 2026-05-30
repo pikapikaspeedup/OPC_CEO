@@ -85,6 +85,7 @@ import type {
   CancelledAgentEvent,
   CompletedAgentEvent,
   FailedAgentEvent,
+  MemoryContext,
 } from '../backends';
 import type { DepartmentRuntimeContract } from '../organization/contracts';
 import { isExecutionProfile, type ExecutionProfile } from '../execution/contracts';
@@ -272,6 +273,7 @@ interface RoleSessionExecutionOptions {
   timeoutMs: number;
   parentConversationId?: string;
   projectId?: string;
+  memoryContext?: MemoryContext;
   onSessionReady?(session: AgentSession): void | Promise<void>;
 }
 
@@ -413,6 +415,7 @@ async function buildRoleBackendConfig(options: RoleSessionExecutionOptions): Pro
       autoApprove: options.role.autoApprove,
     },
     timeoutMs: options.timeoutMs,
+    ...(options.memoryContext ? { memoryContext: options.memoryContext } : {}),
     ...(runtimeCarrier.executionProfile
       ? { executionProfile: runtimeCarrier.executionProfile }
       : {}),
@@ -568,7 +571,7 @@ async function consumeTrackedRoleAgentSession(
     };
   }
 
-  // Build backendConfig for afterRun memory hooks (uses the same config as beforeRun)
+  // Build backendConfig for afterRun memory hooks.
   const backendConfig = await buildRoleBackendConfig(options);
 
   if (completedEvent) {
@@ -791,6 +794,7 @@ export interface DispatchRunInput {
   resolvedSkillRefs?: string[];
   resolutionReason?: string;
   triggerContext?: TriggerContext;
+  memoryContext?: MemoryContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -1211,6 +1215,7 @@ export async function dispatchRun(input: DispatchRunInput): Promise<{ runId: str
           autoApprove: group.roles[0].autoApprove,
         },
         timeoutMs: group.roles[0].timeoutMs,
+        ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
         ...(runtimeCarrier.executionProfile
           ? { executionProfile: runtimeCarrier.executionProfile }
           : {}),
@@ -2131,6 +2136,7 @@ async function executeDeliverySinglePass(
     timeoutMs: role.timeoutMs,
     parentConversationId: input.parentConversationId,
     projectId: input.projectId,
+    memoryContext: input.memoryContext,
     onSessionReady: (session) => {
       if (providerSupportsSupervisorLoop(provider)) {
         void startSupervisorLoop(runId, session.handle, goal, apiKey, server, wsUri);
@@ -2327,6 +2333,7 @@ async function executeReviewRound(
         timeoutMs: role.timeoutMs,
         parentConversationId: input.parentConversationId,
         projectId: input.projectId,
+        memoryContext: input.memoryContext,
         existingHandle: cascadeId,
       });
 
@@ -2348,6 +2355,7 @@ async function executeReviewRound(
         timeoutMs: role.timeoutMs,
         parentConversationId: input.parentConversationId,
         projectId: input.projectId,
+        memoryContext: input.memoryContext,
         onSessionReady: (session) => {
           if (round === 1 && i === 0 && providerSupportsSupervisorLoop(provider)) {
             void startSupervisorLoop(runId, session.handle, goal, apiKey, server, wsUri);

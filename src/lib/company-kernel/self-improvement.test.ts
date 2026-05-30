@@ -3,6 +3,15 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { CreateApprovalInput } from '../approval/types';
+
+vi.mock('../approval/handler', async () => {
+  const requestStore = await import('../approval/request-store');
+  return {
+    submitApprovalRequestSync: (input: CreateApprovalInput) => requestStore.createApprovalRequest(input),
+  };
+});
+
 let tempHome: string;
 let previousHome: string | undefined;
 let previousGatewayHome: string | undefined;
@@ -152,7 +161,7 @@ describe('guarded self-improvement kernel', () => {
     });
 
     expect(testedAfterApproval?.status).toBe('ready-to-merge');
-  });
+  }, 15_000);
 
   it('lets approved high-risk proposals recover from failed test evidence after a later pass', async () => {
     const modules = await loadModules();

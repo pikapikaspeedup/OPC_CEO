@@ -53,6 +53,15 @@ const PRESET_TYPES: Array<{ value: string; icon: string; label: string; desc: st
   { value: 'ceo', icon: '👔', label: 'CEO Office', desc: 'CEO 专属房间' },
 ];
 
+type DepartmentRuntimeToolset = NonNullable<NonNullable<DepartmentConfig['runtimePolicy']>['toolset']>;
+
+const RUNTIME_TOOLSET_OPTIONS: Array<{ value: DepartmentRuntimeToolset; label: string }> = [
+  { value: 'safe', label: 'safe - 保守，无 shell' },
+  { value: 'research', label: 'research - 研究工具，无 shell' },
+  { value: 'coding', label: 'coding - 文件 + shell + 执行工具' },
+  { value: 'full', label: 'full - 全工具' },
+];
+
 // Available character sprite types for roster
 const SPRITE_OPTIONS: Array<{ value: string; label: string; preview?: string }> = [
   { value: '', label: '自动' },
@@ -246,6 +255,9 @@ export default function DepartmentSetupDialog({
   const [roster, setRoster] = useState<DepartmentRoster[]>(initialConfig.roster ?? []);
   const [skills, setSkills] = useState(initialConfig.skills ?? []);
   const [provider, setProvider] = useState<DepartmentConfig['provider']>(initialConfig.provider);
+  const [runtimeToolset, setRuntimeToolset] = useState<DepartmentRuntimeToolset | ''>(
+    initialConfig.runtimePolicy?.toolset ?? '',
+  );
   const [tokenQuotaDaily, setTokenQuotaDaily] = useState<number>(initialConfig.tokenQuota?.daily ?? 0);
   const [tokenQuotaMonthly, setTokenQuotaMonthly] = useState<number>(initialConfig.tokenQuota?.monthly ?? 0);
   const [workspaceBindings, setWorkspaceBindings] = useState<DepartmentWorkspaceBinding[]>(
@@ -351,6 +363,7 @@ export default function DepartmentSetupDialog({
       setRoster(initialConfig.roster ?? []);
       setSkills(initialConfig.skills ?? []);
       setProvider(initialConfig.provider);
+      setRuntimeToolset(initialConfig.runtimePolicy?.toolset ?? '');
       setTokenQuotaDaily(initialConfig.tokenQuota?.daily ?? 0);
       setTokenQuotaMonthly(initialConfig.tokenQuota?.monthly ?? 0);
       setWorkspaceBindings(getDepartmentWorkspaceBindings(initialConfig, workspaceUri, workspaceName));
@@ -745,6 +758,13 @@ export default function DepartmentSetupDialog({
         .split('\n')
         .map((entry) => entry.trim())
         .filter(Boolean);
+      const runtimePolicy = { ...(initialConfig.runtimePolicy ?? {}) };
+      if (runtimeToolset) {
+        runtimePolicy.toolset = runtimeToolset;
+      } else {
+        delete runtimePolicy.toolset;
+      }
+      const normalizedRuntimePolicy = Object.keys(runtimePolicy).length > 0 ? runtimePolicy : undefined;
 
       const config = normalizeDepartmentConfig({
         departmentId: initialConfig.departmentId,
@@ -763,6 +783,7 @@ export default function DepartmentSetupDialog({
         okr: okr && okr.objectives.length > 0 ? okr : null,
         roster: roster.filter(r => r.rolePattern.trim() && (r.displayName.trim() || r.spriteType)),
         ...(provider ? { provider } : {}),
+        ...(normalizedRuntimePolicy ? { runtimePolicy: normalizedRuntimePolicy } : {}),
         ...(tokenQuota ? { tokenQuota } : {}),
         // Preserve map editor data (roomLayout/roomBg) — these are managed by RoomEditor, not this dialog
         ...(initialConfig.roomLayout?.length ? { roomLayout: initialConfig.roomLayout } : {}),
@@ -926,6 +947,26 @@ export default function DepartmentSetupDialog({
               </NativeSelect>
               <p className="text-xs text-muted-foreground">
                 设置该部门 Agent 任务使用的推理 Provider；本机 CLI 会作为执行工具在运行时被调用，不在这里配置。
+              </p>
+            </div>
+
+            {/* Runtime Toolset */}
+            <div className="space-y-1.5">
+              <label htmlFor="dept-runtime-toolset" className="text-sm font-medium text-foreground">Runtime Toolset</label>
+              <NativeSelect
+                id="dept-runtime-toolset"
+                value={runtimeToolset}
+                onChange={(e) => setRuntimeToolset(e.target.value as DepartmentRuntimeToolset | '')}
+                size="sm"
+                className="text-xs"
+              >
+                <option value="">沿用当前默认</option>
+                {RUNTIME_TOOLSET_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </NativeSelect>
+              <p className="text-xs text-muted-foreground">
+                控制该部门运行时可用工具集；选择 coding 可启用 shell 与执行工具。
               </p>
             </div>
 

@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useI18n } from '@/components/locale-provider';
-import type { AgentRun, ModelConfig } from '@/lib/types';
+import type { AgentRun, KnowledgeItem, ModelConfig } from '@/lib/types';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { Bot, XCircle, Clock, CheckCircle2, AlertCircle, Ban, Loader2, ChevronDown, ChevronUp, Send, RefreshCw, Sparkles, Zap, RotateCw } from 'lucide-react';
+import { Bot, XCircle, Clock, CheckCircle2, AlertCircle, Ban, Loader2, ChevronDown, ChevronUp, Send, RefreshCw, Sparkles, Zap, RotateCw, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -81,6 +81,62 @@ const statusConfig: Record<string, { icon: React.ReactNode; color: string; rail:
 
 function getStatusInfo(status: string) {
   return statusConfig[status] || statusConfig.queued;
+}
+
+function KnowledgeSelectionStrip({
+  items,
+  selectedIds,
+  loading,
+  compact = false,
+  onToggle,
+}: {
+  items: KnowledgeItem[];
+  selectedIds: string[];
+  loading: boolean;
+  compact?: boolean;
+  onToggle: (id: string) => void;
+}) {
+  if (loading && items.length === 0) {
+    return (
+      <div className={cn('flex items-center text-[color:var(--agent-text-muted)]', compact ? 'text-[11px]' : 'text-xs')}>
+        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+        加载知识候选
+      </div>
+    );
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="agent-kicker">上下文知识</div>
+        <div className="text-[11px] text-[color:var(--agent-text-soft)]">已选 {selectedIds.length}</div>
+      </div>
+      <div className={cn('flex gap-2 overflow-x-auto pb-1', compact ? 'max-h-20' : '')}>
+        {items.map((item) => {
+          const selected = selectedIds.includes(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onToggle(item.id)}
+              className={cn(
+                'inline-flex shrink-0 items-center gap-2 rounded-full border text-left transition-colors',
+                compact ? 'max-w-[210px] px-2.5 py-1.5 text-[11px]' : 'max-w-[280px] px-3 py-2 text-xs',
+                selected
+                  ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                  : 'border-white/8 bg-white/[0.04] text-[color:var(--agent-text-muted)] hover:border-white/15 hover:bg-white/[0.07]',
+              )}
+            >
+              {selected ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <BookOpen className="h-3.5 w-3.5 shrink-0" />}
+              <span className="truncate">{item.title}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +434,9 @@ export default function AgentRunsPanel({
   const [modelMode, setModelMode] = useState<RunModelMode>('follow-header');
   const [selectedExplicitModel, setSelectedExplicitModel] = useState('');
   const [conversationMode, setConversationMode] = useState<'isolated' | 'shared'>('isolated');
+  const [knowledgeCandidates, setKnowledgeCandidates] = useState<KnowledgeItem[]>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
   const [dispatching, setDispatching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -421,6 +480,51 @@ export default function AgentRunsPanel({
   const runningWs = workspaces.filter(w => w.running);
   const preferredWorkspace = runningWs[0]?.uri || workspaces[0]?.uri || '';
   const effectiveSelectedWs = workspaces.some(w => w.uri === selectedWs) ? selectedWs : preferredWorkspace;
+
+  useEffect(() => {
+    if (!effectiveSelectedWs) {
+      const resetTimer = window.setTimeout(() => {
+        setKnowledgeCandidates([]);
+        setSelectedKnowledgeIds([]);
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const query = prompt.trim();
+      setKnowledgeLoading(true);
+      const request = query.length >= 3
+        ? api.knowledge({ workspace: effectiveSelectedWs, status: 'active', selectionPrompt: query, limit: 6 })
+        : api.knowledge({ workspace: effectiveSelectedWs, status: 'active', sort: 'recent', limit: 6 });
+
+      request
+        .then((items) => {
+          if (cancelled) return;
+          setKnowledgeCandidates(items);
+          setSelectedKnowledgeIds((current) => current.filter((id) => items.some((item) => item.id === id)));
+        })
+        .catch(() => {
+          if (!cancelled) setKnowledgeCandidates([]);
+        })
+        .finally(() => {
+          if (!cancelled) setKnowledgeLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [effectiveSelectedWs, prompt]);
+
+  const toggleSelectedKnowledge = useCallback((id: string) => {
+    setSelectedKnowledgeIds((current) => (
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    ));
+  }, []);
 
   const resolveStageDispatch = (stageId: string) => ({
     templateId: stageId === 'coding-basic' ? 'coding-basic-template' : 'development-template-1',
@@ -486,6 +590,7 @@ export default function AgentRunsPanel({
           workspace: effectiveSelectedWs,
           prompt: prompt.trim(),
           model: modelToSend,
+          selectedKnowledgeIds,
           taskEnvelope: {
             templateId: 'development-template-1',
             goal: prompt.trim(),
@@ -495,6 +600,7 @@ export default function AgentRunsPanel({
           conversationMode,
         });
         setPrompt('');
+        setSelectedKnowledgeIds([]);
         if (showRunsList) await loadRuns();
         if (onDispatched) await onDispatched(response.runId);
       } else if (selectedGroup === 'autonomous-dev-pilot') {
@@ -510,9 +616,11 @@ export default function AgentRunsPanel({
           prompt: prompt.trim(),
           model: modelToSend,
           sourceRunIds: [selectedSourceRunId],
+          selectedKnowledgeIds,
           conversationMode,
         });
         setPrompt('');
+        setSelectedKnowledgeIds([]);
         if (showRunsList) await loadRuns();
         if (onDispatched) await onDispatched(response.runId);
       } else {
@@ -521,9 +629,11 @@ export default function AgentRunsPanel({
           workspace: effectiveSelectedWs,
           prompt: prompt.trim(),
           model: modelToSend,
+          selectedKnowledgeIds,
           conversationMode,
         });
         setPrompt('');
+        setSelectedKnowledgeIds([]);
         if (showRunsList) await loadRuns();
         if (onDispatched) await onDispatched(response.runId);
       }
@@ -778,6 +888,13 @@ export default function AgentRunsPanel({
                 />
               </div>
 
+              <KnowledgeSelectionStrip
+                items={knowledgeCandidates}
+                selectedIds={selectedKnowledgeIds}
+                loading={knowledgeLoading}
+                onToggle={toggleSelectedKnowledge}
+              />
+
               <div className="flex flex-col gap-3 border-t border-white/6 pt-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline" className="rounded-full border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-[color:var(--agent-text-soft)]">
@@ -910,6 +1027,14 @@ export default function AgentRunsPanel({
                   onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleDispatch(); }}
                 />
               </div>
+
+              <KnowledgeSelectionStrip
+                items={knowledgeCandidates}
+                selectedIds={selectedKnowledgeIds}
+                loading={knowledgeLoading}
+                compact
+                onToggle={toggleSelectedKnowledge}
+              />
 
               <Button
                 className="h-8 w-full text-xs"

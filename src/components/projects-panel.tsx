@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import DepartmentSetupDialog from '@/components/department-setup-dialog';
+import DepartmentContentPanel from '@/components/department-content-panel';
 import LocalFolderImportDialog from '@/components/local-folder-import-dialog';
 import { useI18n } from '@/components/locale-provider';
 import { formatRelativeTime } from '@/lib/i18n/formatting';
@@ -3072,6 +3073,12 @@ export default function ProjectsPanel({
                   />
                 )}
               </WorkspaceSurface>
+
+	              <DepartmentContentPanel
+                workspaceUri={browseContextWorkspaceUri}
+                title={browseContextWorkspaceLabel}
+                locale={locale}
+              />
 
 	              {browseFocusProject ? (
                   <div className="grid gap-3 xl:grid-cols-2">

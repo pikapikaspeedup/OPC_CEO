@@ -23,6 +23,7 @@ import {
 } from './project-registry';
 import type { TriggerContext } from './group-types';
 import { createLogger } from '../logger';
+import type { MemoryContext } from '../backends/types';
 
 const log = createLogger('DispatchService');
 
@@ -53,6 +54,7 @@ export interface ExecuteDispatchInput {
   /** V6.1: Explicit provider override (bypasses resolveProvider). */
   provider?: string;
   triggerContext?: TriggerContext;
+  memoryContext?: MemoryContext;
 }
 
 export interface ExecuteDispatchResult {
@@ -212,6 +214,7 @@ export async function executeDispatch(input: ExecuteDispatchInput): Promise<Exec
     conversationMode: input.conversationMode,
     provider: input.provider,
     triggerContext: input.triggerContext,
+    memoryContext: input.memoryContext,
     promptPreamble: templateExecutionContext.promptPreamble,
     resolutionReason: templateExecutionContext.resolutionReason,
   });

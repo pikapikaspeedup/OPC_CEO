@@ -126,6 +126,36 @@ describe('department-capability-registry', () => {
     );
   });
 
+  it('uses explicit runtime policy before legacy inferred toolset', () => {
+    fs.writeFileSync(
+      path.join(workspace, '.department', 'config.json'),
+      JSON.stringify({
+        name: 'AI 情报中心',
+        type: 'research',
+        skills: [
+          {
+            skillId: 'daily_digest',
+            name: '日报总结',
+            category: 'research',
+            workflowRef: '/ai_digest',
+          },
+        ],
+        runtimePolicy: {
+          toolset: 'coding',
+          permissionMode: 'acceptEdits',
+          allowSubAgents: true,
+        },
+      }),
+      'utf-8',
+    );
+
+    const view = getDepartmentCapabilityView(workspace);
+
+    expect(view.runtimeContract.toolset).toBe('coding');
+    expect(view.runtimeContract.permissionMode).toBe('acceptEdits');
+    expect(view.runtimeContract.allowSubAgents).toBe(true);
+  });
+
   it('injects bound workspaces and context documents into the runtime contract', () => {
     const sharedDocs = fs.mkdtempSync(path.join(os.tmpdir(), 'dept-capability-shared-'));
     fs.writeFileSync(

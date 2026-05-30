@@ -151,30 +151,31 @@ Company Kernel 约束：
 1. 自动沉淀不会再直接 append `.department/memory/*.md`。
 2. run 完成后的经验先进入 `MemoryCandidate`。
 3. 只有显式 promote 后才会写入结构化 `KnowledgeAsset`。
-4. 这层不改变 Antigravity IDE / Language Server / Provider 启动逻辑。
-5. Signal / Agenda 只做观察、排序和推荐，不会无限自循环。
-6. Agenda dispatch、scheduler dispatch、manual CEO / `agent-runs` dispatch 都先过 budget gate 和 circuit breaker；手动任务不消耗 autonomous dispatch quota，但会记录 token/runtime ledger。
-7. Budget reservation 会绑定到创建出来的 `runId`，run 到达终态后统一 commit / release，避免 reserved 和 committed 重复计数；缺少 target workspace 的 agenda 不会预占预算。
-8. Approval lifecycle 会进入经营信号：提交审批、批准、拒绝、反馈都会成为可解释的 agenda 来源；`ApprovalRequest.target` 必填，不能创建无业务对象归属的审批。
-9. Run terminal failure 会更新 department、scheduler-job、provider、workflow 熔断器；`recoverAt` 到期后 open breaker 会进入 `half-open` 探测态，成功终态会 reset 对应 breaker。
-10. `cooldownMinutesByKind` 会按 ledger `operationKind` 生效，冷却未结束的动作会被 gate 拦截并可写入 `skipped`。
-11. EvolutionProposal 发布必须先创建 `proposal_publish` 审批；审批通过后才会写 canonical workflow / skill / rule / workflow script 或 SOP knowledge。
-12. 三次以上同类成功 RunCapsule 可生成 workflow proposal；重复脚本化任务和重复规则约束可生成 script / rule proposal。
-13. Published workflow/skill EvolutionProposal 会进入 Prompt Mode 执行解析，下一次相似任务可自动注入 canonical workflow/skill。
-14. Knowledge 页面提供候选记忆详情态和增长提案入口，支持 refresh、promote、reject、generate、evaluate、approve、dry-run、publish、observe，不做高频轮询。
-15. 候选记忆、KnowledgeAsset、RunCapsule 和 repeated prompt runs 是 EvolutionProposal 的生成来源，避免业务能力提案和来源证据脱节。
-16. Company Loop 只处理 Top-N agenda，默认每轮最多 autonomous dispatch 1 个；`approve` 不会被自动批准，高风险 dispatch 只进 digest / approval。
-17. Scheduler 内置 company daily/weekly loop 使用 cron job，不创建 5 秒 interval，不启动第二套 worker；平台工程部还会自动确保一个每日 `09:00` 的 `dispatch-prompt` 内置任务，用真实 `User Story/**/*.md` 直接提炼全局 Top 3 待立项故事候选。
-18. CEO 决策队列只消费 `/api/company/ceo/decisions` 返回的 `DecisionItemView[]`，只展示系统改进、Growth 与 Project stage gate 这三类正式业务决策；点击后按 `DecisionTarget` 进入对应业务详情。Decision deep link 使用紧凑 token，例如 `?decision=si~<proposalId>`；ApprovalPanel 只保留通用审批收件箱，不再承担正式决策控制面。
-19. SystemImprovement 在 proposal 被 approve 后，会自动在内置平台工程部创建受控开发 Project，并派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链：隔离 worktree、Codex 执行、evidence、preflight、release gate；准入接口在执行被派发后立即返回，不同步等待整条 Codex 链跑完。平台工程 Project governance 会显式保存 `systemImprovementProposalId`，Projects 只作为执行证据入口，并用于阻断 self-iteration 失败后的递归 follow-up proposal。CEO / Ops 页面不再直接解释 `proposal.status / humanGate / automationState / releaseGate`，而是统一消费服务端派生的 `controlState`。`controlState` 会固定输出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`，并通过 `entryApprovalSummary` 把准入审批事实直接聚合到 proposal 详情；若审批事实已经是 `rejected`，即使旧 proposal 状态仍停在 `approval-required`，它也不会重新进入 CEO 队列。
-20. Codex 受控执行成功后，只要 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 还是 `not-run`，系统就会自动触发一次 `preflight`；`syncSystemImprovementProposalsForRun()` 只做幂等兜底，不承担主触发责任。
-21. `releaseGate.preflight` 会真实生成 patch 并执行主仓 apply 检查；`releaseGate` 只以 `exitEvidence.releaseGate` 为事实源，不再写 `metadata.releaseGate`。对于确定性的 trailing whitespace 失败，系统会先在 worktree 内自动修复并重跑 preflight。若 `主仓 apply check` 表明旧 patch 已不再适配当前主仓，系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 继续 preflight；结果统一记录在 `releaseGate.failureCategory / remediationStatus / remediationAttempts / remediationSummary`。
-22. Approval 响应会先持久化 request 状态，再 best-effort 执行 callback；如果目标业务对象已经不存在，接口仍返回已落库的审批事实。删除系统改进 proposal 时会同步删除 linked approval request，避免 ApprovalPanel 残留 orphan pending。
-23. Settings 的 `Autonomy 预算` 是自治策略入口，用于维护组织级 budget、部门默认 budget、loop policy、并发、失败预算、operation cooldown 与 high-risk approval threshold。
-24. 平台工程部是内置 Department 实例，workspace 位于 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`；它继续复用 Project / Company Kernel / Approval / Scheduler，不引入第二套自进化机制。
-25. 平台工程部项目默认开启 `governance.platformEngineering.observe = true` 与 `allowProposal = true`；这类项目出现 `failed / blocked / timeout` run 时，系统会自动生成 `SystemImprovementSignal`，并可继续自动生成 proposal 给 CEO。
-26. `User Story` 中的 `[不支持]` 场景会先同步成平台工程部的文件级长期改进信号池；随后由内置每日 Top 3 prompt 任务从真实 `User Story/**/*.md` 中直接挑选全局 Top 3，并把结果写回 story-level `SystemImprovementSignal`（`metadata.candidateKind = story-top`）。
-27. CEO Office 右栏“候选改进”只展示当前激活的 Top 3 story-level candidate signal，不再直接展示文件级聚合 gap。每条候选都支持独立 `生成提案` / `打开提案`。
+4. `KnowledgeAsset` 和 `.department/memory/*.md` 不再默认自动进入 execution prompt；当前运行上下文由部门能力包、选定 workflow、用户任务、显式选择的 `selectedKnowledgeIds` 和 workflow/API 获取的当前事实组成。
+5. 这层不改变 Antigravity IDE / Language Server / Provider 启动逻辑。
+6. Signal / Agenda 只做观察、排序和推荐，不会无限自循环。
+7. Agenda dispatch、scheduler dispatch、manual CEO / `agent-runs` dispatch 都先过 budget gate 和 circuit breaker；手动任务不消耗 autonomous dispatch quota，但会记录 token/runtime ledger。
+8. Budget reservation 会绑定到创建出来的 `runId`，run 到达终态后统一 commit / release，避免 reserved 和 committed 重复计数；缺少 target workspace 的 agenda 不会预占预算。
+9. Approval lifecycle 会进入经营信号：提交审批、批准、拒绝、反馈都会成为可解释的 agenda 来源；`ApprovalRequest.target` 必填，不能创建无业务对象归属的审批。
+10. Run terminal failure 会更新 department、scheduler-job、provider、workflow 熔断器；`recoverAt` 到期后 open breaker 会进入 `half-open` 探测态，成功终态会 reset 对应 breaker。
+11. `cooldownMinutesByKind` 会按 ledger `operationKind` 生效，冷却未结束的动作会被 gate 拦截并可写入 `skipped`。
+12. EvolutionProposal 发布必须先创建 `proposal_publish` 审批；审批通过后才会写 canonical workflow / skill / rule / workflow script 或 SOP knowledge。
+13. 三次以上同类成功 RunCapsule 可生成 workflow proposal；重复脚本化任务和重复规则约束可生成 script / rule proposal。
+14. Published workflow/skill EvolutionProposal 会进入 Prompt Mode 执行解析，下一次相似任务可自动注入 canonical workflow/skill。
+15. Knowledge 页面提供候选记忆详情态和增长提案入口，支持 refresh、promote、reject、generate、evaluate、approve、dry-run、publish、observe，不做高频轮询。
+16. 候选记忆、KnowledgeAsset、RunCapsule 和 repeated prompt runs 是 EvolutionProposal 的生成来源，避免业务能力提案和来源证据脱节。
+17. Company Loop 只处理 Top-N agenda，默认每轮最多 autonomous dispatch 1 个；`approve` 不会被自动批准，高风险 dispatch 只进 digest / approval。
+18. Scheduler 内置 company daily/weekly loop 使用 cron job，不创建 5 秒 interval，不启动第二套 worker；平台工程部还会自动确保一个每日 `09:00` 的 `dispatch-prompt` 内置任务，用真实 `User Story/**/*.md` 直接提炼全局 Top 3 待立项故事候选。
+19. CEO 决策队列只消费 `/api/company/ceo/decisions` 返回的 `DecisionItemView[]`，只展示系统改进、Growth 与 Project stage gate 这三类正式业务决策；点击后按 `DecisionTarget` 进入对应业务详情。Decision deep link 使用紧凑 token，例如 `?decision=si~<proposalId>`；ApprovalPanel 只保留通用审批收件箱，不再承担正式决策控制面。
+20. SystemImprovement 在 proposal 被 approve 后，会自动在内置平台工程部创建受控开发 Project，并派发首个 self-improvement Codex tracking run，进入当前 direct Codex 链：隔离 worktree、Codex 执行、evidence、preflight、release gate；准入接口在执行被派发后立即返回，不同步等待整条 Codex 链跑完。平台工程 Project governance 会显式保存 `systemImprovementProposalId`，Projects 只作为执行证据入口，并用于阻断 self-iteration 失败后的递归 follow-up proposal。CEO / Ops 页面不再直接解释 `proposal.status / humanGate / automationState / releaseGate`，而是统一消费服务端派生的 `controlState`。`controlState` 会固定输出 `stage/currentOwner/nextAction/pageMode/headline/subline/milestones`，并通过 `entryApprovalSummary` 把准入审批事实直接聚合到 proposal 详情；若审批事实已经是 `rejected`，即使旧 proposal 状态仍停在 `approval-required`，它也不会重新进入 CEO 队列。
+21. Codex 受控执行成功后，只要 proposal 已达到 `mergeGate.ready-to-merge` 且 `releaseGate` 还是 `not-run`，系统就会自动触发一次 `preflight`；`syncSystemImprovementProposalsForRun()` 只做幂等兜底，不承担主触发责任。
+22. `releaseGate.preflight` 会真实生成 patch 并执行主仓 apply 检查；`releaseGate` 只以 `exitEvidence.releaseGate` 为事实源，不再写 `metadata.releaseGate`。对于确定性的 trailing whitespace 失败，系统会先在 worktree 内自动修复并重跑 preflight。若 `主仓 apply check` 表明旧 patch 已不再适配当前主仓，系统会带着 apply-check 摘要自动强制重跑一轮 Codex，再基于新的 worktree 继续 preflight；结果统一记录在 `releaseGate.failureCategory / remediationStatus / remediationAttempts / remediationSummary`。
+23. Approval 响应会先持久化 request 状态，再 best-effort 执行 callback；如果目标业务对象已经不存在，接口仍返回已落库的审批事实。删除系统改进 proposal 时会同步删除 linked approval request，避免 ApprovalPanel 残留 orphan pending。
+24. Settings 的 `Autonomy 预算` 是自治策略入口，用于维护组织级 budget、部门默认 budget、loop policy、并发、失败预算、operation cooldown 与 high-risk approval threshold。
+25. 平台工程部是内置 Department 实例，workspace 位于 `AG_GATEWAY_HOME/system-workspaces/platform-engineering/`；它继续复用 Project / Company Kernel / Approval / Scheduler，不引入第二套自进化机制。
+26. 平台工程部项目默认开启 `governance.platformEngineering.observe = true` 与 `allowProposal = true`；这类项目出现 `failed / blocked / timeout` run 时，系统会自动生成 `SystemImprovementSignal`，并可继续自动生成 proposal 给 CEO。
+27. `User Story` 中的 `[不支持]` 场景会先同步成平台工程部的文件级长期改进信号池；随后由内置每日 Top 3 prompt 任务从真实 `User Story/**/*.md` 中直接挑选全局 Top 3，并把结果写回 story-level `SystemImprovementSignal`（`metadata.candidateKind = story-top`）。
+28. CEO Office 右栏“候选改进”只展示当前激活的 Top 3 story-level candidate signal，不再直接展示文件级聚合 gap。每条候选都支持独立 `生成提案` / `打开提案`。
 28. 从 `story-top` candidate 生成 proposal 时，会直接进入 `approval-required` 并自动创建准入审批请求，必须经 CEO 准入审批后才允许进入 direct Codex 开发链；这不会改变其他 signal 源现有的 proposal 风险与审批策略。
 
 ---
@@ -310,14 +311,15 @@ POST /api/company/self-improvement/proposals/:id/observe
 2. RunCapsule 重建时会合并既有 WorkingCheckpoint，不覆盖已记录的生命周期证据。
 3. 用 MemoryCandidate 审核自动沉淀出来的候选经验。
 4. promote 后才会生成 `KnowledgeAsset`，并带上 evidence / promotion 元数据。
-5. reject 只改变候选状态，不删除 run 或 capsule；已 promote/rejected/archived 的闭合候选不会被后续自动重生成回滚。
-6. 即便系统侧启用 auto-promote，空证据、高冲突、volatile 或低分候选也不会自动晋升。
-7. 用 `OperatingSignal` 看系统观察到了什么，用 `OperatingAgendaItem` 看 CEO 当前应该处理什么。
-8. 用 `dispatch-check` 解释“为什么这个任务不能跑”，不要绕开 budget / circuit breaker。
-9. Scheduler 手动触发或到点触发如果被 budget / circuit 拦截，会返回 `skipped` 并写 ledger，不会创建 run。
-10. 用 `EvolutionProposal` 审核业务能力进化候选；历史 `GrowthProposal` 只用于旧数据查询。
-11. `publish` 审批通过后才会写 canonical workflow/skill/rule、workflow script 或 SOP knowledge；workflow/skill 发布后会参与后续 Prompt Mode 解析。
-12. 在 Settings `Autonomy 预算` 调整组织默认策略、部门默认预算和 loop policy，不要直接改库；该页保存后会影响 budget gate、cooldown、Company Loop cadence/timezone/enabled 和通知通道。
+5. `KnowledgeAsset` 不会因为 promote 自动注入后续 prompt；后续如果需要让知识参与执行，需要在 dispatch 时传入 `selectedKnowledgeIds`。
+6. reject 只改变候选状态，不删除 run 或 capsule；已 promote/rejected/archived 的闭合候选不会被后续自动重生成回滚。
+7. 即便系统侧启用 auto-promote，空证据、高冲突、volatile 或低分候选也不会自动晋升。
+8. 用 `OperatingSignal` 看系统观察到了什么，用 `OperatingAgendaItem` 看 CEO 当前应该处理什么。
+9. 用 `dispatch-check` 解释“为什么这个任务不能跑”，不要绕开 budget / circuit breaker。
+10. Scheduler 手动触发或到点触发如果被 budget / circuit 拦截，会返回 `skipped` 并写 ledger，不会创建 run。
+11. 用 `EvolutionProposal` 审核业务能力进化候选；历史 `GrowthProposal` 只用于旧数据查询。
+12. `publish` 审批通过后才会写 canonical workflow/skill/rule、workflow script 或 SOP knowledge；workflow/skill 发布后会参与后续 Prompt Mode 解析。
+13. 在 Settings `Autonomy 预算` 调整组织默认策略、部门默认预算和 loop policy，不要直接改库；该页保存后会影响 budget gate、cooldown、Company Loop cadence/timezone/enabled 和通知通道。
 13. 用 `CompanyLoopRun` 追踪 daily/weekly/growth/risk loop 的 selected、dispatch、skipped、ledger 和 digest；`metadata.skippedAgenda` 是解释 skipped 原因的结构化来源，不要用新增后台轮询替代 loop run。
 14. 用 `SystemImprovementProposal` 管理系统自我改进，protected core 涉及 scheduler、provider、approval、database、runtime、company API 时必须走 approval 和测试证据；high/critical proposal 不能只靠 passed test evidence 进入 `ready-to-merge`。
 
@@ -444,6 +446,7 @@ POST /api/scheduler/jobs/:id/trigger
 5. fan-out / approval / CEO event consumer 等 companion 后台默认不随 `opc-api` 启动；需要恢复类后台时设置 `AG_ENABLE_SCHEDULER_COMPANIONS=1`。
 6. 首页和 management overview 不再只看启用中的 job 数；`schedulerRuntime.status` 会明确显示 `running` / `idle` / `disabled` / `stalled`，避免把“库里有定时任务”误显示成“调度正在运行”。
 7. dispatch 类 scheduler job 触发前会生成 routine agenda 并经过 budget gate；预算不足或熔断打开时记录 `skipped`，不创建 run。
+8. 部门自己的周期性工作应创建系统内 Scheduler Job，并写入 `departmentWorkspaceUri`；外层 Codex App automation 只适合继续当前 Codex 对话，不作为 Antigravity CLI 部门自动化的主机制。
 
 ---
 
@@ -497,6 +500,9 @@ POST /api/scheduler/jobs/:id/trigger
 | `templateIds` | 该部门允许使用的模板 |
 | `skills` | 技能声明 |
 | `provider` | 默认 provider |
+| `runtimePolicy.toolset` | 运行时工具集：`safe` / `research` / `coding` / `full`；未配置时沿用部门类型与技能推断 |
+| `runtimePolicy.permissionMode` | 运行时权限模式：`default` / `dontAsk` / `acceptEdits` / `bypassPermissions` |
+| `runtimePolicy.allowSubAgents` | 是否允许该部门运行时启用 sub-agent |
 | `tokenQuota` | 每日 / 每月额度与申请策略 |
 | `workspaceBindings` | 绑定的 workspace 列表，`role` 支持 `primary` / `execution` / `context` |
 | `executionPolicy.defaultWorkspaceUri` | 默认主执行目录 |
@@ -514,6 +520,7 @@ POST /api/scheduler/jobs/:id/trigger
 ```bash
 GET /api/departments
 GET /api/departments?workspace=<uri>
+GET /api/departments/content?workspace=<uri>&path=<relative_path>
 PUT /api/departments?workspace=<uri>
 GET /api/departments/quota
 GET /api/departments/memory
@@ -523,8 +530,15 @@ POST /api/departments/sync
 说明：
 
 1. `GET /api/departments` 不带参数时会列出所有已存在 `.department/config.json` 的部门目录
-2. `GET /api/departments?workspace=<uri>` 会返回归一化后的 `workspaceBindings` 与 `executionPolicy`
-3. `PUT /api/departments` 会把同一份部门配置镜像写入所有已绑定 workspace 的 `.department/config.json`
+2. `GET /api/departments?workspace=<uri>` 会返回归一化后的 `workspaceBindings`、`executionPolicy` 与显式 `runtimePolicy`
+3. `GET /api/departments/content` 会返回部门真实文件目录树、产出物重组目录树和当前选中文档内容；Project 查看部门时使用该接口提供“产出物 / 文件”两种阅读方式
+4. `PUT /api/departments` 会把同一份部门配置镜像写入所有已绑定 workspace 的 `.department/config.json`
+
+部门产出物约定：
+
+1. 面向 CEO 阅读的任务产出优先写入 `.department/outputs/<task>/briefs/*.md`
+2. 原始采集、缓存和状态文件可以放在 `.department/outputs/<task>/raw/` 与 `.department/outputs/<task>/cache/`
+3. `.department/outputs/index.json` 可登记需要进入重组目录树的产出物；系统也会合并 run output artifacts、Project deliverables 和带 `department-output` 标签的 Knowledge assets
 
 内置平台工程部补充约束：
 

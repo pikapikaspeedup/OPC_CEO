@@ -12,7 +12,7 @@ import { logKnowledgePersistence } from './store';
 export type { KnowledgeAsset, KnowledgeCategory, KnowledgeListQuery, KnowledgeScope, KnowledgeStatus } from './contracts';
 export { buildKnowledgeSummary } from './contracts';
 export { extractKnowledgeAssetsFromRun } from './extractor';
-export { formatKnowledgeAssetsForPrompt, retrieveKnowledgeAssets } from './retrieval';
+export { searchKnowledgeAssetsForSelection } from './retrieval';
 export {
   buildKnowledgeItemFromAsset,
   deleteKnowledgeAsset,

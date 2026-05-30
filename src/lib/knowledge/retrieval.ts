@@ -1,7 +1,7 @@
 import type { KnowledgeAsset } from './contracts';
-import { listKnowledgeAssets, recordKnowledgeAssetAccess } from './store';
+import { listKnowledgeAssets } from './store';
 
-export interface KnowledgeRetrievalInput {
+export interface KnowledgeSelectionSearchInput {
   workspaceUri: string;
   promptText: string;
   workflowRef?: string;
@@ -20,7 +20,7 @@ function tokenize(value: string): string[] {
     .filter((token) => token.length >= 3);
 }
 
-function scoreKnowledgeAsset(asset: KnowledgeAsset, input: KnowledgeRetrievalInput): number {
+function scoreKnowledgeAsset(asset: KnowledgeAsset, input: KnowledgeSelectionSearchInput): number {
   let score = 0;
   const promptTokens = tokenize(input.promptText);
   const title = normalizeText(asset.title);
@@ -64,7 +64,7 @@ function scoreKnowledgeAsset(asset: KnowledgeAsset, input: KnowledgeRetrievalInp
   return score;
 }
 
-export function retrieveKnowledgeAssets(input: KnowledgeRetrievalInput): KnowledgeAsset[] {
+export function searchKnowledgeAssetsForSelection(input: KnowledgeSelectionSearchInput): KnowledgeAsset[] {
   const candidates = listKnowledgeAssets({
     workspaceUri: input.workspaceUri,
     status: 'active',
@@ -77,16 +77,5 @@ export function retrieveKnowledgeAssets(input: KnowledgeRetrievalInput): Knowled
     .sort((a, b) => b.score - a.score || b.asset.updatedAt.localeCompare(a.asset.updatedAt))
     .slice(0, input.limit ?? 5)
     .map((entry) => entry.asset);
-  recordKnowledgeAssetAccess(assets.map((asset) => asset.id));
   return assets;
-}
-
-export function formatKnowledgeAssetsForPrompt(assets: KnowledgeAsset[]): string {
-  if (assets.length === 0) return '';
-
-  const lines = ['## Retrieved Knowledge', '', 'Use the following prior knowledge when relevant:'];
-  for (const asset of assets) {
-    lines.push('', `### ${asset.title}`, asset.content.trim());
-  }
-  return lines.join('\n');
 }

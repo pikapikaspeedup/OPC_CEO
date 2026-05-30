@@ -1,5 +1,6 @@
 import type { ExecutionTarget, PromptExecutionTarget, TaskEnvelope, TriggerContext } from '@/lib/agents/group-types';
 import type { DepartmentRuntimeContract } from '@/lib/organization/contracts';
+import type { MemoryContext } from '@/lib/backends/types';
 import type { BudgetLedgerEntry } from '@/lib/company-kernel/contracts';
 import {
   attachRunToBudgetReservation,
@@ -15,6 +16,7 @@ import {
 type RuntimeTaskEnvelopeCarrier = {
   executionProfile?: ExecutionProfile;
   departmentRuntimeContract?: DepartmentRuntimeContract & Record<string, unknown>;
+  explicitKnowledgeIds?: string[];
 };
 
 type RuntimeDispatchBody = {
@@ -38,6 +40,7 @@ type RuntimeDispatchBody = {
   runtimeContract?: unknown;
   executionTarget?: ExecutionTarget;
   triggerContext?: TriggerContext;
+  selectedKnowledgeIds?: string[];
 };
 
 function promptTextFromBody(body: RuntimeDispatchBody): string {
@@ -101,6 +104,7 @@ function coerceDepartmentRuntimeContract(
 function buildTaskEnvelopeWithRuntimeCarrier(
   taskEnvelope: unknown,
   carrier: RuntimeTaskEnvelopeCarrier,
+  selectedKnowledgeIds: string[],
 ): Partial<TaskEnvelope> | undefined {
   const base = taskEnvelope && typeof taskEnvelope === 'object'
     ? { ...(taskEnvelope as Partial<TaskEnvelope>) }
@@ -113,13 +117,56 @@ function buildTaskEnvelopeWithRuntimeCarrier(
   if (carrier.departmentRuntimeContract) {
     next.departmentRuntimeContract = carrier.departmentRuntimeContract;
   }
+  if (selectedKnowledgeIds.length > 0) {
+    next.explicitKnowledgeIds = selectedKnowledgeIds;
+  }
 
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function normalizeSelectedKnowledgeIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()))];
+}
+
+async function buildExplicitKnowledgeMemoryContext(ids: string[]): Promise<MemoryContext | undefined> {
+  if (ids.length === 0) return undefined;
+  const { getKnowledgeAsset, recordKnowledgeAssetAccess } = await import('@/lib/knowledge');
+  const entries = ids.map((id) => {
+    const asset = getKnowledgeAsset(id);
+    if (!asset) {
+      const err = new Error(`Knowledge asset not found: ${id}`) as Error & { statusCode: number };
+      err.statusCode = 400;
+      throw err;
+    }
+    return {
+      type: 'reference' as const,
+      name: `knowledge:${asset.id}`,
+      content: `# ${asset.title}\n\n${asset.content.trim()}`,
+      updatedAt: asset.updatedAt,
+      metadata: {
+        knowledgeId: asset.id,
+        category: asset.category,
+        source: 'explicit-selection',
+      },
+    };
+  });
+  recordKnowledgeAssetAccess(ids);
+  return {
+    projectMemories: entries,
+    departmentMemories: [],
+    userPreferences: [],
+  };
 }
 
 export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Response> {
   try {
     const body = await req.json() as RuntimeDispatchBody;
+    const selectedKnowledgeIds = normalizeSelectedKnowledgeIds(
+      body.selectedKnowledgeIds
+      ?? (body.executionTarget?.kind === 'prompt' ? body.executionTarget.selectedKnowledgeIds : undefined),
+    );
+    const explicitKnowledgeMemoryContext = await buildExplicitKnowledgeMemoryContext(selectedKnowledgeIds);
     const executionProfile = isExecutionProfile(body.executionProfile) ? body.executionProfile : undefined;
     const departmentRuntimeContract = coerceDepartmentRuntimeContract(
       body.departmentRuntimeContract ?? body.runtimeContract,
@@ -127,7 +174,7 @@ export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Respo
     const taskEnvelope = buildTaskEnvelopeWithRuntimeCarrier(body.taskEnvelope, {
       executionProfile,
       departmentRuntimeContract,
-    });
+    }, selectedKnowledgeIds);
     const executionProfileTarget = executionProfile ? normalizeExecutionProfileForTarget(executionProfile) : undefined;
     const templateTarget = body.executionTarget?.kind === 'template'
       ? body.executionTarget
@@ -146,7 +193,10 @@ export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Respo
         : undefined);
 
     const promptExecutionTarget = executionTarget?.kind === 'prompt'
-      ? executionTarget as PromptExecutionTarget
+      ? {
+          ...(executionTarget as PromptExecutionTarget),
+          ...(selectedKnowledgeIds.length > 0 ? { selectedKnowledgeIds } : {}),
+        }
       : undefined;
     if (promptExecutionTarget) {
       const budgetLedger = reserveManualDispatchBudget(body, 'prompt');
@@ -163,6 +213,7 @@ export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Respo
           projectId: body.projectId,
           executionTarget: promptExecutionTarget,
           triggerContext: body.triggerContext,
+          memoryContext: explicitKnowledgeMemoryContext,
         });
       } catch (err) {
         releaseUnattachedBudgetReservation(budgetLedger, 'manual prompt dispatch failed before run attach');
@@ -200,6 +251,7 @@ export async function handleRuntimeAgentRunDispatch(req: Request): Promise<Respo
         conversationMode: body.conversationMode,
         provider: body.provider,
         triggerContext: body.triggerContext,
+        memoryContext: explicitKnowledgeMemoryContext,
       });
     } catch (err) {
       releaseUnattachedBudgetReservation(budgetLedger, 'manual template dispatch failed before run attach');

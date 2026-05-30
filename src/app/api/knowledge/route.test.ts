@@ -162,6 +162,45 @@ describe('GET /api/knowledge', () => {
     }));
   });
 
+  it('returns explicit selection candidates without broad list fallback', async () => {
+    const { GET, store } = await loadRouteAndStore();
+    store.upsertKnowledgeAsset({
+      id: 'knowledge-selection-a',
+      scope: 'department',
+      workspaceUri: 'file:///tmp/workspace-a',
+      category: 'decision',
+      title: 'Daily digest checklist',
+      content: 'Check source dates before reporting AI digest items.',
+      source: { type: 'manual' },
+      tags: ['workflow:/ai_digest'],
+      createdAt: '2026-05-23T00:00:00.000Z',
+      updatedAt: new Date().toISOString(),
+      status: 'active',
+    });
+    store.upsertKnowledgeAsset({
+      id: 'knowledge-selection-b',
+      scope: 'department',
+      workspaceUri: 'file:///tmp/workspace-a',
+      category: 'pattern',
+      title: 'Unrelated CSS note',
+      content: 'Use CSS variables.',
+      source: { type: 'manual' },
+      createdAt: '2026-05-23T00:00:00.000Z',
+      updatedAt: new Date().toISOString(),
+      status: 'active',
+    });
+
+    const res = await GET(new Request('http://localhost/api/knowledge?workspace=file%3A%2F%2F%2Ftmp%2Fworkspace-a&selectionPrompt=digest%20dates&workflowRef=%2Fai_digest&limit=3'));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toEqual([
+      expect.objectContaining({
+        id: 'knowledge-selection-a',
+        title: 'Daily digest checklist',
+      }),
+    ]);
+  });
+
   it('creates manual knowledge items via POST', async () => {
     const { POST, store } = await loadRouteAndStore();
     const res = await POST(new Request('http://localhost/api/knowledge', {

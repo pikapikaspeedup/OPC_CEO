@@ -20,6 +20,14 @@ vi.mock('@/lib/api-provider-conversations', () => ({
   revertApiConversation: vi.fn(async () => []),
 }));
 
+vi.mock('@/server/shared/proxy', () => ({
+  proxyToRuntime: vi.fn(async () => Response.json({ proxied: true })),
+  runControlPlaneRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+  runControlPlaneThenRuntimeRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+  runRuntimeRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+  shouldProxyRuntimeRequest: vi.fn(() => false),
+}));
+
 import { getOwnerConnection, grpc, resolveConversationRecord, updateLocalConversation } from '@/lib/bridge/gateway';
 import {
   inferLocalProviderFromConversation,
@@ -27,6 +35,7 @@ import {
   writeLocalProviderConversationSteps,
 } from '@/lib/local-provider-conversations';
 import { revertApiConversation } from '@/lib/api-provider-conversations';
+import { proxyToRuntime, shouldProxyRuntimeRequest } from '@/server/shared/proxy';
 import { POST } from './route';
 
 function params(id: string) {
@@ -51,6 +60,9 @@ describe('POST /api/conversations/[id]/revert', () => {
     vi.mocked(revertLocalProviderConversationSteps).mockReturnValue([]);
     vi.mocked(writeLocalProviderConversationSteps).mockClear();
     vi.mocked(revertApiConversation).mockReset();
+    vi.mocked(proxyToRuntime).mockClear();
+    vi.mocked(shouldProxyRuntimeRequest).mockReset();
+    vi.mocked(shouldProxyRuntimeRequest).mockReturnValue(false);
     vi.mocked(grpc.revertToStep).mockClear();
   });
 
@@ -141,5 +153,18 @@ describe('POST /api/conversations/[id]/revert', () => {
     expect(res.status).toBe(200);
     expect(vi.mocked(getOwnerConnection)).toHaveBeenCalledWith('ag-cascade-1');
     expect(vi.mocked(grpc.revertToStep)).toHaveBeenCalledWith(9211, 'csrf-token', 'ag-key', 'ag-cascade-1', 1, 'gemini');
+  });
+
+  it('proxies reverts to the runtime server in split web mode', async () => {
+    vi.mocked(shouldProxyRuntimeRequest).mockReturnValue(true);
+
+    const req = makeRequest({ stepIndex: 1, model: 'gemini' });
+    const res = await POST(req, params('conversation-1'));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ proxied: true });
+    expect(vi.mocked(proxyToRuntime)).toHaveBeenCalledWith(req);
+    expect(vi.mocked(getOwnerConnection)).not.toHaveBeenCalled();
+    expect(vi.mocked(grpc.revertToStep)).not.toHaveBeenCalled();
   });
 });

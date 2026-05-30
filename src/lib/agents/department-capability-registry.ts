@@ -598,6 +598,9 @@ export function buildDepartmentRuntimeContract(
     ...writableWorkspacePaths,
     ...(overrides.writeRoots ?? []),
   ]);
+  const allowSubAgents = typeof overrides.allowSubAgents === 'boolean'
+    ? overrides.allowSubAgents
+    : config.runtimePolicy?.allowSubAgents;
 
   return {
     workspaceRoot: path.resolve(workspacePath),
@@ -606,11 +609,11 @@ export function buildDepartmentRuntimeContract(
     writeRoots,
     artifactRoot,
     executionClass: overrides.executionClass ?? inferDepartmentExecutionClass(config),
-    toolset: overrides.toolset ?? inferDepartmentToolset(config),
-    permissionMode: overrides.permissionMode ?? 'default',
+    toolset: overrides.toolset ?? config.runtimePolicy?.toolset ?? inferDepartmentToolset(config),
+    permissionMode: overrides.permissionMode ?? config.runtimePolicy?.permissionMode ?? 'default',
     ...(overrides.requiredArtifacts ? { requiredArtifacts: overrides.requiredArtifacts } : {}),
     ...(overrides.mcpServers ? { mcpServers: dedupeStrings(overrides.mcpServers) } : {}),
-    ...(typeof overrides.allowSubAgents === 'boolean' ? { allowSubAgents: overrides.allowSubAgents } : {}),
+    ...(typeof allowSubAgents === 'boolean' ? { allowSubAgents } : {}),
   };
 }
 

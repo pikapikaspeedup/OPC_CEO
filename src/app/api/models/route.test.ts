@@ -18,7 +18,12 @@ vi.mock('@/lib/provider-model-catalog', () => ({
   })),
 }));
 
+vi.mock('@/server/shared/proxy', () => ({
+  runRuntimeRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+}));
+
 import { tryAllServers } from '@/lib/bridge/gateway';
+import '@/server/runtime/routes/user';
 import { GET } from './route';
 
 describe('GET /api/models', () => {

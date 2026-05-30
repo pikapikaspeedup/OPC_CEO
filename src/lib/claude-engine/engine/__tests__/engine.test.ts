@@ -15,8 +15,8 @@ const { mockStreamQuery } = vi.hoisted(() => ({
   mockStreamQuery: vi.fn(),
 }));
 
-vi.mock('../../api/client', () => ({
-  streamQuery: (...args: unknown[]) => mockStreamQuery(...args),
+vi.mock('../../api/pi-transport', () => ({
+  streamQueryViaPi: (...args: unknown[]) => mockStreamQuery(...args),
 }));
 
 import { ClaudeEngine, ToolExecutor, queryLoop } from '..';
@@ -934,7 +934,7 @@ describe('queryLoop — reactive compaction on 413 (D2)', () => {
       estimatedTokensBefore: expect.any(Number),
       estimatedTokensAfter: expect.any(Number),
     });
-    expect((compactionEvents[0] as any).removedMessages).toBeGreaterThan(0);
+    expect(compactionEvents[0]?.removedMessages).toBeGreaterThan(0);
 
     expect(events.at(-1)).toMatchObject({
       type: 'complete',

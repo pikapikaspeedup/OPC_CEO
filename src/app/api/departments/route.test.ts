@@ -7,7 +7,12 @@ vi.mock('@/lib/workspace-catalog', () => ({
   listKnownWorkspaces: vi.fn(),
 }));
 
+vi.mock('@/server/shared/proxy', () => ({
+  runControlPlaneRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+}));
+
 import { getKnownWorkspace, listKnownWorkspaces } from '@/lib/workspace-catalog';
+import '@/server/control-plane/routes/departments';
 import { GET, PUT } from './route';
 
 const tempRoot = path.join('/tmp', `ag-departments-route-${process.pid}-${Date.now()}`);
@@ -109,6 +114,11 @@ describe('/api/departments', () => {
         type: 'research',
         skills: [],
         okr: null,
+        runtimePolicy: {
+          toolset: 'coding',
+          permissionMode: 'default',
+          allowSubAgents: false,
+        },
       }),
     }));
 
@@ -120,6 +130,11 @@ describe('/api/departments', () => {
       type: 'research',
       skills: [],
       okr: null,
+      runtimePolicy: {
+        toolset: 'coding',
+        permissionMode: 'default',
+        allowSubAgents: false,
+      },
       workspaceBindings: [
         {
           workspaceUri: `file://${tempWorkspace}`,

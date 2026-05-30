@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { applyBeforeRunMemoryHooks, clearMemoryHooks, registerMemoryHook } from '../memory-hooks';
+import { applyBeforeRunMemoryHooks, clearMemoryHooks } from '../memory-hooks';
 import type { BackendRunConfig } from '../types';
 
 type RuntimeContract = {
@@ -90,20 +90,8 @@ describe('backend memory hooks runtime contract passthrough', () => {
     clearMemoryHooks();
   });
 
-  it('preserves department runtime fields while merging memory context', async () => {
+  it('preserves runtime fields and explicit memory context without hook injection', async () => {
     const config = makeConfig();
-
-    registerMemoryHook({
-      id: 'runtime-contract-test-hook',
-      beforeRun: () => ({
-        projectMemories: [{
-          type: 'project',
-          name: 'hook-memory',
-          content: 'Inject hook-owned project memory.',
-          updatedAt: '2026-04-19T00:01:00.000Z',
-        }],
-      }),
-    });
 
     const enriched = await applyBeforeRunMemoryHooks(
       'claude-api' as never,
@@ -128,7 +116,6 @@ describe('backend memory hooks runtime contract passthrough', () => {
     }]);
     expect(enriched.memoryContext?.projectMemories.map((entry) => entry.name)).toEqual([
       'existing-memory',
-      'hook-memory',
     ]);
   });
 });

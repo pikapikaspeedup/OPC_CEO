@@ -9,6 +9,7 @@ import {
   buildKnowledgeItemFromAsset,
   getKnowledgeAsset,
   listKnowledgeAssets,
+  searchKnowledgeAssetsForSelection,
   upsertKnowledgeAsset,
 } from '@/lib/knowledge';
 import type { KnowledgeAsset, KnowledgeCategory, KnowledgeScope, KnowledgeStatus } from '@/lib/knowledge';
@@ -187,8 +188,25 @@ export async function GET(req: Request) {
     const scopeFilter = url.searchParams.get('scope') || undefined;
     const tagFilter = url.searchParams.get('tag') || undefined;
     const query = (url.searchParams.get('q') || '').trim().toLowerCase();
+    const selectionPrompt = (url.searchParams.get('selectionPrompt') || '').trim();
+    const workflowRef = url.searchParams.get('workflowRef') || undefined;
+    const skillHints = (url.searchParams.get('skillHints') || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
     const sort = url.searchParams.get('sort') || 'recent';
     const limit = Number(url.searchParams.get('limit') || 0);
+
+    if (selectionPrompt && workspaceFilter) {
+      const assets = searchKnowledgeAssetsForSelection({
+        workspaceUri: workspaceFilter,
+        promptText: selectionPrompt,
+        workflowRef,
+        skillHints,
+        limit: limit > 0 ? limit : 5,
+      });
+      return NextResponse.json(assets.map(buildResponseFromAsset));
+    }
 
     const ids = new Set<string>();
     try {

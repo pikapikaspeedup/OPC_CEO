@@ -40,6 +40,7 @@ import {
   handleCEOSetupPost,
 } from '@/server/control-plane/routes/ceo';
 import {
+  handleDepartmentsContentGet,
   handleDepartmentsDigestGet,
   handleDepartmentsGet,
   handleDepartmentsMemoryGet,
@@ -441,6 +442,15 @@ export function createControlPlaneRoutes(options: { includeHealth?: boolean } = 
         handler: async (req) => {
           if (req.method === 'GET') {
             return handleDepartmentsDigestGet(req);
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/departments\/content$/,
+        handler: async (req) => {
+          if (req.method === 'GET') {
+            return handleDepartmentsContentGet(req);
           }
           return methodNotAllowedResponse(['GET']);
         },

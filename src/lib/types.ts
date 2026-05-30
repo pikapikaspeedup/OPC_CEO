@@ -1,5 +1,6 @@
 import type { AIProviderId } from './providers/types';
 import type { DecisionItemView, DecisionTarget } from './decision-control';
+import type { DepartmentPermissionMode, DepartmentToolset } from './organization/contracts';
 
 // === API Response Types ===
 
@@ -143,6 +144,12 @@ export interface DepartmentExecutionPolicy {
   contextDocumentPaths?: string[];
 }
 
+export interface DepartmentRuntimePolicy {
+  toolset?: DepartmentToolset;
+  permissionMode?: DepartmentPermissionMode;
+  allowSubAgents?: boolean;
+}
+
 export interface DepartmentConfig {
   departmentId?: string;
   name: string;
@@ -161,6 +168,7 @@ export interface DepartmentConfig {
   tokenQuota?: TokenQuota | null;
   workspaceBindings?: DepartmentWorkspaceBinding[];
   executionPolicy?: DepartmentExecutionPolicy;
+  runtimePolicy?: DepartmentRuntimePolicy;
 }
 
 export interface DepartmentDirectoryEntry {
@@ -177,6 +185,65 @@ export interface DepartmentRule {
   source: DepartmentRuleSource;
   editable: boolean;
   path: string;
+}
+
+export interface DepartmentFileTreeNode {
+  id: string;
+  name: string;
+  path: string;
+  type: 'directory' | 'file';
+  size?: number;
+  modifiedAt?: string;
+  rootLabel?: string;
+  children?: DepartmentFileTreeNode[];
+}
+
+export interface DepartmentMarkdownFile {
+  path: string;
+  name: string;
+  content: string;
+  size: number;
+  modifiedAt: string;
+}
+
+export interface DepartmentOutputItem {
+  id: string;
+  title: string;
+  kind: string;
+  taskKey: string;
+  taskTitle: string;
+  audience: 'ceo' | 'department' | 'agent';
+  status: 'active' | 'needs-review' | 'archived';
+  createdAt: string;
+  updatedAt?: string;
+  summary?: string;
+  markdownPath?: string;
+  tags?: string[];
+  source: {
+    type: 'run-artifact' | 'project-deliverable' | 'knowledge' | 'file';
+    runId?: string;
+    projectId?: string;
+    knowledgeId?: string;
+    artifactPath?: string;
+  };
+}
+
+export interface DepartmentOutputTreeNode {
+  id: string;
+  name: string;
+  type: 'group' | 'item';
+  count?: number;
+  children?: DepartmentOutputTreeNode[];
+  output?: DepartmentOutputItem;
+}
+
+export interface DepartmentContentResponse {
+  workspaceUri: string;
+  workspaceName: string;
+  generatedAt: string;
+  fileTree: DepartmentFileTreeNode[];
+  outputTree: DepartmentOutputTreeNode[];
+  selectedFile?: DepartmentMarkdownFile;
 }
 
 /** V6: Token quota for a department */
@@ -197,6 +264,7 @@ export interface PromptExecutionTargetFE {
   kind: 'prompt';
   promptAssetRefs?: string[];
   skillHints?: string[];
+  selectedKnowledgeIds?: string[];
 }
 
 export interface ProjectOnlyExecutionTargetFE {

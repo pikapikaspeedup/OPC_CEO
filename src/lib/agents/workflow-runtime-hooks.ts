@@ -9,44 +9,10 @@ import {
   getCanonicalWorkflowScriptsDir,
 } from './canonical-assets';
 import type { TaskResult } from './group-types';
-import { createLogger } from '../logger';
 import { STORY_TOP_CANDIDATE_ARTIFACT } from '../story-top-candidates';
 import { ingestStoryTopCandidatesFromArtifact } from '../company-kernel/story-top-candidate-signals';
 
-const log = createLogger('WorkflowRuntimeHooks');
 const execFile = promisify(execFileCallback);
-
-type BigEventContext = {
-  status?: string;
-  skipReason?: string | null;
-  targetDate?: string;
-  runMode?: 'first' | 'supplement' | string;
-  articleCount?: number;
-  sourceArticleIds?: number[];
-  candidateArticles?: Array<{
-    id?: number;
-    title?: string;
-    summary?: string;
-    url?: string;
-    createdAt?: string;
-    aiCategory?: string;
-    tags?: string[];
-  }>;
-  articleDetailsById?: Record<string, {
-    id?: number;
-    title?: string;
-    aiCategory?: string;
-    description?: string;
-    contentSnippet?: string;
-    tags?: string[];
-    aiPeople?: Array<{ name?: string; company?: string; position?: string }>;
-    url?: string;
-  }>;
-  existingEvents?: {
-    sameDay?: BigEventPayload['events'];
-    last30Days?: BigEventPayload['events'];
-  };
-};
 
 type BigEventPayload = {
   eventDate: string;
@@ -83,10 +49,6 @@ type BigEventVerification = {
   verifyApiUrl?: string;
   message?: string;
 };
-
-export interface WorkflowRuntimePreparation {
-  promptAppendix: string;
-}
 
 export interface WorkflowRuntimeFinalizeOptions {
   workflowOutputText?: string;
@@ -152,21 +114,6 @@ function getAsiaShanghaiDateString(now: Date = new Date()): string {
   }).format(now);
 }
 
-function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function truncateText(value: string, maxLength = 1200): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength)}…`;
-}
-
 async function runPythonScript(
   scriptPath: string,
   args: string[],
@@ -177,35 +124,6 @@ async function runPythonScript(
     timeout: 120_000,
     maxBuffer: 10_000_000,
   });
-}
-
-async function fetchExistingDigest(targetDate: string): Promise<{
-  title: string;
-  summary: string;
-  contentText: string;
-} | null> {
-  try {
-    const res = await fetch(`https://api.aitrend.us/digest?date=${encodeURIComponent(targetDate)}`);
-    if (!res.ok) return null;
-    const payload = await res.json() as {
-      data?: {
-        exists?: boolean;
-        run?: {
-          title?: string;
-          summary?: string;
-          contentHtml?: string;
-        };
-      };
-    };
-    if (!payload.data?.exists || !payload.data.run) return null;
-    return {
-      title: payload.data.run.title || '',
-      summary: payload.data.run.summary || '',
-      contentText: stripHtml(payload.data.run.contentHtml || ''),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function resolveWorkflowRuntimeManifest(resolvedWorkflowRef: string | undefined): WorkflowRuntimeManifest {
@@ -242,265 +160,6 @@ function resolveRuntimeScriptPath(runtime: WorkflowRuntimeSupport, scriptName: s
 
 function resolveDepartmentPrivatePath(workspacePath: string): string {
   return path.join(workspacePath, '.department', 'private.json');
-}
-
-async function prepareAiDigestContext(
-  manifest: WorkflowRuntimeManifest,
-  workspacePath: string,
-  artifactAbsDir: string,
-): Promise<string> {
-  const runtime = resolveWorkflowRuntimeSupport(manifest);
-  const targetDate = getAsiaShanghaiDateString();
-  const contextPath = path.join(artifactAbsDir, 'prepared-ai-digest-context.json');
-  const fetchScript = resolveRuntimeScriptPath(runtime, 'fetch_context.py');
-  const reportScript = resolveRuntimeScriptPath(runtime, 'report_digest.py');
-  const sections: string[] = [
-    '## Prepared Daily Digest Context',
-    `- Absolute target date: ${targetDate} (Asia/Shanghai)`,
-    ...(runtime.scriptsDir ? [`- Workflow scripts dir: ${runtime.scriptsDir}`] : []),
-    ...(runtime.skillName ? [`- Workflow helper skill: ${runtime.skillName}`] : []),
-    `- Fetch script: ${fetchScript || 'missing'}`,
-    `- Report script: ${reportScript || 'missing'}`,
-  ];
-
-  if (!fetchScript) {
-    sections.push(
-      '',
-      '- Runtime preflight skipped: missing fetch_context.py helper in canonical workflow assets.',
-      `- Today is still ${targetDate}; do not invent another date.`,
-    );
-    return sections.join('\n');
-  }
-
-  try {
-    await runPythonScript(fetchScript, [
-      '--date', targetDate,
-      '--limit', '50',
-      '--max-pages', '2',
-      '--window-start-hour', '20',
-      '--window-end-hour', '20',
-      '--out', contextPath,
-      '--insecure',
-    ], workspacePath);
-  } catch {
-    // fetch_context returns non-zero only on hard failure; skip states still write output
-  }
-
-  let preparedContext: AiDigestPreparedContext | null = null;
-
-  try {
-    preparedContext = JSON.parse(fs.readFileSync(contextPath, 'utf-8')) as AiDigestPreparedContext;
-  } catch {
-    preparedContext = null;
-  }
-
-  if (preparedContext?.status === 'skip' && preparedContext.skipReason?.includes('digest_already_exists')) {
-    const effectiveTargetDate = preparedContext.targetDate || targetDate;
-    const digest = await fetchExistingDigest(effectiveTargetDate);
-    if (digest) {
-      sections.push(
-        '',
-        '### Existing digest for today already exists',
-        `- Title: ${digest.title}`,
-        `- Summary: ${digest.summary}`,
-        '',
-        '### Existing digest full text',
-        digest.contentText,
-      );
-      sections.push(
-        '',
-        '### Hard constraints for summarization',
-        '- Use the provided existing digest above as the factual source of truth for today.',
-        '- Do not ask the user for more materials if the digest above is sufficient.',
-        `- Do not invent another date. Today is ${effectiveTargetDate}.`,
-      );
-      return sections.join('\n');
-    }
-  }
-
-  if (preparedContext?.status === 'ok') {
-    const effectiveTargetDate = preparedContext.targetDate || targetDate;
-    sections.push(
-      '',
-      `- Absolute target date: ${effectiveTargetDate} (Asia/Shanghai)`,
-      ...(preparedContext.window?.start && preparedContext.window?.end
-        ? [`- Context window: ${preparedContext.window.start} -> ${preparedContext.window.end}`]
-        : []),
-      `- Article count in context window: ${preparedContext.articleCount ?? 0}`,
-      `- Source article ids: ${(preparedContext.sourceArticleIds ?? []).join(', ') || 'none'}`,
-    );
-    if (preparedContext.articles?.length) {
-      sections.push('', '### Source articles');
-      for (const article of preparedContext.articles.slice(0, 20)) {
-        sections.push(`- ${article.title || ''}${article.summary ? ` — ${article.summary}` : ''}${article.url ? ` (${article.url})` : ''}`);
-      }
-    }
-    sections.push(
-      '',
-      '### Hard constraints for summarization',
-      '- Base the report strictly on the prepared article context above.',
-      `- Do not invent another date. Today is ${effectiveTargetDate}.`,
-    );
-    return sections.join('\n');
-  }
-
-  if (preparedContext?.status === 'skip') {
-    sections.push(
-      '',
-      `- Context preparation skipped: ${preparedContext.skipReason || 'unknown'}`,
-      `- Today is still ${preparedContext.targetDate || targetDate}; do not invent another date.`,
-    );
-  }
-
-  return sections.join('\n');
-}
-
-async function prepareStoryTopCandidatesContext(
-  workspacePath: string,
-  artifactAbsDir: string,
-): Promise<string> {
-  // Contract 真理源：playbook MD（platform_engineering_story_candidates.md）已涵盖
-  // 工作边界 / 输出要求 / 严格约束 / 最终回复 / JSON schema 等所有约束。
-  // 用户在 workflow 编辑器里改 contract，无需发版改代码。
-  // 这里只追加运行时绝对路径上下文（workflow MD 里只能写相对路径，无法预知 absolute path）。
-  const userStoryRoot = path.join(workspacePath, 'User Story');
-  const artifactPath = path.join(artifactAbsDir, STORY_TOP_CANDIDATE_ARTIFACT);
-  return [
-    '## Story Top 3 — Runtime Context',
-    `- Workspace root: ${workspacePath}`,
-    `- User Story directory (read .md files here): ${userStoryRoot}`,
-    `- Artifact directory: ${artifactAbsDir}`,
-    `- Write story-top-candidates.json to: ${artifactPath}`,
-    '- All other constraints (work boundaries, schema, severity values, affectedAreas enum) are defined in the playbook above; follow them strictly.',
-  ].join('\n');
-}
-
-function renderEventList(
-  title: string,
-  events: BigEventPayload['events'] | undefined,
-  maxItems: number,
-): string[] {
-  if (!events?.length) return [];
-  const lines = ['', title];
-  for (const event of events.slice(0, maxItems)) {
-    lines.push(`- [${event.category}] ${event.title}${event.summary ? ` — ${event.summary}` : ''}`);
-  }
-  if (events.length > maxItems) {
-    lines.push(`- ... 还有 ${events.length - maxItems} 条`);
-  }
-  return lines;
-}
-
-async function prepareAiBigEventContext(
-  manifest: WorkflowRuntimeManifest,
-  workspacePath: string,
-  artifactAbsDir: string,
-): Promise<string> {
-  const runtime = resolveWorkflowRuntimeSupport(manifest);
-  const targetDate = getAsiaShanghaiDateString();
-  const contextPath = path.join(artifactAbsDir, 'prepared-ai-bigevent-context.json');
-  const fetchScript = resolveRuntimeScriptPath(runtime, 'fetch_context.py');
-
-  if (!fetchScript) {
-    return [
-      '## Prepared Daily Events Context',
-      `- Target date: ${targetDate} (Asia/Shanghai)`,
-      '- Context preparation failed: missing fetch_context.py helper.',
-      '- If you cannot infer valid events from the prompt, output an empty events array in the required JSON schema.',
-    ].join('\n');
-  }
-
-  try {
-    await runPythonScript(fetchScript, [
-      '--date', targetDate,
-      '--limit', '50',
-      '--max-pages', '3',
-      '--out', contextPath,
-      '--insecure',
-    ], workspacePath);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'unknown';
-    log.warn({ err: message }, 'ai_bigevent context preparation failed');
-  }
-
-  let preparedContext: BigEventContext | null = null;
-  try {
-    preparedContext = JSON.parse(fs.readFileSync(contextPath, 'utf-8')) as BigEventContext;
-  } catch {
-    preparedContext = null;
-  }
-
-  if (!preparedContext) {
-    return [
-      '## Prepared Daily Events Context',
-      `- Target date: ${targetDate} (Asia/Shanghai)`,
-      '- Context preparation failed; do not invent dates or sources.',
-      '- If you cannot infer valid events from the prompt, output an empty events array in the required JSON schema.',
-    ].join('\n');
-  }
-
-  const sections: string[] = [
-    '## Prepared Daily Events Context',
-    `- Target date: ${preparedContext.targetDate || targetDate} (Asia/Shanghai)`,
-    `- Run mode: ${preparedContext.runMode || 'first'}`,
-    `- Article count: ${preparedContext.articleCount ?? 0}`,
-    `- Source article ids: ${(preparedContext.sourceArticleIds ?? []).join(', ') || 'none'}`,
-  ];
-
-  if (preparedContext.skipReason) {
-    sections.push(`- Skip reason from preflight: ${preparedContext.skipReason}`);
-  }
-
-  sections.push(
-    ...renderEventList('### Existing same-day events (do not duplicate these titles)', preparedContext.existingEvents?.sameDay, 12),
-    ...renderEventList('### Recent 30-day events (avoid cross-day repeats unless there is a genuinely new fact)', preparedContext.existingEvents?.last30Days, 15),
-  );
-
-  if (preparedContext.candidateArticles?.length) {
-    sections.push('', '### Candidate articles');
-    for (const article of preparedContext.candidateArticles.slice(0, 18)) {
-      sections.push(
-        `- [${article.id ?? 'n/a'}] ${article.title || ''}${article.aiCategory ? ` [${article.aiCategory}]` : ''}${article.createdAt ? ` @ ${article.createdAt}` : ''}`,
-        `  summary: ${article.summary || ''}`,
-        ...(article.tags?.length ? [`  tags: ${article.tags.join(', ')}`] : []),
-        ...(article.url ? [`  url: ${article.url}`] : []),
-      );
-    }
-  }
-
-  if (preparedContext.articleDetailsById) {
-    sections.push('', '### Article details');
-    const detailEntries = Object.values(preparedContext.articleDetailsById).slice(0, 12);
-    for (const detail of detailEntries) {
-      const people = (detail.aiPeople || [])
-        .map((person) => [person.name, person.company].filter(Boolean).join(' / '))
-        .filter(Boolean)
-        .slice(0, 4);
-      sections.push(
-        `- [${detail.id ?? 'n/a'}] ${detail.title || ''}${detail.aiCategory ? ` [${detail.aiCategory}]` : ''}`,
-        ...(detail.tags?.length ? [`  tags: ${detail.tags.join(', ')}`] : []),
-        ...(detail.description ? [`  description: ${truncateText(detail.description, 500)}`] : []),
-        ...(detail.contentSnippet ? [`  contentSnippet: ${truncateText(detail.contentSnippet, 900)}`] : []),
-        ...(people.length ? [`  people: ${people.join('; ')}`] : []),
-        ...(detail.url ? [`  url: ${detail.url}`] : []),
-      );
-    }
-  }
-
-  sections.push(
-    '',
-    '### Required output contract',
-    '- Return exactly one ```json fenced block and make it the main output.',
-    '- The JSON object must have: eventDate, events, notes.',
-    `- eventDate must equal ${preparedContext.targetDate || targetDate}.`,
-    '- Each event must include: category, title, summary, importance, sourceArticleIds, sourceUrls.',
-    '- category must be one of: model_release, product_launch, funding, ipo_ma, policy, milestone, partnership, talent, open_source.',
-    '- Use only sourceArticleIds/sourceUrls that appear in the prepared context above.',
-    '- Do not repeat same-day or clearly duplicate 30-day historical events unless there is a materially new fact.',
-    '- If there are no valid new events, return an empty events array and explain why in notes.',
-  );
-
-  return sections.join('\n');
 }
 
 function uniqStrings(values: string[]): string[] {
@@ -889,62 +548,6 @@ async function finalizeAiBigEventRun(
     verificationPassed: true,
     reportApiResponse: verification.reportUrl,
   };
-}
-
-// Process-level cache for prepared workflow runtime context.
-// Key: `${runId}:${runtimeProfile}` — within a single run, multiple compose calls
-// (e.g. review-loop multi-round, multi-role) share the same prepared context,
-// avoiding redundant python spawn / fetch / knowledge access.
-const preparedContextCache = new Map<string, WorkflowRuntimePreparation>();
-
-export function clearPreparedContextCache(runId?: string): void {
-  if (!runId) {
-    preparedContextCache.clear();
-    return;
-  }
-  for (const key of preparedContextCache.keys()) {
-    if (key.startsWith(`${runId}:`)) preparedContextCache.delete(key);
-  }
-}
-
-export async function prepareWorkflowRuntimeContext(
-  resolvedWorkflowRef: string | undefined,
-  workspacePath: string,
-  artifactAbsDir: string,
-  runId?: string,
-): Promise<WorkflowRuntimePreparation> {
-  const manifest = resolveWorkflowRuntimeManifest(resolvedWorkflowRef);
-
-  // Cache key only effective when both runId and runtimeProfile are present.
-  // Uncacheable cases (default / no runId) fall through to original behavior.
-  const cacheKey = runId && manifest.runtimeProfile
-    ? `${runId}:${manifest.runtimeProfile}`
-    : null;
-  if (cacheKey && preparedContextCache.has(cacheKey)) {
-    return preparedContextCache.get(cacheKey)!;
-  }
-
-  let result: WorkflowRuntimePreparation;
-  switch (manifest.runtimeProfile) {
-    case 'daily-digest':
-      result = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
-        ? { promptAppendix: await prepareAiDigestContext(manifest, workspacePath, artifactAbsDir) }
-        : { promptAppendix: '' };
-      break;
-    case 'daily-events':
-      result = Boolean(manifest.runtimeSkill || manifest.runtimeScriptsDir)
-        ? { promptAppendix: await prepareAiBigEventContext(manifest, workspacePath, artifactAbsDir) }
-        : { promptAppendix: '' };
-      break;
-    case 'story-top-candidates':
-      result = { promptAppendix: await prepareStoryTopCandidatesContext(workspacePath, artifactAbsDir) };
-      break;
-    default:
-      result = { promptAppendix: '' };
-  }
-
-  if (cacheKey) preparedContextCache.set(cacheKey, result);
-  return result;
 }
 
 export async function finalizeWorkflowRun(

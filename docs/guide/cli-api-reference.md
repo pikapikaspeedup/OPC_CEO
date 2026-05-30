@@ -16,7 +16,7 @@ The API runs on port 3000 by default.
 > Split-mode ownership (2026-04-21):
 > 当 `web` 以 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 运行时，CLI 打到 `localhost:3000` 的这些 endpoint 会被壳层代理到独立后端。
 > - `control-plane`: `/api/approval*`、`/api/ai-config`、`/api/provider-model-catalog`、`/api/provider-image-generation`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
-> - `runtime`: `/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation / run runtime 主链
+> - `runtime`: `/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation `send/steps/cancel/files/proceed/revert/revert-preview` 与 run runtime 主链
 > - `api` 组合服务支持同一路径按 method 分流；`GET /api/conversations` 与 `POST /api/conversations` 不会因前序 route 返回 405 而互相截断。
 > - 所有 HTTP 响应会回 `x-ag-correlation-id`；split-mode proxy 会保持同一个值，便于 CLI 报错后回查后端日志。
 
@@ -570,6 +570,7 @@ Company Kernel 是 run 执行后的学习、经营与历史兼容收口层。CLI
   - `workspace` (String, required)
   - `prompt` (String, optional for template-backed profiles)
   - `executionProfile` (Object, optional)
+  - `selectedKnowledgeIds` (String array, optional): explicitly selected Knowledge IDs for this run. Omit this field to run without Knowledge prompt context.
 
 - **Supported `executionProfile.kind`:**
   - `workflow-run`
@@ -702,12 +703,19 @@ Company Kernel 是 run 执行后的学习、经营与历史兼容收口层。CLI
 - **Description:** 获取单个部门配置。workspace 参数为 `file://` URI，并以 OPC workspace catalog 为准；若 config 文件不存在，返回默认 build 配置。
 - **Split mode owner:** `control-plane`
 - **Response:** `200 OK` `DepartmentConfig` object.
+- **Note:** 返回值包含归一化后的 `workspaceBindings` / `executionPolicy`，以及已显式配置的 `runtimePolicy`。
 - **Error:** `403` if workspace is not known to OPC workspace catalog.
+
+#### Get Department Content
+- **URL:** `GET /api/departments/content?workspace=<file_uri>&path=<relative_path>`
+- **Description:** 返回部门真实文件目录树、面向产出物阅读的重组目录树，以及可选选中文档内容。`path` 只能指向 workspace 内的 `.md` / `.markdown` / `.txt` 文件。
+- **Split mode owner:** `control-plane`
+- **Response:** `200 OK` `DepartmentContentResponse` object. `outputTree` 会合并 run output artifacts、Project deliverables、Knowledge assets、`.department/outputs/index.json` 和 `.department/outputs/**/*.md`。
 
 #### Update Department Config
 - **URL:** `PUT /api/departments?workspace=<file_uri>`
 - **Request Body:** Full `DepartmentConfig` JSON object.
-- **Note:** 该接口现在只保存 `.department/config.json`，不会再隐式同步所有 IDE mirror。响应会返回 `{ ok: true, syncPending: true }`。
+- **Note:** 该接口现在只保存 `.department/config.json`，不会再隐式同步所有 IDE mirror。可通过 `runtimePolicy.toolset` 显式保存 `safe` / `research` / `coding` / `full`，未配置时沿用部门类型与技能推断。响应会返回 `{ ok: true, syncPending: true }`。
 - **Split mode owner:** `control-plane`
 
 #### Read Department Rules
@@ -769,6 +777,9 @@ Company Kernel 是 run 执行后的学习、经营与历史兼容收口层。CLI
   - `scope`
   - `tag`
   - `q`
+  - `selectionPrompt` + `workspace` for explicit context selection candidates
+  - `workflowRef`
+  - `skillHints`
   - `sort=recent|created|updated|alpha|reuse`
   - `limit`
 - **Response:** `200 OK` Array of `KnowledgeItem`
@@ -840,6 +851,8 @@ Company Kernel 是 run 执行后的学习、经营与历史兼容收口层。CLI
 - `create-project`
 
 默认同设备部署中，`opc-api` 负责 cron scheduler 循环；`web` 只做代理和页面，不执行定时任务。`AG_ENABLE_SCHEDULER=0` 可关闭 cron，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会额外启动 fan-out / approval / CEO event consumer 等恢复类后台。
+
+部门周期性工作应创建系统内 Scheduler Job，并写入 `departmentWorkspaceUri`；这类任务会进入 Antigravity CLI 的部门、Project、budget gate 和 scheduler runtime 语义。Codex App automation 只适合外层对话续跑，不作为部门自动化主机制。
 
 `dispatch-execution-profile` 当前支持：
 - `workflow-run`

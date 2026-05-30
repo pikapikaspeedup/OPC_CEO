@@ -11,8 +11,8 @@ const { mockStreamQuery } = vi.hoisted(() => ({
   mockStreamQuery: vi.fn(),
 }));
 
-vi.mock('../../api/client', () => ({
-  streamQuery: (...args: unknown[]) => mockStreamQuery(...args),
+vi.mock('../../api/pi-transport', () => ({
+  streamQueryViaPi: (...args: unknown[]) => mockStreamQuery(...args),
 }));
 
 import { ClaudeEngine } from '../claude-engine';
@@ -67,6 +67,12 @@ function createMockStreamEvents(options: {
 async function* mockAsyncIterator(events: StreamEvent[]) {
   for (const event of events) {
     yield event;
+  }
+}
+
+async function drainAsync(iterable: AsyncIterable<unknown>) {
+  for await (const event of iterable) {
+    void event;
   }
 }
 
@@ -139,9 +145,7 @@ describe('ClaudeEngine — Memory Integration', () => {
       transcript: { disabled: true },
     });
 
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     // Messages start with memory-context user + assistant ack + actual user
@@ -170,9 +174,7 @@ describe('ClaudeEngine — Memory Integration', () => {
       transcript: { disabled: true },
     });
 
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     const memoryMsg = callArgs.messages[0].content;
@@ -192,9 +194,7 @@ describe('ClaudeEngine — Memory Integration', () => {
       transcript: { disabled: true },
     });
 
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     expect(callArgs.systemPrompt).toBe('Plain prompt.');
@@ -210,9 +210,7 @@ describe('ClaudeEngine — Memory Integration', () => {
       transcript: { disabled: true },
     });
 
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     expect(callArgs.systemPrompt).toBe('Hello.');
@@ -233,9 +231,7 @@ describe('ClaudeEngine — Memory Integration', () => {
     });
 
     // Should not throw
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     // Mechanics prompt is still injected (it's static template)
@@ -256,9 +252,7 @@ describe('ClaudeEngine — Memory Integration', () => {
     });
 
     // First call — should have memory-context prefix
-    for await (const _e of engine.chat('first')) {
-      // drain
-    }
+    await drainAsync(engine.chat('first'));
     expect(mockStreamQuery.mock.calls[0][0].messages[0].content).toContain('<memory-context>');
     expect(mockStreamQuery.mock.calls[0][0].messages[2].content).toBe('first');
 
@@ -268,9 +262,7 @@ describe('ClaudeEngine — Memory Integration', () => {
     );
 
     // Second call — should NOT inject memory-context again (not first turn)
-    for await (const _e of engine.chat('second')) {
-      // drain
-    }
+    await drainAsync(engine.chat('second'));
     const secondCallArgs = mockStreamQuery.mock.calls[1][0];
     // First message should NOT be memory-context (conversation already has history)
     expect(secondCallArgs.messages[0].content).not.toContain('<memory-context>');
@@ -285,9 +277,7 @@ describe('ClaudeEngine — Memory Integration', () => {
       transcript: { disabled: true },
     });
 
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     expect(callArgs.systemPrompt).toContain('# Project Notes');
@@ -309,9 +299,7 @@ describe('ClaudeEngine — Memory Integration', () => {
       transcript: { disabled: true },
     });
 
-    for await (const _e of engine.chat('hi')) {
-      // drain
-    }
+    await drainAsync(engine.chat('hi'));
 
     const callArgs = mockStreamQuery.mock.calls[0][0];
     // Should still inject manifest as memory-context

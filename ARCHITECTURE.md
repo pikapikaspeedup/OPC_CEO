@@ -79,7 +79,7 @@ graph TB
 | 能力主线 | 当前真相源 | 核心实现 |
 |---|---|---|
 | 文件夹/工作区核心运行环境 | `workspace_catalog` + `workspace/.department/config.json` + `DepartmentRuntimeContract` | workspace catalog、multi-workspace bindings、context documents、artifact root、read/write roots、capability-aware provider routing |
-| Skill / Workflow / Prompt / RAG / 调度 | canonical assets + discovered assets + `ExecutionProfile` + scheduler jobs | `/api/skills|workflows|rules` canonical CRUD、`/discovered` 运行态投影、prompt mode workflow-run、`prepareWorkflowRuntimeContext()`、`retrieveKnowledgeAssets()` |
+| Skill / Workflow / Prompt / 调度 | canonical assets + discovered assets + `ExecutionProfile` + scheduler jobs | `/api/skills|workflows|rules` canonical CRUD、`/discovered` 运行态投影、prompt mode workflow-run、workflow-authored steps、`finalizeWorkflowRun()` |
 | AI 费用控制与过程检视 | `storage.sqlite` + `run-history.jsonl` + `budget_ledger` + `ops_audit/*.jsonl` | provider usage aggregation、budget gate、circuit breaker、approval、session provenance、analytics fallback |
 | Memory / Knowledge / Skill 进化 | `.department/memory/*.md` + `knowledge_assets` + `memory_candidates` + proposal stores | RunCapsule、候选记忆晋升、EvolutionProposal、historical GrowthProposal、System Improvement Proposal |
 | Provider 平面 | `ai-config.json` + `providerProfiles` + `provider-model-catalog.json` | scene/layer/provider resolution、transport/auth split、provider-aware `/api/models`、image generation、multi custom provider profiles |
@@ -433,7 +433,7 @@ graph TB
 | 概念 | 定义 | 生命周期 |
 |:-----|:-----|:---------|
 | **IDE Skill** | Language Server 注册的 AI 能力（如 `edit_file`、`codebase_search`）。通过 gRPC 从 IDE 获取。 | IDE 内置，**不参与 Pipeline 编排** |
-| **Canonical Skill Asset** | 存储在 `assets/skills/<name>/SKILL.md` 的长期技能资产，可被 Prompt Mode、Growth Proposal 和 workflow runtime helper 引用。 | Gateway canonical 资产，可被 CRUD / 发布 / 观察 |
+| **Canonical Skill Asset** | 存储在 `assets/skills/<name>/SKILL.md` 的长期技能资产，可被 Prompt Mode、Growth Proposal 和 workflow finalize helper 引用。 | Gateway canonical 资产，可被 CRUD / 发布 / 观察 |
 | **Workflow** | 存储在 `assets/workflows/*.md` 的 canonical 指令脚本。每个 Role 引用一个 workflow 路径（如 `/dev-worker`），运行时注入为 Agent 的 system prompt。 | 由模板作者编写，角色执行时加载 |
 | **Stage Profile** | Stage / node 内联执行配置，定义执行模式、角色、能力、来源约束。 | 内联定义在 `pipeline[]` / `graphPipeline.nodes[]` |
 | **Template** | 顶层编排蓝图。包含 `pipeline[]` 或 `graphPipeline`，以及可选的 `contract` 定义。 | 存储在 `assets/templates/*.json` |
@@ -457,18 +457,18 @@ graph TB
 |---|---|---|---|
 | canonical assets | `~/.gemini/antigravity/gateway/assets/{workflows,skills,rules}` + `workflow-scripts/` | `/api/skills`、`/api/workflows`、`/api/rules` 及各自 `[name]` CRUD | 组织级长期资产，可被 Prompt Mode、EvolutionProposal 发布与复用 |
 | discovered assets | Antigravity / IDE runtime gRPC `getAllSkills()` / `getAllWorkflows()` / `getAllRules()` | `/api/skills/discovered`、`/api/workflows/discovered`、`/api/rules/discovered` | 运行时观察视图，反映 IDE 当前可见资产，但不是 Gateway canonical 真相源 |
-| department-scoped assets | `workspace/.department/{rules,workflows,memory}` | Department routes + `DepartmentCapabilityView` | 部门本地规则、流程和记忆，服务于部门治理与 prompt/context 注入 |
+| department-scoped assets | `workspace/.department/{rules,workflows,memory}` | Department routes + `DepartmentCapabilityView` | 部门本地规则、流程和记忆，服务于部门治理；执行 prompt 默认只注入部门能力包与选定 workflow，不自动注入 memory markdown |
 | learned skills | `~/.claude-engine/skills` + `<workspace>/.claude/skills` | Claude Engine `SkillStore` / SkillManageTool | API-backed engine 的过程性记忆，与 canonical assets 分离 |
-| runtime helper assets | workflow frontmatter `runtimeProfile` / `runtimeSkill` / `runtimeScriptsDir` | `workflow-runtime-hooks.ts` | 给 workflow 增加 preflight / finalize helper，例如 daily-digest、daily-events |
+| runtime helper assets | workflow frontmatter `runtimeProfile` / `runtimeSkill` / `runtimeScriptsDir` | `workflow-runtime-hooks.ts` | 给 workflow 增加 finalize / validator helper，例如 daily-digest、daily-events |
 
-### Prompt / Workflow / RAG 执行主线
+### Prompt / Workflow 执行主线
 
-Prompt Mode 已经不是“直接把一句 prompt 丢给 provider”那么简单，而是一条带资产、RAG 和运行时合同的主线：
+Prompt Mode 已经不是“直接把一句 prompt 丢给 provider”那么简单，而是一条带资产和运行时合同的主线：
 
 1. 调度入口可来自 `/api/agent-runs`、scheduler `dispatch-prompt`，或 `dispatch-execution-profile(kind='workflow-run')`。
 2. `promptAssetRefs + skillHints` 先经过 `department-execution-resolver`，解析出 `ExecutionProfile`、resolved workflow、resolved skills 与 provider routing reason。
-3. `prepareWorkflowRuntimeContext()` 会根据 workflow frontmatter 注入 runtime helper 上下文。
-4. `retrieveKnowledgeAssets()` 会按 `workspace + workflowRef + skillHints + prompt tokens` 做轻量 RAG 召回。
+3. Workflow 的业务步骤由 workflow 正文和 capability-pack 注入给 Agent 执行，runtime 不再在发起前隐式补写 preflight 上下文。
+4. PromptExecutor 不再自动执行 Knowledge 召回，也不再写入 `knowledge.retrieval.injected`；`KnowledgeAsset` 只有通过 `selectedKnowledgeIds` 显式选择后才会作为 `<explicit-context>` 进入 execution prompt。
 5. `DepartmentRuntimeContract + capability registry` 会决定当前任务是否允许留在轻量 provider，还是升级到支持 artifact contract / review loop / permission enforcement 的 Department runtime。
 6. run 完成后 `finalizeWorkflowRun()` 可做后处理验证、写回 artifact，并把结果沉淀进 Knowledge / Company Kernel；若命中重复模式，还可在 `promptResolution` 中留下 workflowSuggestion，推动后续资产化。
 
@@ -708,7 +708,7 @@ sequenceDiagram
 | `src/lib/agents/department-memory.ts` | 三层持久记忆（组织/部门/会话） |
 | `src/lib/company-kernel/*` | 公司运行内核：RunCapsule、WorkingCheckpoint、MemoryCandidate、OperatingSignal、Agenda、Budget、AutonomyPolicy、CircuitBreaker、historical GrowthProposal |
 | `src/lib/knowledge/store.ts` | 结构化 `KnowledgeAsset` 存储（SQLite + filesystem mirror） |
-| `src/lib/knowledge/retrieval.ts` | 按 workspace / prompt / workflow / skill 召回相关知识 |
+| `src/lib/knowledge/retrieval.ts` | 按 workspace / prompt / workflow / skill 搜索可显式选择的知识候选，不负责默认注入 prompt |
 | `src/lib/execution/contracts.ts` | `ExecutionProfile` 合同与 run/scheduler 推导逻辑 |
 
 ---
@@ -1472,6 +1472,11 @@ interface DepartmentConfig {
   okr?: DepartmentOKR                   // OKR 目标
   roster?: DepartmentRoster[]           // 角色花名册（UI 人格化显示）
   provider?: ProviderId                 // 默认 Provider（覆盖组织级配置）
+  runtimePolicy?: {                     // 可选运行时策略；未配置时沿用 legacy 推断
+    toolset?: 'safe' | 'research' | 'coding' | 'full'
+    permissionMode?: 'default' | 'dontAsk' | 'acceptEdits' | 'bypassPermissions'
+    allowSubAgents?: boolean
+  }
   tokenQuota?: TokenQuota | null        // 部门级软配额
   workspaceBindings?: Array<{           // 一个 Department 可绑定多个工作区
     workspaceUri: string
@@ -1543,7 +1548,7 @@ interface DepartmentRuntimeContract {
 它由 `department-capability-registry.ts` 负责构建和解释，并承担三件事：
 
 1. 把 multi-workspace binding 变成实际 `readRoots / writeRoots / additionalWorkingDirectories`
-2. 把部门类型与模板复杂度映射成 `executionClass / toolset / permissionMode`
+2. 按 `overrides > config.runtimePolicy > legacy inferred` 解析 `toolset / permissionMode / allowSubAgents`，未显式配置的旧部门继续由部门类型与技能推断工具集
 3. 在 dispatch 前判断某个 provider 是否真能承载当前任务，而不是只看“用户想选谁”
 
 ### CEO Conversation Workflow
@@ -1645,6 +1650,7 @@ workspace/
     ├── config.json      ← 结构化配置
     ├── rules/           ← 部门规则（Source of Truth，symlink 到各 IDE）
     ├── workflows/       ← 部门工作流
+    ├── outputs/         ← 面向 CEO 阅读的任务产出、原始采集与缓存
     └── memory/          ← 持久记忆
         ├── knowledge.md ← 技术知识
         ├── decisions.md ← 决策日志
@@ -1660,16 +1666,17 @@ workspace/
 边界：
 
 1. `.department/memory/*.md` 仍是部门本地、人工可读的长期记忆。
-2. `knowledge_assets` + filesystem mirror 是结构化知识主线，被 Knowledge UI、RAG、EvolutionProposal 和 Company Kernel 共同消费。
+2. `knowledge_assets` + filesystem mirror 是结构化知识主线，被 Knowledge UI、未来显式加载机制、EvolutionProposal 和 Company Kernel 共同消费。
 3. run 完成后的自动沉淀先进入 RunCapsule / MemoryCandidate / KnowledgeAsset，不再等同于“直接往 Markdown 里追加一段”。
-4. Prompt Mode 的知识注入优先走结构化 retrieval，而不是依赖人工维护的 memory markdown。
+4. Prompt Mode 默认不自动注入结构化 Knowledge 或 memory markdown；Knowledge 进入执行 prompt 需要显式选择/审批加载机制。
+5. `.department/outputs/` 是部门任务产出阅读入口；Project 部门查看页会把真实文件树与 run artifacts / deliverables / knowledge assets / `outputs/index.json` 重组为面向 CEO 阅读的目录树。
 
 ### 关键文件
 
 | 文件 | 职责 |
 |---|---|
 | `src/lib/workspace-catalog.ts` | workspace catalog 真相源：realpath 规范化、recent 同步、CEO bootstrap 注册 |
-| `src/lib/department-config.ts` | 归一化多工作区 DepartmentConfig、primary/execution/context bindings 与 executionPolicy |
+| `src/lib/department-config.ts` | 归一化多工作区 DepartmentConfig、primary/execution/context bindings、executionPolicy 与 runtimePolicy |
 | `src/lib/agents/department-capability-registry.ts` | 构建 DepartmentContract / DepartmentRuntimeContract，并做 capability-aware provider 支持判定 |
 | `src/lib/agents/ceo-environment.ts` | CEO workspace、identity、playbook 和 scheduler playbook bootstrap |
 | `src/lib/organization/ceo-profile-store.ts` | CEOProfile 持久状态存储 |
@@ -1692,6 +1699,8 @@ workspace/
 | `src/lib/approval/channels/im.ts` | WeChat ACP 通道 |
 | `src/lib/ceo-events.ts` | CEO 事件流（critical/warning/info/done） |
 | `src/app/api/departments/route.ts` | 部门目录与配置 API（GET/PUT） |
+| `src/app/api/departments/content/route.ts` | 部门文件树、产出物重组目录树与 Markdown 内容读取 API |
+| `src/components/department-content-panel.tsx` | Project 部门查看页中的“产出物 / 文件”阅读面板 |
 | `src/app/api/ceo/profile/route.ts` | CEOProfile 读写 API |
 | `src/app/api/ceo/profile/feedback/route.ts` | CEO 反馈信号写入 API |
 | `src/app/api/ceo/routine/route.ts` | CEO routine summary API |
@@ -1871,7 +1880,7 @@ graph LR
 
 ### 概述
 
-Cron 风格的定时任务调度器，支持周期性触发 Pipeline、Prompt Mode、Execution Profile、Company Loop 或 OPC 命令。默认同设备部署中由 `opc-api` 承载 cron 循环；`AG_ENABLE_SCHEDULER=0` 可显式关闭，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会额外启动 fan-out / approval / CEO event consumer 等 companion 后台。
+Cron 风格的定时任务调度器，支持周期性触发 Pipeline、Prompt Mode、Execution Profile、Company Loop 或 OPC 命令。默认同设备部署中由 `opc-api` 承载 cron 循环；`AG_ENABLE_SCHEDULER=0` 可显式关闭，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会额外启动 fan-out / approval / CEO event consumer 等 companion 后台。部门周期性工作必须落在系统内 Scheduler Job，并通过 `departmentWorkspaceUri` 归属到部门；外层 Codex App automation 不参与 Antigravity CLI 的部门、Project、budget gate 或 scheduler runtime 语义。
 
 ### 架构
 
@@ -2134,14 +2143,14 @@ flowchart TB
 | 路径 | 方法 | 模块 | 说明 |
 |---|---|---|---|
 | `/api/conversations` | GET / POST | Conversation | 列表 / 创建对话；GET 支持 `page/pageSize` 并返回分页 envelope；Gateway 本地会话路径返回 provider-neutral `conversation-*`；组合 `api` 服务允许 GET/POST 分属 control-plane/runtime route |
-| `/api/conversations/{id}/send` | POST | Conversation | 发送消息（支持 `@file` 附件；Gateway 本地会话每轮按当前 provider 配置运行，provider failed status 会转为 502）|
-| `/api/conversations/{id}/cancel` | POST | Conversation | 取消生成；Gateway 本地 API-backed 请求按业务 conversation id 取消 |
-| `/api/conversations/{id}/steps` | GET | Conversation | 获取步骤历史（provider-neutral 业务 transcript、provider session transcript 或 gRPC checkpoint） |
-| `/api/conversations/{id}/proceed` | POST | Conversation | 审批 Artifact / 继续 |
-| `/api/conversations/{id}/revert` | POST | Conversation | 回退到指定步骤 |
-| `/api/conversations/{id}/revert-preview` | GET | Conversation | 回退预览；Gateway 本地会话优先预览业务 transcript，Antigravity 走 runtime cascade |
-| `/api/conversations/{id}/files` | GET | Conversation | 对话关联的文件列表 |
-| `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run；GET 改为分页 list view，并支持 `workspace` / `projectless=true` 过滤未挂到 Project 的 run-only 结果，重字段留在 `/api/agent-runs/{id}`；手动调度会写 Company Kernel token/runtime ledger，但不消耗 autonomous dispatch quota |
+| `/api/conversations/{id}/send` | POST | Conversation | 发送消息（支持 `@file` 附件；Gateway 本地会话每轮按当前 provider 配置运行，provider failed status 会转为 502）；split web/api 模式由 runtime 承载 |
+| `/api/conversations/{id}/cancel` | POST | Conversation | 取消生成；Gateway 本地 API-backed 请求按业务 conversation id 取消；split web/api 模式由 runtime 承载 |
+| `/api/conversations/{id}/steps` | GET | Conversation | 获取步骤历史（provider-neutral 业务 transcript、provider session transcript 或 gRPC checkpoint）；split web/api 模式由 runtime 承载 |
+| `/api/conversations/{id}/proceed` | POST | Conversation | 审批 Artifact / 继续；split web/api 模式由 runtime 承载 |
+| `/api/conversations/{id}/revert` | POST | Conversation | 回退到指定步骤；split web/api 模式由 runtime 承载 |
+| `/api/conversations/{id}/revert-preview` | GET | Conversation | 回退预览；Gateway 本地会话优先预览业务 transcript，Antigravity 走 runtime cascade；split web/api 模式由 runtime 承载 |
+| `/api/conversations/{id}/files` | GET | Conversation | 对话关联的文件列表；split web/api 模式由 runtime 承载 |
+| `/api/agent-runs` | GET / POST | Agent | 列表 / 调度 Run；GET 改为分页 list view，并支持 `workspace` / `projectless=true` 过滤未挂到 Project 的 run-only 结果，重字段留在 `/api/agent-runs/{id}`；POST 支持 `selectedKnowledgeIds` 显式选择 Knowledge 进入 `<explicit-context>`；手动调度会写 Company Kernel token/runtime ledger，但不消耗 autonomous dispatch quota |
 | `/api/agent-runs/{id}` | GET / DELETE | Agent | 详情 / 取消 Run；若命中 self-improvement Codex tracking run，会优先终止真实 `codex exec` child process，再把 tracking run / project / proposal 收口到取消终态 |
 | `/api/agent-runs/{id}/intervene` | POST | Agent | 介入操作 (retry/nudge/restart_role/cancel/evaluate；prompt-mode 支持 cancel/evaluate)。`cancel` 对 self-improvement Codex tracking run 也会走同一条真实 child-process 终止路径 |
 | `/api/scope-check` | POST | Agent | 写入范围校验 |
@@ -2217,7 +2226,7 @@ flowchart TB
 | `/api/company/self-improvement/proposals/{id}/attach-test-evidence` | POST | Company Kernel | 追加测试证据；high/critical 必须已有持久 approval metadata 才能进入 ready-to-merge，最新测试结果决定当前测试态 |
 | `/api/company/self-improvement/proposals/{id}/release-gate` | POST | Company Kernel | 自迭代准出门；支持 preflight、CEO/Ops 准出、标记合并、标记重启、观察和回滚，preflight 会生成 patch 并做 `git apply --check` |
 | `/api/company/self-improvement/proposals/{id}/observe` | POST | Company Kernel | 将 proposal 进入 observing 并记录观察摘要 |
-| `/api/knowledge` | GET / POST | Knowledge | 知识库条目列表与手动新建；列表支持 `workspace/category/status/scope/tag/q/sort/limit` 过滤 |
+| `/api/knowledge` | GET / POST | Knowledge | 知识库条目列表与手动新建；列表支持 `workspace/category/status/scope/tag/q/sort/limit` 过滤；`selectionPrompt + workspace` 返回显式上下文选择候选 |
 | `/api/knowledge/{id}` | GET / PUT / DELETE | Knowledge | 知识条目 CRUD（结构化资产 + 文件镜像双轨同步，详情透出 tags/source/confidence/evidence/promotion 元数据） |
 | `/api/knowledge/{id}/artifacts/{path}` | GET / PUT | Knowledge | 知识条目附件读写 |
 | `/api/ceo/profile` | GET / PATCH | Control Plane | CEOProfile 读取与更新 |
@@ -2257,6 +2266,7 @@ flowchart TB
 | `/api/approval/{id}/feedback` | GET / POST | Control Plane | 审批反馈 |
 | `/api/approval/events` | GET | Control Plane | 审批 SSE 推送事件流 |
 | `/api/departments` | GET / PUT | Control Plane | 部门目录列表 / 单部门配置 |
+| `/api/departments/content` | GET | Control Plane | 部门真实文件树、产出物重组目录树与 Markdown 内容读取 |
 | `/api/departments/rules` | GET / PUT / DELETE | Control Plane | 部门本地规则配置（`.department/rules` 主源，`.agents/rules` legacy 只读） |
 | `/api/departments/sync` | POST | Control Plane | 同步部门状态 |
 | `/api/departments/digest` | GET | Control Plane | 部门摘要 |

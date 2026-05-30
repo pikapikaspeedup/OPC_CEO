@@ -57,29 +57,6 @@ describe('workflow runtime hooks', () => {
     );
 
     fs.writeFileSync(
-      path.join(workflowScriptsDir, 'fetch_context.py'),
-      [
-        '#!/usr/bin/env python3',
-        'import json',
-        'import sys',
-        '',
-        'out_path = sys.argv[sys.argv.index("--out") + 1]',
-        'payload = {',
-        '  "status": "ok",',
-        '  "articleCount": 2,',
-        '  "sourceArticleIds": [101, 202],',
-        '  "articles": [',
-        '    {"title": "First article", "summary": "Summary one", "url": "https://example.com/1"},',
-        '    {"title": "Second article", "summary": "Summary two", "url": "https://example.com/2"}',
-        '  ]',
-        '}',
-        'with open(out_path, "w", encoding="utf-8") as fh:',
-        '    json.dump(payload, fh, ensure_ascii=False)',
-      ].join('\n'),
-      'utf-8',
-    );
-
-    fs.writeFileSync(
       path.join(workflowScriptsDir, 'report_digest.py'),
       [
         '#!/usr/bin/env python3',
@@ -136,60 +113,6 @@ describe('workflow runtime hooks', () => {
     } else {
       process.env.AG_GATEWAY_HOME = previousGatewayHome;
     }
-  });
-
-  it('prepares digest context from canonical workflow scripts without requiring a skill', async () => {
-    const hooks = await import('./workflow-runtime-hooks');
-
-    const prepared = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir);
-
-    expect(prepared.promptAppendix).toContain('Prepared Daily Digest Context');
-    expect(prepared.promptAppendix).toContain('Workflow scripts dir:');
-    expect(prepared.promptAppendix).toContain('fetch_context.py');
-    expect(prepared.promptAppendix).toContain('report_digest.py');
-    expect(prepared.promptAppendix).toContain('Article count in context window: 2');
-    expect(prepared.promptAppendix).toContain('First article');
-  });
-
-  it('caches prepared context per run id and clears it explicitly', async () => {
-    const hooks = await import('./workflow-runtime-hooks');
-    const fetchScriptPath = path.join(
-      tempGatewayHome,
-      'assets',
-      'workflow-scripts',
-      'ai_digest',
-      'fetch_context.py',
-    );
-
-    const first = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir, 'run-cache');
-    fs.writeFileSync(
-      fetchScriptPath,
-      [
-        '#!/usr/bin/env python3',
-        'import json',
-        'import sys',
-        '',
-        'out_path = sys.argv[sys.argv.index("--out") + 1]',
-        'payload = {',
-        '  "status": "ok",',
-        '  "articleCount": 1,',
-        '  "sourceArticleIds": [303],',
-        '  "articles": [',
-        '    {"title": "Changed article", "summary": "Summary three", "url": "https://example.com/3"}',
-        '  ]',
-        '}',
-        'with open(out_path, "w", encoding="utf-8") as fh:',
-        '    json.dump(payload, fh, ensure_ascii=False)',
-      ].join('\n'),
-      'utf-8',
-    );
-
-    const second = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir, 'run-cache');
-    expect(second.promptAppendix).toBe(first.promptAppendix);
-
-    hooks.clearPreparedContextCache('run-cache');
-    const third = await hooks.prepareWorkflowRuntimeContext('/ai_digest', tempWorkspace, artifactDir, 'run-cache');
-    expect(third.promptAppendix).toContain('Changed article');
   });
 
   it('finalizes digest workflow runs by reporting generated output and persisting verification artifacts', async () => {

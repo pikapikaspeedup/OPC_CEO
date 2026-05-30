@@ -24,6 +24,24 @@ vi.mock('@/lib/agents/prompt-executor', () => ({
   },
 }));
 
+vi.mock('@/lib/knowledge', () => ({
+  getKnowledgeAsset: vi.fn((id: string) => id === 'knowledge-explicit'
+    ? {
+        id,
+        scope: 'department',
+        workspaceUri: 'file:///tmp/ai-news',
+        category: 'domain-knowledge',
+        title: 'Explicit digest context',
+        content: 'Only use this when explicitly selected.',
+        source: { type: 'manual' },
+        createdAt: '2026-05-23T00:00:00.000Z',
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        status: 'active',
+      }
+    : null),
+  recordKnowledgeAssetAccess: vi.fn(),
+}));
+
 vi.mock('@/lib/storage/gateway-db', async () => {
   const actual = await vi.importActual<typeof import('@/lib/storage/gateway-db')>('@/lib/storage/gateway-db');
   return {
@@ -119,6 +137,35 @@ describe('POST /api/agent-runs', () => {
       triggerContext: { source: 'ceo-command' },
     }));
     expect(vi.mocked(executeDispatch)).not.toHaveBeenCalled();
+  });
+
+  it('passes explicitly selected knowledge as memory context to prompt runs', async () => {
+    const res = await POST(makeRequest({
+      workspace: 'file:///tmp/ai-news',
+      prompt: '整理今天 AI 资讯重点',
+      selectedKnowledgeIds: ['knowledge-explicit'],
+      executionTarget: {
+        kind: 'prompt',
+        promptAssetRefs: ['daily-digest'],
+      },
+      triggerContext: {
+        source: 'ceo-command',
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(vi.mocked(executePrompt)).toHaveBeenCalledWith(expect.objectContaining({
+      memoryContext: expect.objectContaining({
+        projectMemories: [expect.objectContaining({
+          type: 'reference',
+          name: 'knowledge:knowledge-explicit',
+          content: expect.stringContaining('Explicit digest context'),
+        })],
+      }),
+      taskEnvelope: expect.objectContaining({
+        explicitKnowledgeIds: ['knowledge-explicit'],
+      }),
+    }));
   });
 
   it('records manual prompt dispatch in the budget ledger without autonomous dispatch quota', async () => {

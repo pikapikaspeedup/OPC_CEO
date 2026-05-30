@@ -4,6 +4,10 @@ import { DELETE as deleteAgentRun } from '@/app/api/agent-runs/[id]/route';
 import { POST as postAgentRunIntervene } from '@/app/api/agent-runs/[id]/intervene/route';
 import { GET as getAgentRunStream } from '@/app/api/agent-runs/[id]/stream/route';
 import { POST as postConversations } from '@/app/api/conversations/route';
+import { GET as getConversationFiles } from '@/app/api/conversations/[id]/files/route';
+import { POST as postConversationProceed } from '@/app/api/conversations/[id]/proceed/route';
+import { POST as postConversationRevert } from '@/app/api/conversations/[id]/revert/route';
+import { GET as getConversationRevertPreview } from '@/app/api/conversations/[id]/revert-preview/route';
 import { GET as getConversationSteps } from '@/app/api/conversations/[id]/steps/route';
 import { POST as postConversationSend } from '@/app/api/conversations/[id]/send/route';
 import { POST as postConversationCancel } from '@/app/api/conversations/[id]/cancel/route';
@@ -135,6 +139,42 @@ export function createRuntimeRoutes(options: { includeHealth?: boolean } = {}): 
             return postConversationCancel(req, params(decodeURIComponent(match[1])));
           }
           return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/conversations\/([^/]+)\/files$/,
+        handler: async (req, match) => {
+          if (req.method === 'GET') {
+            return getConversationFiles(req, params(decodeURIComponent(match[1])));
+          }
+          return methodNotAllowedResponse(['GET']);
+        },
+      },
+      {
+        pattern: /^\/api\/conversations\/([^/]+)\/proceed$/,
+        handler: async (req, match) => {
+          if (req.method === 'POST') {
+            return postConversationProceed(req, params(decodeURIComponent(match[1])));
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/conversations\/([^/]+)\/revert$/,
+        handler: async (req, match) => {
+          if (req.method === 'POST') {
+            return postConversationRevert(req, params(decodeURIComponent(match[1])));
+          }
+          return methodNotAllowedResponse(['POST']);
+        },
+      },
+      {
+        pattern: /^\/api\/conversations\/([^/]+)\/revert-preview$/,
+        handler: async (req, match) => {
+          if (req.method === 'GET') {
+            return getConversationRevertPreview(req, params(decodeURIComponent(match[1])));
+          }
+          return methodNotAllowedResponse(['GET']);
         },
       },
       {

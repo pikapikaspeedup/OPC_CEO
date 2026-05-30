@@ -4,7 +4,6 @@ import type {
   CancelledAgentEvent,
   CompletedAgentEvent,
   FailedAgentEvent,
-  MemoryContext,
 } from './types';
 
 type TerminalAgentEvent = CompletedAgentEvent | FailedAgentEvent | CancelledAgentEvent;
@@ -12,10 +11,6 @@ type TerminalAgentEvent = CompletedAgentEvent | FailedAgentEvent | CancelledAgen
 export interface BackendMemoryHook {
   id: string;
   providers?: AgentBackendId[];
-  beforeRun?(context: { providerId: AgentBackendId; config: BackendRunConfig }):
-    | Partial<MemoryContext>
-    | void
-    | Promise<Partial<MemoryContext> | void>;
   afterRun?(context: {
     providerId: AgentBackendId;
     config: BackendRunConfig;
@@ -37,30 +32,6 @@ function matchesProvider(hook: BackendMemoryHook, providerId: AgentBackendId): b
   return !hook.providers || hook.providers.includes(providerId);
 }
 
-function mergeMemoryContext(
-  current: BackendRunConfig['memoryContext'],
-  patch?: Partial<MemoryContext> | void,
-): BackendRunConfig['memoryContext'] {
-  if (!patch) {
-    return current;
-  }
-
-  return {
-    projectMemories: [
-      ...(current?.projectMemories || []),
-      ...(patch.projectMemories || []),
-    ],
-    departmentMemories: [
-      ...(current?.departmentMemories || []),
-      ...(patch.departmentMemories || []),
-    ],
-    userPreferences: [
-      ...(current?.userPreferences || []),
-      ...(patch.userPreferences || []),
-    ],
-  };
-}
-
 export function registerMemoryHook(hook: BackendMemoryHook): BackendMemoryHook {
   memoryHooks.set(hook.id, hook);
   return hook;
@@ -78,21 +49,8 @@ export async function applyBeforeRunMemoryHooks(
   providerId: AgentBackendId,
   config: BackendRunConfig,
 ): Promise<BackendRunConfig> {
-  let nextConfig = { ...config };
-
-  for (const hook of memoryHooks.values()) {
-    if (!matchesProvider(hook, providerId) || !hook.beforeRun) {
-      continue;
-    }
-
-    const patch = await hook.beforeRun({ providerId, config: nextConfig });
-    nextConfig = {
-      ...nextConfig,
-      memoryContext: mergeMemoryContext(nextConfig.memoryContext, patch),
-    };
-  }
-
-  return nextConfig;
+  void providerId;
+  return { ...config };
 }
 
 export async function applyAfterRunMemoryHooks(

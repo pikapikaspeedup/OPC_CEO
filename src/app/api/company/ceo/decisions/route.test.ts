@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let tempHome: string;
 let previousHome: string | undefined;
 let previousGatewayHome: string | undefined;
+let previousRole: string | undefined;
 
 async function loadModules() {
   vi.resetModules();
@@ -22,8 +23,10 @@ describe('GET /api/company/ceo/decisions', () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ceo-decisions-route-'));
     previousHome = process.env.HOME;
     previousGatewayHome = process.env.AG_GATEWAY_HOME;
+    previousRole = process.env.AG_ROLE;
     process.env.HOME = tempHome;
     process.env.AG_GATEWAY_HOME = path.join(tempHome, 'gateway-home');
+    process.env.AG_ROLE = 'api';
   });
 
   afterEach(() => {
@@ -33,6 +36,8 @@ describe('GET /api/company/ceo/decisions', () => {
     else process.env.HOME = previousHome;
     if (previousGatewayHome === undefined) delete process.env.AG_GATEWAY_HOME;
     else process.env.AG_GATEWAY_HOME = previousGatewayHome;
+    if (previousRole === undefined) delete process.env.AG_ROLE;
+    else process.env.AG_ROLE = previousRole;
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 

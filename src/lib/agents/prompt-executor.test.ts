@@ -116,8 +116,6 @@ vi.mock('./project-registry', () => ({
 }));
 
 vi.mock('../knowledge', () => ({
-  retrieveKnowledgeAssets: vi.fn(() => []),
-  formatKnowledgeAssetsForPrompt: vi.fn(() => ''),
   persistKnowledgeForRun: vi.fn(),
 }));
 

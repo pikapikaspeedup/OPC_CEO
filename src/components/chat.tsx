@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { readScrollAnchor, writeScrollAnchor } from '@/components/chat-scroll-anchor';
 import {
   workspaceGhostActionClassName,
   workspaceOutlineActionClassName,
@@ -30,31 +31,6 @@ interface ChatProps {
   isActive?: boolean;
   conversationId?: string | null;
 }
-
-const CHAT_SCROLL_STORAGE_KEY = 'ceo-office:chat-scroll';
-
-function readScrollAnchor(conversationId: string): number | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.sessionStorage.getItem(`${CHAT_SCROLL_STORAGE_KEY}:${conversationId}`);
-    if (!raw) return null;
-    const value = Number(raw);
-    return Number.isFinite(value) && value >= 0 ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeScrollAnchor(conversationId: string, value: number): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(`${CHAT_SCROLL_STORAGE_KEY}:${conversationId}`, String(Math.max(0, Math.round(value))));
-  } catch {
-    // sessionStorage may be unavailable (private mode); ignore silently.
-  }
-}
-
-export const __chatScrollAnchorTestApi = { readScrollAnchor, writeScrollAnchor, storageKey: CHAT_SCROLL_STORAGE_KEY };
 
 const TOOL_TYPES = new Set([
   'CORTEX_STEP_TYPE_CODE_ACTION',

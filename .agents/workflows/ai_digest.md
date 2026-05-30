@@ -69,45 +69,78 @@ runtimeScriptsDir: ai_digest
     echo "=== NEW RUN $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >> /tmp/baogaoai-skill-digest.log
     ```
 ## 标准执行流程
-### Step 1：智能上下文拉取
-日报覆盖时间窗口：**前一天 20:00（北京时间）→ 当天 20:00（北京时间）**，触发时间为每天北京时间 20:00（UTC 12:00）。
+
+运行前先读取 Prompt Mode Run context 中的 **Absolute artifact directory**。后续所有运行时文件必须写入该目录：
+
+- `prepared-ai-digest-context.json`
+- `digest_output.json`
+
+如果使用 shell，先设置：
+
 ```bash
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py \
+GATEWAY_HOME="${AG_GATEWAY_HOME:-$HOME/.gemini/antigravity/gateway}"
+ARTIFACT_DIR="<把 Run context 中的 Absolute artifact directory 原样填入这里>"
+```
+
+### Step 1：智能上下文拉取
+
+日报覆盖时间窗口：**前一天 20:00（北京时间）→ 当天 20:00（北京时间）**，触发时间为每天北京时间 20:00（UTC 12:00）。
+
+```bash
+python3 "$GATEWAY_HOME/assets/workflow-scripts/ai_digest/fetch_context.py" \
   --date $(TZ=Asia/Shanghai date +%Y-%m-%d) \
   --limit 50 --max-pages 2 \
   --window-start-hour 20 --window-end-hour 20 \
-  --out /tmp/baogaoai-digest-context.json --insecure
+  --out "$ARTIFACT_DIR/prepared-ai-digest-context.json" \
+  --insecure
+```
 
 执行后检查输出文件：
-status 为 skip + digest_already_exists -> 日报已存在，终止流程
-status 为 skip + insufficient_articles -> 文章不足，终止流程
-status 为 ok -> 记录 recentDigests，继续下一步
-recentDigests 包含过去 7 天已发布日报的 title、summary 和 deepDiveTopics。用于去重。
-Step 2：创作
-读取 /tmp/baogaoai-digest-context.json，执行以下过程：
-去重检查：通读 recentDigests 中过去 7 天每篇日报的完整内容（title、summary、contentHtml、deepDiveTopics），凡是已深度展开过的话题、人物、事件，一律不得以相同角度再次展开。判断标准是“读者已经从上周日报里读到过这件事”——标题里提过、正文里分析过，都算。
-通读所有文章，选出 2-3 个最有认知增量的主题
-确定视觉主题——根据内容调性选择配色、布局和可视化方式
-创作深度解读 + 快讯，融入合适的信息可视化元素
-如果某主题已在近 7 天深度展开过，要么跳过，要么以进展追踪角度聚焦增量（标题注明“最新进展”，开头交代前情）
-将输出保存为 /tmp/baogaoai-digest-output.json：
+
+- `status` 为 `skip` + `digest_already_exists`：日报已存在，终止流程，不创建 `digest_output.json`
+- `status` 为 `skip` + `insufficient_articles`：文章不足，终止流程，不创建 `digest_output.json`
+- `status` 为 `ok`：记录 `recentDigests`，继续下一步
+
+`recentDigests` 包含过去 7 天已发布日报的 `title`、`summary` 和 `deepDiveTopics`。用于去重。
+
+### Step 2：创作
+
+读取 `$ARTIFACT_DIR/prepared-ai-digest-context.json`，执行以下过程：
+
+1. 去重检查：通读 `recentDigests` 中过去 7 天每篇日报的完整内容（`title`、`summary`、`contentHtml`、`deepDiveTopics`），凡是已深度展开过的话题、人物、事件，一律不得以相同角度再次展开。判断标准是“读者已经从上周日报里读到过这件事”，标题里提过、正文里分析过，都算。
+2. 通读所有文章，选出 2-3 个最有认知增量的主题。
+3. 确定视觉主题：根据内容调性选择配色、布局和可视化方式。
+4. 创作深度解读 + 快讯，融入合适的信息可视化元素。
+5. 如果某主题已在近 7 天深度展开过，要么跳过，要么以进展追踪角度聚焦增量（标题注明“最新进展”，开头交代前情）。
+
+将输出保存为 `$ARTIFACT_DIR/digest_output.json`：
+
+```json
 {
   "title": "具体、有信息量的中文标题（含数字或专有名词）",
   "summary": "150-300字的钩子",
   "contentHtml": "<style>...</style><div>...完整 HTML...</div>",
   "sourceArticleIds": [文章 ID 列表]
 }
-Step 3：全量上报
-python3 ~/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/report_digest.py \
-  --input /tmp/baogaoai-digest-output.json \
-  --context /tmp/baogaoai-digest-context.json \
-  --insecure
-护栏规则
-禁止跨日重复深度分析：近 7 天日报的 title、summary、contentHtml 中出现过的话题、人物、事件，不得以相同角度再次深度展开。仅凭 deepDiveTopics 判断不够，必须通读完整内容。
-进展追踪要求：标题含“最新”或“进展”，开头交代前情，正文只聚焦增量。
-禁止清单式摘要：summary 中禁止用分号连接 3 个以上不同事件。
-禁止浅层复述：换措辞重述原文摘要 ≠ 深度分析。
-超链接溯源：引用的文章必须有链接。
-快讯精炼：每条不超过 2 句话。
----
-以上是完整的 `SKILL.md` 内容。如需同时查看 `fetch_context.py` 或 `report_digest.py` 脚本内容，随时告知。
+```
+
+### Step 3：交给运行时 finalize 上报
+
+不要在 workflow 正文里直接调用 `report_digest.py`。运行时 `finalizeWorkflowRun()` 会读取：
+
+- `$ARTIFACT_DIR/prepared-ai-digest-context.json`
+- `$ARTIFACT_DIR/digest_output.json`
+
+然后调用 `report_digest.py` 完成真实上报、回读验证，并写入：
+
+- `$ARTIFACT_DIR/daily-digest-report-payload.json`
+- `$ARTIFACT_DIR/daily-digest-verification.json`
+
+## 护栏规则
+
+- 禁止跨日重复深度分析：近 7 天日报的 `title`、`summary`、`contentHtml` 中出现过的话题、人物、事件，不得以相同角度再次深度展开。仅凭 `deepDiveTopics` 判断不够，必须通读完整内容。
+- 进展追踪要求：标题含“最新”或“进展”，开头交代前情，正文只聚焦增量。
+- 禁止清单式摘要：`summary` 中禁止用分号连接 3 个以上不同事件。
+- 禁止浅层复述：换措辞重述原文摘要 ≠ 深度分析。
+- 超链接溯源：引用的文章必须有链接。
+- 快讯精炼：每条不超过 2 句话。

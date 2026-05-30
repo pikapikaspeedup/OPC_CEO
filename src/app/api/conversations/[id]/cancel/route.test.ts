@@ -20,6 +20,9 @@ vi.mock('@/lib/api-provider-conversations', () => ({
 vi.mock('@/server/shared/proxy', () => ({
   shouldProxyRuntimeRequest: vi.fn(() => false),
   proxyToRuntime: vi.fn(),
+  runControlPlaneRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+  runControlPlaneThenRuntimeRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
+  runRuntimeRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
 }));
 
 import { getOwnerConnection, grpc, resolveConversationRecord } from '@/lib/bridge/gateway';

@@ -1,4 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  CHAT_SCROLL_STORAGE_KEY,
+  readScrollAnchor,
+  writeScrollAnchor,
+} from './chat-scroll-anchor';
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -22,7 +28,6 @@ class MemoryStorage {
 const originalWindow = (globalThis as unknown as { window?: unknown }).window;
 
 beforeEach(() => {
-  vi.resetModules();
   const storage = new MemoryStorage();
   Object.assign(globalThis, {
     window: { sessionStorage: storage },
@@ -39,25 +44,14 @@ afterEach(() => {
   }
 });
 
-vi.mock('@/components/locale-provider', () => ({
-  useI18n: () => ({ locale: 'zh', t: (key: string) => key, setLocale: () => undefined }),
-  LocaleProvider: ({ children }: { children: unknown }) => children,
-}));
-
 describe('chat scroll anchor helpers', () => {
-  it('round-trips a scroll position keyed by conversation id', async () => {
-    const { __chatScrollAnchorTestApi } = await import('./chat');
-    const { readScrollAnchor, writeScrollAnchor } = __chatScrollAnchorTestApi;
-
+  it('round-trips a scroll position keyed by conversation id', () => {
     expect(readScrollAnchor('thread-a')).toBeNull();
     writeScrollAnchor('thread-a', 412);
     expect(readScrollAnchor('thread-a')).toBe(412);
   });
 
-  it('isolates scroll positions across conversations', async () => {
-    const { __chatScrollAnchorTestApi } = await import('./chat');
-    const { readScrollAnchor, writeScrollAnchor } = __chatScrollAnchorTestApi;
-
+  it('isolates scroll positions across conversations', () => {
     writeScrollAnchor('thread-a', 100);
     writeScrollAnchor('thread-b', 320);
 
@@ -65,10 +59,7 @@ describe('chat scroll anchor helpers', () => {
     expect(readScrollAnchor('thread-b')).toBe(320);
   });
 
-  it('rounds and clamps negative values to zero', async () => {
-    const { __chatScrollAnchorTestApi } = await import('./chat');
-    const { readScrollAnchor, writeScrollAnchor } = __chatScrollAnchorTestApi;
-
+  it('rounds and clamps negative values to zero', () => {
     writeScrollAnchor('thread-x', -50);
     expect(readScrollAnchor('thread-x')).toBe(0);
 
@@ -76,17 +67,14 @@ describe('chat scroll anchor helpers', () => {
     expect(readScrollAnchor('thread-x')).toBe(135);
   });
 
-  it('returns null for a corrupted stored value', async () => {
-    const { __chatScrollAnchorTestApi } = await import('./chat');
-    const { readScrollAnchor, storageKey } = __chatScrollAnchorTestApi;
-
+  it('returns null for a corrupted stored value', () => {
     (globalThis as unknown as { sessionStorage: Storage }).sessionStorage
-      .setItem(`${storageKey}:thread-broken`, 'not-a-number');
+      .setItem(`${CHAT_SCROLL_STORAGE_KEY}:thread-broken`, 'not-a-number');
 
     expect(readScrollAnchor('thread-broken')).toBeNull();
   });
 
-  it('silently ignores write failures when sessionStorage throws', async () => {
+  it('silently ignores write failures when sessionStorage throws', () => {
     const throwingStorage = {
       getItem: () => null,
       setItem: () => {
@@ -103,7 +91,6 @@ describe('chat scroll anchor helpers', () => {
       sessionStorage: throwingStorage,
     });
 
-    const { __chatScrollAnchorTestApi } = await import('./chat');
-    expect(() => __chatScrollAnchorTestApi.writeScrollAnchor('thread-y', 12)).not.toThrow();
+    expect(() => writeScrollAnchor('thread-y', 12)).not.toThrow();
   });
 });

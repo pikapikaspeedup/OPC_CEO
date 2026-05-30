@@ -55,6 +55,35 @@ export function readOrganizationMemory(): string {
   }
 }
 
+/** Read all Markdown files from the shared department memory directory. */
+export function readSharedDepartmentMemory(workspace: string): string {
+  return readAllMarkdownInDir(path.join(workspace, '.department', 'memory', 'shared'));
+}
+
+/** Read provider-specific department memory without injecting it into runtime prompts. */
+export function readProviderDepartmentMemory(workspace: string, providerDir: string): string {
+  return readAllMarkdownInDir(path.join(workspace, '.department', 'memory', providerDir));
+}
+
+function readAllMarkdownInDir(dir: string): string {
+  try {
+    if (!fs.existsSync(dir)) return '';
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+    return files
+      .map(f => {
+        try {
+          return fs.readFileSync(path.join(dir, f), 'utf-8');
+        } catch {
+          return '';
+        }
+      })
+      .filter(Boolean)
+      .join('\n\n---\n\n');
+  } catch {
+    return '';
+  }
+}
+
 function readMemoryFile(dir: string, filename: string): string {
   const filePath = path.join(dir, filename);
   if (!fs.existsSync(filePath)) return '';
@@ -178,4 +207,29 @@ export function initDepartmentMemory(workspace: string): void {
   }
 
   log.info({ workspace: workspace.slice(-30) }, 'Department memory initialized');
+}
+
+/** Initialize the governance memory directory with shared + provider folders. */
+export function initDepartmentMemoryV2(workspace: string): void {
+  const baseDir = path.join(workspace, '.department', 'memory');
+  const sharedDir = path.join(baseDir, 'shared');
+  fs.mkdirSync(sharedDir, { recursive: true });
+
+  const sharedFiles: Record<string, string> = {
+    'decisions.md': '# Department Decisions\n\nArchitectural and implementation decisions with rationale.\n\n---\n\n',
+    'patterns.md': '# Department Patterns\n\nBest practices, coding conventions, and lessons learned.\n\n---\n\n',
+  };
+
+  for (const [filename, content] of Object.entries(sharedFiles)) {
+    const filePath = path.join(sharedDir, filename);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, content, 'utf-8');
+    }
+  }
+
+  for (const dirName of ['claude-engine', 'codex']) {
+    fs.mkdirSync(path.join(baseDir, dirName), { recursive: true });
+  }
+
+  log.info({ workspace: workspace.slice(-30) }, 'Department memory V2 initialized');
 }

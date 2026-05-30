@@ -81,7 +81,7 @@ curl -s "http://localhost:3000/api/conversations/$CID/steps" | \
 > Split-mode API ownership（2026-04-21）:
 > 在 `AG_ROLE=web` 且配置了 `AG_CONTROL_PLANE_URL` / `AG_RUNTIME_URL` 时，`web` 只负责页面与 WS ingress，不再执行前端主链的控制面业务逻辑。
 > - `control-plane` 负责：`/api/approval*`、`/api/ai-config`、`/api/provider-model-catalog`、`/api/provider-image-generation`、`/api/api-keys*`、`/api/ceo/*`、`/api/departments/*`、`/api/mcp*`、`/api/workspaces`、`/api/workspaces/import`、`/api/workspaces/close`
-> - `runtime` 负责：`/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation send/steps/cancel、run stream/intervene 等运行时接口
+> - `runtime` 负责：`/api/me`、`/api/models`、`/api/workspaces/launch`、`/api/workspaces/kill`，以及 conversation `send/steps/cancel/files/proceed/revert/revert-preview`、run stream/intervene 等运行时接口
 > - `api` 组合服务允许同一路径按 method 分流；例如 `GET /api/conversations` 归 control-plane，`POST /api/conversations` 归 runtime，路由器会在 405 后继续匹配后续同路径 route。
 > - 所有 HTTP 响应会带 `x-ag-correlation-id`，split-mode proxy 会透传同一个值，便于跨 `web -> api/control-plane/runtime` 串日志排障。
 
@@ -564,6 +564,7 @@ Gateway 本地 conversation 返回示例：
 | `departmentRuntimeContract` / `runtimeContract` | `object` | 否 | Department 级 runtime 合同，声明目录边界、工具集、权限模式与交付要求 |
 | `projectId` | `string` | 否 | 归属 Project |
 | `sourceRunIds` | `string[]` | 否 | 上游 run 依赖 |
+| `selectedKnowledgeIds` | `string[]` | 否 | 显式选择进入本次 run `<explicit-context>` 的 Knowledge ID；未传时不会自动加载 Knowledge |
 | `model` | `string` | 否 | 覆盖模型 |
 | `parentConversationId` | `string` | 否 | 父会话 ID |
 
@@ -1384,6 +1385,7 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
   "skills": [],
   "okr": null,
   "provider": "antigravity",
+  "runtimePolicy": { "toolset": "coding", "permissionMode": "default", "allowSubAgents": false },
   "tokenQuota": { "daily": 500000, "monthly": 10000000, "used": { "daily": 12300, "monthly": 456000 }, "canRequestMore": true }
 }
 ```
@@ -1398,7 +1400,46 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 **说明**:
 
 1. 目录列表只返回“真实存在 config 文件”的部门，不把默认 build 占位视为已存在部门
-2. 单部门返回值已经过 `normalizeDepartmentConfig()` 处理，包含 `workspaceBindings` 与 `executionPolicy`
+2. 单部门返回值已经过 `normalizeDepartmentConfig()` 处理，包含 `workspaceBindings`、`executionPolicy` 与显式 `runtimePolicy`
+
+### `GET /api/departments/content` — 读取部门文件与产出物
+
+**Split mode owner**: `control-plane`
+
+**功能**: 为 Project 的部门查看页提供部门阅读数据。接口同时返回真实文件目录树、面向产出物的重组目录树，以及当前选中文档内容。
+
+**Query 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `workspace` | `string` | 必填。workspace `file://` URI |
+| `path` | `string` | 可选。workspace 内相对路径；只允许读取 `.md` / `.markdown` / `.txt` |
+
+**Response** `200 OK`:
+```json
+{
+  "workspace": {
+    "uri": "file:///Users/me/repo",
+    "path": "/Users/me/repo",
+    "name": "repo"
+  },
+  "fileTree": [],
+  "outputTree": [],
+  "selectedFile": {
+    "path": ".department/outputs/linuxdo-ai-watch/briefs/2026-05-21-0013.md",
+    "name": "2026-05-21-0013.md",
+    "kind": "markdown",
+    "content": "# Linux Do AI 情报简报\n",
+    "updatedAt": "2026-05-21T00:13:05.000Z"
+  }
+}
+```
+
+**说明**:
+
+1. `fileTree` 反映部门工作区真实目录，默认纳入 workspace root、`.department/outputs`、`.department/memory`、`.department/rules`、`.agents/rules` 与 `executionPolicy.contextDocumentPaths`
+2. `outputTree` 面向 CEO 阅读重组产出物，合并 run output artifacts、Project deliverables、Knowledge assets、`.department/outputs/index.json` 和 `.department/outputs/**/*.md`
+3. 单文件读取限制在 workspace 内部，并限制最大读取体积，避免路径穿越和超大文件拖慢控制面
 
 ### `PUT /api/departments` — 更新部门配置
 
@@ -1409,7 +1450,7 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
 
 **Query 参数**: 同 GET
 
-**Request Body**: 完整的 `DepartmentConfig` JSON 对象。
+**Request Body**: 完整的 `DepartmentConfig` JSON 对象。`runtimePolicy.toolset` 可显式配置为 `safe` / `research` / `coding` / `full`；未配置时继续沿用部门类型与技能推断。
 
 **Response** `200 OK`:
 ```json
@@ -1518,6 +1559,9 @@ data: {"id":"1776981167936-1","type":"approval_request","requestId":"approval-12
   - `scope`
   - `tag`
   - `q`
+  - `selectionPrompt` + `workspace`：返回可显式选择的上下文候选，不自动注入 run
+  - `workflowRef`
+  - `skillHints`
   - `sort=recent|created|updated|alpha|reuse`
   - `limit`
 - `POST /api/knowledge` 可手动创建 `manual` source 的知识项，并立即返回 `KnowledgeDetail`。
@@ -1878,6 +1922,7 @@ Legacy 兼容接口，当前统一返回 `410 Gone`。growth proposal 的评估�
 - 列表和详情读取会按 SQLite `scheduled_jobs` 主存储刷新，不再只看某个进程里的旧内存态；任务已过触发点但尚未执行时，`nextRunAt` 返回当前时间，表示应立即补跑。
 - 默认同设备部署中由 `opc-api` 承载 cron scheduler；`web` 不执行定时任务。`AG_ENABLE_SCHEDULER=0` 可显式关闭 cron，`AG_ENABLE_SCHEDULER_COMPANIONS=1` 才会启动 fan-out / approval / CEO event consumer 等 companion 后台。
 - 内置平台工程部会自动确保一个 `builtin-platform-engineering-story-top-candidates` cron job，默认每天 `09:00`（服务端本地时区）执行 `dispatch-prompt`，从真实 `User Story/**/*.md` 中提炼全局 Top 3 候选并写回 story-level self-improvement signals。
+- 部门周期性工作应使用系统内 Scheduler Job，并写入 `departmentWorkspaceUri`。外层 Codex App automation 不会进入 Antigravity CLI 的部门、Project、budget gate 和 scheduler runtime 语义。
 
 ### `POST /api/scheduler/jobs` — 创建定时任务
 

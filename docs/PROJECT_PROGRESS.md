@@ -1,3 +1,1481 @@
+## 任务：Linux Do AI 情报监控沉淀逐帖知识条目
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-28
+
+### 本轮实施
+
+已完成：
+
+1. 修复 `scripts/linuxdo-ai-watch.mjs` 的候选读取逻辑：采集器实际返回 `payload.data.candidates`，旧逻辑只读取顶层 `payload.candidates`，导致上一轮把 7 条候选误报为 0。
+2. 为每条新候选新增单独知识条目输出，写入：
+   - `.department/outputs/linuxdo-ai-watch/knowledge/*.md`
+   - `.department/outputs/index.json`
+3. 每个知识条目包含基础信息、信号评分、风险标签、加密/解密/答案类标记、信息点解读、可分享摘要、复核问题、安全处理和原始 JSON 关联。
+4. 简报新增“知识库条目”区，列出本轮每个新线索对应的知识 Markdown 路径。
+5. Scheduler job `134072d7-888c-47c1-bf13-5f4961623988` 的 action prompt 已同步更新：未来生成简报时必须检查 `briefs/`、`raw/`、`knowledge/`、`index.json`，并确认 `knowledgeCount` 与 `freshCandidates` 一致。
+6. 安全边界保持不变：知识条目只沉淀防御性、高层次情报解读，不保存可执行绕过步骤、密钥、账号、支付路径或具体接口滥用细节。
+
+### 本轮验证
+
+强制采集验证：
+
+```bash
+LINUXDO_WATCH_WORKSPACE_ROOT=/Users/darrel/Documents/baogaoai node /Users/darrel/Documents/Antigravity-Mobility-CLI/scripts/linuxdo-ai-watch.mjs --hours 2 --levels 1,2,3 --source new --min-interval-minutes 90 --force
+```
+
+结果：脚本成功生成 11 条新候选、11 个知识条目：
+
+```json
+{
+  "ok": true,
+  "skipped": false,
+  "outputPath": ".department/outputs/linuxdo-ai-watch/briefs/2026-05-28-0901.md",
+  "rawPath": ".department/outputs/linuxdo-ai-watch/raw/2026-05-28-0901.json",
+  "totalCandidates": 11,
+  "freshCandidates": 11,
+  "knowledgeCount": 11
+}
+```
+
+抽查产物：
+
+```text
+/Users/darrel/Documents/baogaoai/.department/outputs/linuxdo-ai-watch/briefs/2026-05-28-0901.md
+/Users/darrel/Documents/baogaoai/.department/outputs/linuxdo-ai-watch/knowledge/2026-05-28-0901-01-2260695-48186f85ebb901c9.md
+/Users/darrel/Documents/baogaoai/.department/outputs/index.json
+```
+
+部门内容接口验证：
+
+```bash
+curl -sS "http://127.0.0.1:3000/api/departments/content?workspace=file%3A%2F%2F%2FUsers%2Fdarrel%2FDocuments%2Fbaogaoai"
+```
+
+结果：`outputTree` 中 `linuxdo-ai-watch` 分组可见，本轮简报和 11 个 `kind=knowledge` 的待复核知识条目已被索引。
+
+Scheduler 触发验证：
+
+```bash
+POST /api/scheduler/jobs/134072d7-888c-47c1-bf13-5f4961623988/trigger
+```
+
+结果：触发 run `d7781946-4f6f-467c-bda8-9e5c98f9fe0d`，状态 completed。由于刚完成强制采集，脚本返回 `skipped=true`、`reason=cache-window`，属于正常缓存跳过；run 产物写入：
+
+```text
+/Users/darrel/Documents/baogaoai/demolong/runs/d7781946-4f6f-467c-bda8-9e5c98f9fe0d/linuxdo-watch.stdout.json
+/Users/darrel/Documents/baogaoai/demolong/runs/d7781946-4f6f-467c-bda8-9e5c98f9fe0d/verification.json
+```
+
+补充检查：
+
+```bash
+npx eslint scripts/linuxdo-ai-watch.mjs
+git diff --check
+```
+
+结果：均通过。
+
+## 任务：修正 Linux Do AI 情报监控部门绑定与脚本输出读取
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-27
+
+### 本轮实施
+
+已完成：
+
+1. 确认原 `AI 情报部 · Linux Do AI 漏洞监控` scheduler job `134072d7-888c-47c1-bf13-5f4961623988` 绑定到了 `file:///Users/darrel/Documents/Antigravity-Mobility-CLI`，不是 AI 情报工作室。
+2. 原绑定导致该任务按平台仓库 Department 运行，runtime contract 推断为 `safe`，scheduler run 虽然显示 completed，但没有真实执行 `node scripts/linuxdo-ai-watch.mjs`。
+3. 将 scheduler job 的 `action.workspace` 改为 `file:///Users/darrel/Documents/baogaoai`，使其归属 AI 情报工作室，并复用该部门已配置的 `runtimePolicy.toolset = coding`。
+4. `scripts/linuxdo-ai-watch.mjs` 不再固定把输出写到脚本所在仓库；新增通过 `LINUXDO_WATCH_WORKSPACE_ROOT` 或当前工作目录确定输出 workspace。
+5. 修复 `bb-browser --json` 在 `spawnSync` pipe 捕获时输出约 5KB 截断导致 `JSON.parse` 失败的问题：脚本现在把 `bb-browser` stdout 写入临时文件，再读取完整 JSON。
+
+### 本轮验证
+
+通过：
+
+```bash
+LINUXDO_WATCH_WORKSPACE_ROOT=/Users/darrel/Documents/baogaoai node /Users/darrel/Documents/Antigravity-Mobility-CLI/scripts/linuxdo-ai-watch.mjs --hours 2 --levels 1,2,3 --source new --min-interval-minutes 90
+```
+
+结果：脚本成功运行并写入 AI 情报工作室输出目录：
+
+```json
+{
+  "ok": true,
+  "skipped": false,
+  "outputPath": ".department/outputs/linuxdo-ai-watch/briefs/2026-05-27-2335.md",
+  "rawPath": ".department/outputs/linuxdo-ai-watch/raw/2026-05-27-2335.json",
+  "totalCandidates": 0,
+  "freshCandidates": 0
+}
+```
+
+通过 scheduler 触发：
+
+```bash
+POST /api/scheduler/jobs/134072d7-888c-47c1-bf13-5f4961623988/trigger
+```
+
+结果：触发 run `d11ac257-84d7-42a2-a493-d83ce2207661`，状态 completed。run-history 确认 `BashTool` 可见并被调用；脚本返回 `skipped=true`、`reason=cache-window`，这是刚完成直接采集后 90 分钟缓存窗口内的正常跳过。run artifact 写入：
+
+```text
+/Users/darrel/Documents/baogaoai/demolong/runs/d11ac257-84d7-42a2-a493-d83ce2207661/linuxdo-ai-watch.stdout.json
+/Users/darrel/Documents/baogaoai/demolong/runs/d11ac257-84d7-42a2-a493-d83ce2207661/linuxdo-ai-watch-check.json
+```
+
+补充检查：
+
+```bash
+npx eslint scripts/linuxdo-ai-watch.mjs
+git diff --check
+```
+
+结果：均通过。
+
+## 任务：Runtime Toolset 接入部门配置与前端
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-27
+
+### 本轮实施
+
+已完成：
+
+1. `DepartmentConfig` 新增可选 `runtimePolicy`，支持显式配置：
+   - `toolset`: `safe` / `research` / `coding` / `full`
+   - `permissionMode`: `default` / `dontAsk` / `acceptEdits` / `bypassPermissions`
+   - `allowSubAgents`
+2. `normalizeDepartmentConfig()` 会保留并白名单归一化 `runtimePolicy`；未配置的旧部门不新增字段。
+3. `buildDepartmentRuntimeContract()` 的运行时优先级改为：
+   - `overrides`
+   - `config.runtimePolicy`
+   - legacy inferred toolset / permission fallback
+4. 部门配置弹窗 Basic tab 在 Provider 下方新增 `Runtime Toolset` 下拉框；未选择时保存为“沿用当前默认”，不写入 `runtimePolicy.toolset`。
+5. 部门详情抽屉的部门配置区展示 runtime toolset；未显式配置时显示“默认”。
+6. 通过 `PUT /api/departments` 将 AI 情报工作室保存为：
+
+```json
+{
+  "runtimePolicy": {
+    "toolset": "coding",
+    "permissionMode": "default",
+    "allowSubAgents": false
+  }
+}
+```
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/department-config.test.ts src/lib/agents/department-capability-registry.test.ts src/app/api/departments/route.test.ts
+```
+
+结果：3 个测试文件、15 个测试全部通过。
+
+```bash
+npx vitest run src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts
+```
+
+结果：2 个测试文件、8 个测试全部通过。
+
+```bash
+npx eslint src/lib/types.ts src/lib/department-config.ts src/lib/department-config.test.ts src/lib/agents/department-capability-registry.ts src/lib/agents/department-capability-registry.test.ts src/app/api/departments/route.test.ts src/components/department-setup-dialog.tsx src/components/department-detail-drawer.tsx
+```
+
+结果：0 errors；`department-setup-dialog.tsx` 仍有既有 `<img>` 使用 warning，本轮未扩大处理。
+
+```bash
+npx tsc --noEmit --pretty false
+git diff --check
+```
+
+结果：均通过。
+
+补充运行时验证：
+
+```bash
+npx tsx -e "import { getDepartmentCapabilityView } from './src/lib/agents/department-capability-registry'; const view = getDepartmentCapabilityView('/Users/darrel/Documents/baogaoai'); console.log(view.runtimeContract.toolset)"
+```
+
+结果：AI 情报工作室 runtime contract 输出 `coding`。
+
+集成验证：
+
+```bash
+POST /api/scheduler/jobs/2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/trigger
+```
+
+结果：触发 run `1ca7f189-1d88-4ae7-ab76-d0f7cc633c86`，状态 completed。run-history 确认 `BashTool` 可见并被调用，实际执行了 `fetch_context.py`、生成 `prepared-ai-digest-context.json`，随后生成 `digest_output.json` 并由 `finalizeWorkflowRun()` 上报。产物目录：
+
+```text
+/Users/darrel/Documents/baogaoai/demolong/runs/1ca7f189-1d88-4ae7-ab76-d0f7cc633c86/
+```
+
+关键产物：
+
+1. `prepared-ai-digest-context.json`: `status=ok`，`targetDate=2026-05-28`，`articleCount=38`
+2. `digest_output.json`: 标题《ESMFold2、Cognition 25亿美元估值与SK海力士1.061万亿市值：AI开始同时重写科研、软件与算力》，`sourceArticleIds=13`
+3. `daily-digest-report-payload.json`
+4. `daily-digest-verification.json`: 上报回读验证通过
+
+## 任务：强化 AI 日报 workflow 执行提示并手动验证
+
+**状态**: ✅ 已完成（workflow 提示词调整已落地；日报上报仍被 runtime 能力阻塞）
+**日期**: 2026-05-24
+
+### 本轮实施
+
+已完成：
+
+1. 同步更新 `/Users/darrel/Documents/baogaoai/.agents/workflows/ai_digest.md` 与 live gateway 镜像 `/Users/darrel/.gemini/antigravity/gateway/assets/workflows/ai_digest.md`。
+2. `/ai_digest` 从 V6 自由创作版调整为 V7 执行优先版，新增“执行身份与完成判定”：
+   - 明确 Agent 正在执行 `/ai_digest` workflow，不是在解释流程。
+   - 要求按 Step 1 -> Step 2 -> Step 3 顺序真实运行。
+   - 要求先读取 Run context 的 Absolute artifact directory。
+   - 要求 Step 1 必须真实生成 `prepared-ai-digest-context.json`，Step 2 才能生成 `digest_output.json`。
+   - 明确 BLOCKED / SKIPPED / 错误说明不得写入 `prepared-ai-digest-context.json` 或 `digest_output.json`。
+3. 将 `如果使用 shell` 改为必须执行上下文拉取，并补充失败时不得继续创作、不得编造文章、不得绕过 Step 1。
+4. 补充 prepared context 时间窗口校验：即使 `status=ok`，也必须确认文章 `createdAt` 落在 `window.start <= createdAt < window.end`；如果文章来自窗口外旧日期，必须 `BLOCKED: context window mismatch`，不得生成 `digest_output.json`。
+
+### 本轮验证
+
+通过：
+
+```bash
+cmp -s /Users/darrel/Documents/baogaoai/.agents/workflows/ai_digest.md /Users/darrel/.gemini/antigravity/gateway/assets/workflows/ai_digest.md
+rg -n "执行身份与完成判定|必须真实执行|不得空回复|必须使用 shell|必须实际运行|只能使用 prepared context|保存后必须检查|不得手写|context window mismatch" /Users/darrel/Documents/baogaoai/.agents/workflows/ai_digest.md /Users/darrel/.gemini/antigravity/gateway/assets/workflows/ai_digest.md
+```
+
+结果：workspace workflow 与 live gateway workflow 内容一致，关键执行提示均存在。
+
+手动运行验证：
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/scheduler/jobs/2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/trigger
+```
+
+第一次运行 `10fab18f-382a-4b29-97b0-dcb9f9635686` 不再空跑，Agent 明确返回 BLOCKED，但暴露出当前 `native-codex` prompt-mode runtime 不提供 shell/python 执行能力。
+
+补充禁止伪造 runtime artifact 后，通过正式 API reset 相关 circuit breaker：
+
+```bash
+POST /api/company/circuit-breakers/breaker%3Adepartment%3Afile%3A%2F%2F%2FUsers%2Fdarrel%2FDocuments%2Fbaogaoai/reset
+POST /api/company/circuit-breakers/breaker%3Ascheduler-job%3A2a1a9a76-e63d-42c6-a4f5-99fb8b89c86f/reset
+POST /api/company/circuit-breakers/breaker%3Aworkflow%3A%2Fai_digest/reset
+```
+
+再次运行 `e678a945-7b20-4fae-9684-cc011cd7486c` 后，Agent 使用 WebFetch 拉取了 `selected-articles` 和历史日报，但仍未能真实执行 `fetch_context.py`；它拼装了一个排查用 `prepared-ai-digest-context.json`，其中 `targetDate=2026-05-22`，并最终因缺少 `digest_output.json` 被 finalize 判 failed。
+
+额外探针：
+
+```bash
+python3 /Users/darrel/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py --date 2026-05-24 --limit 50 --max-pages 2 --window-start-hour 20 --window-end-hour 20 --out /tmp/ai-digest-context-2026-05-24.json --insecure
+python3 /Users/darrel/.gemini/antigravity/gateway/assets/workflow-scripts/ai_digest/fetch_context.py --date 2026-05-25 --limit 50 --max-pages 2 --window-start-hour 20 --window-end-hour 20 --out /tmp/ai-digest-context-2026-05-25.json --insecure
+```
+
+结果：脚本对 2026-05-24 / 2026-05-25 都返回 `status=ok`、`articleCount=100`，但首篇文章 `createdAt=2026-05-22T21:27:49+08:00`。原因是脚本在窗口内无文章时会 fallback 到全量 selected articles。这与 workflow 的日报窗口语义冲突，因此本轮在 workflow 层新增窗口校验，防止旧日期文章被当作当天事实。
+
+### 当前结论
+
+workflow 提示词问题已部分修复：任务不再 0 token 空完成，Agent 会尝试执行和明确 BLOCKED。新的核心阻塞是：当前 `native-codex` prompt-mode runtime 没有 shell/python 能力，Agent 在缺少脚本执行能力时会自行拼装 context；同时 `fetch_context.py` 本身存在窗口无文章时 fallback 到旧 selected articles 的行为，可能导致日期污染。日报未成功上报。
+
+## 任务：删除隐藏上下文机制并改为显式 Knowledge 选择
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-23
+
+### 本轮实施
+
+已完成：
+
+1. 删除 `src/lib/agents/department-memory-bridge.ts` 和对应测试，`departmentMemoryHook` / `registerDepartmentMemoryBridge` 不再存在。
+2. `initDepartmentMemoryV2()`、shared/provider memory 读取 helper 迁入 `src/lib/agents/department-memory.ts`，只作为治理/初始化工具，不再具备 runtime hook 身份。
+3. `MemoryHooks` 删除 `beforeRun` 能力，`applyBeforeRunMemoryHooks()` 保留为兼容 pass-through；执行前上下文只能来自调用方显式传入的 `memoryContext`。
+4. `retrieveKnowledgeAssets()` / `formatKnowledgeAssetsForPrompt()` 改为 `searchKnowledgeAssetsForSelection()`；Knowledge 检索只返回可选择候选，不再提供默认 prompt formatter。
+5. `GET /api/knowledge` 新增 `selectionPrompt + workspace` 候选搜索；`POST /api/agent-runs` 新增 `selectedKnowledgeIds`，只把显式选择的 Knowledge 作为 `<explicit-context>` 下发给 provider。
+6. Agent Runs 前端增加“上下文知识”选择控件，只展示候选，用户点选后才随 dispatch 提交。
+7. 文档同步更新 `ARCHITECTURE.md`、`docs/guide/agent-user-guide.md`、`docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/agents/department-memory.test.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/__tests__/memory-hooks-runtime-contract.test.ts src/lib/knowledge/__tests__/retrieval.test.ts src/app/api/knowledge/route.test.ts src/app/api/agent-runs/route.test.ts
+```
+
+结果：6 个测试文件、39 个测试全部通过。
+
+```bash
+npx vitest run src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts src/lib/agents/workflow-runtime-hooks.test.ts src/lib/agents/group-runtime.multi-role.test.ts
+```
+
+结果：4 个测试文件、21 个测试全部通过。
+
+```bash
+npx eslint src/lib/agents/department-memory.ts src/lib/agents/department-memory.test.ts src/lib/backends/memory-hooks.ts src/lib/backends/memory-hooks.test.ts src/lib/backends/__tests__/memory-hooks-runtime-contract.test.ts src/lib/knowledge/retrieval.ts src/lib/knowledge/__tests__/retrieval.test.ts src/app/api/knowledge/route.ts src/app/api/knowledge/route.test.ts src/app/api/agent-runs/route.test.ts src/server/runtime/agent-runs-dispatch.ts src/lib/agents/prompt-executor.ts src/lib/backends/builtin-backends.ts src/lib/backends/claude-engine-backend.ts src/lib/api.ts src/lib/types.ts src/lib/agents/group-types.ts src/components/agent-runs-panel.tsx src/lib/platform-engineering.ts
+```
+
+结果：0 errors。
+
+补充：把 `src/lib/agents/group-runtime.ts`、`src/lib/agents/dispatch-service.ts` 一起纳入 ESLint 会暴露该文件既有 `no-explicit-any` 债务；本轮没有扩大处理这些历史类型债务，`tsc` 已覆盖新增类型链路。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+rg -n "retrieveKnowledgeAssets|formatKnowledgeAssetsForPrompt|Retrieved Knowledge|department-memory-bridge|departmentMemoryHook|registerDepartmentMemoryBridge|beforeRun:" src
+rg -n "listRecentKnowledgeAssets" src/lib/agents src/lib/backends src/server/runtime src/app/api/agent-runs src/components/agent-runs-panel.tsx
+```
+
+结果：无 whitespace errors；旧隐藏上下文入口无残留匹配。
+
+浏览器冒烟：复用已有 `http://127.0.0.1:3000` 服务用 `bb-browser` 打开首页，页面可渲染且 `bb-browser errors` 返回无 JS error。本轮未另起服务。
+
+## 任务：精简 Prompt Mode 执行上下文自动注入
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-23
+
+### 本轮实施
+
+已完成：
+
+1. `PromptExecutor` 不再自动调用 `retrieveKnowledgeAssets()` / `formatKnowledgeAssetsForPrompt()`，最终 prompt 不再拼接 `## Retrieved Knowledge`。
+2. 运行历史不再写入 `knowledge.retrieval.injected`，避免 workflow run 在用户未显式选择时混入历史 run-derived Knowledge。
+3. `DepartmentMemoryBridge` 的 `beforeRun` 改为 no-op，不再把 `.department/memory/shared`、provider-specific memory 或最近 `KnowledgeAsset` 注入 `BackendRunConfig.memoryContext`。
+4. builtin backend 不再注册 `department-memory-bridge` 执行期 hook；`initDepartmentMemoryV2()` 和 memory read helper 保留给平台治理/初始化使用。
+5. 保留 run 完成后的 `persistKnowledgeForRun()`、RunCapsule / MemoryCandidate / KnowledgeAsset 沉淀链路，不删除旧数据、不迁移 SQLite、不清理既有 Knowledge。
+6. `ARCHITECTURE.md` 和 `docs/guide/agent-user-guide.md` 已同步：默认运行上下文为 Department Capability Pack、选定 workflow Playbook、用户任务/Artifact 路径，以及 workflow/API 获取的当前事实；Knowledge 需要后续显式选择/审批加载机制才进入 execution prompt。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts src/lib/agents/__tests__/department-memory-bridge.test.ts src/lib/backends/memory-hooks.test.ts src/lib/agents/workflow-runtime-hooks.test.ts
+```
+
+结果：5 个测试文件、31 个测试全部通过。`department-memory-bridge.test.ts` 复跑时有 Node `MaxListenersExceededWarning` 测试环境警告，但没有失败用例。
+
+```bash
+npx eslint src/lib/agents/prompt-executor.ts src/lib/agents/department-memory-bridge.ts src/lib/backends/builtin-backends.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+```bash
+rg -n "retrieveKnowledgeAssets|formatKnowledgeAssetsForPrompt|knowledge\\.retrieval\\.injected|Retrieved Knowledge" src/lib/agents/prompt-executor.ts src/lib/agents/prompt-executor.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts
+rg -n "listRecentKnowledgeAssets" src/lib/agents/department-memory-bridge.ts
+rg -n "registerDepartmentMemoryBridge" src/lib/backends/builtin-backends.ts
+rg -n "knowledge\\.retrieval\\.injected" src
+```
+
+结果：均无残留匹配。
+
+浏览器验收：未执行。本轮只调整后端 prompt/context 组成与 runtime memory hook，不改变页面交互。
+
+## 任务：移除 Workflow preflight 注入机制
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-21
+
+### 本轮实施
+
+已完成：
+
+1. PromptExecutor 不再调用 `prepareWorkflowRuntimeContext()`，不再写入 `workflow.preflight.started/completed` run-history，也不再把 `promptAppendix` 拼进最终 prompt。
+2. `workflow-runtime-hooks.ts` 移除 preflight context preparation、prepared context cache 和对应导出，只保留 `finalizeWorkflowRun()` 后处理/验证能力。
+3. `/ai_digest` workflow 改为由 Agent 主动调用 `fetch_context.py`，并把 `prepared-ai-digest-context.json`、`digest_output.json` 写入本次 run artifact 目录；不再在 workflow 正文里手动调用 `report_digest.py`。
+4. `/ai_bigevent` workflow 改为由 Agent 主动调用 `fetch_context.py`，产出 `prepared-ai-bigevent-context.json` 后再输出 JSON draft；payload 构建、真实上报和回读验证继续由 finalize 接管。
+5. 删除 preflight 专属测试与 mock，保留并验证 AI 日报 finalize、AI 大事件 finalize、story-top candidates finalize 相关链路。
+6. `ARCHITECTURE.md` 同步为 workflow 正文/capability-pack 约束 Agent 执行，runtime hook 只承担 finalize / validator。
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/agents/workflow-runtime-hooks.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts --reporter verbose
+```
+
+结果：2 个测试文件、4 个测试全部通过。
+
+```bash
+npx eslint src/lib/agents/prompt-executor.ts src/lib/agents/workflow-runtime-hooks.ts src/lib/agents/workflow-runtime-hooks.test.ts src/lib/agents/__tests__/prompt-runtime-contract.acceptance.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+```bash
+rg -n "prepareWorkflowRuntimeContext|workflow\\.preflight|promptAppendix|preparedContextCache|clearPreparedContextCache|WorkflowRuntimePreparation|prepareAiDigestContext|prepareStoryTopCandidatesContext|prepareAiBigEventContext" src ARCHITECTURE.md .agents/workflows
+rg -n -e "/tmp/baogaoai-digest" -e "/tmp/baogaoai-bigevent" -e "python3 .*report_digest" .agents/workflows/ai_digest.md .agents/workflows/ai_bigevent.md
+```
+
+结果：无残留匹配。
+
+浏览器验收：未执行。本轮是后端 prompt/runtime hook 机制调整，没有页面交互行为变化。
+
+## 任务：部门产出物阅读与 Linux Do AI 情报定期采集
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-21
+
+### 本轮实施
+
+已完成：
+
+1. 部门阅读能力：
+   - 新增 `GET /api/departments/content`，返回部门真实文件树、面向 CEO 阅读的产出物重组树和当前 Markdown 文档内容
+   - Project 部门查看页增加“产出物 / 文件”阅读面板，可直接查看 `.department/outputs`、部门记忆、规则和上下文文档
+   - 产出物重组树合并 run output artifacts、Project deliverables、Knowledge assets、`.department/outputs/index.json` 和 `.department/outputs/**/*.md`
+2. Linux Do AI 情报采集：
+   - 新增 `scripts/linuxdo-ai-watch.mjs`，调用 `bb-browser site linuxdo/ai-watch` 获取 `/new` 话题，并筛选 LV1-LV3 中与免费使用、异常获取 AI、AI 攻略相关的线索
+   - 输出写入 `.department/outputs/linuxdo-ai-watch/briefs/` 与 `raw/`，缓存写入 `cache/state.json`，并更新 `.department/outputs/index.json`
+   - 脚本默认带 90 分钟缓存窗口，避免手动触发或 scheduler 补跑造成高频抓取
+3. 部门定期任务：
+   - 已在 Antigravity CLI 系统内 Scheduler 创建部门任务 `134072d7-888c-47c1-bf13-5f4961623988`
+   - 任务归属 `file:///Users/darrel/Documents/Antigravity-Mobility-CLI`，每两小时运行一次，触发 `dispatch-prompt` 执行本地采集脚本
+   - 外层 Codex App automation 已删除，部门自动化不依赖 Codex 对话层
+4. 文档同步：
+   - 更新 `docs/guide/gateway-api.md`、`docs/guide/cli-api-reference.md`、`docs/guide/agent-user-guide.md` 和 `ARCHITECTURE.md`
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/departments/content/route.test.ts src/app/api/scheduler/jobs/route.test.ts --reporter verbose
+```
+
+结果：2 个测试文件、3 个测试全部通过。
+
+```bash
+npx eslint src/server/control-plane/routes/departments.ts src/app/api/departments/content/route.ts src/components/department-content-panel.tsx src/components/projects-panel.tsx src/lib/api.ts src/lib/types.ts scripts/linuxdo-ai-watch.mjs
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+node scripts/linuxdo-ai-watch.mjs
+node scripts/linuxdo-ai-watch.mjs --min-interval-minutes 999999
+```
+
+结果：首次生成本地简报、原始 JSON、缓存状态和输出索引；第二次命中 `cache-window` 正常跳过。
+
+```bash
+curl -sS "http://127.0.0.1:3000/api/departments/content?workspace=file:///Users/darrel/Documents/Antigravity-Mobility-CLI"
+curl -sS "http://127.0.0.1:3000/api/scheduler/jobs?pageSize=200"
+curl -sS "http://127.0.0.1:3000/api/scheduler/jobs/134072d7-888c-47c1-bf13-5f4961623988"
+curl -sS "http://127.0.0.1:3000/api/agent-runs/a424e755-5e3b-41d9-b439-fc7e9a732eed"
+```
+
+结果：部门内容接口可返回 Linux Do 简报；Scheduler 可查到启用中的部门任务 `134072d7-888c-47c1-bf13-5f4961623988`；该任务已由系统 scheduler 触发一次并成功创建/完成 run `a424e755-5e3b-41d9-b439-fc7e9a732eed`。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：已用 `bb-browser` 打开 Project 页，确认部门查看页可见“产出物 / 文件”阅读面板，并能显示 Linux Do AI 情报简报。
+
+## 任务：MAGI 第 19 轮 - CEO Decisions Route Split-Role 测试隔离加固
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 扫描 `src/app/api/company/**/*.test.ts` 中显式 split-role/proxy 用例，确认已加固的 route 测试范围
+   - 对剩余 store-backed company route 测试 `src/app/api/company/ceo/decisions/route.test.ts` 进行 `AG_ROLE=web AG_CONTROL_PLANE_URL=...` 污染环境复跑
+   - 确认该测试虽然没有显式 proxy 用例，但本地写入 self-improvement proposal 时会继承 web 只读 storage 并失败
+2. 执行：
+   - 在 `src/app/api/company/ceo/decisions/route.test.ts` 中保存并恢复 `AG_ROLE`
+   - 将测试默认角色固定为 `api`，让本地 CEO decision route fixture 始终使用可写 gateway storage
+   - 保持 CEO decision route、decision control 和 self-improvement store 生产逻辑不变
+3. 提升：
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 19 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/company/ceo/decisions/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、1 个测试通过。
+
+```bash
+AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3101 npx vitest run src/app/api/company/ceo/decisions/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、1 个测试通过，确认本地 fixture 不再被 web 只读 storage 环境污染。
+
+```bash
+npx vitest run src/app/api/company/ceo/decisions/route.test.ts src/lib/company-kernel/ceo-decision-control.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts --reporter verbose
+```
+
+结果：3 个测试文件、9 个测试全部通过。
+
+```bash
+npx eslint src/app/api/company/ceo/decisions/route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 API route 单元测试环境隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 18 轮 - Operating Kernel Route Split-Role 测试隔离加固
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 基于第 16 轮全量绿灯后的慢组输出，检查 `src/app/api/company/operating-kernel.route.test.ts`
+   - 在 `AG_ROLE=web AG_CONTROL_PLANE_URL=...` 环境下复跑，确认 5 个本地 route 用例会被 web/control-plane 环境污染
+   - 失败形态包括本地 store 进入 read-only storage，以及 legacy growth route 用例尝试真实 control-plane fetch
+2. 执行：
+   - 在 `src/app/api/company/operating-kernel.route.test.ts` 中 mock `@/server/shared/proxy`
+   - 将测试默认角色固定为 `api`，只在显式 proxy 用例内切换到 `web`
+   - 保留 proxy 用例目标 URL 校验，不改变 operating-kernel、预算、growth legacy 或 control-plane 生产逻辑
+3. 提升：
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 18 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/company/operating-kernel.route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、6 个测试全部通过。
+
+```bash
+AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3101 npx vitest run src/app/api/company/operating-kernel.route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、6 个测试全部通过，确认本地 route 用例不再被 web/control-plane 环境污染。
+
+```bash
+npx vitest run src/app/api/company/operating-kernel.route.test.ts src/lib/company-kernel/operating-kernel.test.ts src/server/control-plane/server.test.ts --reporter verbose
+```
+
+结果：3 个测试文件、16 个测试全部通过。
+
+```bash
+npx eslint src/app/api/company/operating-kernel.route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 API route 单元测试环境隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 17 轮 - Run Capsules Route Split-Role 测试隔离加固
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 基于第 16 轮全量绿灯后的慢组输出，检查 `src/app/api/company/run-capsules/route.test.ts`
+   - 在 `AG_ROLE=web AG_CONTROL_PLANE_URL=...` 环境下复跑，确认两个本地写库用例会继承 web 只读 storage 并失败
+   - 确认 proxy 用例应继续覆盖 web -> control-plane URL，但不应让外部 split-role 环境污染本地 store 用例
+2. 执行：
+   - 在 `src/app/api/company/run-capsules/route.test.ts` 中 mock `@/server/shared/proxy`
+   - 将测试默认角色固定为 `api`，只在显式 proxy 用例内切换到 `web`
+   - 保留 proxy 用例目标 URL 校验，不改变 run-capsule store、production route 或 control-plane route
+3. 提升：
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 17 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/company/run-capsules/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、3 个测试全部通过。
+
+```bash
+AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3101 npx vitest run src/app/api/company/run-capsules/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、3 个测试全部通过，确认本地用例不再被 web 只读 storage 环境污染。
+
+```bash
+npx vitest run src/app/api/company/run-capsules/route.test.ts src/lib/company-kernel/run-capsule-store.test.ts src/server/control-plane/server.test.ts --reporter verbose
+```
+
+结果：3 个测试文件、6 个测试全部通过。
+
+```bash
+npx eslint src/app/api/company/run-capsules/route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 API route 单元测试环境隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 15 轮 - Self-Improvement Kernel Approval 副作用测试隔离收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/lib/company-kernel/self-improvement.test.ts`，确认当前可独立通过
+   - 针对全量失败用例 `keeps high-risk proposals approval-gated even when tests pass` 单独复跑，确认它是高风险审批生命周期集成断言
+   - 发现测试中的 `ensureSystemImprovementApprovalRequest` 会通过 `submitApprovalRequestSync` 调度 approval notification 副作用，而本文件只需要验证 approval request 记录和 proposal gate 状态
+2. 执行：
+   - 在 `src/lib/company-kernel/self-improvement.test.ts` 中 mock `../approval/handler.submitApprovalRequestSync`，让本测试只创建审批记录，不调度通知分发
+   - 为高风险审批 gate 用例增加显式 `15_000ms` 集成测试预算
+   - 保持 self-improvement planner/store/approval 生产逻辑和真实 approval handler 行为不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 self-improvement kernel timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 15 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、9 个测试全部通过。
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement.test.ts --reporter verbose -t "keeps high-risk proposals approval-gated even when tests pass"
+```
+
+结果：目标用例通过；8 个无关用例被跳过。
+
+```bash
+npx vitest run src/lib/company-kernel/self-improvement.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts src/lib/company-kernel/self-improvement-release-gate.test.ts src/lib/company-kernel/self-improvement-runtime-state.test.ts --reporter verbose
+```
+
+结果：4 个测试文件、27 个测试全部通过。
+
+```bash
+npx eslint src/lib/company-kernel/self-improvement.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 kernel 单元/集成测试隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 14 轮 - Chat Scroll Anchor Helper 拆分与测试提速收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/components/chat-scroll-anchor.test.ts`，确认当前可独立通过，但首个用例需要动态 import 整个 `chat.tsx`
+   - 确认 scroll-anchor 测试只验证 sessionStorage key、读写、负数 clamp、取整和异常吞掉，不需要加载聊天 UI、lucide、Markdown renderer 或 UI 组件树
+2. 执行：
+   - 新增 `src/components/chat-scroll-anchor.ts`，承载 `readScrollAnchor` / `writeScrollAnchor` / storage key
+   - `src/components/chat.tsx` 改为从 helper 模块导入同名读写函数，聊天 UI 行为保持不变
+   - `src/components/chat-scroll-anchor.test.ts` 直接测试纯 helper 模块，移除整组件动态 import 和不再需要的 locale mock
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 chat scroll anchor timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 14 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/components/chat-scroll-anchor.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、5 个测试全部通过；首个用例 1ms，文件总耗时 430ms。
+
+```bash
+npx eslint src/components/chat-scroll-anchor.ts src/components/chat-scroll-anchor.test.ts src/components/chat.tsx
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只拆分纯存储 helper 并验证单元测试，不改变可见 UI 行为；未启动浏览器验收。
+
+## 任务：MAGI 第 13 轮 - Loops Self-Improvement Route Split-Role 测试隔离收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/app/api/company/loops-self-improvement.route.test.ts`，确认本地可通过
+   - 在 `AG_ROLE=web AG_CONTROL_PLANE_URL=...` 环境下复跑，确认本地 loop 写库用例继承 web 只读 storage 后失败
+   - 确认 self-improvement 本地 route 用例会在 web 环境下走真实 `127.0.0.1:3101` proxy，导致不可控外部请求
+2. 执行：
+   - 在 `src/app/api/company/loops-self-improvement.route.test.ts` 中 mock `@/server/shared/proxy`
+   - 将测试默认角色固定为 `api`，只在显式 proxy 用例内切换到 `web`
+   - 保留 proxy 用例对 control-plane 目标 URL 的校验，不改变 loop/self-improvement 生产 route 或 kernel 逻辑
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 loops self-improvement route timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 13 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/company/loops-self-improvement.route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、3 个测试全部通过。
+
+```bash
+AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3101 npx vitest run src/app/api/company/loops-self-improvement.route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、3 个测试全部通过，确认本地用例不再被 web/control-plane 环境污染，proxy 用例仍覆盖转发 URL。
+
+```bash
+npx vitest run src/app/api/company/loops-self-improvement.route.test.ts src/server/control-plane/server.test.ts src/lib/company-kernel/self-improvement-control-state.test.ts --reporter verbose
+```
+
+结果：3 个测试文件、10 个测试全部通过。
+
+```bash
+npx eslint src/app/api/company/loops-self-improvement.route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 API route 单元测试环境隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 12 轮 - Memory Candidates Route Web 环境测试隔离收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/app/api/company/memory-candidates/route.test.ts`，确认本地可通过
+   - 在 `AG_ROLE=web AG_CONTROL_PLANE_URL=...` 环境下复跑，确认前三个本地写库用例会继承 web 只读 storage 模式并失败
+   - 确认 proxy 用例应继续覆盖 web -> control-plane 转发 URL，但不应让外部角色环境污染本地 handler 用例
+2. 执行：
+   - 在 `src/app/api/company/memory-candidates/route.test.ts` 中 mock `@/server/shared/proxy`，默认强制本地 handler 路径
+   - 将每个用例默认 `AG_ROLE` 固定为 `api`，只在 proxy 用例内显式切换到 `web`
+   - 保留 proxy 用例的目标 URL 校验，保持 production route、store、promotion 逻辑不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 memory-candidates route timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 12 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/company/memory-candidates/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、4 个测试全部通过。
+
+```bash
+AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3101 npx vitest run src/app/api/company/memory-candidates/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、4 个测试全部通过，确认本地用例不再被 web 只读 storage 环境污染，proxy 用例仍覆盖 control-plane URL。
+
+```bash
+npx vitest run src/app/api/company/memory-candidates/route.test.ts src/lib/company-kernel/memory-promotion.test.ts src/server/control-plane/server.test.ts --reporter verbose
+```
+
+结果：3 个测试文件、12 个测试全部通过。
+
+```bash
+npx eslint src/app/api/company/memory-candidates/route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 API route 单元测试环境隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 11 轮 - Models Route Runtime Proxy 测试隔离收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/app/api/models/route.test.ts`，确认本地可通过但首个断言承担 `route.ts -> runtime routes/user` 动态 import 成本
+   - 确认 `/api/models` route 通过 `runRuntimeRoute` 包裹，在全量测试中可能受 `AG_ROLE=web` / `AG_RUNTIME_URL` 环境污染而走真实 runtime proxy
+2. 执行：
+   - 在 `src/app/api/models/route.test.ts` 中 mock `@/server/shared/proxy.runRuntimeRoute`，强制 route test 走本地 handler
+   - 在测试收集阶段预加载 `@/server/runtime/routes/user`，避免首次动态 import 成本压到测试断言里
+   - 保持 `/api/models` 生产 route 和 runtime handler 逻辑不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 models route timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 11 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/models/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、1 个测试通过；单个断言为毫秒级。
+
+```bash
+AG_ROLE=web AG_RUNTIME_URL=http://127.0.0.1:3101 npx vitest run src/app/api/models/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、1 个测试通过，确认 web/runtime 环境下不走真实 proxy。
+
+```bash
+npx vitest run src/app/api/models/route.test.ts src/app/api/provider-model-catalog/route.test.ts src/lib/provider-model-catalog.test.ts
+```
+
+结果：3 个测试文件、5 个测试全部通过。
+
+```bash
+npx eslint src/app/api/models/route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 API route 单元测试隔离，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 10 轮 - Company Loop Kernel 集成测试超时收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/lib/company-kernel/company-loop.test.ts`，确认 5 个测试可独立通过
+   - 对照全量失败，确认 timeout 集中在真实 `runCompanyLoop` 集成路径：持久化 loop run / digest、预算 ledger、agenda 状态更新与通知事件
+   - 发现首个测试通过环境变量启用 webhook/email 通知，但测试目标只需验证 notification id，不需要真实网络请求
+2. 执行：
+   - 在通知型 company-loop 测试中 stub `fetch`，避免单测向外部 webhook/email URL 排队真实网络请求
+   - 为两个真实 `runCompanyLoop` 集成用例增加显式 `20_000ms` 超时预算
+   - 保持 company-loop executor、notifier 与预算逻辑生产行为不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 company-loop kernel timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 10 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/company-kernel/company-loop.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、5 个测试全部通过。
+
+```bash
+npx vitest run src/lib/company-kernel/company-loop.test.ts src/lib/company-kernel/company-loop-notification-targets.test.ts src/lib/agents/scheduler-company-loop.test.ts
+```
+
+结果：3 个测试文件、11 个测试全部通过。
+
+```bash
+npx eslint src/lib/company-kernel/company-loop.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 company-loop 单元/集成测试隔离与超时预算，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 9 轮 - Scheduler Company Loop 集成测试超时收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/lib/agents/scheduler-company-loop.test.ts`，确认当前可独立通过
+   - 对照全量失败，确认第一个用例是真实触发 `runCompanyLoop` 的集成测试，在全量并发下撞到默认 5s 超时后会导致后续同文件断言看到残留 company-loop job
+   - 判断第二个“初始化前已有 Daily loop”断言更像第一个超时后异步继续落库造成的连锁污染，不是 scheduler 生产逻辑稳定错误
+2. 执行：
+   - 仅为 `normalizes and triggers company-loop jobs without dispatch worker calls` 增加显式 `20_000ms` 测试超时预算
+   - 保持 scheduler、company-loop executor 与 built-in job 安装生产逻辑不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 scheduler company-loop 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 9 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/agents/scheduler-company-loop.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、4 个测试全部通过。
+
+```bash
+npx vitest run src/lib/agents/scheduler.test.ts src/lib/agents/scheduler-company-loop.test.ts
+```
+
+结果：2 个测试文件、24 个测试全部通过。
+
+```bash
+npx eslint src/lib/agents/scheduler-company-loop.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只调整 scheduler company-loop 集成测试的超时预算，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 7 轮 - Platform Engineering Codex Runner Snapshot Timeout 收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/lib/platform-engineering-codex-runner.test.ts`，确认 5 个测试当前全部通过
+   - 确认原始 timeout 集中在 `uses a snapshot base when the current repo has uncommitted changes`，该用例真实执行 git snapshot commit、worktree add、mock Codex 写入、diff/evidence/validation 收集
+   - 判断这是慢 IO 集成用例在全量并发下撞到默认测试超时预算，不是 runner 生产逻辑错误
+2. 执行：
+   - 仅为 snapshot-base 集成用例增加显式 `20_000ms` 测试超时预算
+   - 保持 `src/lib/platform-engineering-codex-runner.ts` 生产 snapshot/worktree/evidence 逻辑不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 platform engineering codex runner timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 7 轮 MAGI 结果
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/platform-engineering-codex-runner.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、5 个测试全部通过；snapshot-base 用例通过。
+
+```bash
+npx eslint src/lib/platform-engineering-codex-runner.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只调整慢 IO 集成测试的超时预算，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 6 轮 - Departments Route Timeout 测试隔离收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 单文件复现 `src/app/api/departments/route.test.ts`，确认当前不是稳定死锁，4 个测试可单独通过
+   - 确认首个 GET 用例把 `route.ts` 内的动态 import 与 control-plane departments 模块图首次 transform 成本计入单个测试，单文件可到秒级，全量并发下容易放大成 timeout
+   - 确认该 route test 缺少与其他 split control-plane route test 一致的 `runControlPlaneRoute` 隔离，可能受 `AG_ROLE=web` / `AG_CONTROL_PLANE_URL` 环境污染影响
+2. 执行：
+   - 在 `src/app/api/departments/route.test.ts` 中 mock `@/server/shared/proxy.runControlPlaneRoute`，强制 route test 走本地 handler
+   - 在测试收集阶段预加载 `@/server/control-plane/routes/departments`，避免首次动态 import 的 transform 成本压到第一个断言用例
+   - 保持 departments route 与 control-plane handler 生产逻辑不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 departments route timeout 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 6 轮 MAGI 结果并调整后续方向
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/app/api/departments/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、4 个测试全部通过；单个测试用例为毫秒级。
+
+```bash
+AG_ROLE=web AG_CONTROL_PLANE_URL=http://127.0.0.1:3101 npx vitest run src/app/api/departments/route.test.ts --reporter verbose
+```
+
+结果：1 个测试文件、4 个测试全部通过，确认 web/control-plane 环境下不走真实 proxy。
+
+```bash
+npx vitest run src/app/api/departments/route.test.ts src/app/api/departments/rules/route.test.ts
+```
+
+结果：2 个测试文件、9 个测试全部通过。
+
+```bash
+npx eslint src/app/api/departments/route.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 route 单元测试隔离与测试首次加载成本，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 5 轮 - Approval Webhook HMAC 测试夹具收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 复现 `src/lib/approval/__tests__/notification-events.test.ts` 单文件失败，确认不是全量并发污染
+   - 追踪 `WebhookChannel.send -> getApprovalUrl -> getApprovalInboxUrl -> encodeDecisionTarget` 链路
+   - 确认失败原因是 webhook HMAC 测试手写的 `ApprovalRequest` fixture 缺少必填 `target`，导致 decision target 编码读取 `undefined.kind`
+2. 执行：
+   - 在 webhook HMAC 测试 fixture 中补齐 `target: { kind: 'knowledge', knowledgeId: 'knowledge-1' }`
+   - 保持生产 webhook HMAC 签名、approval URL 与 feedback URL 生成逻辑不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 approval webhook HMAC 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 5 轮 MAGI 结果并调整后续方向
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/approval/__tests__/notification-events.test.ts
+```
+
+结果：1 个测试文件、3 个测试全部通过。
+
+```bash
+npx vitest run src/lib/approval/__tests__/notification-events.test.ts src/lib/approval/__tests__/handler.test.ts src/lib/approval/__tests__/request-store.test.ts
+```
+
+结果：3 个测试文件、9 个测试全部通过。
+
+```bash
+npx eslint src/lib/approval/__tests__/notification-events.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复 approval 单元测试 fixture，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 4 轮 - Knowledge/Evolution 时间窗口测试收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 复现 `src/lib/knowledge/__tests__/retrieval.test.ts` 与 `src/lib/evolution/__tests__/generator.test.ts` 两个剩余失败文件
+   - 确认 retrieval 失败来自 active fixture 的 `updatedAt` 固定在 2026-04-19，当前时间越过 30 天 freshness 窗口后被 hydrate 为 `stale`
+   - 确认 generator 失败不是 knowledge retrieval 直接下游，而是 repeated-runs 分支同样用 30 天窗口过滤了固定在 2026-04-19 的 run fixture
+2. 执行：
+   - 将 retrieval 测试中的 active fixture 时间改为相对当前时间的 recent ISO，保留 stale fixture 固定旧日期以继续覆盖过期过滤
+   - 将 evolution generator 测试中的 repeated run、knowledge proposal、memory candidate、run capsule 时间改为 recent ISO，保持生产 30 天规则不变
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 knowledge retrieval 与 evolution generator 失败簇标记为已收口
+   - 更新 `docs/project/magi-20-rounds-2026-05-19.md`，记录第 4 轮 MAGI 结果并调整后续方向
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/knowledge/__tests__/retrieval.test.ts src/lib/evolution/__tests__/generator.test.ts
+```
+
+结果：2 个测试文件、5 个测试全部通过。
+
+```bash
+npx vitest run src/lib/knowledge/__tests__/retrieval.test.ts src/lib/knowledge/__tests__/store.test.ts src/lib/evolution/__tests__/generator.test.ts src/lib/evolution/__tests__/publisher.test.ts src/lib/evolution/__tests__/evaluator.test.ts
+```
+
+结果：5 个测试文件、13 个测试全部通过。
+
+```bash
+npx eslint src/lib/knowledge/__tests__/retrieval.test.ts src/lib/evolution/__tests__/generator.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修复测试时间夹具，不改变页面、API 或运行时行为；未启动浏览器验收。
+
+## 任务：MAGI 第 3 轮 - Claude Engine Mock 边界收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 审视：
+   - 复现 `src/lib/claude-engine/engine/__tests__/engine.test.ts` 与 `engine-memory.test.ts` 单文件失败
+   - 确认失败不是全量并发污染，而是测试 mock 仍指向旧的 `../../api/client.streamQuery`
+   - 确认真实执行链已变为 `queryLoop -> streamQueryWithRetry -> streamQueryViaPi`
+2. 执行：
+   - 将两个 Claude Engine 测试文件的 mock 边界从旧 `api/client` 调整到真实 transport seam `api/pi-transport.streamQueryViaPi`
+   - 保留真实 `streamQueryWithRetry`，使 retry / compaction / continuation 测试仍覆盖 retry 层行为
+   - 清理 `engine-memory.test.ts` drain 写法，去掉未使用变量 lint 噪声
+3. 提升：
+   - 更新 `docs/research/full-test-suite-failures-2026-05-19.md`，把 Claude Engine 失败簇标记为已收口
+   - 新增 `docs/project/magi-20-rounds-2026-05-19.md` 作为 20 轮 MAGI 提升跟踪文档
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run src/lib/claude-engine/engine/__tests__/engine.test.ts src/lib/claude-engine/engine/__tests__/engine-memory.test.ts
+```
+
+结果：2 个测试文件、41 个测试全部通过。
+
+```bash
+npx eslint src/lib/claude-engine/engine/__tests__/engine.test.ts src/lib/claude-engine/engine/__tests__/engine-memory.test.ts
+```
+
+结果：0 errors。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+npx vitest run src/lib/claude-engine/engine/__tests__/engine.test.ts src/lib/claude-engine/engine/__tests__/engine-memory.test.ts src/lib/claude-engine/api/__tests__/pi-transport-routing.test.ts src/lib/claude-engine/api/__tests__/provider-fallback.test.ts src/lib/claude-engine/engine/__tests__/compactor.test.ts
+```
+
+结果：5 个测试文件、74 个测试全部通过。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮只修改测试 mock 边界与测试 drain 写法，不改变页面行为；未启动浏览器验收。
+
+## 任务：Provider-neutral Conversation 旁路 Split Runtime 收口
+
+**状态**: ✅ 已完成
+**日期**: 2026-05-19
+
+### 本轮实施
+
+已完成：
+
+1. 按 MAGI 三脑轮次完成一次小闭环：
+   - 审视：确认上一轮 provider-neutral conversation 主线在 `files / proceed / revert-preview` 三条旁路入口缺少直接 route 回归测试
+   - 执行：新增 route test，锁定 provider-neutral `providerSessions` runtime handle 解析行为
+   - 提升：继续审视 split web/api 模式，发现并补齐旁路入口 runtime proxy 与 runtime route table 注册缺口
+2. 补齐 `GET /api/conversations/:id/files` 回归覆盖：
+   - provider-neutral Antigravity conversation 使用 `providerSessions.antigravity.sessionHandle` 查 owner
+   - 文件搜索优先使用业务 conversation record 的 workspace
+   - 本地 provider conversation 不触发 Antigravity owner lookup
+3. 补齐 `POST /api/conversations/:id/proceed` 回归覆盖：
+   - 本地 provider conversation 返回 `not_applicable`
+   - Antigravity conversation 通过 provider runtime handle 调 `grpc.proceedArtifact`
+4. 补齐 `GET /api/conversations/:id/revert-preview` 回归覆盖：
+   - API provider-neutral conversation 在 canonical preview 为空时使用 provider session handle 读取 API preview
+   - Antigravity conversation 通过 provider runtime handle 调 `grpc.getRevertPreview`
+5. 补齐 split runtime 行为：
+   - `files / proceed / revert / revert-preview` 在 `AG_ROLE=web` 且配置 `AG_RUNTIME_URL` 时统一代理到 runtime server
+   - `src/server/runtime/server.ts` 注册上述四条 conversation runtime route，组合 `api` 服务不再只覆盖 `send / steps / cancel`
+6. 文档同步：
+   - 更新 `ARCHITECTURE.md`
+   - 更新 `docs/guide/gateway-api.md`
+   - 更新 `docs/guide/cli-api-reference.md`
+7. 全量测试审视后的邻近测试健康收口：
+   - 补齐 provider model catalog / image generation route test 的 proxy helper mock，避免 `runControlPlaneRoute` 缺失造成假失败
+   - 更新 `app-url-state` 测试期望，把已落地的 `decisionTarget` URL state 字段纳入默认断言
+
+### 本轮验证
+
+通过：
+
+```bash
+npx vitest run 'src/app/api/conversations/[id]/files/route.test.ts' 'src/app/api/conversations/[id]/proceed/route.test.ts' 'src/app/api/conversations/[id]/revert-preview/route.test.ts'
+```
+
+结果：3 个测试文件、6 个测试全部通过。
+
+```bash
+npx vitest run 'src/app/api/conversations/[id]/files/route.test.ts' 'src/app/api/conversations/[id]/proceed/route.test.ts' 'src/app/api/conversations/[id]/revert-preview/route.test.ts' 'src/app/api/conversations/[id]/revert/route.test.ts' src/server/runtime/server.test.ts
+```
+
+结果：5 个测试文件、13 个测试全部通过。
+
+```bash
+npx tsc --noEmit --pretty false
+```
+
+结果：通过，无 TypeScript 错误。
+
+```bash
+npx vitest run src/app/api/conversations/route.test.ts 'src/app/api/conversations/[id]/send/route.test.ts' 'src/app/api/conversations/[id]/steps/route.test.ts' 'src/app/api/conversations/[id]/cancel/route.test.ts' 'src/app/api/conversations/[id]/revert/route.test.ts' 'src/app/api/conversations/[id]/files/route.test.ts' 'src/app/api/conversations/[id]/proceed/route.test.ts' 'src/app/api/conversations/[id]/revert-preview/route.test.ts' src/lib/storage/gateway-db.test.ts src/lib/ceo-conversation-selection.test.ts src/server/runtime/server.test.ts src/app/api/provider-model-catalog/route.test.ts src/app/api/provider-image-generation/route.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：14 个测试文件、50 个测试全部通过。
+
+```bash
+npx eslint 'src/app/api/conversations/[id]/files/route.ts' 'src/app/api/conversations/[id]/files/route.test.ts' 'src/app/api/conversations/[id]/proceed/route.ts' 'src/app/api/conversations/[id]/proceed/route.test.ts' 'src/app/api/conversations/[id]/revert-preview/route.ts' 'src/app/api/conversations/[id]/revert-preview/route.test.ts' 'src/app/api/conversations/[id]/revert/route.ts' 'src/app/api/conversations/[id]/revert/route.test.ts' 'src/app/api/conversations/[id]/cancel/route.test.ts' src/server/runtime/server.ts src/server/runtime/server.test.ts src/app/api/provider-model-catalog/route.test.ts src/app/api/provider-image-generation/route.test.ts src/lib/app-url-state.test.ts
+```
+
+结果：0 errors。
+
+```bash
+git diff --check
+```
+
+结果：无 whitespace errors。
+
+浏览器验收：本轮变更集中在 API route proxy 与 runtime route table，已由 route 单测、runtime route table 单测、TypeScript、lint 覆盖；未启动页面浏览器验收。
+
 ## 任务：Provider 无关会话机制优化
 
 **状态**: ✅ 已完成

@@ -24,10 +24,11 @@ import { createRun, getRun, updateRun } from './run-registry';
 import { appendRunHistoryEntry } from './run-history';
 import { readRunHistory } from './run-history';
 import { scanArtifactManifest, writeEnvelopeFile } from './run-artifacts';
-import { clearPreparedContextCache, finalizeWorkflowRun, prepareWorkflowRuntimeContext } from './workflow-runtime-hooks';
+import { finalizeWorkflowRun } from './workflow-runtime-hooks';
 import {
   applyBeforeRunMemoryHooks,
   type BackendRunConfig,
+  type MemoryContext,
   consumeAgentSession,
   createRunSessionHooks,
   ensureBuiltInAgentBackends,
@@ -42,11 +43,7 @@ import type { CompletedAgentEvent, FailedAgentEvent, CancelledAgentEvent } from 
 import { isExecutionProfile, type ExecutionProfile } from '../execution/contracts';
 import type { SupervisorDecision, SupervisorReview } from './group-types';
 import { summarizeStepForSupervisor, SUPERVISOR_MODEL } from './supervisor';
-import {
-  formatKnowledgeAssetsForPrompt,
-  persistKnowledgeForRun,
-  retrieveKnowledgeAssets,
-} from '../knowledge';
+import { persistKnowledgeForRun } from '../knowledge';
 
 const PROMPT_STAGE_ID = 'prompt-mode';
 const PROMPT_ROLE_ID = 'prompt-executor';
@@ -67,6 +64,7 @@ export interface ExecutePromptInput {
   projectId?: string;
   executionTarget?: PromptExecutionTarget;
   triggerContext?: TriggerContext;
+  memoryContext?: MemoryContext;
 }
 
 export interface ExecutePromptResult {
@@ -346,18 +344,13 @@ async function finalizePromptRun(runId: string, result: TaskResult, workflowOutp
       artifactAbsDir,
     },
   });
-  let finalizedResult: TaskResult;
-  try {
-    finalizedResult = await finalizeWorkflowRun(
-      run.resolvedWorkflowRef,
-      run.workspace.replace(/^file:\/\//, ''),
-      artifactAbsDir,
-      result,
-      { workflowOutputText },
-    );
-  } finally {
-    clearPreparedContextCache(runId);
-  }
+  const finalizedResult = await finalizeWorkflowRun(
+    run.resolvedWorkflowRef,
+    run.workspace.replace(/^file:\/\//, ''),
+    artifactAbsDir,
+    result,
+    { workflowOutputText },
+  );
   appendRunHistoryEntry({
     runId,
     provider: run.provider,
@@ -480,63 +473,14 @@ export async function executePrompt(
   });
   writeEnvelopeFile(artifactAbsDir, 'task-envelope.json', taskEnvelope);
 
-  appendRunHistoryEntry({
-    runId: run.runId,
-    provider,
-    eventType: 'workflow.preflight.started',
-    details: {
-      resolvedWorkflowRef: executionContext.resolvedWorkflowRef,
-      artifactAbsDir,
-    },
-  });
-  const preparedWorkflowContext = await prepareWorkflowRuntimeContext(
-    executionContext.resolvedWorkflowRef,
-    workspacePath,
-    artifactAbsDir,
-    run.runId,
-  );
-  appendRunHistoryEntry({
-    runId: run.runId,
-    provider,
-    eventType: 'workflow.preflight.completed',
-    details: {
-      resolvedWorkflowRef: executionContext.resolvedWorkflowRef,
-      promptAppendixLength: preparedWorkflowContext.promptAppendix.length,
-    },
-  });
-
-  const retrievedKnowledgeAssets = retrieveKnowledgeAssets({
-    workspaceUri: input.workspace,
-    promptText: prompt,
-    workflowRef: executionContext.resolvedWorkflowRef,
-    skillHints: executionTarget.skillHints,
-    limit: 5,
-  });
-  const retrievedKnowledgeSection = formatKnowledgeAssetsForPrompt(retrievedKnowledgeAssets);
-  if (retrievedKnowledgeAssets.length > 0) {
-    appendRunHistoryEntry({
-      runId: run.runId,
-      provider,
-      eventType: 'knowledge.retrieval.injected',
-      details: {
-        assetIds: retrievedKnowledgeAssets.map((asset) => asset.id),
-        count: retrievedKnowledgeAssets.length,
-      },
-    });
-  }
-
   const composedPrompt = applyProviderExecutionContext(
-    [
-      buildPromptExecutionPrompt(
-        prompt,
-        executionTarget,
-        artifactDir,
-        artifactAbsDir,
-        executionContext.promptResolution?.matchedWorkflowRefs ?? [],
-      ),
-      preparedWorkflowContext.promptAppendix,
-      retrievedKnowledgeSection,
-    ].filter(Boolean).join('\n\n'),
+    buildPromptExecutionPrompt(
+      prompt,
+      executionTarget,
+      artifactDir,
+      artifactAbsDir,
+      executionContext.promptResolution?.matchedWorkflowRefs ?? [],
+    ),
     executionContext,
   );
 
@@ -569,6 +513,7 @@ export async function executePrompt(
         roleId: PROMPT_ROLE_ID,
         executorKind: 'prompt',
       },
+      ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
       ...(effectiveExecutionProfile
         ? { executionProfile: effectiveExecutionProfile }
         : {}),
@@ -600,7 +545,6 @@ export async function executePrompt(
 
     return { runId: run.runId };
   } catch (err: unknown) {
-    clearPreparedContextCache(run.runId);
     const currentRun = getRun(run.runId);
     if (!currentRun || TERMINAL_STATUSES.has(currentRun.status)) {
       throw err;
@@ -625,7 +569,6 @@ export async function cancelPromptRun(runId: string): Promise<void> {
   }
 
   updateRun(runId, { status: 'cancelled' });
-  clearPreparedContextCache(runId);
 }
 
 function extractPromptRunEvaluationResponse(

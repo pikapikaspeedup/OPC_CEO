@@ -5,6 +5,9 @@ import {
   readDepartmentMemory,
   appendDepartmentMemory,
   initDepartmentMemory,
+  initDepartmentMemoryV2,
+  readProviderDepartmentMemory,
+  readSharedDepartmentMemory,
   extractAndPersistMemory,
 } from './department-memory';
 
@@ -39,6 +42,47 @@ describe('department-memory', () => {
       initDepartmentMemory(tmpDir);
       const content = fs.readFileSync(path.join(memDir, 'knowledge.md'), 'utf-8');
       expect(content).toBe('Existing content');
+    });
+  });
+
+  describe('initDepartmentMemoryV2', () => {
+    it('creates shared and provider directories without runtime hook behavior', () => {
+      initDepartmentMemoryV2(tmpDir);
+
+      const memDir = path.join(tmpDir, '.department', 'memory');
+      expect(fs.existsSync(path.join(memDir, 'shared', 'decisions.md'))).toBe(true);
+      expect(fs.existsSync(path.join(memDir, 'shared', 'patterns.md'))).toBe(true);
+      expect(fs.existsSync(path.join(memDir, 'claude-engine'))).toBe(true);
+      expect(fs.existsSync(path.join(memDir, 'codex'))).toBe(true);
+    });
+
+    it('does not overwrite shared memory files', () => {
+      initDepartmentMemoryV2(tmpDir);
+      const decisionsPath = path.join(tmpDir, '.department', 'memory', 'shared', 'decisions.md');
+      fs.writeFileSync(decisionsPath, 'Existing shared decision');
+
+      initDepartmentMemoryV2(tmpDir);
+
+      expect(fs.readFileSync(decisionsPath, 'utf-8')).toBe('Existing shared decision');
+    });
+  });
+
+  describe('shared/provider memory readers', () => {
+    it('reads shared and provider memory folders only when explicitly requested', () => {
+      initDepartmentMemoryV2(tmpDir);
+      fs.writeFileSync(path.join(tmpDir, '.department', 'memory', 'shared', 'decisions.md'), 'Shared decision');
+      fs.writeFileSync(path.join(tmpDir, '.department', 'memory', 'claude-engine', 'rules.md'), 'Claude-specific rule');
+
+      expect(readSharedDepartmentMemory(tmpDir)).toContain('Shared decision');
+      expect(readProviderDepartmentMemory(tmpDir, 'claude-engine')).toContain('Claude-specific rule');
+    });
+
+    it('does not treat legacy flat files as shared memory', () => {
+      const memDir = path.join(tmpDir, '.department', 'memory');
+      fs.mkdirSync(memDir, { recursive: true });
+      fs.writeFileSync(path.join(memDir, 'knowledge.md'), 'Legacy flat knowledge');
+
+      expect(readSharedDepartmentMemory(tmpDir)).toBe('');
     });
   });
 

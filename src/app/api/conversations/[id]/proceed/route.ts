@@ -5,10 +5,18 @@ import {
   getProviderSessionHandle,
   type ProviderNeutralConversationRecord,
 } from '@/lib/conversation-runtime';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   const { id: cascadeId } = await params;
   const { artifactUri, model } = await req.json();
   const conversationRecord = resolveConversationRecord(cascadeId);

@@ -61,6 +61,26 @@ describe('department-config helpers', () => {
     ]);
   });
 
+  it('preserves runtime policy when normalizing department config', () => {
+    const normalized = normalizeDepartmentConfig({
+      name: 'AI 情报工作室',
+      type: 'research',
+      skills: [],
+      okr: null,
+      runtimePolicy: {
+        toolset: 'coding',
+        permissionMode: 'default',
+        allowSubAgents: false,
+      },
+    }, 'file:///tmp/ai-intel', 'ai-intel');
+
+    expect(normalized.runtimePolicy).toEqual({
+      toolset: 'coding',
+      permissionMode: 'default',
+      allowSubAgents: false,
+    });
+  });
+
   it('merges a department config into all bound workspace keys', () => {
     const existing = new Map<string, DepartmentConfig>([
       ['file:///tmp/legacy', {

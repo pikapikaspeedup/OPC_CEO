@@ -1,14 +1,34 @@
 import type {
   DepartmentConfig,
   DepartmentExecutionPolicy,
+  DepartmentRuntimePolicy,
   DepartmentWorkspaceBinding,
   DepartmentWorkspaceRole,
   Workspace,
 } from './types';
 
+type RuntimeToolset = NonNullable<DepartmentRuntimePolicy['toolset']>;
+type RuntimePermissionMode = NonNullable<DepartmentRuntimePolicy['permissionMode']>;
+
+const RUNTIME_TOOLSETS = new Set<RuntimeToolset>(['safe', 'research', 'coding', 'full']);
+const RUNTIME_PERMISSION_MODES = new Set<RuntimePermissionMode>([
+  'default',
+  'dontAsk',
+  'acceptEdits',
+  'bypassPermissions',
+]);
+
 function trimOrUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function isRuntimeToolset(value: unknown): value is RuntimeToolset {
+  return typeof value === 'string' && RUNTIME_TOOLSETS.has(value as RuntimeToolset);
+}
+
+function isRuntimePermissionMode(value: unknown): value is RuntimePermissionMode {
+  return typeof value === 'string' && RUNTIME_PERMISSION_MODES.has(value as RuntimePermissionMode);
 }
 
 export function workspaceNameFromUri(workspaceUri: string): string {
@@ -123,6 +143,26 @@ export function normalizeDepartmentExecutionPolicy(
   };
 }
 
+export function normalizeDepartmentRuntimePolicy(
+  config: DepartmentConfig | null | undefined,
+): DepartmentRuntimePolicy | undefined {
+  const policy = config?.runtimePolicy;
+  if (!policy) return undefined;
+
+  const normalized: DepartmentRuntimePolicy = {};
+  if (isRuntimeToolset(policy.toolset)) {
+    normalized.toolset = policy.toolset;
+  }
+  if (isRuntimePermissionMode(policy.permissionMode)) {
+    normalized.permissionMode = policy.permissionMode;
+  }
+  if (typeof policy.allowSubAgents === 'boolean') {
+    normalized.allowSubAgents = policy.allowSubAgents;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function normalizeDepartmentConfig(
   config: DepartmentConfig | null | undefined,
   fallbackWorkspaceUri: string,
@@ -131,6 +171,7 @@ export function normalizeDepartmentConfig(
   const bindings = getDepartmentWorkspaceBindings(config, fallbackWorkspaceUri, fallbackWorkspaceName);
   const primaryBinding = bindings.find((entry) => entry.role === 'primary') ?? bindings[0];
   const name = trimOrUndefined(config?.name) || fallbackWorkspaceName || workspaceNameFromUri(primaryBinding.workspaceUri);
+  const runtimePolicy = normalizeDepartmentRuntimePolicy(config);
 
   return {
     departmentId: trimOrUndefined(config?.departmentId) || `department:${primaryBinding.workspaceUri}`,
@@ -148,6 +189,7 @@ export function normalizeDepartmentConfig(
     ...(config?.tokenQuota ? { tokenQuota: config.tokenQuota } : {}),
     workspaceBindings: bindings,
     executionPolicy: normalizeDepartmentExecutionPolicy(config, fallbackWorkspaceUri, fallbackWorkspaceName),
+    ...(runtimePolicy ? { runtimePolicy } : {}),
   };
 }
 

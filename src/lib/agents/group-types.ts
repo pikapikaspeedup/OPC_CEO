@@ -233,6 +233,7 @@ export interface PromptExecutionTarget {
   kind: 'prompt';
   promptAssetRefs?: string[];
   skillHints?: string[];
+  selectedKnowledgeIds?: string[];
 }
 
 export interface ProjectOnlyExecutionTarget {

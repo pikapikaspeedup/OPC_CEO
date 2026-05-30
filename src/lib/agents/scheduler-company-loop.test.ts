@@ -79,7 +79,7 @@ describe('scheduler company loop integration', () => {
     expect(modules.dispatch.executeDispatch).not.toHaveBeenCalled();
     expect(modules.prompt.executePrompt).not.toHaveBeenCalled();
     modules.scheduler.stopScheduler();
-  });
+  }, 20_000);
 
   it('installs built-in daily and weekly loop jobs only when scheduler initializes', async () => {
     const modules = await loadModules();

@@ -26,28 +26,12 @@ describe('memory-hooks', () => {
     clearMemoryHooks();
   });
 
-  it('merges beforeRun memory context patches in registration order', async () => {
-    registerMemoryHook({
-      id: 'project-hook',
-      providers: ['codex'],
-      beforeRun: () => ({
-        projectMemories: [{ type: 'project', name: 'p', content: 'project', updatedAt: '2026-04-08T00:00:00.000Z' }],
-      }),
-    });
-    registerMemoryHook({
-      id: 'user-hook',
-      beforeRun: () => ({
-        userPreferences: [{ type: 'user', name: 'u', content: 'pref', updatedAt: '2026-04-08T00:00:00.000Z' }],
-      }),
-    });
-
+  it('keeps before-run memory application as a pass-through', async () => {
+    const config = makeConfig();
     const result = await applyBeforeRunMemoryHooks('codex', makeConfig());
 
-    expect(result.memoryContext).toEqual({
-      projectMemories: [{ type: 'project', name: 'p', content: 'project', updatedAt: '2026-04-08T00:00:00.000Z' }],
-      departmentMemories: [],
-      userPreferences: [{ type: 'user', name: 'u', content: 'pref', updatedAt: '2026-04-08T00:00:00.000Z' }],
-    });
+    expect(result).toEqual(config);
+    expect(result).not.toBe(config);
   });
 
   it('runs afterRun hooks only for matching providers', async () => {

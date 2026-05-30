@@ -22,6 +22,12 @@ async function loadModules() {
   };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+
+function recentIso(hoursAgo = 1): string {
+  return new Date(Date.now() - hoursAgo * HOUR_MS).toISOString();
+}
+
 function makeMemoryCandidate(overrides: Partial<MemoryCandidate> = {}): MemoryCandidate {
   return {
     id: 'candidate-skill-1',
@@ -46,8 +52,8 @@ function makeMemoryCandidate(overrides: Partial<MemoryCandidate> = {}): MemoryCa
     conflicts: [],
     status: 'promoted',
     promotedKnowledgeId: 'knowledge-skill-source',
-    createdAt: '2026-04-19T00:00:00.000Z',
-    updatedAt: '2026-04-19T00:00:00.000Z',
+    createdAt: recentIso(2),
+    updatedAt: recentIso(1),
     ...overrides,
   };
 }
@@ -72,7 +78,7 @@ function makeRunCapsule(index: number, overrides: Partial<RunCapsule> = {}): Run
       label: 'Automation script',
       runId: `run-script-${index}`,
       filePath: `scripts/report-${index}.sh`,
-      createdAt: '2026-04-19T00:00:00.000Z',
+      createdAt: recentIso(index + 2),
     }],
     qualitySignals: {
       resultStatus: 'completed',
@@ -81,9 +87,9 @@ function makeRunCapsule(index: number, overrides: Partial<RunCapsule> = {}): Run
       hasArtifactManifest: false,
       hasDeliveryPacket: false,
     },
-    sourceRunUpdatedAt: '2026-04-19T00:00:00.000Z',
-    createdAt: '2026-04-19T00:00:00.000Z',
-    updatedAt: '2026-04-19T00:00:00.000Z',
+    sourceRunUpdatedAt: recentIso(index + 2),
+    createdAt: recentIso(index + 3),
+    updatedAt: recentIso(index + 1),
     ...overrides,
   };
 }
@@ -116,8 +122,8 @@ describe('evolution generator', () => {
       title: 'phase5 digest routine',
       content: 'Reason: This digest task repeats every day.\nSource: skill',
       source: { type: 'run', runId: 'run-knowledge-1' },
-      createdAt: '2026-04-19T00:00:00.000Z',
-      updatedAt: '2026-04-19T00:00:00.000Z',
+      createdAt: recentIso(2),
+      updatedAt: recentIso(1),
       status: 'proposal',
     });
 
@@ -132,7 +138,7 @@ describe('evolution generator', () => {
         stageId: 'prompt',
         workspace: 'file:///tmp/research',
         status: 'completed',
-        createdAt: `2026-04-19T0${index}:00:00.000Z`,
+        createdAt: recentIso(index + 1),
         prompt,
         executorKind: 'prompt',
         executionTarget: { kind: 'prompt' },

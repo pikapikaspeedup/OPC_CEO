@@ -7,6 +7,7 @@ import type {
   SubgraphSummaryFE, ResourcePolicyFE, PolicyEvalResultFE,
   JournalEntryFE, CheckpointFE,
   DepartmentConfig,
+  DepartmentContentResponse,
   DepartmentDirectoryEntry,
   DepartmentRule,
   DailyDigestFE,
@@ -424,6 +425,11 @@ export const api = {
     fetchJson<{ workspace: string; rules: DepartmentRule[] }>(
       `/api/departments/rules?workspace=${encodeURIComponent(workspaceUri)}`,
     ),
+  getDepartmentContent: (workspaceUri: string, filePath?: string) => {
+    const params = new URLSearchParams({ workspace: workspaceUri });
+    if (filePath) params.set('path', filePath);
+    return fetchJson<DepartmentContentResponse>(`/api/departments/content?${params}`);
+  },
   updateDepartmentRule: (workspaceUri: string, name: string, content: string) =>
     fetchJson<{ ok: boolean; rule: DepartmentRule }>(
       `/api/departments/rules?workspace=${encodeURIComponent(workspaceUri)}&name=${encodeURIComponent(name)}`,
@@ -526,6 +532,9 @@ export const api = {
     scope?: 'department' | 'organization';
     tag?: string;
     q?: string;
+    selectionPrompt?: string;
+    workflowRef?: string;
+    skillHints?: string[];
     sort?: 'recent' | 'created' | 'updated' | 'alpha' | 'reuse';
     limit?: number;
   }) => {
@@ -536,6 +545,9 @@ export const api = {
     if (params?.scope) search.set('scope', params.scope);
     if (params?.tag) search.set('tag', params.tag);
     if (params?.q) search.set('q', params.q);
+    if (params?.selectionPrompt) search.set('selectionPrompt', params.selectionPrompt);
+    if (params?.workflowRef) search.set('workflowRef', params.workflowRef);
+    if (params?.skillHints?.length) search.set('skillHints', params.skillHints.join(','));
     if (params?.sort) search.set('sort', params.sort);
     if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
     const qs = search.toString();
@@ -1094,6 +1106,7 @@ export const api = {
     conversationMode?: 'shared' | 'isolated';
     executionTarget?: import('./types').ExecutionTargetFE;
     triggerContext?: import('./types').TriggerContextFE;
+    selectedKnowledgeIds?: string[];
   }) =>
     fetchJson<{ runId: string; status: string }>('/api/agent-runs', {
       method: 'POST',
@@ -1109,6 +1122,7 @@ export const api = {
     conversationMode?: 'shared' | 'isolated';
     promptAssetRefs?: string[];
     skillHints?: string[];
+    selectedKnowledgeIds?: string[];
     triggerContext?: import('./types').TriggerContextFE;
   }) =>
     fetchJson<{ runId: string; status: string }>('/api/agent-runs', {
@@ -1122,6 +1136,7 @@ export const api = {
         parentConversationId: input.parentConversationId,
         conversationMode: input.conversationMode,
         triggerContext: input.triggerContext,
+        ...(input.selectedKnowledgeIds?.length ? { selectedKnowledgeIds: input.selectedKnowledgeIds } : {}),
         executionTarget: {
           kind: 'prompt',
           ...(input.promptAssetRefs?.length ? { promptAssetRefs: input.promptAssetRefs } : {}),

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { initDepartmentMemoryV2 } from './agents/department-memory-bridge';
+import { initDepartmentMemoryV2 } from './agents/department-memory';
 import { GATEWAY_HOME } from './agents/gateway-home';
 import { normalizeDepartmentConfig } from './department-config';
 import type { ProjectGovernance } from './agents/project-types';

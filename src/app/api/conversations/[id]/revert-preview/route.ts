@@ -12,10 +12,18 @@ import {
   getProviderSessionHandle,
   type ProviderNeutralConversationRecord,
 } from '@/lib/conversation-runtime';
+import {
+  proxyToRuntime,
+  shouldProxyRuntimeRequest,
+} from '@/server/shared/proxy';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (shouldProxyRuntimeRequest()) {
+    return proxyToRuntime(req);
+  }
+
   const { id: cascadeId } = await params;
   const { searchParams } = new URL(req.url);
   const stepIndex = parseInt(searchParams.get('stepIndex') || '0');

@@ -114,6 +114,7 @@ describe('approval notifications', () => {
     const result = await channel.send({
       id: 'approval-1',
       type: 'proposal_publish',
+      target: { kind: 'knowledge', knowledgeId: 'knowledge-1' },
       workspace: 'file:///tmp/research',
       title: '发布提案',
       description: '需要 CEO 审批',

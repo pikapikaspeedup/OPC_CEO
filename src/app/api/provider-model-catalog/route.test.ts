@@ -8,6 +8,7 @@ vi.mock('@/server/control-plane/routes/settings', () => ({
 vi.mock('@/server/shared/proxy', () => ({
   shouldProxyControlPlaneRequest: vi.fn(() => false),
   proxyToControlPlane: vi.fn(),
+  runControlPlaneRoute: vi.fn(async (_req: Request, handler: () => Promise<Response> | Response) => handler()),
 }));
 
 import { handleProviderModelCatalogGet, handleProviderModelCatalogPost } from '@/server/control-plane/routes/settings';

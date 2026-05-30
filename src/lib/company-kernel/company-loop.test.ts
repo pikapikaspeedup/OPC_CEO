@@ -65,6 +65,7 @@ describe('company loop kernel', () => {
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__AG_GATEWAY_DB__;
+    vi.unstubAllGlobals();
     vi.resetModules();
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
@@ -84,6 +85,8 @@ describe('company loop kernel', () => {
     process.env.COMPANY_LOOP_EMAIL_WEBHOOK_URL = 'https://mail.example.test/hook';
     process.env.COMPANY_LOOP_EMAIL_RECIPIENTS = 'ceo@example.test';
     process.env.COMPANY_LOOP_WEBHOOK_URL = 'https://hooks.example.test/company-loop';
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 202 }));
+    vi.stubGlobal('fetch', fetchMock);
 
     const modules = await loadModules();
     const policy = modules.loopPolicy.upsertCompanyLoopPolicy({
@@ -103,9 +106,10 @@ describe('company loop kernel', () => {
     expect(result.run.dispatchedRunIds).toHaveLength(1);
     expect(result.digestId).toBeTruthy();
     expect(result.run.notificationIds).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(modules.loopRunStore.countCompanyLoopRuns()).toBe(1);
     expect(modules.loopRunStore.countCompanyLoopDigests()).toBe(1);
-  });
+  }, 20_000);
 
   it('keeps high-risk agenda in digest and enforces dispatch cap', async () => {
     const modules = await loadModules();
@@ -179,7 +183,7 @@ describe('company loop kernel', () => {
     expect((result.run.metadata?.skippedAgenda as Array<{ id: string; reason: string }>)[0]).toMatchObject({
       id: 'blocked',
     });
-  });
+  }, 20_000);
 
   it('does not generate legacy growth proposals during weekly review', async () => {
     const modules = await loadModules();

@@ -18,16 +18,13 @@ const {
   mockCreateRunSessionHooks,
   mockEnsureBuiltInAgentBackends,
   mockFinalizeWorkflowRun,
-  mockFormatKnowledgeAssetsForPrompt,
   mockGetAgentBackend,
   mockGetProject,
   mockGetRun,
   mockPersistKnowledgeForRun,
-  mockPrepareWorkflowRuntimeContext,
   mockRegisterAgentSession,
   mockResolveCapabilityAwareProvider,
   mockResolveProvider,
-  mockRetrieveKnowledgeAssets,
   mockUpdateProject,
   mockUpdateRun,
   mockWriteEnvelopeFile,
@@ -61,7 +58,6 @@ const {
     mockCreateRunSessionHooks: vi.fn(() => ({})),
     mockEnsureBuiltInAgentBackends: vi.fn(),
     mockFinalizeWorkflowRun: vi.fn(async (_workflowRef: string, _workspacePath: string, _artifactAbsDir: string, result: unknown) => result),
-    mockFormatKnowledgeAssetsForPrompt: vi.fn(() => ''),
     mockGetAgentBackend: vi.fn(() => ({
       providerId: 'claude-api',
       capabilities: () => ({
@@ -76,7 +72,6 @@ const {
     mockGetProject: vi.fn(() => null),
     mockGetRun: vi.fn(),
     mockPersistKnowledgeForRun: vi.fn(),
-    mockPrepareWorkflowRuntimeContext: vi.fn(async () => ({ promptAppendix: '' })),
     mockRegisterAgentSession: vi.fn(),
     mockResolveCapabilityAwareProvider: vi.fn((options: {
       requestedProvider: string;
@@ -93,7 +88,6 @@ const {
       missingCapabilities: [],
     })),
     mockResolveProvider: vi.fn(() => ({ provider: 'claude-api', model: 'gpt-4.1-mini', source: 'default' })),
-    mockRetrieveKnowledgeAssets: vi.fn(() => []),
     mockUpdateProject: vi.fn(),
     mockUpdateRun: vi.fn(),
     mockWriteEnvelopeFile: vi.fn(),
@@ -133,7 +127,6 @@ async function loadPromptExecutor() {
 
   vi.doMock('../workflow-runtime-hooks', () => ({
     finalizeWorkflowRun: (...args: unknown[]) => mockFinalizeWorkflowRun(...args),
-    prepareWorkflowRuntimeContext: (...args: unknown[]) => mockPrepareWorkflowRuntimeContext(...args),
   }));
 
   vi.doMock('../run-artifacts', () => ({
@@ -164,9 +157,7 @@ async function loadPromptExecutor() {
   }));
 
   vi.doMock('../../knowledge', () => ({
-    formatKnowledgeAssetsForPrompt: (...args: unknown[]) => mockFormatKnowledgeAssetsForPrompt(...args),
     persistKnowledgeForRun: (...args: unknown[]) => mockPersistKnowledgeForRun(...args),
-    retrieveKnowledgeAssets: (...args: unknown[]) => mockRetrieveKnowledgeAssets(...args),
   }));
 
   vi.doMock('../logger', () => ({
@@ -201,15 +192,12 @@ describe('prompt runtime contract acceptance', () => {
     mockCreateRunSessionHooks.mockClear();
     mockEnsureBuiltInAgentBackends.mockClear();
     mockFinalizeWorkflowRun.mockClear();
-    mockFormatKnowledgeAssetsForPrompt.mockClear();
     mockGetAgentBackend.mockClear();
     mockGetProject.mockClear();
     mockGetRun.mockClear();
     mockPersistKnowledgeForRun.mockClear();
-    mockPrepareWorkflowRuntimeContext.mockClear();
     mockRegisterAgentSession.mockClear();
     mockResolveProvider.mockClear();
-    mockRetrieveKnowledgeAssets.mockClear();
     mockUpdateProject.mockClear();
     mockUpdateRun.mockClear();
     mockWriteEnvelopeFile.mockClear();

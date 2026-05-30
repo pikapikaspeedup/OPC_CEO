@@ -1378,7 +1378,7 @@ export function buildClaudeEngineSystemPrompt(config: BackendRunConfig): string 
     parts.push(`\n${contractLines.join('\n')}`);
   }
 
-  // Inject department memory context if available
+  // Inject explicitly selected context if available.
   if (config.memoryContext) {
     const memParts: string[] = [];
     for (const entry of config.memoryContext.departmentMemories ?? []) {
@@ -1391,9 +1391,9 @@ export function buildClaudeEngineSystemPrompt(config: BackendRunConfig): string 
       if (entry.content.trim()) memParts.push(`[${entry.name}]\n${entry.content}`);
     }
     if (memParts.length > 0) {
-      parts.push('\n<department-memory>');
+      parts.push('\n<explicit-context>');
       parts.push(memParts.join('\n\n'));
-      parts.push('</department-memory>');
+      parts.push('</explicit-context>');
     }
   }
 
