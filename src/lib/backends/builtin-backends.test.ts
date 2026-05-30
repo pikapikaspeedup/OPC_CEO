@@ -68,9 +68,7 @@ vi.mock('../agents/result-parser', () => ({
 
 import {
   AntigravityAgentBackend,
-  LegacyClaudeCodeManualBackend,
   ClaudeEngineAgentBackend,
-  LegacyCodexManualBackend,
   clearAgentBackends,
   ensureBuiltInAgentBackends,
   getAgentBackend,
@@ -162,78 +160,6 @@ describe('builtin-backends', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it('emits started then completed for Codex sessions', async () => {
-    const executor = {
-      capabilities: () => codexCapabilities,
-      executeTask: vi.fn(async () => ({
-        handle: 'codex-thread-1',
-        content: 'codex done',
-        steps: [],
-        changedFiles: ['delivery/result.md'],
-        status: 'completed' as const,
-      })),
-      appendMessage: vi.fn(async () => ({
-        handle: 'codex-thread-1',
-        content: 'follow-up',
-        steps: [],
-        changedFiles: [],
-        status: 'completed' as const,
-      })),
-      cancel: vi.fn(async () => undefined),
-    };
-    mockGetExecutor.mockReturnValue(executor);
-
-    const backend = new LegacyCodexManualBackend();
-    const session = await backend.start(makeConfig('run-1'));
-    const events = await collectEvents(session);
-
-    expect(session.capabilities.supportsAppend).toBe(false);
-    expect(events.map((event) => event.kind)).toEqual(['started', 'completed']);
-    expect(executor.executeTask).toHaveBeenCalledWith(expect.objectContaining({
-      workspace: '/tmp/workspace',
-      prompt: '执行任务',
-      model: 'MODEL_PLACEHOLDER_M26',
-      runId: 'run-1',
-    }));
-    expect(events[1]).toEqual(expect.objectContaining({
-      kind: 'completed',
-      result: expect.objectContaining({
-        status: 'completed',
-        summary: 'codex done',
-        changedFiles: ['delivery/result.md'],
-      }),
-    }));
-    await expect(session.append({ prompt: '继续执行' })).rejects.toThrow('append_not_supported');
-  });
-
-  it('emits cancelled once and suppresses late Codex completion after cancel', async () => {
-    const task = deferred<any>();
-    const executor = {
-      capabilities: () => codexCapabilities,
-      executeTask: vi.fn(() => task.promise),
-      appendMessage: vi.fn(),
-      cancel: vi.fn(async () => undefined),
-    };
-    mockGetExecutor.mockReturnValue(executor);
-
-    const backend = new LegacyCodexManualBackend();
-    const session = await backend.start(makeConfig('run-2'));
-    const eventsPromise = collectEvents(session);
-
-    await Promise.resolve();
-    await session.cancel('cancelled_by_user');
-    task.resolve({
-      handle: 'codex-thread-2',
-      content: 'too late',
-      steps: [],
-      changedFiles: [],
-      status: 'completed' as const,
-    });
-
-    const events = await eventsPromise;
-    expect(events.map((event) => event.kind)).toEqual(['started', 'cancelled']);
   });
 
   it('emits live_state updates and completion for Antigravity sessions', async () => {
@@ -403,42 +329,6 @@ describe('builtin-backends', () => {
       '继续执行 attach',
       'MODEL_PLACEHOLDER_M26',
     );
-  });
-
-  it('attaches to an existing Codex handle without starting a new execution', async () => {
-    const executor = {
-      capabilities: () => codexCapabilities,
-      executeTask: vi.fn(async () => ({
-        handle: 'codex-thread-new',
-        content: 'done',
-        steps: [],
-        changedFiles: [],
-        status: 'completed' as const,
-      })),
-      appendMessage: vi.fn(),
-      cancel: vi.fn(async () => undefined),
-    };
-    mockGetExecutor.mockReturnValue(executor);
-
-    const backend = new LegacyCodexManualBackend();
-    const session = await backend.attach(makeConfig('run-5c'), 'codex-thread-existing');
-    const iterator = session.events()[Symbol.asyncIterator]();
-    const started = await iterator.next();
-
-    await session.cancel('stop');
-    const cancelled = await iterator.next();
-
-    expect(started.value).toEqual(expect.objectContaining({
-      kind: 'started',
-      handle: 'codex-thread-existing',
-    }));
-    expect(cancelled.value).toEqual(expect.objectContaining({
-      kind: 'cancelled',
-      handle: 'codex-thread-existing',
-      reason: 'stop',
-    }));
-    expect(executor.executeTask).not.toHaveBeenCalled();
-    expect(executor.cancel).toHaveBeenCalledWith('codex-thread-existing');
   });
 
   it('exposes recent-step diagnostics for Antigravity backends', async () => {
@@ -760,140 +650,8 @@ describe('builtin-backends', () => {
     ensureBuiltInAgentBackends();
     ensureBuiltInAgentBackends();
 
-    expect(listAgentBackends()).toHaveLength(9);
+    expect(listAgentBackends()).toHaveLength(7);
     expect(getAgentBackend('native-codex')).toBeInstanceOf(ClaudeEngineAgentBackend);
     expect(getAgentBackend('native-codex').providerId).toBe('native-codex');
-  });
-
-  // -------------------------------------------------------------------------
-  // Claude Code AgentBackend tests
-  // -------------------------------------------------------------------------
-
-  describe('LegacyClaudeCodeManualBackend', () => {
-    const claudeCodeExecutor = {
-      capabilities: () => claudeCodeCapabilities,
-      executeTask: vi.fn(),
-      appendMessage: vi.fn(),
-      cancel: vi.fn(),
-    };
-
-    beforeEach(() => {
-      claudeCodeExecutor.executeTask.mockReset();
-      claudeCodeExecutor.appendMessage.mockReset();
-      claudeCodeExecutor.cancel.mockReset();
-      mockGetExecutor.mockImplementation((provider: string) => {
-        if (provider === 'claude-code') return claudeCodeExecutor;
-        return { capabilities: () => codexCapabilities, executeTask: vi.fn(), appendMessage: vi.fn(), cancel: vi.fn() };
-      });
-    });
-
-    it('emits started, live_state, then completed for successful execution', async () => {
-      claudeCodeExecutor.executeTask.mockResolvedValue({
-        handle: 'claude-session-abc',
-        content: 'Task completed successfully',
-        steps: [{ type: 'result', result: 'done' }],
-        changedFiles: ['src/main.ts', 'src/utils.ts'],
-        status: 'completed',
-      });
-
-      const backend = new LegacyClaudeCodeManualBackend();
-      const session = await backend.start(makeConfig('run-cc-1'));
-      const events = await collectEvents(session);
-
-      expect(events).toHaveLength(3);
-      expect(events[0].kind).toBe('started');
-      expect(events[0].providerId).toBe('claude-code');
-      expect(events[1].kind).toBe('live_state');
-      expect(events[2].kind).toBe('completed');
-      expect(events[2].providerId).toBe('claude-code');
-      if (events[2].kind === 'completed') {
-        expect(events[2].handle).toBe('claude-session-abc');
-        expect(events[2].result.status).toBe('completed');
-        expect(events[2].result.changedFiles).toEqual(['src/main.ts', 'src/utils.ts']);
-        expect(events[2].result.summary).toBe('Task completed successfully');
-        expect(events[2].finalText).toBe('Task completed successfully');
-      }
-    });
-
-    it('emits started then failed when execution throws', async () => {
-      claudeCodeExecutor.executeTask.mockRejectedValue(new Error('Anthropic API key missing'));
-
-      const backend = new LegacyClaudeCodeManualBackend();
-      const session = await backend.start(makeConfig('run-cc-2'));
-      const events = await collectEvents(session);
-
-      expect(events).toHaveLength(2);
-      expect(events[0].kind).toBe('started');
-      expect(events[1].kind).toBe('failed');
-      if (events[1].kind === 'failed') {
-        expect(events[1].error.code).toBe('provider_failed');
-        expect(events[1].error.message).toBe('Anthropic API key missing');
-        expect(events[1].error.retryable).toBe(true);
-      }
-    });
-
-    it('emits started, live_state, then completed when executor returns failed status', async () => {
-      claudeCodeExecutor.executeTask.mockResolvedValue({
-        handle: 'claude-session-fail',
-        content: 'Could not complete the task',
-        steps: [],
-        changedFiles: [],
-        status: 'failed',
-      });
-
-      const backend = new LegacyClaudeCodeManualBackend();
-      const session = await backend.start(makeConfig('run-cc-3'));
-      const events = await collectEvents(session);
-
-      expect(events).toHaveLength(3);
-      expect(events[0].kind).toBe('started');
-      expect(events[1].kind).toBe('live_state');
-      expect(events[2].kind).toBe('completed');
-      if (events[2].kind === 'completed') {
-        expect(events[2].result.status).toBe('failed');
-        expect(events[2].result.summary).toBe('Could not complete the task');
-      }
-    });
-
-    it('cancel emits cancelled event', async () => {
-      const neverResolve = new Promise<never>(() => {});
-      claudeCodeExecutor.executeTask.mockReturnValue(neverResolve);
-      claudeCodeExecutor.cancel.mockResolvedValue(undefined);
-
-      const backend = new LegacyClaudeCodeManualBackend();
-      const session = await backend.start(makeConfig('run-cc-4'));
-
-      // Collect first event (started)
-      const iter = session.events()[Symbol.asyncIterator]();
-      const first = await iter.next();
-      expect(first.value.kind).toBe('started');
-
-      // Cancel
-      await session.cancel('user requested');
-
-      const second = await iter.next();
-      expect(second.value.kind).toBe('cancelled');
-      if (second.value.kind === 'cancelled') {
-        expect(second.value.reason).toBe('user requested');
-      }
-    });
-
-    it('attach creates a session without starting execution', async () => {
-      const backend = new LegacyClaudeCodeManualBackend();
-      const session = await backend.attach(makeConfig('run-cc-5'), 'existing-handle-123');
-
-      expect(session.handle).toBe('existing-handle-123');
-      expect(session.providerId).toBe('claude-code');
-      expect(claudeCodeExecutor.executeTask).not.toHaveBeenCalled();
-    });
-
-    it('capabilities reports correct values', () => {
-      const backend = new LegacyClaudeCodeManualBackend();
-      const caps = backend.capabilities();
-
-      expect(caps.supportsCancel).toBe(true);
-      expect(caps.emitsLiveState).toBe(false);
-      expect(caps.emitsRawSteps).toBe(false);
-    });
   });
 });

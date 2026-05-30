@@ -5,10 +5,9 @@ import { getApiKey, getOwnerConnection, grpc, refreshOwnerMap } from '../bridge/
 import type { GroupRoleDefinition, TaskResult } from '../agents/group-types';
 import { appendRunHistoryEntry } from '../agents/run-history';
 import { compactCodingResult } from '../agents/result-parser';
-import { normalizeClaudeCodeEvents, type ClaudeStreamEvent } from '../providers/claude-code-normalizer';
 import { watchConversation, type ConversationWatchState } from '../agents/watch-conversation';
 import { createLogger } from '../logger';
-import { getExecutor, type ProviderCapabilities, type TaskExecutionResult } from '../providers';
+import { getExecutor, type ProviderCapabilities } from '../providers';
 import { resolveAntigravityRuntimeConnection } from './antigravity-runtime-resolver';
 import { ClaudeEngineAgentBackend } from './claude-engine-backend';
 import type { GetRecentStepsOptions } from './extensions';
@@ -33,21 +32,6 @@ function mapCapabilities(capabilities: ProviderCapabilities): AgentBackendCapabi
     emitsLiveState: capabilities.supportsStepWatch,
     emitsRawSteps: capabilities.supportsStepWatch,
     emitsStreamingText: capabilities.supportsStreaming,
-  };
-}
-
-function toTaskResult(result: TaskExecutionResult): TaskResult {
-  const content = result.content?.trim();
-  return {
-    status: result.status,
-    summary: content || (result.status === 'completed'
-      ? 'Prompt run completed'
-      : result.status === 'blocked'
-        ? 'Prompt run blocked'
-        : 'Prompt run failed'),
-    changedFiles: result.changedFiles || [],
-    blockers: result.status === 'blocked' && content ? [content] : [],
-    needsReview: [],
   };
 }
 
@@ -186,147 +170,6 @@ function createEventChannel<T>() {
 
 // ---------------------------------------------------------------------------
 // Legacy manual CLI backends
-// ---------------------------------------------------------------------------
-// These paths are kept for compatibility/manual entrypoints such as /api/codex*
-// and old backend-attached conversations. The Claude Engine mainline should use
-// ExecutionTool instead of selecting codex / claude-code as a peer backend.
-
-class LegacyCodexManualSession implements AgentSession {
-  readonly providerId = 'codex' as const;
-  readonly capabilities: AgentBackendCapabilities;
-  readonly handle: string;
-
-  private readonly executor = getExecutor('codex');
-  private readonly channel = createEventChannel<AgentEvent>();
-  private terminal = false;
-  private cancelled = false;
-
-  constructor(
-    readonly runId: string,
-    private readonly config: BackendRunConfig,
-    options: { handle?: string; startExecution?: boolean } = {},
-  ) {
-    this.handle = options.handle || `codex-${runId}`;
-    this.capabilities = mapCapabilities(this.executor.capabilities());
-    this.channel.push({
-      kind: 'started',
-      runId: this.runId,
-      providerId: this.providerId,
-      handle: this.handle,
-      startedAt: new Date().toISOString(),
-    });
-    if (options.startExecution !== false) {
-      void this.run();
-    }
-  }
-
-  static attach(config: BackendRunConfig, handle: string): LegacyCodexManualSession {
-    return new LegacyCodexManualSession(config.runId, config, {
-      handle,
-      startExecution: false,
-    });
-  }
-
-  private async run(): Promise<void> {
-    try {
-      // Build baseInstructions from explicit context if available.
-      const memoryInstructions = formatMemoryContextForBaseInstructions(this.config.memoryContext);
-
-      const result = await this.executor.executeTask({
-        workspace: this.config.workspacePath,
-        prompt: this.config.prompt,
-        model: this.config.model,
-        artifactDir: this.config.artifactDir,
-        timeout: this.config.timeoutMs,
-        runId: this.config.runId,
-        stageId: this.config.metadata?.stageId,
-        roleId: this.config.metadata?.roleId,
-        parentConversationId: this.config.parentConversationId,
-        baseInstructions: memoryInstructions || undefined,
-      });
-
-      if (this.cancelled || this.terminal) {
-        return;
-      }
-
-      this.channel.push({
-        kind: 'completed',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: this.handle,
-        finishedAt: new Date().toISOString(),
-        result: toTaskResult(result),
-        finalText: result.content,
-        rawSteps: result.steps,
-      });
-      this.terminal = true;
-      this.channel.close();
-    } catch (err: unknown) {
-      if (this.cancelled || this.terminal) {
-        return;
-      }
-      const message = getErrorMessage(err) || 'Codex execution failed';
-      this.channel.push({
-        kind: 'failed',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: this.handle,
-        finishedAt: new Date().toISOString(),
-        error: createBackendError({
-          code: 'provider_failed',
-          message,
-          retryable: true,
-          source: 'provider',
-        }),
-      });
-      this.terminal = true;
-      this.channel.close();
-    }
-  }
-
-  events(): AsyncIterable<AgentEvent> {
-    return this.channel.iterate();
-  }
-
-  async append(request: AppendRunRequest): Promise<void> {
-    if (!this.capabilities.supportsAppend) {
-      throw new Error('append_not_supported');
-    }
-
-    await this.executor.appendMessage(this.handle, {
-      prompt: request.prompt,
-      model: request.model,
-      workspace: request.workspacePath || this.config.workspacePath,
-      runId: this.runId,
-    });
-  }
-
-  async cancel(reason?: string): Promise<void> {
-    if (this.terminal || this.cancelled) {
-      return;
-    }
-
-    this.cancelled = true;
-
-    try {
-      await this.executor.cancel(this.handle);
-    } catch (err: unknown) {
-      log.warn({ runId: this.runId.slice(0, 8), err: getErrorMessage(err) }, 'Codex cancel raised an error');
-    }
-
-    this.channel.push({
-      kind: 'cancelled',
-      runId: this.runId,
-      providerId: this.providerId,
-      handle: this.handle,
-      finishedAt: new Date().toISOString(),
-      reason,
-    });
-    this.terminal = true;
-    this.channel.close();
-  }
-}
-
 class AntigravityAgentSession implements AgentSession {
   readonly providerId = 'antigravity' as const;
   readonly capabilities: AgentBackendCapabilities;
@@ -815,28 +658,6 @@ class AntigravityAgentSession implements AgentSession {
   }
 }
 
-/**
- * Compatibility/manual backend for Codex CLI.
- *
- * Keep this only for manual entrypoints and old backend-attached sessions.
- * New Claude Engine coding flows should call Codex through ExecutionTool.
- */
-export class LegacyCodexManualBackend implements AgentBackend {
-  readonly providerId = 'codex' as const;
-
-  capabilities(): AgentBackendCapabilities {
-    return mapCapabilities(getExecutor('codex').capabilities());
-  }
-
-  async start(config: BackendRunConfig): Promise<AgentSession> {
-    return new LegacyCodexManualSession(config.runId, config);
-  }
-
-  async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
-    return LegacyCodexManualSession.attach(config, handle);
-  }
-}
-
 export class AntigravityAgentBackend implements AgentBackend {
   readonly providerId = 'antigravity' as const;
 
@@ -883,194 +704,10 @@ export class AntigravityAgentBackend implements AgentBackend {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Legacy Claude Code manual backend
-// ---------------------------------------------------------------------------
-
-class LegacyClaudeCodeManualSession implements AgentSession {
-  readonly providerId = 'claude-code' as const;
-  readonly capabilities: AgentBackendCapabilities;
-  readonly handle: string;
-
-  private readonly executor = getExecutor('claude-code');
-  private readonly channel = createEventChannel<AgentEvent>();
-  private terminal = false;
-  private cancelled = false;
-
-  constructor(
-    readonly runId: string,
-    private readonly config: BackendRunConfig,
-    options: { handle?: string; startExecution?: boolean } = {},
-  ) {
-    this.handle = options.handle || `claude-code-${runId}`;
-    // Phase 4: Claude Code supports append via --resume even without step watch
-    const baseCaps = mapCapabilities(this.executor.capabilities());
-    this.capabilities = { ...baseCaps, supportsAppend: true };
-    this.channel.push({
-      kind: 'started',
-      runId: this.runId,
-      providerId: this.providerId,
-      handle: this.handle,
-      startedAt: new Date().toISOString(),
-    });
-    if (options.startExecution !== false) {
-      void this.run();
-    }
-  }
-
-  static attach(config: BackendRunConfig, handle: string): LegacyClaudeCodeManualSession {
-    return new LegacyClaudeCodeManualSession(config.runId, config, {
-      handle,
-      startExecution: false,
-    });
-  }
-
-  private async run(): Promise<void> {
-    try {
-      const result = await this.executor.executeTask({
-        workspace: this.config.workspacePath,
-        prompt: this.config.prompt,
-        model: this.config.model,
-        artifactDir: this.config.artifactDir,
-        timeout: this.config.timeoutMs,
-        runId: this.config.runId,
-        stageId: this.config.metadata?.stageId,
-        roleId: this.config.metadata?.roleId,
-        parentConversationId: this.config.parentConversationId,
-      });
-
-      if (this.cancelled || this.terminal) return;
-
-      // Update handle if Claude returned a session ID
-      const effectiveHandle = result.handle || this.handle;
-
-      // Phase 3: emit live_state from normalized events
-      const rawEvents = (result.steps || []) as ClaudeStreamEvent[];
-      const normalized = normalizeClaudeCodeEvents(rawEvents);
-      this.channel.push({
-        kind: 'live_state',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: effectiveHandle,
-        liveState: normalized.liveState,
-      });
-
-      this.channel.push({
-        kind: 'completed',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: effectiveHandle,
-        finishedAt: new Date().toISOString(),
-        result: toTaskResult(result),
-        finalText: result.content,
-        rawSteps: result.steps,
-      });
-      this.terminal = true;
-      this.channel.close();
-    } catch (err: unknown) {
-      if (this.cancelled || this.terminal) return;
-      const message = getErrorMessage(err) || 'Claude Code execution failed';
-
-      this.channel.push({
-        kind: 'failed',
-        runId: this.runId,
-        providerId: this.providerId,
-        handle: this.handle,
-        finishedAt: new Date().toISOString(),
-        error: createBackendError({
-          code: 'provider_failed',
-          message,
-          retryable: true,
-          source: 'provider',
-        }),
-      });
-      this.terminal = true;
-      this.channel.close();
-    }
-  }
-
-  events(): AsyncIterable<AgentEvent> {
-    return this.channel.iterate();
-  }
-
-  async append(request: AppendRunRequest): Promise<void> {
-    if (!this.capabilities.supportsAppend) {
-      throw new Error('append_not_supported');
-    }
-
-    await this.executor.appendMessage(this.handle, {
-      prompt: request.prompt,
-      model: request.model,
-      workspace: request.workspacePath || this.config.workspacePath,
-      runId: this.runId,
-    });
-  }
-
-  async cancel(reason?: string): Promise<void> {
-    if (this.terminal || this.cancelled) return;
-    this.cancelled = true;
-
-    try {
-      await this.executor.cancel(this.handle);
-    } catch (err: unknown) {
-      log.warn({ runId: this.runId.slice(0, 8), err: getErrorMessage(err) }, 'Claude Code cancel raised an error');
-    }
-
-    this.channel.push({
-      kind: 'cancelled',
-      runId: this.runId,
-      providerId: this.providerId,
-      handle: this.handle,
-      finishedAt: new Date().toISOString(),
-      reason,
-    });
-    this.terminal = true;
-    this.channel.close();
-  }
-}
-
-/**
- * Compatibility/manual backend for Claude Code CLI.
- *
- * Keep this only for manual entrypoints and old backend-attached sessions.
- * New Claude Engine coding flows should call Claude Code through ExecutionTool.
- */
-export class LegacyClaudeCodeManualBackend implements AgentBackend {
-  readonly providerId = 'claude-code' as const;
-
-  capabilities(): AgentBackendCapabilities {
-    // Phase 4: Claude Code supports append via --resume
-    const base = mapCapabilities(getExecutor('claude-code').capabilities());
-    return { ...base, supportsAppend: true };
-  }
-
-  async start(config: BackendRunConfig): Promise<AgentSession> {
-    return new LegacyClaudeCodeManualSession(config.runId, config);
-  }
-
-  async attach(config: BackendRunConfig, handle: string): Promise<AgentSession> {
-    return LegacyClaudeCodeManualSession.attach(config, handle);
-  }
-}
-
 export { ClaudeEngineAgentBackend };
 
-/**
- * @deprecated Compatibility/manual path only. Claude Engine mainline should
- * invoke Codex through ExecutionTool instead of selecting this backend.
- */
-export const CodexAgentBackend = LegacyCodexManualBackend;
-
-/**
- * @deprecated Compatibility/manual path only. Claude Engine mainline should
- * invoke Claude Code through ExecutionTool instead of selecting this backend.
- */
-export const ClaudeCodeAgentBackend = LegacyClaudeCodeManualBackend;
-
-let legacyCodexManualBackend: LegacyCodexManualBackend | null = null;
 let nativeCodexBackend: ClaudeEngineAgentBackend | null = null;
 let antigravityBackend: AntigravityAgentBackend | null = null;
-let legacyClaudeCodeManualBackend: LegacyClaudeCodeManualBackend | null = null;
 let claudeApiBackend: ClaudeEngineAgentBackend | null = null;
 let openaiApiBackend: ClaudeEngineAgentBackend | null = null;
 let geminiApiBackend: ClaudeEngineAgentBackend | null = null;
@@ -1078,12 +715,6 @@ let grokApiBackend: ClaudeEngineAgentBackend | null = null;
 let customApiBackend: ClaudeEngineAgentBackend | null = null;
 
 export function ensureBuiltInAgentBackends(): void {
-  if (!hasAgentBackend('codex')) {
-    // Compatibility/manual path only. Mainline Claude Engine coding should use ExecutionTool.
-    legacyCodexManualBackend ||= new LegacyCodexManualBackend();
-    registerAgentBackend(legacyCodexManualBackend);
-  }
-
   if (!hasAgentBackend('native-codex')) {
     // native-codex is now uniformly routed through Claude Engine.
     nativeCodexBackend ||= new ClaudeEngineAgentBackend('native-codex');
@@ -1093,12 +724,6 @@ export function ensureBuiltInAgentBackends(): void {
   if (!hasAgentBackend('antigravity')) {
     antigravityBackend ||= new AntigravityAgentBackend();
     registerAgentBackend(antigravityBackend);
-  }
-
-  if (!hasAgentBackend('claude-code')) {
-    // Compatibility/manual path only. Mainline Claude Engine coding should use ExecutionTool.
-    legacyClaudeCodeManualBackend ||= new LegacyClaudeCodeManualBackend();
-    registerAgentBackend(legacyClaudeCodeManualBackend);
   }
 
   if (!hasAgentBackend('claude-api')) {
@@ -1132,26 +757,3 @@ export function ensureBuiltInAgentBackends(): void {
 // Explicit context → base instructions converter
 // ---------------------------------------------------------------------------
 
-import type { MemoryContext } from './types';
-
-function formatMemoryContextForBaseInstructions(
-  memoryContext: MemoryContext | undefined,
-): string {
-  if (!memoryContext) return '';
-
-  const parts: string[] = [];
-
-  for (const entry of memoryContext.departmentMemories ?? []) {
-    if (entry.content.trim()) parts.push(`[${entry.name}]\n${entry.content}`);
-  }
-  for (const entry of memoryContext.projectMemories ?? []) {
-    if (entry.content.trim()) parts.push(`[${entry.name}]\n${entry.content}`);
-  }
-  for (const entry of memoryContext.userPreferences ?? []) {
-    if (entry.content.trim()) parts.push(`[${entry.name}]\n${entry.content}`);
-  }
-
-  if (parts.length === 0) return '';
-
-  return `\n<explicit-context>\n${parts.join('\n\n')}\n</explicit-context>`;
-}
