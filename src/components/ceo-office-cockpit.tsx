@@ -1812,17 +1812,6 @@ export default function CeoOfficeCockpit({
 	                    type="button"
 	                    size="sm"
 	                    variant="outline"
-	                    disabled={Boolean(runningLoopKind)}
-	                    onClick={() => void runCompanyLoopFromOffice('growth-review')}
-	                    className="h-8 rounded-xl text-[12px]"
-	                  >
-	                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-	                    {runningLoopKind === 'growth-review' ? '运行中' : 'Growth'}
-	                  </Button>
-	                  <Button
-	                    type="button"
-	                    size="sm"
-	                    variant="outline"
 	                    disabled={!loopPolicy || togglingLoopPolicy}
 	                    onClick={() => void toggleCompanyLoopPolicy()}
 	                    className="h-8 rounded-xl text-[12px]"

@@ -52,18 +52,6 @@ async function executeCustomCallback(request: ApprovalRequest): Promise<void> {
     return;
   }
 
-  if (
-    (action === 'publish-growth-proposal' || action === 'reject-growth-proposal')
-    && typeof callback.payload.proposalId === 'string'
-  ) {
-    log.warn({
-      requestId: request.id,
-      action,
-      proposalId: callback.payload.proposalId,
-    }, 'Legacy growth approval callback ignored because growth automation is retired');
-    return;
-  }
-
   if (action === 'approve-system-improvement-proposal' && typeof callback.payload.proposalId === 'string') {
     const { approveSystemImprovementProposal } = await import('../company-kernel/self-improvement-approval');
     await Promise.resolve(approveSystemImprovementProposal(callback.payload.proposalId, {

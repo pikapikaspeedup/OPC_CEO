@@ -236,8 +236,6 @@ function formatLoopKind(kind: CompanyLoopRunFE['kind']): string {
       return '每日巡检';
     case 'weekly-review':
       return '每周复盘';
-    case 'growth-review':
-      return '增长评审';
     case 'risk-review':
       return '风险巡检';
     default:

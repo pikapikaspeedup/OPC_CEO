@@ -1202,14 +1202,13 @@ export interface CompanyLoopPolicyFE {
   maxAgendaPerDailyLoop: number;
   maxAutonomousDispatchesPerLoop: number;
   allowedAgendaActions: CompanyLoopAgendaActionFE[];
-  growthReviewEnabled: boolean;
   notificationChannels: CompanyLoopNotificationChannelFE[];
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
 }
 
-export type CompanyLoopRunKindFE = 'daily-review' | 'weekly-review' | 'growth-review' | 'risk-review';
+export type CompanyLoopRunKindFE = 'daily-review' | 'weekly-review' | 'risk-review';
 export type CompanyLoopRunStatusFE = 'running' | 'completed' | 'skipped' | 'failed';
 
 export interface CompanyLoopRunFE {
@@ -1249,7 +1248,7 @@ export interface CompanyLoopDigestFE {
   createdAt: string;
 }
 
-export type BudgetScopeFE = 'organization' | 'department' | 'scheduler-job' | 'agenda-item' | 'growth-proposal';
+export type BudgetScopeFE = 'organization' | 'department' | 'scheduler-job' | 'agenda-item';
 export type BudgetPeriodFE = 'day' | 'week' | 'month';
 
 export interface OperatingBudgetPolicyFE {
@@ -1322,57 +1321,6 @@ export interface BudgetGateDecisionFE {
   requested: { tokens: number; minutes: number; dispatches: number };
   circuitBreakers: CircuitBreakerFE[];
   createdAt: string;
-}
-
-export type GrowthProposalKindFE = 'sop' | 'workflow' | 'skill' | 'script' | 'rule';
-export type GrowthProposalStatusFE = 'draft' | 'evaluated' | 'approval-required' | 'approved' | 'rejected' | 'published' | 'observing' | 'archived';
-export type GrowthProposalRiskFE = 'low' | 'medium' | 'high';
-
-export interface GrowthProposalFE {
-  id: string;
-  kind: GrowthProposalKindFE;
-  status: GrowthProposalStatusFE;
-  risk: GrowthProposalRiskFE;
-  score: number;
-  workspaceUri?: string;
-  title: string;
-  summary: string;
-  targetName: string;
-  targetRef: string;
-  content: string;
-  sourceRunIds: string[];
-  sourceCapsuleIds: string[];
-  sourceKnowledgeIds: string[];
-  sourceCandidateIds: string[];
-  evidenceRefs: CompanyEvidenceRefFE[];
-  evaluation?: {
-    evaluatedAt: string;
-    evidenceCount: number;
-    score: number;
-    recommendation: 'approve' | 'needs-approval' | 'reject' | 'observe';
-    reasons: string[];
-  };
-  approvalRequestId?: string;
-  publishedAssetRef?: string;
-  publishedAt?: string;
-  rejectedReason?: string;
-  createdAt: string;
-  updatedAt: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface GrowthObservationFE {
-  id: string;
-  proposalId: string;
-  publishedAssetRef?: string;
-  observedAt: string;
-  hitCount: number;
-  matchedRunIds: string[];
-  successRate: number | null;
-  estimatedTokenSaving?: number;
-  regressionSignals?: string[];
-  summary: string;
-  metadata?: Record<string, unknown>;
 }
 
 export type SystemImprovementSignalSourceFE =

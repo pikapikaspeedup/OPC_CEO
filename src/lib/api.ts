@@ -30,10 +30,6 @@ import type {
   CompanyLoopRunKindFE,
   CompanyLoopRunStatusFE,
   CompanyOperatingDayFE,
-  GrowthProposalFE,
-  GrowthProposalKindFE,
-  GrowthProposalRiskFE,
-  GrowthProposalStatusFE,
   MemoryCandidateFE,
   MemoryCandidateKindFE,
   MemoryCandidateStatusFE,
@@ -809,26 +805,6 @@ export const api = {
     fetchJson<{ breaker: CircuitBreakerFE }>(`/api/company/circuit-breakers/${encodeURIComponent(id)}/reset`, {
       method: 'POST',
     }),
-  companyGrowthProposals: (params?: {
-    workspaceUri?: string;
-    kind?: GrowthProposalKindFE;
-    status?: GrowthProposalStatusFE;
-    risk?: GrowthProposalRiskFE;
-    minScore?: number;
-  } & PaginationQueryFE) => {
-    const search = new URLSearchParams();
-    if (params?.workspaceUri) search.set('workspaceUri', params.workspaceUri);
-    if (params?.kind) search.set('kind', params.kind);
-    if (params?.status) search.set('status', params.status);
-    if (params?.risk) search.set('risk', params.risk);
-    if (typeof params?.minScore === 'number') search.set('minScore', String(params.minScore));
-    appendPaginationParams(search, {
-      page: params?.page,
-      pageSize: params?.pageSize ?? 20,
-    });
-    const qs = search.toString();
-    return fetchPaginatedJson<GrowthProposalFE>(`/api/company/growth/proposals${qs ? `?${qs}` : ''}`);
-  },
   companyLoopPolicies: (params?: {
     scope?: CompanyLoopPolicyFE['scope'];
     scopeId?: string;
@@ -878,7 +854,7 @@ export const api = {
       selectedAgenda: OperatingAgendaItemFE[];
       skipped: Array<{ item: OperatingAgendaItemFE; reason: string }>;
       budgetLedger: BudgetLedgerEntryFE[];
-      generatedProposals: GrowthProposalFE[];
+      generatedProposals: never[];
     }>('/api/company/loops/run-now', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

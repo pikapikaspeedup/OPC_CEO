@@ -594,11 +594,6 @@ export default function Home() {
         setSystemImprovementProposalId(target.proposalId);
         setActiveDecisionTarget(target);
         return;
-      case 'growth-proposal':
-        queueUrlSync(mode);
-        navigateToKnowledge(null, null, mode);
-        setActiveDecisionTarget(target);
-        return;
       case 'project':
         navigateToProject(target.projectId, mode);
         setActiveDecisionTarget(target);

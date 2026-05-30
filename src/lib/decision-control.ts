@@ -1,6 +1,5 @@
 export type DecisionTarget =
   | { kind: 'system-improvement-proposal'; proposalId: string }
-  | { kind: 'growth-proposal'; proposalId: string }
   | { kind: 'project'; projectId: string }
   | { kind: 'project-stage-gate'; projectId: string; stageId: string }
   | { kind: 'run'; runId: string; projectId?: string }
@@ -37,7 +36,6 @@ export function isDecisionTarget(value: unknown): value is DecisionTarget {
   if (!isPlainObject(value) || typeof value.kind !== 'string') return false;
   switch (value.kind) {
     case 'system-improvement-proposal':
-    case 'growth-proposal':
       return typeof value.proposalId === 'string' && value.proposalId.length > 0;
     case 'project':
       return typeof value.projectId === 'string' && value.projectId.length > 0;
@@ -64,8 +62,6 @@ export function encodeDecisionTarget(target: DecisionTarget): string {
   switch (target.kind) {
     case 'system-improvement-proposal':
       return `si~${target.proposalId}`;
-    case 'growth-proposal':
-      return `gp~${target.proposalId}`;
     case 'project':
       return `pj~${target.projectId}`;
     case 'project-stage-gate':
@@ -108,10 +104,6 @@ export function decodeDecisionTarget(value: string | null | undefined): Decision
     case 'si':
       return first
         ? { kind: 'system-improvement-proposal', proposalId: first }
-        : null;
-    case 'gp':
-      return first
-        ? { kind: 'growth-proposal', proposalId: first }
         : null;
     case 'pj':
       return first

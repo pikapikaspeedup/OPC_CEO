@@ -52,7 +52,6 @@ vi.mock('@/lib/api', () => ({
     me: () => Promise.resolve(null),
     ceoRoutine: () => Promise.resolve(null),
     managementOverview: () => Promise.resolve(null),
-    companyGrowthProposals: () => Promise.resolve({ items: [] }),
     companyLoopPolicies: () => Promise.resolve({ items: [] }),
     companyLoopRuns: () => Promise.resolve({ items: [] }),
     companyLoopDigests: () => Promise.resolve({ items: [] }),

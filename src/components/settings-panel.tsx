@@ -425,8 +425,6 @@ function buildDefaultOrganizationBudgetPolicy(): OperatingBudgetPolicyFE {
     maxDispatches: 80,
     maxConcurrentRuns: 12,
     cooldownMinutesByKind: {
-      'growth.generate': 60,
-      'growth.evaluate': 15,
       'agenda.dispatch': 10,
     },
     failureBudget: {
@@ -485,7 +483,6 @@ function buildDefaultCompanyLoopPolicy(): CompanyLoopPolicyFE {
     maxAgendaPerDailyLoop: 5,
     maxAutonomousDispatchesPerLoop: 1,
     allowedAgendaActions: ['observe', 'dispatch', 'snooze', 'dismiss'],
-    growthReviewEnabled: true,
     notificationChannels: ['web'],
     createdAt: now,
     updatedAt: now,
@@ -2992,7 +2989,7 @@ function AutonomyBudgetTab() {
               onChange={(event) => setCooldownDraft(event.target.value)}
               spellCheck={false}
               className={cn('mt-3 min-h-[160px] w-full resize-y rounded-2xl border px-4 py-3 font-mono text-xs leading-6 outline-none', workspaceFieldClassName)}
-              placeholder={'growth.generate=60\ngrowth.evaluate=15\nagenda.dispatch=10'}
+              placeholder={'agenda.dispatch=10'}
             />
             <p className="mt-3 text-xs leading-6 text-[var(--app-text-soft)]">
               每行一个 `operationKind=minutes`。只在你明确要限制某类自治动作冷却时才需要填写。
@@ -3216,14 +3213,6 @@ function AutonomyBudgetTab() {
         {showLoopAdvanced ? (
           <div className="mt-4 rounded-2xl border border-[var(--app-border-soft)] bg-[var(--app-surface)] px-4 py-4">
             <div className="flex flex-wrap gap-3 text-xs text-[var(--app-text-soft)]">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={loopPolicy.growthReviewEnabled}
-                  onChange={(event) => setLoopPolicy((prev) => prev ? { ...prev, growthReviewEnabled: event.target.checked } : prev)}
-                />
-                启用增长复盘
-              </label>
               {(['observe', 'dispatch', 'approve', 'snooze', 'dismiss'] as CompanyLoopPolicyFE['allowedAgendaActions']).map((action) => (
                 <label key={action} className="flex items-center gap-2">
                   <input

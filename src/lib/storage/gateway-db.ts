@@ -469,39 +469,6 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_circuit_breakers_status ON circuit_breakers(status);
     CREATE INDEX IF NOT EXISTS idx_circuit_breakers_updated_at ON circuit_breakers(updated_at);
 
-    CREATE TABLE IF NOT EXISTS growth_proposals (
-      proposal_id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      status TEXT NOT NULL,
-      risk TEXT NOT NULL,
-      score REAL NOT NULL,
-      workspace TEXT,
-      target_name TEXT NOT NULL,
-      target_ref TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_kind ON growth_proposals(kind);
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_status ON growth_proposals(status);
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_risk ON growth_proposals(risk);
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_workspace ON growth_proposals(workspace);
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_score ON growth_proposals(score);
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_target_name ON growth_proposals(target_name);
-    CREATE INDEX IF NOT EXISTS idx_growth_proposals_updated_at ON growth_proposals(updated_at);
-
-    CREATE TABLE IF NOT EXISTS growth_observations (
-      observation_id TEXT PRIMARY KEY,
-      proposal_id TEXT NOT NULL,
-      published_asset_ref TEXT,
-      observed_at TEXT NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_growth_observations_proposal_id ON growth_observations(proposal_id);
-    CREATE INDEX IF NOT EXISTS idx_growth_observations_observed_at ON growth_observations(observed_at);
-
     CREATE TABLE IF NOT EXISTS company_loop_policies (
       policy_id TEXT PRIMARY KEY,
       scope TEXT NOT NULL,
