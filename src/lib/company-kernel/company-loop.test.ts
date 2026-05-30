@@ -185,20 +185,4 @@ describe('company loop kernel', () => {
     });
   }, 20_000);
 
-  it('does not generate legacy growth proposals during weekly review', async () => {
-    const modules = await loadModules();
-    const policy = modules.loopPolicy.upsertCompanyLoopPolicy({
-      ...modules.loopPolicy.getOrCreateCompanyLoopPolicy(),
-      growthReviewEnabled: true,
-    });
-
-    const result = modules.loopExecutor.runCompanyLoop({
-      kind: 'weekly-review',
-      source: 'test',
-      policyId: policy.id,
-    });
-
-    expect(result.generatedProposals).toEqual([]);
-    expect(result.run.generatedProposalIds).toEqual([]);
-  });
 });

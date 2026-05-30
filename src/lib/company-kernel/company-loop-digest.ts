@@ -4,7 +4,6 @@ import type {
   BudgetLedgerEntry,
   CompanyLoopDigest,
   CompanyLoopRun,
-  GrowthProposal,
   OperatingAgendaItem,
 } from './contracts';
 
@@ -17,7 +16,6 @@ export function buildCompanyLoopDigest(input: {
   selectedAgenda: OperatingAgendaItem[];
   skipped: Array<{ item: OperatingAgendaItem; reason: string }>;
   budgetLedger: BudgetLedgerEntry[];
-  generatedProposals: GrowthProposal[];
 }): CompanyLoopDigest {
   const decisionsNeeded = input.selectedAgenda
     .filter((item) => item.recommendedAction === 'approve' || item.recommendedAction === 'ask_user')
@@ -29,7 +27,7 @@ export function buildCompanyLoopDigest(input: {
     .filter((item) => item.targetDepartmentId || item.workspaceUri)
     .slice(0, 5)
     .map((item) => `${item.targetDepartmentId || item.workspaceUri}: ${item.title}`);
-  const capabilityGrowth = input.generatedProposals.map((proposal) => `${proposal.kind}: ${proposal.title}`);
+  const capabilityGrowth: string[] = [];
   const budgetSummary = input.budgetLedger.map((entry) => [
     entry.scope,
     entry.scopeId || 'default',
@@ -50,7 +48,6 @@ export function buildCompanyLoopDigest(input: {
       `Selected ${selectedCount} agenda items.`,
       `Dispatched ${dispatchCount}.`,
       `Skipped ${skippedCount}.`,
-      input.generatedProposals.length > 0 ? `Generated ${input.generatedProposals.length} growth proposals.` : '',
     ].filter(Boolean).join(' '),
     decisionsNeeded,
     risksBlocked,
@@ -59,7 +56,7 @@ export function buildCompanyLoopDigest(input: {
     budgetSummary,
     linkedAgendaIds: uniqueStrings(input.selectedAgenda.map((item) => item.id)),
     linkedRunIds: uniqueStrings(input.run.dispatchedRunIds),
-    linkedProposalIds: uniqueStrings(input.generatedProposals.map((proposal) => proposal.id)),
+    linkedProposalIds: [],
     createdAt: new Date().toISOString(),
   };
 }

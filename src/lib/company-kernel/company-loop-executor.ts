@@ -17,7 +17,6 @@ import type {
   CompanyLoopPolicy,
   CompanyLoopRun,
   CompanyLoopRunKind,
-  GrowthProposal,
   OperatingAgendaItem,
 } from './contracts';
 
@@ -35,7 +34,7 @@ export interface RunCompanyLoopResult {
   selectedAgenda: OperatingAgendaItem[];
   skipped: Array<{ item: OperatingAgendaItem; reason: string }>;
   budgetLedger: BudgetLedgerEntry[];
-  generatedProposals: GrowthProposal[];
+  generatedProposals: never[];
 }
 
 function formatDateForTimezone(timezone: string, now = new Date()): string {
@@ -247,7 +246,6 @@ export function runCompanyLoop(input: RunCompanyLoopInput = {}): RunCompanyLoopR
       selectedAgenda: selection.selected,
       skipped,
       budgetLedger,
-      generatedProposals: [],
     });
     const storedDigest = upsertCompanyLoopDigest(digest);
     const notificationIds = notifyCompanyLoopDigest({

@@ -1,4 +1,4 @@
-import type { GrowthProposal, OperatingBudgetPolicy } from './contracts';
+import type { OperatingBudgetPolicy } from './contracts';
 import { getOrCreateBudgetPolicy } from './budget-policy';
 
 export interface OrganizationAutonomyPolicy {
@@ -21,16 +21,4 @@ export function getOrganizationAutonomyPolicy(): OrganizationAutonomyPolicy {
     budgetPolicy,
     highRiskApprovalThreshold: normalizeThreshold(budgetPolicy.metadata?.highRiskApprovalThreshold),
   };
-}
-
-export function growthProposalRequiresApproval(
-  proposal: GrowthProposal,
-  policy: OrganizationAutonomyPolicy = getOrganizationAutonomyPolicy(),
-): boolean {
-  if (proposal.risk === 'high') return true;
-  if (proposal.kind === 'script') return true;
-  if (proposal.risk === 'medium') {
-    return proposal.score >= Math.round(policy.highRiskApprovalThreshold * 100);
-  }
-  return false;
 }

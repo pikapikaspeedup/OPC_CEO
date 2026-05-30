@@ -124,10 +124,6 @@ function checkBudgetForScope(input: {
       scope: 'scheduler-job',
       scopeId: input.schedulerJobId,
     })] : []),
-    ...(input.proposalId ? [getOrCreateCircuitBreaker({
-      scope: 'growth-proposal',
-      scopeId: input.proposalId,
-    })] : []),
   ];
   const openBreakers = circuitBreakers.filter(isCircuitOpen);
 

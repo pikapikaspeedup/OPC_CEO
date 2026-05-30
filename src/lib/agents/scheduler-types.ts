@@ -77,7 +77,7 @@ export type ScheduledAction =
     }
   | {
       kind: 'company-loop';
-      loopKind: 'daily-review' | 'weekly-review' | 'growth-review' | 'risk-review';
+      loopKind: 'daily-review' | 'weekly-review' | 'risk-review';
       policyId?: string;
     }
   | {

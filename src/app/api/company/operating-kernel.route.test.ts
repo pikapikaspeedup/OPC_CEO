@@ -1,10 +1,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { GrowthProposal, RunCapsule } from '@/lib/company-kernel/contracts';
+import type { RunCapsule } from '@/lib/company-kernel/contracts';
 
 const {
   proxyToControlPlaneMock,
@@ -56,9 +55,6 @@ async function loadModules() {
     agendaRoute: await import('./agenda/route'),
     agendaDispatchRoute: await import('./agenda/[id]/dispatch/route'),
     agendaDispatchCheckRoute: await import('./agenda/[id]/dispatch-check/route'),
-    growthGenerateRoute: await import('./growth/proposals/generate/route'),
-    growthEvaluateRoute: await import('./growth/proposals/[id]/evaluate/route'),
-    growthListRoute: await import('./growth/proposals/route'),
     gatewayDb: await import('@/lib/storage/gateway-db'),
     operatingDayRoute: await import('./operating-day/route'),
     signalsRoute: await import('./signals/route'),
@@ -96,31 +92,6 @@ function makeCapsule(): RunCapsule {
     createdAt: '2026-04-25T10:00:00.000Z',
     updatedAt: '2026-04-25T10:01:00.000Z',
   };
-}
-
-function seedGrowthProposal(db: Database.Database, proposal: GrowthProposal): void {
-  db.prepare(`
-    INSERT INTO growth_proposals(
-      proposal_id, kind, status, risk, score, workspace, target_name, target_ref,
-      created_at, updated_at, payload_json
-    )
-    VALUES (
-      @proposal_id, @kind, @status, @risk, @score, @workspace, @target_name, @target_ref,
-      @created_at, @updated_at, @payload_json
-    )
-  `).run({
-    proposal_id: proposal.id,
-    kind: proposal.kind,
-    status: proposal.status,
-    risk: proposal.risk,
-    score: proposal.score,
-    workspace: proposal.workspaceUri || null,
-    target_name: proposal.targetName,
-    target_ref: proposal.targetRef,
-    created_at: proposal.createdAt,
-    updated_at: proposal.updatedAt,
-    payload_json: JSON.stringify(proposal),
-  });
 }
 
 describe('/api/company operating kernel routes', () => {
@@ -178,43 +149,6 @@ describe('/api/company operating kernel routes', () => {
     expect((await dayRes.json()).agenda).toHaveLength(1);
   }, 15_000);
 
-  it('keeps growth proposal APIs read-only while still listing legacy proposals', async () => {
-    const modules = await loadModules();
-    seedGrowthProposal(modules.gatewayDb.getGatewayDb(), {
-      id: 'growth-legacy-1',
-      kind: 'workflow',
-      status: 'draft',
-      risk: 'medium',
-      score: 75,
-      workspaceUri: 'file:///tmp/workspace',
-      title: 'Legacy growth proposal',
-      summary: 'Historical growth proposal.',
-      targetName: 'legacy-growth-proposal',
-      targetRef: 'workflow:/legacy-growth-proposal',
-      content: '# Legacy Growth Proposal',
-      sourceRunIds: [],
-      sourceCapsuleIds: [],
-      sourceKnowledgeIds: [],
-      sourceCandidateIds: [],
-      evidenceRefs: [],
-      createdAt: '2026-04-26T00:00:00.000Z',
-      updatedAt: '2026-04-26T00:00:00.000Z',
-    });
-
-    const generateRes = await modules.growthGenerateRoute.POST(new Request('http://localhost/api/company/growth/proposals/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: 5 }),
-    }));
-    const generateBody = await generateRes.json();
-    expect(generateRes.status).toBe(410);
-    expect(generateBody.legacyMode).toBe('read-only');
-
-    const listRes = await modules.growthListRoute.GET(new Request('http://localhost/api/company/growth/proposals?pageSize=5'));
-    expect(listRes.status).toBe(200);
-    expect((await listRes.json()).total).toBeGreaterThan(0);
-  });
-
   it('does not reserve budget when agenda dispatch has no workspace', async () => {
     const modules = await loadModules();
     const item = modules.agendaStore.upsertOperatingAgendaItem({
@@ -242,54 +176,6 @@ describe('/api/company operating kernel routes', () => {
 
     expect(dispatchRes.status).toBe(409);
     expect(modules.budgetLedgerStore.countBudgetLedgerEntries({ agendaItemId: item.id })).toBe(0);
-  });
-
-  it('returns 410 for legacy growth generation even when old automation inputs are provided', async () => {
-    const modules = await loadModules();
-    const generateRes = await modules.growthGenerateRoute.POST(new Request('http://localhost/api/company/growth/proposals/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: 5 }),
-    }));
-    const body = await generateRes.json();
-
-    expect(generateRes.status).toBe(410);
-    expect(body.legacyMode).toBe('read-only');
-    expect(body.replacement).toContain('/api/company/self-improvement/proposals');
-  });
-
-  it('returns 410 when mutating a legacy growth proposal', async () => {
-    const modules = await loadModules();
-    seedGrowthProposal(modules.gatewayDb.getGatewayDb(), {
-      id: 'growth-high-risk-route',
-      kind: 'workflow',
-      status: 'draft',
-      risk: 'high',
-      score: 80,
-      workspaceUri: 'file:///tmp/workspace',
-      title: 'High-risk workflow',
-      summary: 'Publish a workflow that changes operating behavior.',
-      targetName: 'high-risk-workflow',
-      targetRef: 'workflow:/high-risk-workflow',
-      content: '# High Risk Workflow',
-      sourceRunIds: ['run-a', 'run-b', 'run-c'],
-      sourceCapsuleIds: [],
-      sourceKnowledgeIds: [],
-      sourceCandidateIds: [],
-      evidenceRefs: [],
-      createdAt: '2026-04-26T00:00:00.000Z',
-      updatedAt: '2026-04-26T00:00:00.000Z',
-    });
-
-    const evaluateRes = await modules.growthEvaluateRoute.POST(new Request('http://localhost/api/company/growth/proposals/growth-high-risk-route/evaluate', {
-      method: 'POST',
-    }), {
-      params: Promise.resolve({ id: 'growth-high-risk-route' }),
-    });
-    const body = await evaluateRes.json();
-
-    expect(evaluateRes.status).toBe(410);
-    expect(body.legacyMode).toBe('read-only');
   });
 
   it('proxies new company routes from web role to control-plane', async () => {

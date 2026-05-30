@@ -42,7 +42,6 @@ export function buildDefaultCompanyLoopPolicy(input: {
     maxAgendaPerDailyLoop: 5,
     maxAutonomousDispatchesPerLoop: 1,
     allowedAgendaActions: ['observe', 'dispatch', 'snooze', 'dismiss'],
-    growthReviewEnabled: true,
     notificationChannels: ['web'],
     createdAt: now,
     updatedAt: now,
